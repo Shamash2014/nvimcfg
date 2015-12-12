@@ -1,0 +1,15 @@
+---
+- hosts: all
+  tasks:
+    - pacman: name=neovim state=latest
+    - pacman: name=python-neovim state=latest
+    - copy: src={{ item }} dest=~/.config/nvim/{{ item }} mode="u+rwx"
+      with_items:
+        - init.vim
+    - git:
+        repo: "git@github.com:junegunn/vim-plug.git"
+        dest: ~/.config/nvim/autoload/ update=true
+
+    - command: nvim +PlugInstall -c quitall
+
+
