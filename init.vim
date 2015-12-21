@@ -43,3 +43,4 @@ highlight ExtraWhitespace ctermfg=50
 au BufWritePre * StripWhitespace
 au Vimenter * NERDTree
 set number
+set expandtab
