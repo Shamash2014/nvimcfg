@@ -26,6 +26,13 @@ Plug 'isRuslan/vim-es6'
 Plug 'kien/ctrlp.vim'
 Plug 'godlygeek/tabular'
 Plug 'ntpeters/vim-better-whitespace'
+Plug 'tpope/vim-cucumber'
+Plug 'renderedtext/vim-bdd'
+Plug 'KurtPreston/vim-autoformat-rails'
+Plug 'rgrinberg/vim-ocaml'
+Plug 'OCamlPro/ocp-indent'
+Plug 'slim-template/vim-slim'
+Plug 'the-lambda-church/merlin'
 Plug 'roman/golden-ratio'
 Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': './install --all' }
 call plug#end()
