@@ -34,6 +34,10 @@ Plug 'OCamlPro/ocp-indent'
 Plug 'slim-template/vim-slim'
 Plug 'the-lambda-church/merlin'
 Plug 'roman/golden-ratio'
+Plug 'travitch/hasksyn'
+Plug 'tpope/vim-fireplace'
+Plug 'VimClojure'
+Plug 'amdt/vim-niji'
 Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': './install --all' }
 call plug#end()
 
