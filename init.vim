@@ -37,6 +37,7 @@ Plug 'roman/golden-ratio'
 Plug 'travitch/hasksyn'
 Plug 'dag/vim2hs'
 Plug 'tpope/vim-fireplace'
+Plug 'digitaltoad/vim-jade'
 Plug 'VimClojure'
 Plug 'amdt/vim-niji'
 Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': './install --all' }
