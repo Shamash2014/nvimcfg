@@ -51,14 +51,25 @@ syntax enable
 filetype plugin indent on
 filetype plugin on
 
-nmap  <C-n> :NERDTreeToggle<CR>
-nmap <C-k> <C-w><Up>
-nmap <C-j> <C-w><Down>
-nmap <C-l> <C-w><Right>
-nmap <C-h> <C-w><Left>
-nmap <C-P> :FZF<CR>
+
+:nmap  <C-n> :NERDTreeToggle<CR>
+:nmap <C-k> <C-w><Up>
+:nmap <C-j> <C-w><Down>
+:nmap <C-l> <C-w><Right>
+:nmap <C-h> <C-w><Left>
+:nmap <C-P> :FZF<CR>
 highlight ExtraWhitespace ctermfg=50
 au BufWritePre * StripWhitespace
 au Vimenter * NERDTree
-set number
-set expandtab
+:set number
+:set expandtab
+
+:tnoremap <Esc> <C-\><C-n>
+:tnoremap <A-h> <C-\><C-n><C-w>h
+:tnoremap <A-j> <C-\><C-n><C-w>j
+:tnoremap <A-k> <C-\><C-n><C-w>k
+:tnoremap <A-l> <C-\><C-n><C-w>l
+:nnoremap <A-h> <C-w>h
+:nnoremap <A-j> <C-w>j
+:nnoremap <A-k> <C-w>k
+:nnoremap <A-l> <C-w>l
