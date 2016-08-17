@@ -64,6 +64,8 @@ au BufWritePre * StripWhitespace
 au Vimenter * NERDTree
 :set number
 :set expandtab
+:set foldmethod=indent
+:set foldlevel=99
 
 :tnoremap <Esc> <C-\><C-n>
 :tnoremap <A-h> <C-\><C-n><C-w>h
@@ -74,3 +76,4 @@ au Vimenter * NERDTree
 :nnoremap <A-j> <C-w>j
 :nnoremap <A-k> <C-w>k
 :nnoremap <A-l> <C-w>l
+:nnoremap <space> za
