@@ -41,6 +41,9 @@ Plug 'dag/vim2hs'
 Plug 'tpope/vim-fireplace'
 Plug 'digitaltoad/vim-jade'
 Plug 'VimClojure'
+Plug 'elixir-lang/vim-elixir'
+Plug 'thinca/vim-ref'
+Plug 'awetzel/elixir.nvim', { 'do': 'yes \| ./install.sh' }
 Plug 'amdt/vim-niji'
 Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': './install --all' }
 call plug#end()
