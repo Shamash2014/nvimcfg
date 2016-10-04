@@ -45,6 +45,9 @@ Plug 'elixir-lang/vim-elixir'
 Plug 'thinca/vim-ref'
 Plug 'awetzel/elixir.nvim', { 'do': 'yes \| ./install.sh' }
 Plug 'amdt/vim-niji'
+Plug 'townk/vim-autoclose'
+Plug 'eugen0329/vim-esearch'
+Plug 'tpope/vim-classpath'
 Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': './install --all' }
 call plug#end()
 
