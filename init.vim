@@ -1,6 +1,8 @@
 call plug#begin('~/.vim/plugged')
 
 Plug 'scrooloose/nerdtree'
+Plug 'pearofducks/ansible-vim'
+Plug 'klen/python-mode'
 Plug 'tpope/vim-sensible'
 Plug 'tpope/vim-surround'
 Plug 'tpope/vim-git'
@@ -48,6 +50,7 @@ Plug 'amdt/vim-niji'
 Plug 'townk/vim-autoclose'
 Plug 'eugen0329/vim-esearch'
 Plug 'tpope/vim-classpath'
+Plug 'nvie/vim-flake8'
 Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': './install --all' }
 call plug#end()
 
@@ -58,7 +61,10 @@ colorscheme smpl
 syntax enable
 filetype plugin indent on
 filetype plugin on
-
+:set cursorline
+:set ts=4
+:set lazyredraw
+:set showmatch
 
 :nmap  <C-n> :NERDTreeToggle<CR>
 :nmap <C-k> <C-w><Up>
@@ -66,6 +72,7 @@ filetype plugin on
 :nmap <C-l> <C-w><Right>
 :nmap <C-h> <C-w><Left>
 :nmap <C-P> :FZF<CR>
+:inoremap jk <esc>
 highlight ExtraWhitespace ctermfg=50
 au BufWritePre * StripWhitespace
 au Vimenter * NERDTree
@@ -73,6 +80,7 @@ au Vimenter * NERDTree
 :set expandtab
 :set foldmethod=indent
 :set foldlevel=99
+:set encoding=utf-8
 
 :tnoremap <Esc> <C-\><C-n>
 :tnoremap <A-h> <C-\><C-n><C-w>h
@@ -84,3 +92,8 @@ au Vimenter * NERDTree
 :nnoremap <A-k> <C-w>k
 :nnoremap <A-l> <C-w>l
 :nnoremap <space> za
+
+let g:ctrlp_match_window = 'bottom,order:ttb'
+let g:ctrlp_switch_buffer = 0
+let g:ctrlp_working_path_mode = 0
+let g:ctrlp_user_command = 'ag %s -l --nocolor --hidden -g ""'
