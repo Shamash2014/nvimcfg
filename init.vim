@@ -39,6 +39,7 @@ Plug 'slim-template/vim-slim'
 Plug 'the-lambda-church/merlin'
 Plug 'roman/golden-ratio'
 Plug 'travitch/hasksyn'
+Plug 'moll/vim-node'
 Plug 'dag/vim2hs'
 Plug 'tpope/vim-fireplace'
 Plug 'digitaltoad/vim-jade'
@@ -72,7 +73,6 @@ filetype plugin on
 :nmap <C-l> <C-w><Right>
 :nmap <C-h> <C-w><Left>
 :nmap <C-P> :FZF<CR>
-:inoremap jk <esc>
 highlight ExtraWhitespace ctermfg=50
 au BufWritePre * StripWhitespace
 au Vimenter * NERDTree
@@ -97,3 +97,12 @@ let g:ctrlp_match_window = 'bottom,order:ttb'
 let g:ctrlp_switch_buffer = 0
 let g:ctrlp_working_path_mode = 0
 let g:ctrlp_user_command = 'ag %s -l --nocolor --hidden -g ""'
+
+set statusline+=%#warningmsg#
+set statusline+=%{SyntasticStatuslineFlag()}
+set statusline+=%*
+
+let g:syntastic_always_populate_loc_list = 1
+let g:syntastic_auto_loc_list = 1
+let g:syntastic_check_on_open = 1
+let g:syntastic_check_on_wq = 0
