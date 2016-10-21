@@ -41,6 +41,7 @@ Plug 'roman/golden-ratio'
 Plug 'travitch/hasksyn'
 Plug 'moll/vim-node'
 Plug 'dag/vim2hs'
+Plug 'mxw/vim-jsx'
 Plug 'tpope/vim-fireplace'
 Plug 'digitaltoad/vim-jade'
 Plug 'VimClojure'
@@ -93,14 +94,15 @@ au Vimenter * NERDTree
 :nnoremap <A-l> <C-w>l
 :nnoremap <space> za
 
+let g:jsx_ext_required = 0
 let g:ctrlp_match_window = 'bottom,order:ttb'
 let g:ctrlp_switch_buffer = 0
 let g:ctrlp_working_path_mode = 0
 let g:ctrlp_user_command = 'ag %s -l --nocolor --hidden -g ""'
 
-set statusline+=%#warningmsg#
-set statusline+=%{SyntasticStatuslineFlag()}
-set statusline+=%*
+:set statusline+=%#warningmsg#
+:set statusline+=%{SyntasticStatuslineFlag()}
+:set statusline+=%*
 
 let g:syntastic_always_populate_loc_list = 1
 let g:syntastic_auto_loc_list = 1
