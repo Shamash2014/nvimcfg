@@ -42,7 +42,6 @@ Plug 'travitch/hasksyn'
 Plug 'moll/vim-node'
 Plug 'dag/vim2hs'
 Plug 'mxw/vim-jsx'
-Plug 'tpope/vim-fireplace'
 Plug 'digitaltoad/vim-jade'
 Plug 'VimClojure'
 Plug 'elixir-lang/vim-elixir'
@@ -51,9 +50,19 @@ Plug 'awetzel/elixir.nvim', { 'do': 'yes \| ./install.sh' }
 Plug 'amdt/vim-niji'
 Plug 'townk/vim-autoclose'
 Plug 'eugen0329/vim-esearch'
+Plug 'kivy/kivy'
 Plug 'tpope/vim-classpath'
 Plug 'nvie/vim-flake8'
 Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': './install --all' }
+Plug 'guns/vim-clojure-static'
+Plug 'junegunn/rainbow_parentheses.vim'
+Plug 'guns/vim-clojure-highlight'
+Plug 'tpope/vim-fireplace'
+Plug 'tpope/vim-sexp-mappings-for-regular-people'
+Plug 'guns/vim-sexp'
+Plug 'tpope/vim-repeat'
+Plug 'kassio/neoterm'
+Plug 'snoe/nvim-parinfer.js'
 call plug#end()
 
 let mapleader  = ","
@@ -100,11 +109,5 @@ let g:ctrlp_switch_buffer = 0
 let g:ctrlp_working_path_mode = 0
 let g:ctrlp_user_command = 'ag %s -l --nocolor --hidden -g ""'
 
-:set statusline+=%#warningmsg#
-:set statusline+=%{SyntasticStatuslineFlag()}
-:set statusline+=%*
-
-let g:syntastic_always_populate_loc_list = 1
-let g:syntastic_auto_loc_list = 1
 let g:syntastic_check_on_open = 1
-let g:syntastic_check_on_wq = 0
+let g:syntastic_check_on_wq = 1
