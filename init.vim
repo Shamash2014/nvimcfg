@@ -63,6 +63,8 @@ Plug 'kassio/neoterm'
 Plug 'bhurlow/vim-parinfer'
 Plug 'Vim-R-plugin2'
 Plug 'slashmili/alchemist.vim'
+Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
+Plug 'bfredl/nvim-ipy'
 call plug#end()
 
 let mapleader  = ","
