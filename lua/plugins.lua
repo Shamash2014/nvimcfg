@@ -585,7 +585,8 @@ return {
          set('n', '<Leader>olb', function() require('dap').toggle_breakpoint() end, { desc = 'Toggle breakpoint (dap)' })
          set('n', '<Leader>olB', function() require('dap').set_breakpoint() end, { desc = 'Set breakpoint (dap)' })
          set('n', '<Leader>oll',
-            function() require('dap').set_breakpoint(nil, nil, vim.fn.input('Log point message: ')) end, { desc = 'Set breakpoint (dap)' })
+            function() require('dap').set_breakpoint(nil, nil, vim.fn.input('Log point message: ')) end,
+            { desc = 'Set breakpoint (dap)' })
          set('n', '<Leader>olr', function() require('dap').repl.open() end, { desc = 'Open REPL (dap)' })
          set('n', '<Leader>olq', function() require('dap').run_last() end, { desc = 'Run last (dap)' })
          set({ 'n', 'v' }, '<Leader>olh', function()
@@ -601,14 +602,14 @@ return {
          set('n', '<Leader>olu', function()
             local widgets = require('dap.ui.widgets')
             widgets.centered_float(widgets.scopes)
-         end,  { desc = 'Scopes (dap)' })
+         end, { desc = 'Scopes (dap)' })
 
          -- Configs
          --
          dap.adapters.mix_task = {
-           type = 'executable',
-           command = '/Users/shamash/.tools/elixir-ls/debug_adapter.sh', -- debug_adapter.bat for windows
-           args = {}
+            type = 'executable',
+            command = '/Users/shamash/.tools/elixir-ls/debug_adapter.sh', -- debug_adapter.bat for windows
+            args = {}
          }
          dap.configurations.elixir = {
             {
@@ -1342,6 +1343,14 @@ return {
          words = { enabled = true },
       },
       keys = {
+         {
+            "<leader>ct",
+            function()
+               Snacks.terminal.toggle()
+            end,
+            desc = "Terminal"
+         },
+
       }
    },
    {
@@ -1656,7 +1665,8 @@ return {
                         -- default = "qwen2.5-coder-32b-instruct-mlx"
                         -- default = "fuseo1-deepseekr1-qwen2.5-instruct-32b-preview"
                         -- default = "deepcogito-cogito-v1-preview-qwen-32b"
-                        default = "qwen3-32b-mlxqwen3-32b-mlx"
+                        -- default = "qwen3-30b-a6b-16-extreme"
+                        default = "qwen3-32b-mlx"
                      },
                      temperature = {
                         order = 2,
@@ -1719,46 +1729,47 @@ return {
       dependencies = {
          "nvim-lua/plenary.nvim",
          "nvim-treesitter/nvim-treesitter",
+
       },
    },
 
-{
-  "azorng/goose.nvim",
-  config = function()
-    require("goose").setup({
- default_global_keymaps = false,      
-keymap = {
-    global = {
-      toggle = '<leader>ogg',                 -- Open goose. Close if opened 
-      open_input = '<leader>ogi',             -- Opens and focuses on input window on insert mode
-      open_input_new_session = '<leader>ogI', -- Opens and focuses on input window on insert mode. Creates a new session
-      open_output = '<leader>ogo',            -- Opens and focuses on output window 
-      toggle_focus = '<leader>ogt',           -- Toggle focus between goose and last window
-      close = '<leader>ogq',                  -- Close UI windows
-      toggle_fullscreen = '<leader>ogf',      -- Toggle between normal and fullscreen mode
-      select_session = '<leader>ogs',         -- Select and load a goose session
-      goose_mode_chat = '<leader>ogmc',       -- Set goose mode to `chat`. (Tool calling disabled. No editor context besides selections)
-      goose_mode_auto = '<leader>ogma',       -- Set goose mode to `auto`. (Default mode with full agent capabilities)
-      configure_provider = '<leader>ogp',     -- Quick provider and model switch from predefined list
-      diff_open = '<leader>ogd',              -- Opens a diff tab of a modified file since the last goose prompt
-      diff_next = '<leader>og]',              -- Navigate to next file diff
-      diff_prev = '<leader>og[',              -- Navigate to previous file diff
-      diff_close = '<leader>ogc',             -- Close diff view tab and return to normal editing
-      diff_revert_all = '<leader>ogra',       -- Revert all file changes since the last goose prompt
-      diff_revert_this = '<leader>ogrt',      -- Revert current file changes since the last goose prompt
-    },
-         }
+   {
+      "azorng/goose.nvim",
+      config = function()
+         require("goose").setup({
+            default_global_keymaps = false,
+            keymap = {
+               global = {
+                  toggle = '<leader>ogg',     -- Open goose. Close if opened
+                  open_input = '<leader>ogi', -- Opens and focuses on input window on insert mode
+                  open_input_new_session = '<leader>ogI', -- Opens and focuses on input window on insert mode. Creates a new session
+                  open_output = '<leader>ogo', -- Opens and focuses on output window
+                  toggle_focus = '<leader>ogt', -- Toggle focus between goose and last window
+                  close = '<leader>ogq',      -- Close UI windows
+                  toggle_fullscreen = '<leader>ogf', -- Toggle between normal and fullscreen mode
+                  select_session = '<leader>ogs', -- Select and load a goose session
+                  goose_mode_chat = '<leader>ogmc', -- Set goose mode to `chat`. (Tool calling disabled. No editor context besides selections)
+                  goose_mode_auto = '<leader>ogma', -- Set goose mode to `auto`. (Default mode with full agent capabilities)
+                  configure_provider = '<leader>ogp', -- Quick provider and model switch from predefined list
+                  diff_open = '<leader>ogd',  -- Opens a diff tab of a modified file since the last goose prompt
+                  diff_next = '<leader>og]',  -- Navigate to next file diff
+                  diff_prev = '<leader>og[',  -- Navigate to previous file diff
+                  diff_close = '<leader>ogc', -- Close diff view tab and return to normal editing
+                  diff_revert_all = '<leader>ogra', -- Revert all file changes since the last goose prompt
+                  diff_revert_this = '<leader>ogrt', -- Revert current file changes since the last goose prompt
+               },
+            }
 
          })
-  end,
-  dependencies = {
-    "nvim-lua/plenary.nvim",
-    {
-      "MeanderingProgrammer/render-markdown.nvim",
-      opts = {
-        anti_conceal = { enabled = false },
+      end,
+      dependencies = {
+         "nvim-lua/plenary.nvim",
+         {
+            "MeanderingProgrammer/render-markdown.nvim",
+            opts = {
+               anti_conceal = { enabled = false },
+            },
+         }
       },
-    }
-  },
-}
+   }
 }
