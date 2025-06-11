@@ -32,6 +32,13 @@ vim.lsp.config.vtsls = {
       updateImportsOnFileMove = { enabled = "always" },
       suggest = {
         completeFunctionCalls = true,
+        includeCompletionsForModuleExports = true,
+        includeAutomaticOptionalChainCompletions = true,
+      },
+      preferences = {
+        includePackageJsonAutoImports = "on",
+        importModuleSpecifier = "relative",
+        includeCompletionsForImportStatements = true,
       },
       inlayHints = {
         parameterNames = { enabled = "literals" },
@@ -46,6 +53,13 @@ vim.lsp.config.vtsls = {
       updateImportsOnFileMove = { enabled = "always" },
       suggest = {
         completeFunctionCalls = true,
+        includeCompletionsForModuleExports = true,
+        includeAutomaticOptionalChainCompletions = true,
+      },
+      preferences = {
+        includePackageJsonAutoImports = "on",
+        importModuleSpecifier = "relative",
+        includeCompletionsForImportStatements = true,
       },
       inlayHints = {
         parameterNames = { enabled = "literals" },
@@ -163,13 +177,27 @@ vim.lsp.config.elixirls = {
 vim.lsp.config.pyright = {
   cmd = { 'pyright-langserver', '--stdio' },
   filetypes = { 'python' },
-  root_markers = { 'pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', '.git' },
+  root_markers = { 'pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile', '.envrc', '.git' },
   settings = {
     python = {
       analysis = {
         autoSearchPaths = true,
         useLibraryCodeForTypes = true,
+        autoImportCompletions = true,
+        diagnosticMode = "workspace",
+        typeCheckingMode = "basic",
       },
+      pythonPath = function()
+        -- Use direnv environment if available
+        if vim.env.VIRTUAL_ENV then
+          return vim.env.VIRTUAL_ENV .. "/bin/python"
+        end
+        -- Fallback to system python
+        return "python3"
+      end,
+    },
+    pyright = {
+      disableOrganizeImports = false,
     },
   },
 }
@@ -521,6 +549,39 @@ vim.api.nvim_create_autocmd('LspAttach', {
     map('<leader>ca', vim.lsp.buf.code_action, 'Code Action', { 'n', 'x' })
     map('<leader>cr', vim.lsp.buf.rename, 'Rename')
     map('<leader>cf', vim.lsp.buf.format, 'Format Document')
+    
+    -- Language-specific enhancements
+    local filetype = vim.bo[args.buf].filetype
+    if filetype == "typescript" or filetype == "typescriptreact" or filetype == "javascript" or filetype == "javascriptreact" then
+      map('<leader>co', function()
+        vim.lsp.buf.code_action({
+          filter = function(action)
+            return action.kind and string.match(action.kind, "source.organizeImports")
+          end,
+          apply = true,
+        })
+      end, 'Organize Imports')
+      
+      map('<leader>cu', function()
+        vim.lsp.buf.code_action({
+          filter = function(action)
+            return action.kind and string.match(action.kind, "source.removeUnused")
+          end,
+          apply = true,
+        })
+      end, 'Remove Unused')
+    end
+    
+    if filetype == "python" then
+      map('<leader>co', function()
+        vim.lsp.buf.code_action({
+          filter = function(action)
+            return action.kind and string.match(action.kind, "source.organizeImports")
+          end,
+          apply = true,
+        })
+      end, 'Organize Imports')
+    end
     map('gd', vim.lsp.buf.definition, 'Goto Definition')
     map('gD', vim.lsp.buf.declaration, 'Goto Declaration')
     map('gr', vim.lsp.buf.references, 'Goto References')

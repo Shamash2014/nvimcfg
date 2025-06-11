@@ -1723,6 +1723,55 @@ return {
     },
   },
 
+  -- Auto-import support for multiple languages
+  {
+    "stevanmilic/nvim-lspimport",
+    ft = { "typescript", "typescriptreact", "javascript", "javascriptreact", "python", "go", "rust" },
+    config = function()
+      local map = vim.keymap.set
+      map("n", "<leader>ci", function() require("lspimport").import() end, { desc = "Import symbol under cursor" })
+      
+      -- Enhanced which-key integration
+      local ok, wk = pcall(require, "which-key")
+      if ok then
+        wk.add({
+          { "<leader>ci", desc = "import symbol" },
+        })
+      end
+    end,
+  },
+
+  -- Python debugging (enhanced for direnv)
+  {
+    "mfussenegger/nvim-dap-python",
+    ft = "python",
+    dependencies = {
+      "mfussenegger/nvim-dap",
+    },
+    config = function()
+      -- Use direnv to detect Python path, fallback to system python
+      local python_path = vim.env.VIRTUAL_ENV and (vim.env.VIRTUAL_ENV .. "/bin/python") or "python3"
+      require("dap-python").setup(python_path)
+      
+      -- Enhanced Python debugging keybindings
+      local map = vim.keymap.set
+      map("n", "<leader>cpm", function() require("dap-python").test_method() end, { desc = "Python Test Method" })
+      map("n", "<leader>cpc", function() require("dap-python").test_class() end, { desc = "Python Test Class" })
+      map("n", "<leader>cps", function() require("dap-python").debug_selection() end, { desc = "Python Debug Selection", mode = { "n", "v" } })
+      
+      -- Enhanced which-key integration
+      local ok, wk = pcall(require, "which-key")
+      if ok then
+        wk.add({
+          { "<leader>cp", group = "python", ft = "python" },
+          { "<leader>cpm", desc = "test method", ft = "python" },
+          { "<leader>cpc", desc = "test class", ft = "python" },
+          { "<leader>cps", desc = "debug selection", ft = "python" },
+        })
+      end
+    end,
+  },
+
   -- Auto brackets/pairs insertion
   {
     "windwp/nvim-autopairs",
