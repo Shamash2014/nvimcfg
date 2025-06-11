@@ -62,18 +62,88 @@ vim.lsp.config.vtsls = {
 vim.lsp.config.dartls = {
   cmd = { 'dart', 'language-server', '--protocol=lsp' },
   filetypes = { 'dart' },
-  root_markers = { 'pubspec.yaml', '.git' },
+  root_markers = { 'pubspec.yaml', 'pubspec.yml', '.git' },
   init_options = {
-    onlyAnalyzeProjectsWithOpenFiles = true,
+    onlyAnalyzeProjectsWithOpenFiles = false,
     suggestFromUnimportedLibraries = true,
     closingLabels = true,
     outline = true,
     flutterOutline = true,
+    includeDependenciesInWorkspaceSymbols = true,
   },
   settings = {
     dart = {
+      analysisExcludedFolders = {
+        vim.fn.expand("~/.pub-cache"),
+        vim.fn.expand("~/fvm/versions"),
+        vim.fn.expand("/opt/homebrew"),
+        vim.fn.expand("$HOME/AppData/Local/Pub/Cache"),
+        vim.fn.expand("$HOME/.pub-cache"),
+        vim.fn.expand("/Applications/Flutter"),
+      },
+      updateImportsOnRename = true,
       completeFunctionCalls = true,
       showTodos = true,
+      renameFilesWithClasses = "prompt",
+      enableSdkFormatter = true,
+      lineLength = 80,
+      insertArgumentPlaceholders = true,
+      previewFlutterUiGuides = true,
+      previewFlutterUiGuidesCustomTracking = true,
+      flutterSdkPath = function()
+        -- Check direnv first for FLUTTER_ROOT
+        local flutter_root = vim.env.FLUTTER_ROOT
+        if flutter_root and vim.fn.isdirectory(flutter_root) == 1 then
+          return flutter_root
+        end
+        
+        -- Check for FVM
+        local fvm_default = vim.fn.expand("~/fvm/default")
+        if vim.fn.isdirectory(fvm_default) == 1 then
+          return fvm_default
+        end
+        
+        -- Check .fvm/flutter_sdk in current project
+        local fvm_local = vim.fn.getcwd() .. "/.fvm/flutter_sdk"
+        if vim.fn.isdirectory(fvm_local) == 1 then
+          return fvm_local
+        end
+        
+        -- Fallback to standard locations
+        local flutter_home = vim.fn.expand("~/flutter")
+        if vim.fn.isdirectory(flutter_home) == 1 then
+          return flutter_home
+        end
+        
+        return nil
+      end,
+      checkForSdkUpdates = false,
+      openDevTools = "never",
+    }
+  },
+  capabilities = {
+    textDocument = {
+      codeAction = {
+        dynamicRegistration = true,
+        codeActionLiteralSupport = {
+          codeActionKind = {
+            valueSet = {
+              "source.organizeImports.dart",
+              "source.fixAll.dart",
+              "quickfix.dart",
+              "refactor.dart",
+            }
+          }
+        }
+      },
+      completion = {
+        completionItem = {
+          snippetSupport = true,
+          resolveSupport = {
+            properties = { "documentation", "detail", "additionalTextEdits" }
+          }
+        }
+      }
     }
   }
 }

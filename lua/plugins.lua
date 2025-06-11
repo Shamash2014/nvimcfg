@@ -230,7 +230,7 @@ local plugins = {
           "c", "lua", "vim", "vimdoc", "query", "javascript", "typescript",
           "html", "css", "scss", "python", "bash", "json", "yaml", "markdown",
           "r", "julia", "latex", "astro", "go", "gomod", "gowork", "gosum",
-          "dockerfile", "toml", "xml", "rust", "elixir", "dart"
+          "dockerfile", "toml", "xml", "rust", "elixir", "dart", "flutter"
         },
         sync_install = false,
         highlight = { enable = true },

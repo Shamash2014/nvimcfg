@@ -84,6 +84,7 @@ return {
         javascriptreact = { "eslint" },
         typescriptreact = { "eslint" },
         vue = { "eslint" },
+        dart = { "dart_analyze" },
         elixir = { "credo" },
         rust = { "clippy" },
         c = { "cppcheck" },
@@ -107,6 +108,47 @@ return {
         "--stdin-filename",
         function()
           return vim.api.nvim_buf_get_name(0)
+        end,
+      }
+
+      -- Configure dart_analyze for proper project detection
+      lint.linters.dart_analyze = {
+        cmd = "dart",
+        stdin = true,
+        args = {
+          "analyze",
+          "--fatal-infos",
+          "--fatal-warnings",
+        },
+        stream = "stderr",
+        ignore_exitcode = true,
+        parser = function(output, bufnr)
+          local diagnostics = {}
+          local lines = vim.split(output, "\n")
+          
+          for _, line in ipairs(lines) do
+            local level, msg, file, lnum, col = line:match("^%s*(%w+)%s*•%s*(.-)%s*•%s*(.-)%s*:(%d+):(%d+)")
+            if level and msg and lnum and col then
+              local severity = vim.diagnostic.severity.INFO
+              if level == "error" then
+                severity = vim.diagnostic.severity.ERROR
+              elseif level == "warning" then
+                severity = vim.diagnostic.severity.WARN
+              elseif level == "info" then
+                severity = vim.diagnostic.severity.INFO
+              end
+
+              table.insert(diagnostics, {
+                lnum = tonumber(lnum) - 1,
+                col = tonumber(col) - 1,
+                message = msg,
+                severity = severity,
+                source = "dart_analyze",
+              })
+            end
+          end
+          
+          return diagnostics
         end,
       }
 
@@ -457,12 +499,195 @@ return {
     },
   },
 
+  -- Flutter tools integration
+  {
+    "akinsho/flutter-tools.nvim",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "stevearc/dressing.nvim",
+    },
+    ft = "dart",
+    opts = {
+      ui = {
+        border = "single",
+        notification_style = "native",
+      },
+      decorations = {
+        statusline = {
+          app_version = false,
+          device = true,
+          project_config = false,
+        },
+      },
+      debugger = {
+        enabled = true,
+        run_via_dap = true,
+        exception_breakpoints = {},
+        evaluate_to_string_in_debug_views = true,
+      },
+      flutter_path = function()
+        -- Check direnv first for FLUTTER_ROOT
+        local flutter_root = vim.env.FLUTTER_ROOT
+        if flutter_root and vim.fn.isdirectory(flutter_root) == 1 then
+          return flutter_root .. "/bin/flutter"
+        end
+        
+        -- Check for FVM
+        local fvm_default = vim.fn.expand("~/fvm/default")
+        if vim.fn.isdirectory(fvm_default) == 1 then
+          return fvm_default .. "/bin/flutter"
+        end
+        
+        -- Check .fvm/flutter_sdk in current project
+        local fvm_local = vim.fn.getcwd() .. "/.fvm/flutter_sdk"
+        if vim.fn.isdirectory(fvm_local) == 1 then
+          return fvm_local .. "/bin/flutter"
+        end
+        
+        -- Fallback to PATH
+        return "flutter"
+      end,
+      fvm = true,
+      widget_guides = {
+        enabled = true,
+      },
+      closing_tags = {
+        highlight = "Comment",
+        prefix = " // ",
+        enabled = true
+      },
+      dev_log = {
+        enabled = true,
+        notify_errors = false,
+        open_cmd = "tabedit",
+      },
+      dev_tools = {
+        autostart = false,
+        auto_open_browser = false,
+      },
+      outline = {
+        open_cmd = "30vnew",
+        auto_open = false,
+      },
+      lsp = {
+        color = {
+          enabled = false,
+          background = false,
+          background_color = nil,
+          foreground = false,
+          virtual_text = true,
+          virtual_text_str = "■",
+        },
+        capabilities = function(config)
+          config.textDocument.codeAction = {
+            dynamicRegistration = true,
+            codeActionLiteralSupport = {
+              codeActionKind = {
+                valueSet = {
+                  "source.organizeImports.dart",
+                  "source.fixAll.dart", 
+                  "quickfix.dart",
+                  "refactor.dart",
+                }
+              }
+            }
+          }
+          return config
+        end,
+        settings = {
+          showTodos = true,
+          completeFunctionCalls = true,
+          analysisExcludedFolders = {
+            vim.fn.expand("~/.pub-cache"),
+            vim.fn.expand("~/fvm/versions"), 
+            vim.fn.expand("/opt/homebrew"),
+            vim.fn.expand("$HOME/AppData/Local/Pub/Cache"),
+            vim.fn.expand("$HOME/.pub-cache"),
+            vim.fn.expand("/Applications/Flutter"),
+          },
+          renameFilesWithClasses = "prompt",
+          enableSnippets = true,
+          updateImportsOnRename = true,
+        }
+      }
+    },
+    keys = {
+      { "<leader>cfr", "<cmd>FlutterRun<cr>", desc = "Flutter Run" },
+      { "<leader>cfR", "<cmd>FlutterRestart<cr>", desc = "Flutter Restart" },
+      { "<leader>cfq", "<cmd>FlutterQuit<cr>", desc = "Flutter Quit" },
+      { "<leader>cfh", "<cmd>FlutterReload<cr>", desc = "Flutter Hot Reload" },
+      { "<leader>cfH", "<cmd>FlutterRestart<cr>", desc = "Flutter Hot Restart" },
+      { "<leader>cfd", "<cmd>FlutterDevices<cr>", desc = "Flutter Devices" },
+      { "<leader>cfe", "<cmd>FlutterEmulators<cr>", desc = "Flutter Emulators" },
+      { "<leader>cfo", "<cmd>FlutterOutlineToggle<cr>", desc = "Flutter Outline" },
+      { "<leader>cfD", "<cmd>FlutterDevTools<cr>", desc = "Flutter DevTools" },
+      { "<leader>cfL", "<cmd>FlutterLogClear<cr>", desc = "Flutter Log Clear" },
+      { "<leader>cfs", "<cmd>FlutterSuper<cr>", desc = "Flutter Super" },
+      { "<leader>cfg", "<cmd>FlutterPubGet<cr>", desc = "Flutter Pub Get" },
+      { "<leader>cfG", "<cmd>FlutterPubUpgrade<cr>", desc = "Flutter Pub Upgrade" },
+      { "<leader>cfc", "<cmd>FlutterClean<cr>", desc = "Flutter Clean" },
+      { "<leader>cft", "<cmd>FlutterTest<cr>", desc = "Flutter Test" },
+      { "<leader>cfT", "<cmd>FlutterTestAll<cr>", desc = "Flutter Test All" },
+      { "<leader>cfv", "<cmd>FlutterVersion<cr>", desc = "Flutter Version" },
+      { "<leader>cfp", "<cmd>FlutterPubDeps<cr>", desc = "Flutter Pub Deps" },
+      { "<leader>cfn", "<cmd>FlutterRename<cr>", desc = "Flutter Rename" },
+      { "<leader>cfi", "<cmd>FlutterScreenshot<cr>", desc = "Flutter Screenshot" },
+    },
+    config = function(_, opts)
+      require("flutter-tools").setup(opts)
+      
+      -- Enhanced which-key integration for Flutter
+      local ok, wk = pcall(require, "which-key")
+      if ok then
+        wk.add({
+          { "<leader>cf", group = "flutter", ft = "dart" },
+          { "<leader>cfr", desc = "run", ft = "dart" },
+          { "<leader>cfR", desc = "restart", ft = "dart" },
+          { "<leader>cfq", desc = "quit", ft = "dart" },
+          { "<leader>cfh", desc = "hot reload", ft = "dart" },
+          { "<leader>cfH", desc = "hot restart", ft = "dart" },
+          { "<leader>cfd", desc = "devices", ft = "dart" },
+          { "<leader>cfe", desc = "emulators", ft = "dart" },
+          { "<leader>cfo", desc = "outline", ft = "dart" },
+          { "<leader>cfD", desc = "devtools", ft = "dart" },
+          { "<leader>cfL", desc = "log clear", ft = "dart" },
+          { "<leader>cfs", desc = "super", ft = "dart" },
+          { "<leader>cfg", desc = "pub get", ft = "dart" },
+          { "<leader>cfG", desc = "pub upgrade", ft = "dart" },
+          { "<leader>cfc", desc = "clean", ft = "dart" },
+          { "<leader>cft", desc = "test", ft = "dart" },
+          { "<leader>cfT", desc = "test all", ft = "dart" },
+          { "<leader>cfv", desc = "version", ft = "dart" },
+          { "<leader>cfp", desc = "pub deps", ft = "dart" },
+          { "<leader>cfn", desc = "rename", ft = "dart" },
+          { "<leader>cfi", desc = "screenshot", ft = "dart" },
+        })
+      end
+    end,
+  },
+
   -- Debug Adapter Protocol
   {
     "mfussenegger/nvim-dap",
     dependencies = {
       "theHamsta/nvim-dap-virtual-text",
       "nvim-neotest/nvim-nio",
+      {
+        "igorlfs/nvim-dap-view",
+        config = function()
+          require("dap-view").setup({
+            float = {
+              border = "single",
+              mappings = {
+                edit = "e",
+                expand = "<CR>",
+                repl = "r",
+                toggle = "t",
+              },
+            },
+          })
+        end,
+      },
     },
     keys = {
       { "<leader>db", function() require("dap").toggle_breakpoint() end, desc = "Toggle Breakpoint" },
@@ -482,6 +707,7 @@ return {
       { "<leader>ds", function() require("dap").session() end, desc = "Session" },
       { "<leader>dt", function() require("dap").terminate() end, desc = "Terminate" },
       { "<leader>dw", function() require("dap.ui.widgets").hover() end, desc = "Widgets" },
+      { "<leader>dv", function() require("dap-view").toggle() end, desc = "DAP View" },
     },
     config = function()
       local dap = require("dap")
@@ -602,6 +828,48 @@ return {
       -- C/C++
       dap.configurations.c = dap.configurations.rust
       dap.configurations.cpp = dap.configurations.rust
+      
+      -- Dart/Flutter (enhanced by flutter-tools.nvim)
+      dap.adapters.dart = {
+        type = "executable",
+        command = "dart",
+        args = {"debug_adapter"},
+      }
+      
+      dap.configurations.dart = {
+        {
+          type = "dart",
+          request = "launch",
+          name = "Launch Dart",
+          dartSdkPath = function()
+            local flutter_root = vim.env.FLUTTER_ROOT
+            if flutter_root then
+              return flutter_root .. "/bin/cache/dart-sdk"
+            end
+            return "dart"
+          end,
+          program = "${file}",
+          cwd = "${workspaceFolder}",
+        },
+        {
+          type = "dart",
+          request = "launch",
+          name = "Launch Flutter",
+          flutterSdkPath = function()
+            local flutter_root = vim.env.FLUTTER_ROOT
+            if flutter_root then
+              return flutter_root
+            end
+            local fvm_local = vim.fn.getcwd() .. "/.fvm/flutter_sdk"
+            if vim.fn.isdirectory(fvm_local) == 1 then
+              return fvm_local
+            end
+            return "flutter"
+          end,
+          program = "${workspaceFolder}/lib/main.dart",
+          cwd = "${workspaceFolder}",
+        }
+      }
     end,
   },
 
