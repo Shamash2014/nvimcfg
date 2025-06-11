@@ -230,7 +230,7 @@ local plugins = {
           "c", "lua", "vim", "vimdoc", "query", "javascript", "typescript",
           "html", "css", "scss", "python", "bash", "json", "yaml", "markdown",
           "r", "julia", "latex", "astro", "go", "gomod", "gowork", "gosum",
-          "dockerfile", "toml", "xml", "rust", "elixir", "dart", "flutter"
+          "dockerfile", "toml", "xml", "rust", "elixir", "dart"
         },
         sync_install = false,
         highlight = { enable = true },
@@ -560,11 +560,67 @@ local plugins = {
       "sindrets/diffview.nvim",
     },
     cmd = { "Neogit" },
+    config = function()
+      -- Git operation helper that uses current file's git repository
+      local function safe_git_operation(operation, options)
+        local git_root = nil
+        
+        -- Get current file's directory first
+        local current_file = vim.fn.expand('%:p')
+        local file_dir = current_file and current_file ~= '' and vim.fn.fnamemodify(current_file, ':h') or vim.fn.getcwd()
+        
+        -- Try to find git root from current file's location
+        local cmd = string.format("cd %s && git rev-parse --show-toplevel 2>/dev/null", vim.fn.shellescape(file_dir))
+        git_root = vim.fn.system(cmd):gsub("\n", "")
+        
+        if vim.v.shell_error == 0 and git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+          -- We found the git root for current file, change to it
+          local current_cwd = vim.fn.getcwd()
+          if git_root ~= current_cwd then
+            vim.cmd("cd " .. vim.fn.fnameescape(git_root))
+          end
+        end
+        
+        -- Open Neogit regardless of whether we found git root or not
+        if operation then
+          require("neogit").open({ operation }, options or {})
+        else
+          require("neogit").open(options or { kind = "vsplit" })
+        end
+      end
+      
+      -- Store globally for use in keymaps
+      _G.NeogitSafeGitOp = safe_git_operation
+    end,
     keys = {
-      { "<leader>gg", function() require("neogit").open({ kind = "vsplit" }) end, desc = "Neogit" },
-      { "<leader>gc", "<cmd>Neogit commit<cr>", desc = "Git commit" },
-      { "<leader>gp", "<cmd>Neogit push<cr>", desc = "Git push" },
-      { "<leader>gl", "<cmd>Neogit pull<cr>", desc = "Git pull" },
+      { 
+        "<leader>gg", 
+        function() 
+          _G.NeogitSafeGitOp(nil, { kind = "vsplit" })
+        end, 
+        desc = "Neogit" 
+      },
+      { 
+        "<leader>gc", 
+        function()
+          _G.NeogitSafeGitOp("commit")
+        end, 
+        desc = "Git commit" 
+      },
+      { 
+        "<leader>gp", 
+        function()
+          _G.NeogitSafeGitOp("push")
+        end, 
+        desc = "Git push" 
+      },
+      { 
+        "<leader>gl", 
+        function()
+          _G.NeogitSafeGitOp("pull")
+        end, 
+        desc = "Git pull" 
+      },
     },
     opts = {
       integrations = {
@@ -1324,101 +1380,139 @@ local plugins = {
     event = { "BufReadPre", "BufNewFile" },
   },
 
-  -- Ultra minimal theme (3 colors: white/gray/red)
+  -- Minimal theme with colorbuddy (custom)
   {
-    url = "https://codeberg.org/jthvai/lavender.nvim",
-    name = "lavender",
-    branch = "stable",
+    "tjdevries/colorbuddy.nvim",
     priority = 1000,
-    lazy = false, -- colorscheme must load immediately
+    lazy = false,
     config = function()
-      -- ULTRA minimal: only 3 colors total
-      vim.g.lavender = {
-        overrides = {
-          theme = {
-            -- Base: dark gray background, white text
-            Normal = { fg = "#ffffff", bg = "#111111" },
-            NormalNC = { fg = "#ffffff", bg = "#111111" },
-            
-            -- Comments: more visible gray
-            Comment = { fg = "#666666", italic = true },
-            
-            -- EVERYTHING else is white (no syntax highlighting)
-            String = { fg = "#ffffff" },
-            Keyword = { fg = "#ffffff" },
-            Function = { fg = "#ffffff" },
-            Type = { fg = "#ffffff" },
-            Identifier = { fg = "#ffffff" },
-            Operator = { fg = "#ffffff" },
-            Special = { fg = "#ffffff" },
-            Constant = { fg = "#ffffff" },
-            Statement = { fg = "#ffffff" },
-            Conditional = { fg = "#ffffff" },
-            Repeat = { fg = "#ffffff" },
-            Label = { fg = "#ffffff" },
-            Structure = { fg = "#ffffff" },
-            StorageClass = { fg = "#ffffff" },
-            Typedef = { fg = "#ffffff" },
-            PreProc = { fg = "#ffffff" },     -- Even imports are white now
-            Include = { fg = "#ffffff" },
-            Define = { fg = "#ffffff" },
-            Macro = { fg = "#ffffff" },
-            
-            -- ONLY errors get color (essential feedback)
-            Error = { fg = "#ff5555", bold = true },
-            ErrorMsg = { fg = "#ff5555", bold = true },
-            DiagnosticError = { fg = "#ff5555" },
-            
-            -- Minimal UI (subtly visible)
-            LineNr = { fg = "#444444" },      -- Subtle line numbers
-            CursorLineNr = { fg = "#888888" }, -- More visible current line
-            Visual = { bg = "#222222" },      -- Slightly visible selection
-            Search = { fg = "#000000", bg = "#666666" },
-            IncSearch = { fg = "#000000", bg = "#666666" },
-            
-            -- All diagnostics white except errors
-            DiagnosticWarn = { fg = "#ffffff" },
-            DiagnosticInfo = { fg = "#ffffff" },
-            DiagnosticHint = { fg = "#666666" },
-            
-            -- TreeSitter: ALL white (no syntax colors)
-            ["@keyword"] = { fg = "#ffffff" },
-            ["@function"] = { fg = "#ffffff" },
-            ["@type"] = { fg = "#ffffff" },
-            ["@variable"] = { fg = "#ffffff" },
-            ["@property"] = { fg = "#ffffff" },
-            ["@parameter"] = { fg = "#ffffff" },
-            ["@method"] = { fg = "#ffffff" },
-            ["@field"] = { fg = "#ffffff" },
-            ["@namespace"] = { fg = "#ffffff" },
-            ["@tag"] = { fg = "#ffffff" },
-            ["@attribute"] = { fg = "#ffffff" },
-            ["@string"] = { fg = "#ffffff" },     -- Even strings are white
-            ["@comment"] = { fg = "#666666", italic = true },    -- More visible comments
-            ["@number"] = { fg = "#ffffff" },
-            ["@boolean"] = { fg = "#ffffff" },
-            ["@operator"] = { fg = "#ffffff" },
-            ["@punctuation"] = { fg = "#ffffff" },
-            ["@keyword.import"] = { fg = "#ffffff" },  -- Even imports are white
-            ["@keyword.include"] = { fg = "#ffffff" },
-            ["@preproc"] = { fg = "#ffffff" },
-            ["@include"] = { fg = "#ffffff" },
-            ["@define"] = { fg = "#ffffff" },
-            
-            -- LSP semantic tokens: all white
-            ["@lsp.type.class"] = { fg = "#ffffff" },
-            ["@lsp.type.function"] = { fg = "#ffffff" },
-            ["@lsp.type.method"] = { fg = "#ffffff" },
-            ["@lsp.type.variable"] = { fg = "#ffffff" },
-            ["@lsp.type.parameter"] = { fg = "#ffffff" },
-            ["@lsp.type.property"] = { fg = "#ffffff" },
-            ["@lsp.type.keyword"] = { fg = "#ffffff" },
-            ["@lsp.type.string"] = { fg = "#ffffff" },
-            ["@lsp.type.number"] = { fg = "#ffffff" },
-          },
-        },
+      local colorbuddy = require("colorbuddy")
+      local Color = colorbuddy.Color
+      local colors = colorbuddy.colors
+      local Group = colorbuddy.Group
+      local styles = colorbuddy.styles
+
+      -- Clear existing colors
+      colorbuddy.colorscheme("default")
+
+      -- Define your minimal color palette
+      Color.new("bg", "#111111")        -- Dark background
+      Color.new("fg", "#ffffff")        -- White text
+      Color.new("gray", "#666666")      -- Comments
+      Color.new("light_gray", "#888888") -- UI elements
+      Color.new("dark_gray", "#444444")  -- Subtle UI
+      Color.new("selection", "#222222")  -- Visual selection
+      Color.new("error", "#ff5555")      -- Errors only
+      Color.new("accent", "#bb9af7")     -- Minimal accent
+
+      -- Base groups
+      Group.new("Normal", colors.fg, colors.bg)
+      Group.new("NormalNC", colors.fg, colors.bg)
+      Group.new("Comment", colors.gray, nil, styles.italic)
+
+      -- ALL syntax highlighting white (your preference)
+      local white_groups = {
+        "String", "Keyword", "Function", "Type", "Identifier", "Operator", 
+        "Special", "Constant", "Statement", "Conditional", "Repeat", "Label",
+        "Structure", "StorageClass", "Typedef", "PreProc", "Include", "Define", "Macro"
       }
-      vim.cmd.colorscheme("lavender")
+      for _, group in ipairs(white_groups) do
+        Group.new(group, colors.fg)
+      end
+
+      -- UI elements
+      Group.new("LineNr", colors.dark_gray)
+      Group.new("CursorLineNr", colors.light_gray)
+      Group.new("Visual", nil, colors.selection)
+      Group.new("Search", colors.bg, colors.gray)
+      Group.new("IncSearch", colors.bg, colors.gray)
+      Group.new("CursorLine", nil, colors.selection)
+      Group.new("ColorColumn", nil, colors.selection)
+
+      -- Only errors get color
+      Group.new("Error", colors.error, nil, styles.bold)
+      Group.new("ErrorMsg", colors.error, nil, styles.bold)
+      Group.new("DiagnosticError", colors.error)
+      Group.new("DiagnosticWarn", colors.fg)
+      Group.new("DiagnosticInfo", colors.fg)
+      Group.new("DiagnosticHint", colors.gray)
+
+      -- UI components
+      Group.new("StatusLine", colors.fg, colors.dark_gray)
+      Group.new("StatusLineNC", colors.gray, colors.dark_gray)
+      Group.new("Pmenu", colors.fg, colors.selection)
+      Group.new("PmenuSel", colors.bg, colors.accent)
+      Group.new("FloatBorder", colors.gray)
+      Group.new("NormalFloat", colors.fg, colors.bg)
+
+      -- TreeSitter (all white)
+      local ts_groups = {
+        "@keyword", "@function", "@type", "@variable", "@property", "@parameter",
+        "@method", "@field", "@namespace", "@tag", "@attribute", "@string",
+        "@number", "@boolean", "@operator", "@punctuation", "@keyword.import",
+        "@keyword.include", "@preproc", "@include", "@define"
+      }
+      for _, group in ipairs(ts_groups) do
+        Group.new(group, colors.fg)
+      end
+      Group.new("@comment", colors.gray, nil, styles.italic)
+
+      -- LSP semantic tokens (all white)
+      local lsp_groups = {
+        "@lsp.type.class", "@lsp.type.function", "@lsp.type.method", "@lsp.type.variable",
+        "@lsp.type.parameter", "@lsp.type.property", "@lsp.type.keyword", 
+        "@lsp.type.string", "@lsp.type.number"
+      }
+      for _, group in ipairs(lsp_groups) do
+        Group.new(group, colors.fg)
+      end
+
+      -- Plugin highlights
+      Group.new("WhichKey", colors.fg, nil, styles.bold)
+      Group.new("WhichKeyGroup", colors.accent)
+      Group.new("WhichKeyDesc", colors.gray)
+      Group.new("GitSignsAdd", colors.fg)
+      Group.new("GitSignsChange", colors.fg)
+      Group.new("GitSignsDelete", colors.fg)
+      Group.new("Folded", colors.gray, colors.selection)
+      Group.new("FoldColumn", colors.dark_gray)
+
+      -- Oil file manager highlights (purple instead of yellow)
+      Group.new("OilDir", colors.accent)                -- Directories in purple
+      Group.new("OilDirIcon", colors.accent)            -- Directory icons in purple
+      Group.new("OilLink", colors.accent)               -- Symlinks in purple
+      Group.new("OilLinkTarget", colors.fg)             -- Link targets in white
+      Group.new("OilCopy", colors.accent)               -- Copy operations in purple
+      Group.new("OilMove", colors.accent)               -- Move operations in purple
+      Group.new("OilChange", colors.accent)             -- Changed files in purple
+      Group.new("OilCreate", colors.accent)             -- New files in purple
+      Group.new("OilDelete", colors.error)              -- Deleted files in red
+      Group.new("OilPermissionRead", colors.fg)         -- Read permissions in white
+      Group.new("OilPermissionWrite", colors.accent)    -- Write permissions in purple
+      Group.new("OilPermissionExecute", colors.accent)  -- Execute permissions in purple
+      Group.new("OilTypeText", colors.fg)               -- Text files in white
+      Group.new("OilTypeBinary", colors.gray)           -- Binary files in gray
+      Group.new("OilSocket", colors.accent)             -- Sockets in purple
+      Group.new("OilFifo", colors.accent)               -- Named pipes in purple
+      Group.new("OilBlockDevice", colors.accent)        -- Block devices in purple
+      Group.new("OilCharDevice", colors.accent)         -- Character devices in purple
+
+      -- Clean borders and separators
+      Group.new("VertSplit", colors.dark_gray)
+      Group.new("WinSeparator", colors.dark_gray)
+      Group.new("SignColumn", nil, colors.bg)
+      Group.new("EndOfBuffer", colors.dark_gray)
+
+      -- Terminal colors (minimal)
+      vim.g.terminal_color_0 = "#111111"
+      vim.g.terminal_color_8 = "#666666"
+      vim.g.terminal_color_7 = "#ffffff"
+      vim.g.terminal_color_15 = "#ffffff"
+      -- All other colors use white/gray for minimal appearance
+      for i = 1, 6 do
+        vim.g["terminal_color_" .. i] = "#ffffff"
+        vim.g["terminal_color_" .. (i + 8)] = "#666666"
+      end
     end,
   },
 }

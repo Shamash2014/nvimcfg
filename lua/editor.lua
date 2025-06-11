@@ -1133,14 +1133,32 @@ return {
     config = function(_, opts)
       require("otter").setup(opts)
 
-      -- Auto-activate otter for supported filetypes
+      -- Auto-activate otter for supported filetypes (only if code blocks are detected)
       vim.api.nvim_create_autocmd("FileType", {
         pattern = { "quarto", "rmd", "markdown" },
         callback = function()
           -- Delay activation to ensure buffer is fully loaded
           vim.defer_fn(function()
-            require("otter").activate({ "r", "python", "julia", "bash" })
-          end, 100)
+            -- Check if buffer has code blocks before activating
+            local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+            local has_code_blocks = false
+            
+            for _, line in ipairs(lines) do
+              if line:match("^```[%w_]*$") then -- Detect code block fences
+                has_code_blocks = true
+                break
+              end
+            end
+            
+            if has_code_blocks then
+              local ok, err = pcall(function()
+                require("otter").activate({ "r", "python", "julia", "bash" })
+              end)
+              if not ok and not err:match("No explicit query provided") then
+                vim.notify("Otter activation failed: " .. err, vim.log.levels.WARN)
+              end
+            end
+          end, 200)
         end,
       })
     end,
@@ -1234,109 +1252,263 @@ return {
     },
   },
 
-  -- Modern project root detection (2024/2025)
+  -- Robust project root detection with git priority
   {
-    "ygm2/rooter.nvim",
-    event = "VeryLazy",
+    dir = vim.fn.stdpath("config") .. "/lua",
+    name = "project-rooter",
     config = function()
-      -- Simple setup - this plugin might not need complex configuration
-      local ok = pcall(require, "rooter")
-      if not ok then
-        vim.notify("Failed to load rooter.nvim", vim.log.levels.ERROR)
-        return
-      end
-
-      -- Set up patterns and behavior through vim variables (common pattern for rooter plugins)
-      vim.g.rooter_patterns = {
+      local M = {}
+      
+      -- Project root patterns (ordered by priority)
+      local root_patterns = {
+        -- Git takes highest priority
         ".git",
-        "package.json",
-        "Cargo.toml",
-        "go.mod",
-        "pyproject.toml",
-        "setup.py",
-        "requirements.txt",
-        "Pipfile",
-        "poetry.lock",
-        "composer.json",
-        "mix.exs",
-        "rebar.config",
-        "Makefile",
-        "astro.config.mjs",
-        "astro.config.js",
-        "astro.config.ts",
-        "deno.json",
-        "deno.jsonc",
-        ".Rprofile",
-        "DESCRIPTION",
-        "pubspec.yaml",
+        -- Package managers and build systems
+        "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+        "Cargo.toml", "Cargo.lock",
+        "go.mod", "go.sum",
+        "pyproject.toml", "setup.py", "requirements.txt", "Pipfile", "poetry.lock", "setup.cfg",
+        "composer.json", "composer.lock",
+        "Gemfile", "Gemfile.lock",
+        "mix.exs", "rebar.config", "rebar3.config",
+        "CMakeLists.txt", "Makefile", "makefile",
+        "pubspec.yaml", "pubspec.yml",
+        "deno.json", "deno.jsonc",
+        -- IDE and editor configs
+        ".vscode", ".idea",
+        ".envrc", ".env",
+        -- R and data science
+        ".Rprofile", "DESCRIPTION", "renv.lock",
+        -- Web frameworks
+        "astro.config.mjs", "astro.config.js", "astro.config.ts",
+        "nuxt.config.js", "nuxt.config.ts",
+        "next.config.js", "next.config.ts",
+        "svelte.config.js", "vite.config.js", "vite.config.ts",
+        "webpack.config.js", "rollup.config.js",
+        -- Documentation
+        "README.md", "readme.md", "README.rst",
       }
-
-      vim.g.rooter_silent_chdir = 1
-      vim.g.rooter_change_directory_for_non_project_files = 'current'
-      vim.g.rooter_resolve_links = 1
-
-      -- Add manual commands
-      vim.api.nvim_create_user_command("ProjectRoot", function()
-        -- Use vim's built-in rooter function or implement simple logic
-        local patterns = vim.g.rooter_patterns
-        local current_dir = vim.fn.expand('%:p:h')
-        local root_dir = current_dir
-
-        -- Simple root detection logic
-        for _, pattern in ipairs(patterns) do
-          local found = vim.fn.finddir(pattern, current_dir .. ';')
-          if found ~= '' then
-            root_dir = vim.fn.fnamemodify(found, ':h')
-            break
-          end
-
-          local found_file = vim.fn.findfile(pattern, current_dir .. ';')
-          if found_file ~= '' then
-            root_dir = vim.fn.fnamemodify(found_file, ':h')
-            break
+      
+      -- Find git root based on current file location (not nvim cwd)
+      function M.find_git_root(start_path)
+        -- Always prioritize the current file's directory over nvim's cwd
+        if not start_path then
+          local current_file = vim.fn.expand('%:p')
+          if current_file and current_file ~= '' then
+            start_path = vim.fn.fnamemodify(current_file, ':h')
+          else
+            start_path = vim.fn.getcwd()
           end
         end
-
-        if root_dir ~= current_dir then
-          vim.cmd('cd ' .. root_dir)
-          vim.notify("Project root: " .. root_dir, vim.log.levels.INFO)
-        else
-          vim.notify("No project root found", vim.log.levels.WARN)
+        
+        -- Try the most reliable method first: git rev-parse from the file's directory
+        local cmd = string.format("cd %s && git rev-parse --show-toplevel 2>/dev/null", vim.fn.shellescape(start_path))
+        local result = vim.fn.system(cmd):gsub("\n", "")
+        
+        if vim.v.shell_error == 0 and result ~= "" and vim.fn.isdirectory(result) == 1 then
+          return result
         end
-      end, { desc = "Set project root manually" })
-
-      -- Show current project root info
-      vim.api.nvim_create_user_command("ProjectInfo", function()
+        
+        -- Fallback: walk up directories looking for .git
+        local current = start_path
+        while current ~= "/" and current ~= "" do
+          local git_dir = current .. "/.git"
+          if vim.fn.isdirectory(git_dir) == 1 or vim.fn.filereadable(git_dir) == 1 then
+            return current
+          end
+          local parent = vim.fn.fnamemodify(current, ":h")
+          if parent == current then break end
+          current = parent
+        end
+        
+        return nil
+      end
+      
+      -- Find project root starting from given directory
+      function M.find_root(start_path)
+        start_path = start_path or vim.fn.expand('%:p:h')
+        
+        -- If no file buffer, use current working directory
+        if start_path == '' or start_path == '.' then
+          start_path = vim.fn.getcwd()
+        end
+        
+        -- Try git root first (most reliable for git projects)
+        local git_root = M.find_git_root(start_path)
+        if git_root then
+          return git_root
+        end
+        
+        -- Fall back to pattern matching for non-git projects
+        local current_dir = start_path
+        
+        -- Walk up the directory tree
+        while current_dir ~= "/" and current_dir ~= "" do
+          for _, pattern in ipairs(root_patterns) do
+            local path = current_dir .. "/" .. pattern
+            if vim.fn.isdirectory(path) == 1 or vim.fn.filereadable(path) == 1 then
+              return current_dir
+            end
+          end
+          
+          -- Go up one level
+          local parent = vim.fn.fnamemodify(current_dir, ":h")
+          if parent == current_dir then
+            break -- Reached filesystem root
+          end
+          current_dir = parent
+        end
+        
+        -- No root found, return the starting directory
+        return start_path
+      end
+      
+      -- Get current project root
+      function M.get_current_root()
+        return M.find_root()
+      end
+      
+      -- Change to project root
+      function M.change_to_root(silent)
+        local root = M.find_root()
+        local current_cwd = vim.fn.getcwd()
+        
+        if root and root ~= current_cwd then
+          vim.cmd("cd " .. vim.fn.fnameescape(root))
+          if not silent then
+            vim.notify("📁 Project root: " .. root, vim.log.levels.INFO)
+          end
+          return true
+        end
+        
+        if not silent then
+          vim.notify("Already at project root: " .. current_cwd, vim.log.levels.INFO)
+        end
+        return false
+      end
+      
+      -- Show project info
+      function M.show_info()
         local cwd = vim.fn.getcwd()
+        local root = M.find_root()
         local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
-
+        
+        local info = { "📂 Project Information:", "" }
+        table.insert(info, "Current directory: " .. cwd)
+        table.insert(info, "Detected root: " .. root)
+        
         if vim.v.shell_error == 0 and git_root ~= "" then
-          vim.notify(string.format("Current: %s\nGit root: %s", cwd, git_root), vim.log.levels.INFO)
+          table.insert(info, "Git repository: " .. git_root)
+          if git_root ~= root then
+            table.insert(info, "⚠️  Root mismatch detected")
+          end
         else
-          vim.notify("Current: " .. cwd, vim.log.levels.INFO)
+          table.insert(info, "Git repository: Not a git repo")
         end
-      end, { desc = "Show current project info" })
-
-      -- Auto-change to project root on file open
-      vim.api.nvim_create_autocmd({ "BufRead", "BufWinEnter", "BufNewFile" }, {
-        group = vim.api.nvim_create_augroup("rooter_auto", { clear = true }),
-        callback = function()
-          vim.schedule(function()
-            vim.cmd("ProjectRoot")
-          end)
-        end,
-      })
+        
+        -- Check for project markers
+        local markers_found = {}
+        for _, pattern in ipairs(root_patterns) do
+          local path = root .. "/" .. pattern
+          if vim.fn.isdirectory(path) == 1 or vim.fn.filereadable(path) == 1 then
+            table.insert(markers_found, pattern)
+          end
+        end
+        
+        if #markers_found > 0 then
+          table.insert(info, "")
+          table.insert(info, "Project markers found:")
+          for _, marker in ipairs(markers_found) do
+            table.insert(info, "  • " .. marker)
+          end
+        end
+        
+        vim.notify(table.concat(info, "\n"), vim.log.levels.INFO)
+      end
+      
+      -- Setup autocommands for automatic root detection
+      function M.setup_auto_root()
+        local group = vim.api.nvim_create_augroup("project_rooter", { clear = true })
+        
+        -- Change to project root when opening files
+        vim.api.nvim_create_autocmd({ "BufEnter", "BufNewFile" }, {
+          group = group,
+          callback = function(ev)
+            -- Don't change root for special buffers
+            local buftype = vim.bo[ev.buf].buftype
+            if buftype ~= "" and buftype ~= "acwrite" then
+              return
+            end
+            
+            -- Don't change root for certain filetypes
+            local filetype = vim.bo[ev.buf].filetype
+            local ignore_fts = { "help", "qf", "fugitive", "gitcommit", "gitrebase" }
+            for _, ft in ipairs(ignore_fts) do
+              if filetype == ft then
+                return
+              end
+            end
+            
+            vim.schedule(function()
+              M.change_to_root(true) -- Silent mode for auto-changes
+            end)
+          end,
+        })
+        
+        -- Also run when Vim starts
+        vim.api.nvim_create_autocmd("VimEnter", {
+          group = group,
+          callback = function()
+            vim.schedule(function()
+              M.change_to_root(true)
+            end)
+          end,
+        })
+      end
+      
+      -- Global access
+      _G.ProjectRooter = M
+      
+      -- Setup auto root detection
+      M.setup_auto_root()
+      
+      -- Create user commands
+      vim.api.nvim_create_user_command("ProjectRoot", function()
+        M.change_to_root()
+      end, { desc = "Change to project root" })
+      
+      vim.api.nvim_create_user_command("ProjectInfo", function()
+        M.show_info()
+      end, { desc = "Show project information" })
+      
+      vim.api.nvim_create_user_command("ProjectFind", function()
+        local root = M.find_root()
+        vim.notify("Project root would be: " .. root, vim.log.levels.INFO)
+      end, { desc = "Find project root without changing" })
+      
     end,
     keys = {
       {
         "<leader>fP",
-        "<cmd>ProjectRoot<cr>",
-        desc = "Set Project Root"
+        function()
+          _G.ProjectRooter.change_to_root()
+        end,
+        desc = "Go to project root"
       },
       {
         "<leader>fI",
-        "<cmd>ProjectInfo<cr>",
-        desc = "Project Info"
+        function()
+          _G.ProjectRooter.show_info()
+        end,
+        desc = "Project info"
+      },
+      {
+        "<leader>fR",
+        function()
+          local root = _G.ProjectRooter.find_root()
+          vim.notify("Project root: " .. root, vim.log.levels.INFO)
+        end,
+        desc = "Show project root"
       },
     },
   },
@@ -1351,7 +1523,9 @@ return {
         open = function()
           -- Auto-detect project root when opening workspace
           vim.schedule(function()
-            vim.cmd("ProjectRoot")
+            if _G.ProjectRooter then
+              _G.ProjectRooter.change_to_root(true)
+            end
           end)
         end,
       },
@@ -1492,110 +1666,118 @@ return {
     },
   },
 
-  -- Multiple cursors (Doom Emacs gz style)
+  -- Multiple cursors (reliable and battle-tested)
   {
-    "zaucy/mcos.nvim",
-    event = { "BufReadPost", "BufNewFile" },
-    opts = {
-      delay = 500,
-      show_numbers = true,
-      max_cursors = 50,
-      wrap_around = true,
-      vim_command_hooks = {
-        before = {},
-        after = {},
-      },
-    },
-    config = function(_, opts)
-      require("mcos").setup(opts)
-
-      -- Custom highlight groups to match theme
-      vim.api.nvim_set_hl(0, "McosCursor", { fg = "#ffffff", bg = "#bb9af7" })
-      vim.api.nvim_set_hl(0, "McosVisual", { fg = "#000000", bg = "#666666" })
-      vim.api.nvim_set_hl(0, "McosNumber", { fg = "#bb9af7", bold = true })
+    "mg979/vim-visual-multi",
+    event = "VeryLazy",
+    init = function()
+      -- Disable default mappings to avoid conflicts
+      vim.g.VM_default_mappings = 0
+      vim.g.VM_maps = {
+        ["Find Under"] = "",
+        ["Find Subword Under"] = "",
+      }
+      
+      -- Custom highlighting to match theme
+      vim.g.VM_Cursor_hl = "MultiCursor"
+      vim.g.VM_Extend_hl = "MultiCursorExtend"
+      vim.g.VM_Mono_hl = "MultiCursorMono"
+      vim.g.VM_Insert_hl = "MultiCursorInsert"
+    end,
+    config = function()
+      -- Set custom highlight groups
+      vim.api.nvim_set_hl(0, "MultiCursor", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "MultiCursorExtend", { fg = "#ffffff", bg = "#666666" })
+      vim.api.nvim_set_hl(0, "MultiCursorMono", { fg = "#bb9af7", bg = "#222222" })
+      vim.api.nvim_set_hl(0, "MultiCursorInsert", { fg = "#000000", bg = "#bb9af7" })
     end,
     keys = {
       -- Doom Emacs gz prefix keybindings
       {
         "gzm",
-        function()
-          require("mcos").find_next()
-        end,
+        "<Plug>(VM-Find-Under)",
         mode = { "n", "v" },
-        desc = "Add cursor at next match"
+        desc = "Find word under cursor"
       },
       {
         "gzM",
-        function()
-          require("mcos").find_prev()
-        end,
+        "<Plug>(VM-Find-Subword-Under)",
         mode = { "n", "v" },
-        desc = "Add cursor at previous match"
+        desc = "Find subword under cursor"
       },
       {
-        "gzs",
-        function()
-          require("mcos").skip_next()
-        end,
+        "gzn",
+        "<Plug>(VM-Add-Cursor-Down)",
         mode = { "n", "v" },
-        desc = "Skip next match"
+        desc = "Add cursor down"
       },
       {
-        "gzS",
-        function()
-          require("mcos").skip_prev()
-        end,
+        "gzp",
+        "<Plug>(VM-Add-Cursor-Up)",
         mode = { "n", "v" },
-        desc = "Skip previous match"
+        desc = "Add cursor up"
       },
       {
         "gza",
-        function()
-          require("mcos").find_all()
-        end,
+        "<Plug>(VM-Select-All)",
         mode = { "n", "v" },
-        desc = "Add cursors at all matches"
+        desc = "Select all occurrences"
+      },
+      {
+        "gzs",
+        "<Plug>(VM-Skip-Region)",
+        mode = { "n", "v" },
+        desc = "Skip current and find next"
+      },
+      {
+        "gzr",
+        "<Plug>(VM-Remove-Region)",
+        mode = { "n", "v" },
+        desc = "Remove current region"
       },
       {
         "gzc",
-        function()
-          require("mcos").clear()
-        end,
+        "<Plug>(VM-Exit)",
         mode = { "n", "v" },
-        desc = "Clear all cursors"
+        desc = "Exit multicursor mode"
+      },
+      -- Visual mode selections
+      {
+        "gzv",
+        "<Plug>(VM-Visual-Cursors)",
+        mode = "v",
+        desc = "Create cursors from visual"
       },
       {
-        "gzj",
-        function()
-          require("mcos").add_cursor_down()
-        end,
-        mode = { "n", "v" },
-        desc = "Add cursor below"
+        "gzA",
+        "<Plug>(VM-Visual-All)",
+        mode = "v",
+        desc = "Select all in visual"
       },
       {
-        "gzk",
-        function()
-          require("mcos").add_cursor_up()
-        end,
-        mode = { "n", "v" },
-        desc = "Add cursor above"
+        "gzf",
+        "<Plug>(VM-Visual-Find)",
+        mode = "v",
+        desc = "Find in visual selection"
       },
-      -- Alternative quick access (keeping some common patterns)
+      -- Alternative quick access (common patterns)
       {
         "<C-n>",
-        function()
-          require("mcos").find_next()
-        end,
+        "<Plug>(VM-Find-Under)",
         mode = { "n", "v" },
-        desc = "Add cursor at next match"
+        desc = "Find word under cursor"
       },
       {
-        "<Esc>",
-        function()
-          require("mcos").clear()
-        end,
+        "<C-Down>",
+        "<Plug>(VM-Add-Cursor-Down)",
         mode = { "n", "v" },
-        desc = "Clear all cursors"
+        desc = "Add cursor down"
+      },
+      {
+        "<C-Up>",
+        "<Plug>(VM-Add-Cursor-Up)",
+        mode = { "n", "v" },
+        desc = "Add cursor up"
       },
     },
   },
@@ -1859,6 +2041,549 @@ return {
       end
     end,
   },
+
+  -- Advanced refactoring tools
+  {
+    "smjonas/inc-rename.nvim",
+    cmd = "IncRename",
+    config = function()
+      require("inc_rename").setup({
+        input_buffer_type = "dressing",
+        preview_empty_name = false,
+      })
+    end,
+    keys = {
+      {
+        "<leader>crn",
+        function()
+          return ":IncRename " .. vim.fn.expand("<cword>")
+        end,
+        desc = "Incremental rename",
+        expr = true,
+      },
+    },
+  },
+
+  -- Enhanced search and replace (snacks-integrated)
+  {
+    "MagicDuck/grug-far.nvim",
+    cmd = "GrugFar",
+    opts = {
+      headerMaxWidth = 80,
+      transient = false,
+      windowCreationCommand = "tabnew %",
+      staticTitle = "Find and Replace",
+      engines = {
+        ripgrep = {
+          placeholders = {
+            enabled = true,
+            search = "ex: foo   foo([a-z0-9]*)   fun\\(",
+            replacement = "ex: bar   ${1}_bar   zig\\(",
+            filesFilter = "ex: *.lua   *.{css,js}   **/docs/**",
+            flags = "ex: --help --ignore-case (-i) --replace= (empty replace) --multiline (-U)",
+          },
+        },
+      },
+    },
+    config = function(_, opts)
+      require("grug-far").setup(opts)
+      
+      -- Integrate with snacks picker for better file selection
+      local grug_far = require("grug-far")
+      local original_get_current_files = grug_far.get_current_files
+      
+      -- Override file selection to use snacks picker
+      grug_far.get_current_files = function()
+        return Snacks.picker.files({
+          layout = { preset = "vscode", preview = "main" },
+          title = "Select files for search",
+          multi = true,
+        })
+      end
+    end,
+    keys = {
+      {
+        "<leader>sr",
+        function()
+          local grug = require("grug-far")
+          local ext = vim.bo.buftype == "" and vim.fn.expand("%:e")
+          grug.open({
+            transient = true,
+            prefills = {
+              filesFilter = ext and ext ~= "" and "*." .. ext or nil,
+            },
+          })
+        end,
+        mode = { "n", "v" },
+        desc = "Search and Replace",
+      },
+      {
+        "<leader>sw",
+        function()
+          local grug = require("grug-far")
+          local ext = vim.bo.buftype == "" and vim.fn.expand("%:e")
+          grug.open({
+            transient = true,
+            prefills = {
+              search = vim.fn.expand("<cword>"),
+              filesFilter = ext and ext ~= "" and "*." .. ext or nil,
+            },
+          })
+        end,
+        desc = "Search and Replace Word",
+      },
+      -- Enhanced search using snacks picker first
+      {
+        "<leader>sR",
+        function()
+          -- Use snacks to find and select, then open grug-far with results
+          Snacks.picker.grep({
+            layout = { preset = "vscode", preview = "main" },
+            title = "Search to replace",
+          }, function(items)
+            if items and #items > 0 then
+              local first_result = items[1]
+              local search_term = first_result.text and first_result.text:match("([^:]+)") or ""
+              require("grug-far").open({
+                transient = true,
+                prefills = {
+                  search = search_term,
+                  filesFilter = first_result.filename and ("*" .. vim.fn.fnamemodify(first_result.filename, ":e")) or nil,
+                },
+              })
+            end
+          end)
+        end,
+        desc = "Search with Snacks then Replace",
+      },
+    },
+  },
+
+  -- Code generation with LuaSnip enhancement
+  {
+    "L3MON4D3/LuaSnip",
+    dependencies = {
+      "rafamadriz/friendly-snippets",
+      "saadparwaiz1/cmp_luasnip",
+    },
+    event = "InsertEnter",
+    config = function()
+      local luasnip = require("luasnip")
+      
+      -- Load snippets from friendly-snippets
+      require("luasnip.loaders.from_vscode").lazy_load()
+      
+      -- Custom snippets for common patterns
+      local s = luasnip.snippet
+      local t = luasnip.text_node
+      local i = luasnip.insert_node
+      local f = luasnip.function_node
+      
+      luasnip.add_snippets("all", {
+        s("todo", {
+          t("// TODO: "),
+          i(1, "description"),
+        }),
+        s("fixme", {
+          t("// FIXME: "),
+          i(1, "description"),
+        }),
+      })
+      
+      -- Language-specific snippets
+      luasnip.add_snippets("typescript", {
+        s("comp", {
+          t({"export const "}), i(1, "Component"), t({" = () => {", "  return (", "    <div>"}),
+          i(2, "content"), t({"</div>", "  )", "}"}),
+        }),
+        s("func", {
+          t("const "), i(1, "name"), t(" = ("), i(2, "params"), t("): "), i(3, "ReturnType"), t({" => {", "  "}),
+          i(4, "// implementation"), t({"", "}"}),
+        }),
+      })
+      
+      luasnip.add_snippets("python", {
+        s("def", {
+          t("def "), i(1, "function_name"), t("("), i(2, "params"), t(") -> "), i(3, "ReturnType"), t({":", "    "}),
+          i(4, '"""Docstring."""'), t({"", "    "}), i(5, "pass"),
+        }),
+        s("class", {
+          t("class "), i(1, "ClassName"), t("("), i(2, "BaseClass"), t({"):", "    "}),
+          i(3, '"""Class docstring."""'), t({"", "", "    def __init__(self"}),
+          i(4, ", args"), t({"):", "        "}), i(5, "pass"),
+        }),
+      })
+      
+      luasnip.add_snippets("dart", {
+        s("class", {
+          t("class "), i(1, "ClassName"), t({" {", "  "}), i(2, "// implementation"), t({"", "}"}),
+        }),
+        s("widget", {
+          t({"class "}), i(1, "WidgetName"), t({" extends StatelessWidget {", "  const "}), 
+          f(function(args) return args[1][1] end, {1}), t({"({super.key});", "", "  @override", "  Widget build(BuildContext context) {", "    return "}),
+          i(2, "Container()"), t({";", "  }", "}"}),
+        }),
+      })
+      
+      -- Enhanced which-key integration
+      local ok, wk = pcall(require, "which-key")
+      if ok then
+        wk.add({
+          { "<leader>cs", group = "snippets" },
+          { "<leader>cse", function() require("luasnip.loaders").edit_snippet_files() end, desc = "edit snippets" },
+          { "<leader>csr", function() require("luasnip").unlink_current() end, desc = "unlink snippet" },
+        })
+      end
+    end,
+    keys = {
+      {
+        "<Tab>",
+        function()
+          local luasnip = require("luasnip")
+          if luasnip.locally_jumpable(1) then
+            luasnip.jump(1)
+          else
+            return "<Tab>"
+          end
+        end,
+        expr = true,
+        silent = true,
+        mode = "i",
+        desc = "Jump to next snippet node",
+      },
+      {
+        "<S-Tab>",
+        function()
+          local luasnip = require("luasnip")
+          if luasnip.locally_jumpable(-1) then
+            luasnip.jump(-1)
+          else
+            return "<S-Tab>"
+          end
+        end,
+        expr = true,
+        silent = true,
+        mode = "i",
+        desc = "Jump to previous snippet node",
+      },
+    },
+  },
+
+  -- Async task runner
+  {
+    "stevearc/overseer.nvim",
+    cmd = {
+      "OverseerOpen",
+      "OverseerClose",
+      "OverseerToggle",
+      "OverseerSaveBundle",
+      "OverseerLoadBundle",
+      "OverseerDeleteBundle",
+      "OverseerRunCmd",
+      "OverseerRun",
+      "OverseerInfo",
+      "OverseerBuild",
+      "OverseerQuickAction",
+      "OverseerTaskAction",
+      "OverseerClearCache",
+    },
+    opts = {
+      strategy = {
+        "toggleterm",
+        direction = "horizontal",
+        autos_croll = true,
+        quit_on_exit = "success"
+      },
+      templates = { "builtin", "user.dart_tasks", "user.node_tasks", "user.python_tasks" },
+      auto_scroll = true,
+      open_on_start = false,
+      task_list = {
+        direction = "bottom",
+        min_height = 15,
+        max_height = 20,
+        default_detail = 1,
+        bindings = {
+          ["?"] = "ShowHelp",
+          ["g?"] = "ShowHelp",
+          ["<CR>"] = "RunAction",
+          ["<C-e>"] = "Edit",
+          ["o"] = "Open",
+          ["<C-v>"] = "OpenVsplit",
+          ["<C-s>"] = "OpenSplit",
+          ["<C-f>"] = "OpenFloat",
+          ["<C-q>"] = "OpenQuickFix",
+          ["p"] = "TogglePreview",
+          ["<C-l>"] = "IncreaseDetail",
+          ["<C-h>"] = "DecreaseDetail",
+          ["L"] = "IncreaseAllDetail",
+          ["H"] = "DecreaseAllDetail",
+          ["["] = "DecreaseWidth",
+          ["]"] = "IncreaseWidth",
+          ["{"] = "PrevTask",
+          ["}"] = "NextTask",
+          ["<C-k>"] = "ScrollOutputUp",
+          ["<C-j>"] = "ScrollOutputDown",
+          ["q"] = "Close",
+        },
+      },
+      form = {
+        border = "single",
+        win_opts = {
+          winblend = 0,
+        },
+      },
+      confirm = {
+        border = "single",
+        win_opts = {
+          winblend = 0,
+        },
+      },
+      task_win = {
+        border = "single",
+        win_opts = {
+          winblend = 0,
+        },
+      },
+    },
+    config = function(_, opts)
+      require("overseer").setup(opts)
+      
+      -- Create custom task templates
+      local overseer = require("overseer")
+      
+      -- Flutter/Dart tasks
+      overseer.register_template({
+        name = "flutter run",
+        builder = function()
+          return {
+            cmd = { "flutter" },
+            args = { "run" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "dart" },
+        },
+      })
+      
+      overseer.register_template({
+        name = "flutter test",
+        builder = function()
+          return {
+            cmd = { "flutter" },
+            args = { "test" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "dart" },
+        },
+      })
+      
+      -- Node.js tasks
+      overseer.register_template({
+        name = "npm run dev",
+        builder = function()
+          return {
+            cmd = { "npm" },
+            args = { "run", "dev" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "javascript", "typescript", "javascriptreact", "typescriptreact" },
+        },
+      })
+      
+      -- Python tasks
+      overseer.register_template({
+        name = "python run",
+        builder = function()
+          return {
+            cmd = { "python" },
+            args = { vim.fn.expand("%") },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "python" },
+        },
+      })
+      
+      -- Enhanced which-key integration
+      local ok, wk = pcall(require, "which-key")
+      if ok then
+        wk.add({
+          { "<leader>co", group = "overseer" },
+          { "<leader>cor", desc = "run task" },
+          { "<leader>cot", desc = "toggle task list" },
+          { "<leader>coo", desc = "open task list" },
+          { "<leader>coc", desc = "close task list" },
+          { "<leader>coq", desc = "quick action" },
+          { "<leader>coi", desc = "task info" },
+        })
+      end
+    end,
+    keys = {
+      { "<leader>cor", "<cmd>OverseerRun<cr>", desc = "Run task" },
+      { "<leader>cot", "<cmd>OverseerToggle<cr>", desc = "Toggle task list" },
+      { "<leader>coo", "<cmd>OverseerOpen<cr>", desc = "Open task list" },
+      { "<leader>coc", "<cmd>OverseerClose<cr>", desc = "Close task list" },
+      { "<leader>coq", "<cmd>OverseerQuickAction<cr>", desc = "Quick action" },
+      { "<leader>coi", "<cmd>OverseerInfo<cr>", desc = "Task info" },
+      { "<leader>!!", function()
+        vim.ui.input({ prompt = "Command: " }, function(cmd)
+          if cmd and cmd ~= "" then
+            require("overseer").new_task({
+              cmd = vim.split(cmd, " "),
+              components = { "default" },
+            }):start()
+          end
+        end)
+      end, desc = "Run shell command" },
+    },
+  },
+
+  -- Modern folding with nvim-origami (serious nesting only)
+  {
+    "chrisgrieser/nvim-origami",
+    event = "BufReadPost",
+    opts = {
+      keepFoldsAcrossSessions = true,
+      pauseFoldsOnSearch = true,
+      setupFoldKeymaps = true,
+      -- Only create folds for serious nesting (4+ levels deep)
+      foldlevelstart = 4,
+      h = {
+        auto_close = false,  -- Don't auto-close, let user decide
+        auto_open = true,
+      },
+    },
+    config = function(_, opts)
+      require("origami").setup(opts)
+      
+      -- Set folding method and levels for serious nesting only
+      vim.opt.foldmethod = "indent"
+      vim.opt.foldlevel = 3        -- Start folding at level 4 (0-indexed)
+      vim.opt.foldlevelstart = 3   -- Open files with folds up to level 3
+      vim.opt.foldnestmax = 10     -- Maximum fold nesting
+      vim.opt.foldminlines = 4     -- Minimum lines needed to create a fold
+      
+      -- Language-specific fold settings for serious nesting
+      vim.api.nvim_create_autocmd("FileType", {
+        group = vim.api.nvim_create_augroup("origami_filetype", { clear = true }),
+        callback = function()
+          local ft = vim.bo.filetype
+          
+          -- For code files, use treesitter folding with higher threshold
+          if ft == "lua" or ft == "python" or ft == "javascript" or ft == "typescript" 
+             or ft == "jsx" or ft == "tsx" or ft == "rust" or ft == "go" 
+             or ft == "c" or ft == "cpp" or ft == "java" or ft == "dart" then
+            vim.opt_local.foldmethod = "expr"
+            vim.opt_local.foldexpr = "nvim_treesitter#foldexpr()"
+            vim.opt_local.foldlevel = 4      -- Even more conservative for code
+            vim.opt_local.foldminlines = 6   -- Need at least 6 lines to fold
+          
+          -- For markup files, be more conservative  
+          elseif ft == "markdown" or ft == "rst" or ft == "asciidoc" then
+            vim.opt_local.foldmethod = "expr"
+            vim.opt_local.foldexpr = "nvim_treesitter#foldexpr()"
+            vim.opt_local.foldlevel = 2      -- Only fold deep sections
+            vim.opt_local.foldminlines = 8   -- Need substantial content
+          
+          -- For config files, minimal folding
+          elseif ft == "yaml" or ft == "json" or ft == "toml" or ft == "xml" then
+            vim.opt_local.foldlevel = 5      -- Very deep nesting only
+            vim.opt_local.foldminlines = 10  -- Large blocks only
+          end
+        end,
+      })
+      
+      -- Enhanced folding keybindings (z-prefixed)
+      local map = vim.keymap.set
+      
+      -- Core fold navigation (enhance existing z motions)
+      map("n", "zj", "zj", { desc = "Next fold start" })
+      map("n", "zk", "zk", { desc = "Previous fold start" })
+      map("n", "zJ", function()
+        vim.cmd("normal! zj")
+        vim.cmd("normal! zo")
+      end, { desc = "Next fold and open" })
+      map("n", "zK", function()
+        vim.cmd("normal! zk")
+        vim.cmd("normal! zo")
+      end, { desc = "Previous fold and open" })
+      
+      -- Enhanced fold management (z-prefixed)
+      map("n", "zO", "zR", { desc = "Open all folds" })
+      map("n", "zC", "zM", { desc = "Close all folds" })
+      map("n", "zt", "za", { desc = "Toggle fold" })
+      map("n", "zr", "zr", { desc = "Reduce fold level" })
+      map("n", "zm", "zm", { desc = "More fold level" })
+      
+      -- Fold creation and deletion (z-prefixed) 
+      map("n", "zf", "zf", { desc = "Create fold" })
+      map("v", "zf", "zf", { desc = "Create fold" })
+      map("n", "zd", "zd", { desc = "Delete fold" })
+      map("n", "zD", "zD", { desc = "Delete fold recursively" })
+      map("n", "zE", "zE", { desc = "Eliminate all folds" })
+      
+      -- Advanced fold operations (z-prefixed)
+      map("n", "zn", "zN", { desc = "Fold none (disable folding)" })
+      map("n", "zi", "zi", { desc = "Invert fold enable" })
+      map("n", "zx", "zx", { desc = "Update folds" })
+      map("n", "zX", "zX", { desc = "Undo manual folds" })
+      
+      -- Fold level jumps (z-prefixed)
+      map("n", "z1", function() vim.opt.foldlevel = 1 end, { desc = "Set fold level 1" })
+      map("n", "z2", function() vim.opt.foldlevel = 2 end, { desc = "Set fold level 2" })
+      map("n", "z3", function() vim.opt.foldlevel = 3 end, { desc = "Set fold level 3" })
+      map("n", "z4", function() vim.opt.foldlevel = 4 end, { desc = "Set fold level 4" })
+      map("n", "z5", function() vim.opt.foldlevel = 5 end, { desc = "Set fold level 5" })
+      map("n", "z0", function() vim.opt.foldlevel = 0 end, { desc = "Set fold level 0 (close all)" })
+      
+      -- Enhanced which-key integration
+      local ok, wk = pcall(require, "which-key")
+      if ok then
+        wk.add({
+          { "z", group = "fold" },
+          -- Core fold operations
+          { "za", desc = "toggle fold" },
+          { "zo", desc = "open fold" },
+          { "zc", desc = "close fold" },
+          { "zt", desc = "toggle fold" },
+          -- Navigation
+          { "zj", desc = "next fold start" },
+          { "zk", desc = "previous fold start" },
+          { "zJ", desc = "next fold and open" },
+          { "zK", desc = "previous fold and open" },
+          -- Global operations
+          { "zO", desc = "open all folds (zR)" },
+          { "zC", desc = "close all folds (zM)" },
+          { "zr", desc = "reduce fold level" },
+          { "zm", desc = "more fold level" },
+          -- Creation/deletion
+          { "zf", desc = "create fold" },
+          { "zd", desc = "delete fold" },
+          { "zD", desc = "delete fold recursively" },
+          { "zE", desc = "eliminate all folds" },
+          -- Advanced
+          { "zn", desc = "fold none (disable)" },
+          { "zi", desc = "invert fold enable" },
+          { "zx", desc = "update folds" },
+          { "zX", desc = "undo manual folds" },
+          -- Level shortcuts
+          { "z0", desc = "fold level 0 (close all)" },
+          { "z1", desc = "fold level 1" },
+          { "z2", desc = "fold level 2" },
+          { "z3", desc = "fold level 3" },
+          { "z4", desc = "fold level 4" },
+          { "z5", desc = "fold level 5" },
+        })
+      end
+    end,
+  },
+
 
   -- Color highlighting (colorizer)
   {
