@@ -76,7 +76,7 @@ return {
     event = { "BufReadPre", "BufNewFile" },
     config = function()
       local lint = require("lint")
-      
+
       lint.linters_by_ft = {
         python = { "ruff" },
         javascript = { "eslint" },
@@ -125,7 +125,7 @@ return {
         parser = function(output, bufnr)
           local diagnostics = {}
           local lines = vim.split(output, "\n")
-          
+
           for _, line in ipairs(lines) do
             local level, msg, file, lnum, col = line:match("^%s*(%w+)%s*•%s*(.-)%s*•%s*(.-)%s*:(%d+):(%d+)")
             if level and msg and lnum and col then
@@ -147,14 +147,14 @@ return {
               })
             end
           end
-          
+
           return diagnostics
         end,
       }
 
       -- Auto-lint on save and text change
       local lint_augroup = vim.api.nvim_create_augroup("lint", { clear = true })
-      
+
       vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost", "InsertLeave" }, {
         group = lint_augroup,
         callback = function()
@@ -165,7 +165,7 @@ return {
           end
         end,
       })
-      
+
       -- Also lint when entering a buffer
       vim.api.nvim_create_autocmd("BufReadPost", {
         group = lint_augroup,
@@ -329,7 +329,7 @@ return {
         require("import-cost").setup({
           filetypes = {
             "javascript",
-            "typescript", 
+            "typescript",
             "javascriptreact",
             "typescriptreact",
           },
@@ -342,8 +342,8 @@ return {
       end
     end,
     keys = {
-      { 
-        "<leader>ic", 
+      {
+        "<leader>ic",
         function()
           local script_path = vim.fn.stdpath("data") .. "/lazy/import-cost.nvim/import-cost/index.js"
           if vim.fn.filereadable(script_path) == 1 then
@@ -355,8 +355,8 @@ return {
         desc = "Import Cost",
         ft = { "javascript", "typescript", "javascriptreact", "typescriptreact" }
       },
-      { 
-        "<leader>it", 
+      {
+        "<leader>it",
         function()
           local script_path = vim.fn.stdpath("data") .. "/lazy/import-cost.nvim/import-cost/index.js"
           if vim.fn.filereadable(script_path) == 1 then
@@ -378,7 +378,7 @@ return {
     config = function()
       require("symbol-usage").setup({
         ---@type table<string, any> `nvim_set_hl`-like options for highlight group
-        hl = { fg = "#bb9af7" }, -- Purple to match theme
+        hl = { fg = "#bb9af7" },             -- Purple to match theme
         ---@type lsp.SymbolKind[] Symbol kinds what need to be count (see `lsp.SymbolKind`)
         kinds = { 1, 6, 12, 14, 16, 5, 13 }, -- Function, Method, Variable, Property, Field, Class, Interface
         ---@type 'above'|'end_of_line'|'textwidth'|'signcolumn' `above` by default
@@ -389,7 +389,7 @@ return {
         ---@type string|false
         request_pending_text = false,
         ---Text to display when there are no references. If `false`, extmark will not be created.
-        ---@type string|false  
+        ---@type string|false
         references_text = false,
         ---Text to display when there are no definitions. If `false`, extmark will not be created.
         ---@type string|false
@@ -401,7 +401,7 @@ return {
         ---`__*` - symbols with double underscore prefix
         ---`_*` - symbols with underscore prefix in Python
         symbols_filter = function(symbol)
-          return not string.match(symbol.name, "^__") 
+          return not string.match(symbol.name, "^__")
         end,
         ---Additional filter for references count. References count lower this value will be ignored.
         ---@type integer
@@ -409,29 +409,29 @@ return {
         ---@type function(): string|false Text to display as suffix. If `false`, no suffix is displayed.
         text_format = function(symbol)
           local fragments = {}
-          
-          -- Add reference count with parentheses  
+
+          -- Add reference count with parentheses
           if symbol.references and symbol.references > 0 then
             local usage = symbol.references == 1 and "ref" or "refs"
             table.insert(fragments, ("%d %s"):format(symbol.references, usage))
           end
-          
+
           -- Add definition indicator
           if symbol.definition then
             table.insert(fragments, "def")
           end
-          
-          -- Add implementation indicator  
+
+          -- Add implementation indicator
           if symbol.implementation then
             table.insert(fragments, "impl")
           end
-          
+
           return #fragments > 0 and ("(%s)"):format(table.concat(fragments, ", ")) or ""
         end,
       })
     end,
     keys = {
-      { "<leader>su", "<cmd>SymbolUsageToggle<cr>", desc = "Toggle Symbol Usage" },
+      { "<leader>su", "<cmd>SymbolUsageToggle<cr>",  desc = "Toggle Symbol Usage" },
       { "<leader>sr", "<cmd>SymbolUsageRefresh<cr>", desc = "Refresh Symbol Usage" },
     },
   },
@@ -442,39 +442,39 @@ return {
     event = "LspAttach",
     config = function()
       require("lsp_lines").setup()
-      
+
       -- Disable virtual text (we'll use lsp_lines instead)
       vim.diagnostic.config({
         virtual_text = false,
         virtual_lines = { only_current_line = true },
       })
-      
+
       -- Auto-toggle: show diagnostics only for current line
       local group = vim.api.nvim_create_augroup("lsp_lines_current_line", { clear = true })
-      
+
       vim.api.nvim_create_autocmd("CursorMoved", {
         group = group,
         callback = function()
           -- Hide all virtual lines first
           vim.diagnostic.config({ virtual_lines = false })
-          
+
           -- Show virtual lines only for current line if it has diagnostics
           local line = vim.api.nvim_win_get_cursor(0)[1] - 1
           local diagnostics = vim.diagnostic.get(0, { lnum = line })
-          
+
           if #diagnostics > 0 then
             vim.diagnostic.config({ virtual_lines = { only_current_line = true } })
           end
         end,
       })
-      
+
       -- Also show on CursorHold for a bit more stability
       vim.api.nvim_create_autocmd("CursorHold", {
         group = group,
         callback = function()
           local line = vim.api.nvim_win_get_cursor(0)[1] - 1
           local diagnostics = vim.diagnostic.get(0, { lnum = line })
-          
+
           if #diagnostics > 0 then
             vim.diagnostic.config({ virtual_lines = { only_current_line = true } })
           else
@@ -525,29 +525,8 @@ return {
         exception_breakpoints = {},
         evaluate_to_string_in_debug_views = true,
       },
-      flutter_path = function()
-        -- Check direnv first for FLUTTER_ROOT
-        local flutter_root = vim.env.FLUTTER_ROOT
-        if flutter_root and vim.fn.isdirectory(flutter_root) == 1 then
-          return flutter_root .. "/bin/flutter"
-        end
-        
-        -- Check for FVM
-        local fvm_default = vim.fn.expand("~/fvm/default")
-        if vim.fn.isdirectory(fvm_default) == 1 then
-          return fvm_default .. "/bin/flutter"
-        end
-        
-        -- Check .fvm/flutter_sdk in current project
-        local fvm_local = vim.fn.getcwd() .. "/.fvm/flutter_sdk"
-        if vim.fn.isdirectory(fvm_local) == 1 then
-          return fvm_local .. "/bin/flutter"
-        end
-        
-        -- Fallback to PATH
-        return "flutter"
-      end,
-      fvm = true,
+      fvm = false,
+      flutter_lookup_cmd = "asdf where flutter",
       widget_guides = {
         enabled = true,
       },
@@ -585,7 +564,7 @@ return {
               codeActionKind = {
                 valueSet = {
                   "source.organizeImports.dart",
-                  "source.fixAll.dart", 
+                  "source.fixAll.dart",
                   "quickfix.dart",
                   "refactor.dart",
                 }
@@ -599,7 +578,7 @@ return {
           completeFunctionCalls = true,
           analysisExcludedFolders = {
             vim.fn.expand("~/.pub-cache"),
-            vim.fn.expand("~/fvm/versions"), 
+            vim.fn.expand("~/fvm/versions"),
             vim.fn.expand("/opt/homebrew"),
             vim.fn.expand("$HOME/AppData/Local/Pub/Cache"),
             vim.fn.expand("$HOME/.pub-cache"),
@@ -612,55 +591,55 @@ return {
       }
     },
     keys = {
-      { "<leader>cfr", "<cmd>FlutterRun<cr>", desc = "Flutter Run" },
-      { "<leader>cfR", "<cmd>FlutterRestart<cr>", desc = "Flutter Restart" },
-      { "<leader>cfq", "<cmd>FlutterQuit<cr>", desc = "Flutter Quit" },
-      { "<leader>cfh", "<cmd>FlutterReload<cr>", desc = "Flutter Hot Reload" },
-      { "<leader>cfH", "<cmd>FlutterRestart<cr>", desc = "Flutter Hot Restart" },
-      { "<leader>cfd", "<cmd>FlutterDevices<cr>", desc = "Flutter Devices" },
-      { "<leader>cfe", "<cmd>FlutterEmulators<cr>", desc = "Flutter Emulators" },
+      { "<leader>cfr", "<cmd>FlutterRun<cr>",           desc = "Flutter Run" },
+      { "<leader>cfR", "<cmd>FlutterRestart<cr>",       desc = "Flutter Restart" },
+      { "<leader>cfq", "<cmd>FlutterQuit<cr>",          desc = "Flutter Quit" },
+      { "<leader>cfh", "<cmd>FlutterReload<cr>",        desc = "Flutter Hot Reload" },
+      { "<leader>cfH", "<cmd>FlutterRestart<cr>",       desc = "Flutter Hot Restart" },
+      { "<leader>cfd", "<cmd>FlutterDevices<cr>",       desc = "Flutter Devices" },
+      { "<leader>cfe", "<cmd>FlutterEmulators<cr>",     desc = "Flutter Emulators" },
       { "<leader>cfo", "<cmd>FlutterOutlineToggle<cr>", desc = "Flutter Outline" },
-      { "<leader>cfD", "<cmd>FlutterDevTools<cr>", desc = "Flutter DevTools" },
-      { "<leader>cfL", "<cmd>FlutterLogClear<cr>", desc = "Flutter Log Clear" },
-      { "<leader>cfs", "<cmd>FlutterSuper<cr>", desc = "Flutter Super" },
-      { "<leader>cfg", "<cmd>FlutterPubGet<cr>", desc = "Flutter Pub Get" },
-      { "<leader>cfG", "<cmd>FlutterPubUpgrade<cr>", desc = "Flutter Pub Upgrade" },
-      { "<leader>cfc", "<cmd>FlutterClean<cr>", desc = "Flutter Clean" },
-      { "<leader>cft", "<cmd>FlutterTest<cr>", desc = "Flutter Test" },
-      { "<leader>cfT", "<cmd>FlutterTestAll<cr>", desc = "Flutter Test All" },
-      { "<leader>cfv", "<cmd>FlutterVersion<cr>", desc = "Flutter Version" },
-      { "<leader>cfp", "<cmd>FlutterPubDeps<cr>", desc = "Flutter Pub Deps" },
-      { "<leader>cfn", "<cmd>FlutterRename<cr>", desc = "Flutter Rename" },
-      { "<leader>cfi", "<cmd>FlutterScreenshot<cr>", desc = "Flutter Screenshot" },
+      { "<leader>cfD", "<cmd>FlutterDevTools<cr>",      desc = "Flutter DevTools" },
+      { "<leader>cfL", "<cmd>FlutterLogClear<cr>",      desc = "Flutter Log Clear" },
+      { "<leader>cfs", "<cmd>FlutterSuper<cr>",         desc = "Flutter Super" },
+      { "<leader>cfg", "<cmd>FlutterPubGet<cr>",        desc = "Flutter Pub Get" },
+      { "<leader>cfG", "<cmd>FlutterPubUpgrade<cr>",    desc = "Flutter Pub Upgrade" },
+      { "<leader>cfc", "<cmd>FlutterClean<cr>",         desc = "Flutter Clean" },
+      { "<leader>cft", "<cmd>FlutterTest<cr>",          desc = "Flutter Test" },
+      { "<leader>cfT", "<cmd>FlutterTestAll<cr>",       desc = "Flutter Test All" },
+      { "<leader>cfv", "<cmd>FlutterVersion<cr>",       desc = "Flutter Version" },
+      { "<leader>cfp", "<cmd>FlutterPubDeps<cr>",       desc = "Flutter Pub Deps" },
+      { "<leader>cfn", "<cmd>FlutterRename<cr>",        desc = "Flutter Rename" },
+      { "<leader>cfi", "<cmd>FlutterScreenshot<cr>",    desc = "Flutter Screenshot" },
     },
     config = function(_, opts)
       require("flutter-tools").setup(opts)
-      
+
       -- Enhanced which-key integration for Flutter
       local ok, wk = pcall(require, "which-key")
       if ok then
         wk.add({
-          { "<leader>cf", group = "flutter", ft = "dart" },
-          { "<leader>cfr", desc = "run", ft = "dart" },
-          { "<leader>cfR", desc = "restart", ft = "dart" },
-          { "<leader>cfq", desc = "quit", ft = "dart" },
-          { "<leader>cfh", desc = "hot reload", ft = "dart" },
+          { "<leader>cf",  group = "flutter",    ft = "dart" },
+          { "<leader>cfr", desc = "run",         ft = "dart" },
+          { "<leader>cfR", desc = "restart",     ft = "dart" },
+          { "<leader>cfq", desc = "quit",        ft = "dart" },
+          { "<leader>cfh", desc = "hot reload",  ft = "dart" },
           { "<leader>cfH", desc = "hot restart", ft = "dart" },
-          { "<leader>cfd", desc = "devices", ft = "dart" },
-          { "<leader>cfe", desc = "emulators", ft = "dart" },
-          { "<leader>cfo", desc = "outline", ft = "dart" },
-          { "<leader>cfD", desc = "devtools", ft = "dart" },
-          { "<leader>cfL", desc = "log clear", ft = "dart" },
-          { "<leader>cfs", desc = "super", ft = "dart" },
-          { "<leader>cfg", desc = "pub get", ft = "dart" },
+          { "<leader>cfd", desc = "devices",     ft = "dart" },
+          { "<leader>cfe", desc = "emulators",   ft = "dart" },
+          { "<leader>cfo", desc = "outline",     ft = "dart" },
+          { "<leader>cfD", desc = "devtools",    ft = "dart" },
+          { "<leader>cfL", desc = "log clear",   ft = "dart" },
+          { "<leader>cfs", desc = "super",       ft = "dart" },
+          { "<leader>cfg", desc = "pub get",     ft = "dart" },
           { "<leader>cfG", desc = "pub upgrade", ft = "dart" },
-          { "<leader>cfc", desc = "clean", ft = "dart" },
-          { "<leader>cft", desc = "test", ft = "dart" },
-          { "<leader>cfT", desc = "test all", ft = "dart" },
-          { "<leader>cfv", desc = "version", ft = "dart" },
-          { "<leader>cfp", desc = "pub deps", ft = "dart" },
-          { "<leader>cfn", desc = "rename", ft = "dart" },
-          { "<leader>cfi", desc = "screenshot", ft = "dart" },
+          { "<leader>cfc", desc = "clean",       ft = "dart" },
+          { "<leader>cft", desc = "test",        ft = "dart" },
+          { "<leader>cfT", desc = "test all",    ft = "dart" },
+          { "<leader>cfv", desc = "version",     ft = "dart" },
+          { "<leader>cfp", desc = "pub deps",    ft = "dart" },
+          { "<leader>cfn", desc = "rename",      ft = "dart" },
+          { "<leader>cfi", desc = "screenshot",  ft = "dart" },
         })
       end
     end,
@@ -676,13 +655,16 @@ return {
         "igorlfs/nvim-dap-view",
         config = function()
           require("dap-view").setup({
-            float = {
-              border = "single",
-              mappings = {
-                edit = "e",
-                expand = "<CR>",
-                repl = "r",
-                toggle = "t",
+            windows = {
+              height = 12,
+              position = "below",
+              terminal = {
+                position = "right",
+                width = 0.5,
+                -- List of debug adapters for which the terminal should be ALWAYS hidden
+                hide = {},
+                -- Hide the terminal when starting a new session
+                start_hidden = false,
               },
             },
           })
@@ -690,34 +672,34 @@ return {
       },
     },
     keys = {
-      { "<leader>db", function() require("dap").toggle_breakpoint() end, desc = "Toggle Breakpoint" },
+      { "<leader>db", function() require("dap").toggle_breakpoint() end,                                    desc = "Toggle Breakpoint" },
       { "<leader>dB", function() require("dap").set_breakpoint(vim.fn.input("Breakpoint condition: ")) end, desc = "Conditional Breakpoint" },
-      { "<leader>dc", function() require("dap").continue() end, desc = "Continue" },
-      { "<leader>da", function() require("dap").continue({ before = get_args }) end, desc = "Run with Args" },
-      { "<leader>dC", function() require("dap").run_to_cursor() end, desc = "Run to Cursor" },
-      { "<leader>dg", function() require("dap").goto_() end, desc = "Go to Line (No Execute)" },
-      { "<leader>di", function() require("dap").step_into() end, desc = "Step Into" },
-      { "<leader>dj", function() require("dap").down() end, desc = "Down" },
-      { "<leader>dk", function() require("dap").up() end, desc = "Up" },
-      { "<leader>dl", function() require("dap").run_last() end, desc = "Run Last" },
-      { "<leader>do", function() require("dap").step_out() end, desc = "Step Out" },
-      { "<leader>dO", function() require("dap").step_over() end, desc = "Step Over" },
-      { "<leader>dp", function() require("dap").pause() end, desc = "Pause" },
-      { "<leader>dr", function() require("dap").repl.toggle() end, desc = "Toggle REPL" },
-      { "<leader>ds", function() require("dap").session() end, desc = "Session" },
-      { "<leader>dt", function() require("dap").terminate() end, desc = "Terminate" },
-      { "<leader>dw", function() require("dap.ui.widgets").hover() end, desc = "Widgets" },
-      { "<leader>dv", function() require("dap-view").toggle() end, desc = "DAP View" },
+      { "<leader>dc", function() require("dap").continue() end,                                             desc = "Continue" },
+      { "<leader>da", function() require("dap").continue({ before = get_args }) end,                        desc = "Run with Args" },
+      { "<leader>dC", function() require("dap").run_to_cursor() end,                                        desc = "Run to Cursor" },
+      { "<leader>dg", function() require("dap").goto_() end,                                                desc = "Go to Line (No Execute)" },
+      { "<leader>di", function() require("dap").step_into() end,                                            desc = "Step Into" },
+      { "<leader>dj", function() require("dap").down() end,                                                 desc = "Down" },
+      { "<leader>dk", function() require("dap").up() end,                                                   desc = "Up" },
+      { "<leader>dl", function() require("dap").run_last() end,                                             desc = "Run Last" },
+      { "<leader>do", function() require("dap").step_out() end,                                             desc = "Step Out" },
+      { "<leader>dO", function() require("dap").step_over() end,                                            desc = "Step Over" },
+      { "<leader>dp", function() require("dap").pause() end,                                                desc = "Pause" },
+      { "<leader>dr", function() require("dap").repl.toggle() end,                                          desc = "Toggle REPL" },
+      { "<leader>ds", function() require("dap").session() end,                                              desc = "Session" },
+      { "<leader>dt", function() require("dap").terminate() end,                                            desc = "Terminate" },
+      { "<leader>dw", function() require("dap.ui.widgets").hover() end,                                     desc = "Widgets" },
+      { "<leader>dv", function() require("dap-view").toggle() end,                                          desc = "DAP View" },
     },
     config = function()
       local dap = require("dap")
-      
+
       -- Configure signs
       vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DiagnosticError" })
       vim.fn.sign_define("DapBreakpointCondition", { text = "◐", texthl = "DiagnosticWarn" })
       vim.fn.sign_define("DapBreakpointRejected", { text = "○", texthl = "DiagnosticInfo" })
       vim.fn.sign_define("DapStopped", { text = "→", texthl = "DiagnosticWarn", linehl = "Visual" })
-      
+
       -- DAP Virtual Text
       require("nvim-dap-virtual-text").setup({
         enabled = true,
@@ -736,14 +718,14 @@ return {
       })
 
       -- Language-specific configurations
-      
+
       -- Node.js/TypeScript
       dap.adapters.node2 = {
         type = 'executable',
         command = 'node',
-        args = {vim.fn.exepath('js-debug-adapter')},
+        args = { vim.fn.exepath('js-debug-adapter') },
       }
-      
+
       dap.configurations.javascript = {
         {
           name = 'Launch',
@@ -759,12 +741,12 @@ return {
           name = 'Attach to process',
           type = 'node2',
           request = 'attach',
-          processId = require'dap.utils'.pick_process,
+          processId = require 'dap.utils'.pick_process,
         },
       }
-      
+
       dap.configurations.typescript = dap.configurations.javascript
-      
+
       -- Python
       dap.adapters.python = function(cb, config)
         if config.request == 'attach' then
@@ -789,7 +771,7 @@ return {
           })
         end
       end
-      
+
       dap.configurations.python = {
         {
           type = 'python',
@@ -801,17 +783,17 @@ return {
           end,
         },
       }
-      
+
       -- Rust (via CodeLLDB)
       dap.adapters.codelldb = {
         type = 'server',
         port = '${port}',
         executable = {
           command = 'codelldb',
-          args = {'--port', '${port}'},
+          args = { '--port', '${port}' },
         }
       }
-      
+
       dap.configurations.rust = {
         {
           name = 'Launch file',
@@ -824,18 +806,18 @@ return {
           stopOnEntry = false,
         },
       }
-      
+
       -- C/C++
       dap.configurations.c = dap.configurations.rust
       dap.configurations.cpp = dap.configurations.rust
-      
+
       -- Dart/Flutter (enhanced by flutter-tools.nvim)
       dap.adapters.dart = {
         type = "executable",
         command = "dart",
-        args = {"debug_adapter"},
+        args = { "debug_adapter" },
       }
-      
+
       dap.configurations.dart = {
         {
           type = "dart",
@@ -891,9 +873,9 @@ return {
       "DBUIFindBuffer",
     },
     keys = {
-      { "<leader>od", "<cmd>DBUIToggle<cr>", desc = "Database UI" },
-      { "<leader>of", "<cmd>DBUIFindBuffer<cr>", desc = "Find DB Buffer" },
-      { "<leader>or", "<cmd>DBUIRenameBuffer<cr>", desc = "Rename DB Buffer" },
+      { "<leader>od", "<cmd>DBUIToggle<cr>",        desc = "Database UI" },
+      { "<leader>of", "<cmd>DBUIFindBuffer<cr>",    desc = "Find DB Buffer" },
+      { "<leader>or", "<cmd>DBUIRenameBuffer<cr>",  desc = "Rename DB Buffer" },
       { "<leader>oq", "<cmd>DBUILastQueryInfo<cr>", desc = "Last Query Info" },
     },
     init = function()
@@ -903,13 +885,13 @@ return {
       vim.g.db_ui_force_echo_notifications = 1
       vim.g.db_ui_win_position = "left"
       vim.g.db_ui_winwidth = 40
-      
+
       -- Auto-execute table queries
       vim.g.db_ui_auto_execute_table_helpers = 1
-      
+
       -- Save location for queries
       vim.g.db_ui_save_location = vim.fn.stdpath("data") .. "/db_ui"
-      
+
       -- Icons (minimal, matching theme)
       vim.g.db_ui_icons = {
         expanded = {
@@ -938,10 +920,10 @@ return {
         connection_ok = "✅",
         connection_error = "❌",
       }
-      
+
       -- Drawer behavior
       vim.g.db_ui_tmp_query_location = vim.fn.stdpath("data") .. "/db_ui/tmp"
-      
+
       -- Execute current query on <leader><CR>
       vim.api.nvim_create_autocmd("FileType", {
         pattern = { "sql", "mysql", "plsql" },
@@ -967,9 +949,9 @@ return {
   {
     "ravitemer/mcphub.nvim",
     dependencies = {
-      "nvim-lua/plenary.nvim", -- Required for Job and HTTP requests
+      "nvim-lua/plenary.nvim",               -- Required for Job and HTTP requests
     },
-    cmd = "MCPHub", -- Lazily start the hub when MCPHub is called
+    cmd = "MCPHub",                          -- Lazily start the hub when MCPHub is called
     build = "npm install -g mcp-hub@latest", -- Installs required mcp-hub npm module
     config = function()
       require("mcphub").setup({
@@ -1004,7 +986,7 @@ return {
     "olimorris/codecompanion.nvim",
     cmd = {
       "CodeCompanion",
-      "CodeCompanionActions", 
+      "CodeCompanionActions",
       "CodeCompanionChat",
       "CodeCompanionCmd",
     },
@@ -1015,7 +997,7 @@ return {
     },
     keys = {
       { "<leader>oc", "<cmd>CodeCompanionChat Toggle<cr>", mode = { "n", "v" }, desc = "CodeCompanion Chat" },
-      { "<leader>oa", "<cmd>CodeCompanionActions<cr>", mode = { "n", "v" }, desc = "CodeCompanion Actions" },
+      { "<leader>oa", "<cmd>CodeCompanionActions<cr>",     mode = { "n", "v" }, desc = "CodeCompanion Actions" },
     },
     opts = {
       display = {
@@ -1108,8 +1090,8 @@ return {
     "jmbuhr/otter.nvim",
     dependencies = {
       "nvim-treesitter/nvim-treesitter",
-      { 
-        "quarto-dev/quarto-nvim", 
+      {
+        "quarto-dev/quarto-nvim",
         opts = {
           lspFeatures = {
             enabled = true,
@@ -1136,21 +1118,21 @@ return {
       handle_leading_whitespace = true,
     },
     keys = {
-      { "<leader>oa", function() require("otter").activate() end, desc = "Activate Otter" },
+      { "<leader>oa", function() require("otter").activate() end,   desc = "Activate Otter" },
       { "<leader>od", function() require("otter").deactivate() end, desc = "Deactivate Otter" },
-      { "<leader>oo", function() require("otter").toggle() end, desc = "Toggle Otter" },
+      { "<leader>oo", function() require("otter").toggle() end,     desc = "Toggle Otter" },
       {
-        "<leader>oi", 
+        "<leader>oi",
         function()
           require("otter").activate({ "r", "python", "julia", "bash" })
           vim.notify("Otter activated for R, Python, Julia, and Bash", vim.log.levels.INFO)
-        end, 
+        end,
         desc = "Activate Otter (multi-lang)"
       },
     },
     config = function(_, opts)
       require("otter").setup(opts)
-      
+
       -- Auto-activate otter for supported filetypes
       vim.api.nvim_create_autocmd("FileType", {
         pattern = { "quarto", "rmd", "markdown" },
@@ -1179,15 +1161,15 @@ return {
       vim.g.molten_virt_lines_off_by_1 = true
     end,
     keys = {
-      { "<leader>oji", ":MoltenInit<CR>", desc = "Initialize Molten" },
-      { "<leader>oje", ":MoltenEvaluateOperator<CR>", desc = "Evaluate operator", mode = "n" },
+      { "<leader>oji", ":MoltenInit<CR>",                  desc = "Initialize Molten" },
+      { "<leader>oje", ":MoltenEvaluateOperator<CR>",      desc = "Evaluate operator",         mode = "n" },
       { "<leader>oje", ":<C-u>MoltenEvaluateVisual<CR>gv", desc = "Evaluate visual selection", mode = "v" },
-      { "<leader>ojr", ":MoltenReevaluateCell<CR>", desc = "Re-evaluate cell" },
-      { "<leader>ojd", ":MoltenDelete<CR>", desc = "Delete Molten cell" },
-      { "<leader>ojo", ":MoltenShowOutput<CR>", desc = "Show output" },
-      { "<leader>ojh", ":MoltenHideOutput<CR>", desc = "Hide output" },
-      { "<leader>ojj", ":MoltenNext<CR>", desc = "Next cell" },
-      { "<leader>ojk", ":MoltenPrev<CR>", desc = "Previous cell" },
+      { "<leader>ojr", ":MoltenReevaluateCell<CR>",        desc = "Re-evaluate cell" },
+      { "<leader>ojd", ":MoltenDelete<CR>",                desc = "Delete Molten cell" },
+      { "<leader>ojo", ":MoltenShowOutput<CR>",            desc = "Show output" },
+      { "<leader>ojh", ":MoltenHideOutput<CR>",            desc = "Hide output" },
+      { "<leader>ojj", ":MoltenNext<CR>",                  desc = "Next cell" },
+      { "<leader>ojk", ":MoltenPrev<CR>",                  desc = "Previous cell" },
     },
   },
 
@@ -1235,20 +1217,20 @@ return {
           force_ft = "quarto",
         },
         r = {
-          extension = "qmd", 
+          extension = "qmd",
           style = "quarto",
           force_ft = "quarto",
         },
         julia = {
           extension = "qmd",
-          style = "quarto", 
+          style = "quarto",
           force_ft = "quarto",
         },
       },
     },
     keys = {
       { "<leader>ojc", ":JupytextConvert<CR>", desc = "Convert Jupyter notebook" },
-      { "<leader>ojs", ":JupytextSync<CR>", desc = "Sync Jupyter notebook" },
+      { "<leader>ojs", ":JupytextSync<CR>",    desc = "Sync Jupyter notebook" },
     },
   },
 
@@ -1263,13 +1245,13 @@ return {
         vim.notify("Failed to load rooter.nvim", vim.log.levels.ERROR)
         return
       end
-      
+
       -- Set up patterns and behavior through vim variables (common pattern for rooter plugins)
-      vim.g.rooter_patterns = { 
-        ".git", 
-        "package.json", 
-        "Cargo.toml", 
-        "go.mod", 
+      vim.g.rooter_patterns = {
+        ".git",
+        "package.json",
+        "Cargo.toml",
+        "go.mod",
         "pyproject.toml",
         "setup.py",
         "requirements.txt",
@@ -1280,7 +1262,7 @@ return {
         "rebar.config",
         "Makefile",
         "astro.config.mjs",
-        "astro.config.js", 
+        "astro.config.js",
         "astro.config.ts",
         "deno.json",
         "deno.jsonc",
@@ -1288,18 +1270,18 @@ return {
         "DESCRIPTION",
         "pubspec.yaml",
       }
-      
+
       vim.g.rooter_silent_chdir = 1
       vim.g.rooter_change_directory_for_non_project_files = 'current'
       vim.g.rooter_resolve_links = 1
-      
+
       -- Add manual commands
       vim.api.nvim_create_user_command("ProjectRoot", function()
         -- Use vim's built-in rooter function or implement simple logic
         local patterns = vim.g.rooter_patterns
         local current_dir = vim.fn.expand('%:p:h')
         local root_dir = current_dir
-        
+
         -- Simple root detection logic
         for _, pattern in ipairs(patterns) do
           local found = vim.fn.finddir(pattern, current_dir .. ';')
@@ -1307,14 +1289,14 @@ return {
             root_dir = vim.fn.fnamemodify(found, ':h')
             break
           end
-          
+
           local found_file = vim.fn.findfile(pattern, current_dir .. ';')
           if found_file ~= '' then
             root_dir = vim.fn.fnamemodify(found_file, ':h')
             break
           end
         end
-        
+
         if root_dir ~= current_dir then
           vim.cmd('cd ' .. root_dir)
           vim.notify("Project root: " .. root_dir, vim.log.levels.INFO)
@@ -1322,19 +1304,19 @@ return {
           vim.notify("No project root found", vim.log.levels.WARN)
         end
       end, { desc = "Set project root manually" })
-      
+
       -- Show current project root info
       vim.api.nvim_create_user_command("ProjectInfo", function()
         local cwd = vim.fn.getcwd()
         local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
-        
+
         if vim.v.shell_error == 0 and git_root ~= "" then
           vim.notify(string.format("Current: %s\nGit root: %s", cwd, git_root), vim.log.levels.INFO)
         else
           vim.notify("Current: " .. cwd, vim.log.levels.INFO)
         end
       end, { desc = "Show current project info" })
-      
+
       -- Auto-change to project root on file open
       vim.api.nvim_create_autocmd({ "BufRead", "BufWinEnter", "BufNewFile" }, {
         group = vim.api.nvim_create_augroup("rooter_auto", { clear = true }),
@@ -1383,14 +1365,14 @@ return {
     },
     config = function(_, opts)
       require("workspaces").setup(opts)
-      
+
       -- Auto-save workspace when changing directories
       vim.api.nvim_create_autocmd("DirChanged", {
         group = vim.api.nvim_create_augroup("workspaces_auto", { clear = true }),
         callback = function()
           local cwd = vim.fn.getcwd()
           local workspace_name = vim.fn.fnamemodify(cwd, ":t")
-          
+
           -- Only auto-add if it looks like a project directory
           local project_markers = { ".git", "package.json", "Cargo.toml", "go.mod", "pyproject.toml" }
           for _, marker in ipairs(project_markers) do
@@ -1403,7 +1385,7 @@ return {
                   break
                 end
               end
-              
+
               if not exists then
                 require("workspaces").add(cwd, workspace_name)
                 vim.notify("Added workspace: " .. workspace_name, vim.log.levels.INFO)
@@ -1420,12 +1402,12 @@ return {
         function()
           -- Custom workspace picker using Snacks
           local workspaces = require("workspaces").get()
-          
+
           if #workspaces == 0 then
             vim.notify("No workspaces found", vim.log.levels.WARN)
             return
           end
-          
+
           local items = {}
           for _, workspace in ipairs(workspaces) do
             table.insert(items, {
@@ -1434,11 +1416,11 @@ return {
               display = workspace.name .. " (" .. workspace.path .. ")",
             })
           end
-          
+
           Snacks.picker.pick({
             items = items,
-            format = function(item) 
-              return item.display 
+            format = function(item)
+              return item.display
             end,
             confirm = function(item)
               require("workspaces").open(item.name)
@@ -1455,7 +1437,7 @@ return {
         function()
           local cwd = vim.fn.getcwd()
           local default_name = vim.fn.fnamemodify(cwd, ":t")
-          
+
           vim.ui.input({
             prompt = "Workspace name: ",
             default = default_name,
@@ -1472,12 +1454,12 @@ return {
         "<leader>fwd",
         function()
           local workspaces = require("workspaces").get()
-          
+
           if #workspaces == 0 then
             vim.notify("No workspaces to remove", vim.log.levels.WARN)
             return
           end
-          
+
           local items = {}
           for _, workspace in ipairs(workspaces) do
             table.insert(items, {
@@ -1486,11 +1468,11 @@ return {
               display = workspace.name .. " (" .. workspace.path .. ")",
             })
           end
-          
+
           Snacks.picker.pick({
             items = items,
-            format = function(item) 
-              return item.display 
+            format = function(item)
+              return item.display
             end,
             confirm = function(item)
               require("workspaces").remove(item.name)
@@ -1526,7 +1508,7 @@ return {
     },
     config = function(_, opts)
       require("mcos").setup(opts)
-      
+
       -- Custom highlight groups to match theme
       vim.api.nvim_set_hl(0, "McosCursor", { fg = "#ffffff", bg = "#bb9af7" })
       vim.api.nvim_set_hl(0, "McosVisual", { fg = "#000000", bg = "#666666" })
@@ -1633,7 +1615,7 @@ return {
             javascriptreact = [[console.log("%identifier %log_target:", %log_target)]],
             typescriptreact = [[console.log("%identifier %log_target:", %log_target)]],
             lua = [[print("%identifier %log_target:", vim.inspect(%log_target))]],
-            python = [[print(f"%identifier %log_target: {%log_target}")]], 
+            python = [[print(f"%identifier %log_target: {%log_target}")]],
             go = [[fmt.Printf("%identifier %log_target: %+v\n", %log_target)]],
             rust = [[println!("%identifier %log_target: {:?}", %log_target);]],
             c = [[printf("%identifier %log_target: %s\n", %log_target);]],
@@ -1660,7 +1642,7 @@ return {
           -- Insert log statement for word under cursor
           insert_log_below = "<leader>ljj",
           insert_log_above = "<leader>ljk",
-          -- Insert log statement for visual selection  
+          -- Insert log statement for visual selection
           insert_log_below_visual = "<leader>ljj",
           insert_log_above_visual = "<leader>ljk",
           -- Add plain log statement
@@ -1673,13 +1655,13 @@ return {
         -- Auto-generate unique identifiers
         auto_add_identifier = true,
       })
-      
+
       -- Enhanced which-key integration for timber
       local wk = require("which-key")
       wk.add({
-        { "<leader>lj", group = "timber logs" },
+        { "<leader>lj",  group = "timber logs" },
         { "<leader>ljj", desc = "log below" },
-        { "<leader>ljk", desc = "log above" }, 
+        { "<leader>ljk", desc = "log above" },
         { "<leader>lja", desc = "add to template" },
         { "<leader>ljb", desc = "batch log" },
         { "<leader>ljd", desc = "delete all logs" },
@@ -1693,8 +1675,8 @@ return {
       { "<leader>ljk", desc = "Insert log above" },
       { "<leader>lja", desc = "Add log targets" },
       { "<leader>ljb", desc = "Insert batch log" },
-      { "<leader>ljj", mode = "v", desc = "Insert log below (visual)" },
-      { "<leader>ljk", mode = "v", desc = "Insert log above (visual)" },
+      { "<leader>ljj", mode = "v",               desc = "Insert log below (visual)" },
+      { "<leader>ljk", mode = "v",               desc = "Insert log above (visual)" },
       -- Additional timber commands
       {
         "<leader>ljd",
@@ -1713,7 +1695,7 @@ return {
         desc = "Goto next log"
       },
       {
-        "<leader>ljG", 
+        "<leader>ljG",
         function()
           -- Go to previous log statement
           vim.cmd([[?🪵]])
@@ -1731,7 +1713,7 @@ return {
       local autopairs = require("nvim-autopairs")
       local Rule = require("nvim-autopairs.rule")
       local cond = require("nvim-autopairs.conds")
-      
+
       autopairs.setup({
         check_ts = true, -- Enable treesitter integration
         ts_config = {
@@ -1759,36 +1741,36 @@ return {
         map_c_h = false,
         map_c_w = false,
       })
-      
+
       -- Custom rules for different languages
-      
+
       -- JSX/TSX custom rules
       autopairs.add_rules({
         -- JSX tag completion
         Rule("<", ">", { "javascriptreact", "typescriptreact" })
-          :with_pair(cond.before_regex("%a+"))
-          :with_move(function(opts) return opts.char == ">" end),
-        
+            :with_pair(cond.before_regex("%a+"))
+            :with_move(function(opts) return opts.char == ">" end),
+
         -- JSX self-closing tag
         Rule("<", " />", { "javascriptreact", "typescriptreact" })
-          :with_pair(cond.before_regex("%a+"))
-          :with_move(function(opts) return opts.char == ">" end),
-        
+            :with_pair(cond.before_regex("%a+"))
+            :with_move(function(opts) return opts.char == ">" end),
+
         -- Template literals
         Rule("`", "`", { "javascript", "typescript", "javascriptreact", "typescriptreact" }),
-        
+
         -- JSX expression braces
         Rule("{", "}", { "javascriptreact", "typescriptreact" })
-          :with_pair(cond.not_inside_quote()),
+            :with_pair(cond.not_inside_quote()),
       })
-      
+
       -- XML/HTML rules
       autopairs.add_rules({
         Rule("<", ">", { "html", "xml", "astro", "vue", "svelte" })
-          :with_pair(cond.before_regex("%a+"))
-          :with_move(function(opts) return opts.char == ">" end),
+            :with_pair(cond.before_regex("%a+"))
+            :with_move(function(opts) return opts.char == ">" end),
       })
-      
+
       -- Markdown rules
       autopairs.add_rules({
         Rule("*", "*", "markdown"),
@@ -1797,29 +1779,29 @@ return {
         Rule("`", "`", "markdown"),
         Rule("```", "```", "markdown"),
       })
-      
+
       -- Language-specific bracket rules
       autopairs.add_rules({
         -- Rust
         Rule("|", "|", "rust")
-          :with_pair(cond.before_regex("%w+"))
-          :with_move(function(opts) return opts.char == "|" end),
-        
+            :with_pair(cond.before_regex("%w+"))
+            :with_move(function(opts) return opts.char == "|" end),
+
         -- Go
         Rule("interface{", "}", "go"),
         Rule("struct{", "}", "go"),
-        
+
         -- Python f-strings
         Rule("f\"", "\"", "python"),
         Rule("f'", "'", "python"),
-        
+
         -- Lua string literals
         Rule("[[", "]]", "lua"),
-        
+
         -- CSS/SCSS
         Rule("${", "}", { "css", "scss", "sass" }),
       })
-      
+
       -- Integrate with blink.cmp
       local ok, blink_cmp = pcall(require, "blink.cmp")
       if ok and blink_cmp and blink_cmp.event then
@@ -1846,20 +1828,20 @@ return {
           lua = { names = false },
         },
         user_default_options = {
-          RGB = true, -- #RGB hex codes
-          RRGGBB = true, -- #RRGGBB hex codes
-          names = true, -- "Name" codes like Blue or red
-          RRGGBBAA = false, -- #RRGGBBAA hex codes
-          AARRGGBB = false, -- 0xAARRGGBB hex codes
-          rgb_fn = false, -- CSS rgb() and rgba() functions
-          hsl_fn = false, -- CSS hsl() and hsla() functions
-          css = false, -- Enable all CSS features: rgb_fn, hsl_fn, names, RGB, RRGGBB
-          css_fn = false, -- Enable all CSS *functions*: rgb_fn, hsl_fn
+          RGB = true,          -- #RGB hex codes
+          RRGGBB = true,       -- #RRGGBB hex codes
+          names = true,        -- "Name" codes like Blue or red
+          RRGGBBAA = false,    -- #RRGGBBAA hex codes
+          AARRGGBB = false,    -- 0xAARRGGBB hex codes
+          rgb_fn = false,      -- CSS rgb() and rgba() functions
+          hsl_fn = false,      -- CSS hsl() and hsla() functions
+          css = false,         -- Enable all CSS features: rgb_fn, hsl_fn, names, RGB, RRGGBB
+          css_fn = false,      -- Enable all CSS *functions*: rgb_fn, hsl_fn
           -- Available modes for `mode`: foreground, background,  virtualtext
           mode = "background", -- Set the display mode
           -- Available methods are false / true / "normal" / "lsp" / "both"
           -- True is same as normal
-          tailwind = false, -- Enable tailwind colors
+          tailwind = false,                              -- Enable tailwind colors
           -- parsers can contain values used in |user_default_options|
           sass = { enable = true, parsers = { "css" } }, -- Enable sass colors
           virtualtext = "■",
@@ -1884,3 +1866,4 @@ return {
     },
   },
 }
+
