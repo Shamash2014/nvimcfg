@@ -740,21 +740,160 @@ local plugins = {
     },
   },
 
-  -- Git diff viewer
+  -- Git diff viewer with inline diffing
   {
     "sindrets/diffview.nvim",
-    cmd = { "DiffviewOpen", "DiffviewClose", "DiffviewToggleFiles", "DiffviewFocusFiles", "DiffviewFileHistory" },
+    cmd = { 
+      "DiffviewOpen", "DiffviewClose", "DiffviewToggleFiles", "DiffviewFocusFiles", 
+      "DiffviewFileHistory", "DiffviewRefresh"
+    },
+    config = function()
+      require("diffview").setup({
+        enhanced_diff_hl = true,
+        view = {
+          default = { 
+            layout = "diff2_horizontal",
+            winbar_info = true,
+          },
+          file_history = { 
+            layout = "diff2_horizontal",
+            winbar_info = true,
+          },
+          merge_tool = { 
+            layout = "diff3_horizontal",
+            winbar_info = true,
+          },
+        },
+        file_panel = {
+          listing_style = "tree",
+          tree_options = {
+            flatten_dirs = true,
+            folder_statuses = "only_folded",
+          },
+          win_config = {
+            position = "left",
+            width = 35,
+          },
+        },
+        file_history_panel = {
+          log_options = {
+            git = {
+              single_file = {
+                diff_merges = "combined",
+              },
+              multi_file = {
+                diff_merges = "first-parent",
+              },
+            },
+          },
+        },
+        commit_log_panel = {
+          win_config = {
+            win_opts = {},
+          },
+        },
+        default_args = {
+          DiffviewOpen = {},
+          DiffviewFileHistory = {},
+        },
+        hooks = {},
+        keymaps = {
+          disable_defaults = false,
+          view = {
+            -- Inline diff toggles
+            ["<leader>di"] = function()
+              vim.cmd("set diffopt+=iwhite")
+              vim.cmd("diffupdate")
+              vim.notify("Inline diff: ignore whitespace enabled", vim.log.levels.INFO)
+            end,
+            ["<leader>dI"] = function()
+              vim.cmd("set diffopt-=iwhite")
+              vim.cmd("diffupdate")
+              vim.notify("Inline diff: ignore whitespace disabled", vim.log.levels.INFO)
+            end,
+            ["<leader>dw"] = function()
+              if vim.wo.wrap then
+                vim.wo.wrap = false
+                vim.notify("Inline diff: word wrap disabled", vim.log.levels.INFO)
+              else
+                vim.wo.wrap = true
+                vim.notify("Inline diff: word wrap enabled", vim.log.levels.INFO)
+              end
+            end,
+          },
+          file_panel = {},
+          file_history_panel = {},
+          option_panel = {},
+        },
+      })
+    end,
     keys = {
+      -- Basic diff operations
       { "<leader>gdd", "<cmd>DiffviewOpen<cr>", desc = "Open diff view" },
       { "<leader>gdc", "<cmd>DiffviewClose<cr>", desc = "Close diff view" },
       { "<leader>gdf", "<cmd>DiffviewFileHistory %<cr>", desc = "File history" },
       { "<leader>gdh", "<cmd>DiffviewFileHistory<cr>", desc = "Project history" },
-    },
-    opts = {
-      enhanced_diff_hl = true,
-      view = {
-        default = { layout = "diff2_horizontal" },
-        file_history = { layout = "diff2_horizontal" },
+      { "<leader>gdr", "<cmd>DiffviewRefresh<cr>", desc = "Refresh diff view" },
+      
+      -- Inline diff toggle command
+      {
+        "<leader>gdi",
+        function()
+          -- Toggle inline diff for current file against HEAD in bottom split
+          if vim.wo.diff then
+            -- Turn off diff mode and close any diff windows
+            vim.cmd("diffoff!")
+            local wins = vim.api.nvim_list_wins()
+            for _, win in ipairs(wins) do
+              local buf = vim.api.nvim_win_get_buf(win)
+              local buf_name = vim.api.nvim_buf_get_name(buf)
+              if buf_name:match("%(HEAD%)") or buf_name:match("%(staged%)") then
+                vim.api.nvim_win_close(win, true)
+              end
+            end
+          else
+            -- Show native diff for current file against HEAD in bottom split
+            local file = vim.fn.expand("%:p")
+            local filename = vim.fn.expand("%:t")
+            if file ~= "" then
+              -- Get HEAD version of file
+              local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
+              if vim.v.shell_error == 0 then
+                local relative_path = vim.fn.fnamemodify(file, ":~:.")
+                local head_content = vim.fn.system("git show HEAD:" .. vim.fn.shellescape(relative_path) .. " 2>/dev/null")
+                
+                if vim.v.shell_error == 0 then
+                  -- Create bottom split
+                  vim.cmd("botright split")
+                  vim.cmd("resize 15")
+                  
+                  -- Create temporary buffer with HEAD content
+                  local bufnr = vim.api.nvim_create_buf(false, true)
+                  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, vim.split(head_content, "\n"))
+                  vim.api.nvim_buf_set_name(bufnr, filename .. " (HEAD)")
+                  vim.api.nvim_win_set_buf(0, bufnr)
+                  
+                  -- Set filetype to match original
+                  local ft = vim.bo[vim.fn.bufnr(file)].filetype
+                  vim.bo[bufnr].filetype = ft
+                  vim.bo[bufnr].readonly = true
+                  
+                  -- Enable diff mode
+                  vim.cmd("diffthis")
+                  vim.cmd("wincmd k")
+                  vim.cmd("diffthis")
+                else
+                  vim.notify("Could not get HEAD version of file", vim.log.levels.WARN)
+                end
+              else
+                vim.notify("Not in a git repository", vim.log.levels.WARN)
+              end
+            else
+              vim.notify("No file to diff", vim.log.levels.WARN)
+            end
+          end
+        end,
+        desc = "Toggle inline diff vs HEAD"
       },
     },
   },

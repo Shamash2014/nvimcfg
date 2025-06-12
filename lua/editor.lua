@@ -190,15 +190,10 @@ return {
     },
   },
 
-  -- AI Code Assistant (Chat Interface)
+  -- Unified AI Assistant Interface - Avante (Chat-style AI)
   {
     "yetone/avante.nvim",
     cmd = { "AvanteAsk", "AvanteChat", "AvanteToggle" },
-    keys = {
-      { "<leader>aa", mode = { "n", "v" } },
-      { "<leader>ar", mode = "n" },
-      { "<leader>ae", mode = "v" },
-    },
     version = false,
     build = "make",
     dependencies = {
@@ -278,29 +273,39 @@ return {
         },
       },
     },
+    config = function(_, opts)
+      require("avante").setup(opts)
+    end,
     keys = {
       {
-        "<leader>aa",
+        "<leader>ac",
         function()
           require("avante.api").ask()
         end,
-        desc = "avante: ask",
+        desc = "Avante Chat",
         mode = { "n", "v" },
-      },
-      {
-        "<leader>ar",
-        function()
-          require("avante.api").refresh()
-        end,
-        desc = "avante: refresh",
       },
       {
         "<leader>ae",
         function()
           require("avante.api").edit()
         end,
-        desc = "avante: edit",
+        desc = "Avante Edit",
         mode = "v",
+      },
+      {
+        "<leader>ar",
+        function()
+          require("avante.api").refresh()
+        end,
+        desc = "Avante Refresh",
+      },
+      {
+        "<leader>at",
+        function()
+          require("avante.api").toggle()
+        end,
+        desc = "Avante Toggle",
       },
     },
   },
@@ -995,9 +1000,33 @@ return {
       "nvim-treesitter/nvim-treesitter",
       "ravitemer/mcphub.nvim", -- MCP integration
     },
+    config = function(_, opts)
+      require("codecompanion").setup(opts)
+    end,
     keys = {
-      { "<leader>oc", "<cmd>CodeCompanionChat Toggle<cr>", mode = { "n", "v" }, desc = "CodeCompanion Chat" },
-      { "<leader>oa", "<cmd>CodeCompanionActions<cr>",     mode = { "n", "v" }, desc = "CodeCompanion Actions" },
+      {
+        "<leader>aa",
+        "<cmd>CodeCompanionActions<cr>",
+        mode = { "n", "v" },
+        desc = "CodeCompanion Actions"
+      },
+      {
+        "<leader>ai",
+        "<cmd>CodeCompanion<cr>",
+        mode = { "n", "v" },
+        desc = "CodeCompanion Inline"
+      },
+      {
+        "<leader>am",
+        "<cmd>CodeCompanionCmd<cr>",
+        desc = "CodeCompanion Command"
+      },
+      {
+        "<leader>al",
+        "<cmd>CodeCompanionChat Toggle<cr>",
+        mode = { "n", "v" },
+        desc = "CodeCompanion Chat"
+      },
     },
     opts = {
       display = {
@@ -1780,6 +1809,150 @@ return {
         desc = "Add cursor up"
       },
     },
+  },
+
+  -- Fleet-like inline code actions with preview
+  {
+    "aznhe21/actions-preview.nvim",
+    event = "LspAttach",
+    config = function()
+      require("actions-preview").setup({
+        highlight_command = {
+          require("actions-preview.highlight").delta(),
+        },
+        backend = { "snacks" },
+        snacks = {
+          enabled = true,
+          layout = { preset = "vscode", preview = "main" },
+        },
+      })
+    end,
+    keys = {
+      {
+        "<leader>ca",
+        function()
+          require("actions-preview").code_actions()
+        end,
+        mode = { "n", "v" },
+        desc = "Code actions with preview"
+      },
+    },
+  },
+
+  -- Assistant editor (related file switching)
+  {
+    "rgroli/other.nvim",
+    cmd = { "Other", "OtherTabNew", "OtherSplit", "OtherVSplit" },
+    config = function()
+      require("other-nvim").setup({
+        mappings = {
+          -- TypeScript/JavaScript
+          "livescript",
+          "angular",
+          "react",
+          {
+            pattern = "(.*).ts$",
+            target = "%1.spec.ts",
+            context = "test"
+          },
+          {
+            pattern = "(.*).tsx$", 
+            target = "%1.spec.tsx",
+            context = "test"
+          },
+          {
+            pattern = "(.*).js$",
+            target = "%1.spec.js", 
+            context = "test"
+          },
+          {
+            pattern = "(.*).jsx$",
+            target = "%1.spec.jsx",
+            context = "test"
+          },
+          -- C/C++
+          {
+            pattern = "(.*).c$",
+            target = "%1.h",
+            context = "header"
+          },
+          {
+            pattern = "(.*).cpp$",
+            target = "%1.h",
+            context = "header"  
+          },
+          {
+            pattern = "(.*).h$",
+            target = {
+              { target = "%1.c", context = "implementation" },
+              { target = "%1.cpp", context = "implementation" },
+              { target = "%1.m", context = "implementation" },
+            }
+          },
+          -- Python
+          {
+            pattern = "(.*).py$",
+            target = "test_%1.py",
+            context = "test"
+          },
+          {
+            pattern = "test_(.*).py$",
+            target = "%1.py",
+            context = "implementation"
+          },
+          -- Dart/Flutter
+          {
+            pattern = "(.*).dart$",
+            target = "%1_test.dart",
+            context = "test"
+          },
+          {
+            pattern = "(.*)_test.dart$",
+            target = "%1.dart", 
+            context = "implementation"
+          },
+        },
+        transformers = {
+          camelToKebab = function(inputString)
+            return inputString:gsub("%f[^%l]%u", "-%1"):lower()
+          end
+        },
+        style = {
+          border = "solid",
+          seperator = "|",
+        }
+      })
+    end,
+    keys = {
+      {
+        "<leader>oa",
+        "<cmd>Other<cr>",
+        desc = "Open related file"
+      },
+      {
+        "<leader>oA", 
+        "<cmd>OtherVSplit<cr>",
+        desc = "Open related file (vsplit)"
+      },
+    },
+  },
+
+  -- Better visual feedback (smooth scrolling)
+  {
+    "karb94/neoscroll.nvim",
+    event = "VeryLazy",
+    config = function()
+      require("neoscroll").setup({
+        mappings = {"<C-u>", "<C-d>", "<C-b>", "<C-f>", "<C-y>", "<C-e>", "zt", "zz", "zb"},
+        hide_cursor = true,
+        stop_eof = true,
+        respect_scrolloff = false,
+        cursor_scrolls_alone = true,
+        easing_function = "sine",
+        pre_hook = nil,
+        post_hook = nil,
+      })
+    end,
   },
 
   -- Timber for smart log insertions
