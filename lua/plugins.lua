@@ -107,6 +107,7 @@ local plugins = {
         { "<leader>f", group = "file", mode = { "n", "v" } },
         { "<leader>b", group = "buffer", mode = { "n", "v" } },
         { "<leader>c", group = "code", mode = { "n", "v" } },
+        { "<leader>cx", group = "xcodebuild", mode = { "n", "v" } },
         { "<leader>g", group = "git", mode = { "n", "v" } },
         { "<leader>s", group = "search", mode = { "n", "v" } },
         { "<leader>w", group = "window", mode = { "n", "v" } },

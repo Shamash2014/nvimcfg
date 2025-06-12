@@ -104,7 +104,7 @@ vim.lsp.config.dartls = {
       insertArgumentPlaceholders = true,
       previewFlutterUiGuides = true,
       previewFlutterUiGuidesCustomTracking = true,
-      flutterSdkPath = function()
+      flutterSdkPath = (function()
         -- Check direnv first for FLUTTER_ROOT
         local flutter_root = vim.env.FLUTTER_ROOT
         if flutter_root and vim.fn.isdirectory(flutter_root) == 1 then
@@ -130,7 +130,7 @@ vim.lsp.config.dartls = {
         end
         
         return nil
-      end,
+      end)(),
       checkForSdkUpdates = false,
       openDevTools = "never",
     }
@@ -260,6 +260,24 @@ vim.lsp.config.clangd = {
       },
     },
     offsetEncoding = { 'utf-16' },
+  },
+}
+
+vim.lsp.config.sourcekit = {
+  cmd = { 'sourcekit-lsp' },
+  filetypes = { 'swift', 'c', 'cpp', 'objective-c', 'objective-cpp' },
+  root_markers = { 'Package.swift', '.git', '*.xcodeproj', '*.xcworkspace' },
+  settings = {
+    sourcekit = {
+      indexDatabasePath = ".sourcekit-lsp",
+      indexStorePath = ".sourcekit-lsp/index",
+    },
+  },
+  init_options = {
+    ["sourcekit-lsp"] = {
+      indexDatabasePath = ".sourcekit-lsp",
+      indexStorePath = ".sourcekit-lsp/index",
+    },
   },
 }
 

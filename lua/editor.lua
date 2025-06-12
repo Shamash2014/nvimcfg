@@ -1072,7 +1072,8 @@ return {
             },
             schema = {
               model = {
-                default = "qwen3-32b-mlx" -- Default model (change as needed)
+                -- default = "qwen3-32b-mlx" -- Default model (change as needed)
+                default = "uigen-t3-14b-preview"
               },
               temperature = {
                 order = 2,
@@ -1171,14 +1172,14 @@ return {
             -- Check if buffer has code blocks before activating
             local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
             local has_code_blocks = false
-            
+
             for _, line in ipairs(lines) do
               if line:match("^```[%w_]*$") then -- Detect code block fences
                 has_code_blocks = true
                 break
               end
             end
-            
+
             if has_code_blocks then
               local ok, err = pcall(function()
                 require("otter").activate({ "r", "python", "julia", "bash" })
@@ -1287,7 +1288,7 @@ return {
     name = "project-rooter",
     config = function()
       local M = {}
-      
+
       -- Project root patterns (ordered by priority)
       local root_patterns = {
         -- Git takes highest priority
@@ -1317,7 +1318,7 @@ return {
         -- Documentation
         "README.md", "readme.md", "README.rst",
       }
-      
+
       -- Find git root based on current file location (not nvim cwd)
       function M.find_git_root(start_path)
         -- Always prioritize the current file's directory over nvim's cwd
@@ -1329,15 +1330,15 @@ return {
             start_path = vim.fn.getcwd()
           end
         end
-        
+
         -- Try the most reliable method first: git rev-parse from the file's directory
         local cmd = string.format("cd %s && git rev-parse --show-toplevel 2>/dev/null", vim.fn.shellescape(start_path))
         local result = vim.fn.system(cmd):gsub("\n", "")
-        
+
         if vim.v.shell_error == 0 and result ~= "" and vim.fn.isdirectory(result) == 1 then
           return result
         end
-        
+
         -- Fallback: walk up directories looking for .git
         local current = start_path
         while current ~= "/" and current ~= "" do
@@ -1349,28 +1350,28 @@ return {
           if parent == current then break end
           current = parent
         end
-        
+
         return nil
       end
-      
+
       -- Find project root starting from given directory
       function M.find_root(start_path)
         start_path = start_path or vim.fn.expand('%:p:h')
-        
+
         -- If no file buffer, use current working directory
         if start_path == '' or start_path == '.' then
           start_path = vim.fn.getcwd()
         end
-        
+
         -- Try git root first (most reliable for git projects)
         local git_root = M.find_git_root(start_path)
         if git_root then
           return git_root
         end
-        
+
         -- Fall back to pattern matching for non-git projects
         local current_dir = start_path
-        
+
         -- Walk up the directory tree
         while current_dir ~= "/" and current_dir ~= "" do
           for _, pattern in ipairs(root_patterns) do
@@ -1379,7 +1380,7 @@ return {
               return current_dir
             end
           end
-          
+
           -- Go up one level
           local parent = vim.fn.fnamemodify(current_dir, ":h")
           if parent == current_dir then
@@ -1387,21 +1388,21 @@ return {
           end
           current_dir = parent
         end
-        
+
         -- No root found, return the starting directory
         return start_path
       end
-      
+
       -- Get current project root
       function M.get_current_root()
         return M.find_root()
       end
-      
+
       -- Change to project root
       function M.change_to_root(silent)
         local root = M.find_root()
         local current_cwd = vim.fn.getcwd()
-        
+
         if root and root ~= current_cwd then
           vim.cmd("cd " .. vim.fn.fnameescape(root))
           if not silent then
@@ -1409,23 +1410,23 @@ return {
           end
           return true
         end
-        
+
         if not silent then
           vim.notify("Already at project root: " .. current_cwd, vim.log.levels.INFO)
         end
         return false
       end
-      
+
       -- Show project info
       function M.show_info()
         local cwd = vim.fn.getcwd()
         local root = M.find_root()
         local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
-        
+
         local info = { "📂 Project Information:", "" }
         table.insert(info, "Current directory: " .. cwd)
         table.insert(info, "Detected root: " .. root)
-        
+
         if vim.v.shell_error == 0 and git_root ~= "" then
           table.insert(info, "Git repository: " .. git_root)
           if git_root ~= root then
@@ -1434,7 +1435,7 @@ return {
         else
           table.insert(info, "Git repository: Not a git repo")
         end
-        
+
         -- Check for project markers
         local markers_found = {}
         for _, pattern in ipairs(root_patterns) do
@@ -1443,7 +1444,7 @@ return {
             table.insert(markers_found, pattern)
           end
         end
-        
+
         if #markers_found > 0 then
           table.insert(info, "")
           table.insert(info, "Project markers found:")
@@ -1451,14 +1452,14 @@ return {
             table.insert(info, "  • " .. marker)
           end
         end
-        
+
         vim.notify(table.concat(info, "\n"), vim.log.levels.INFO)
       end
-      
+
       -- Setup autocommands for automatic root detection
       function M.setup_auto_root()
         local group = vim.api.nvim_create_augroup("project_rooter", { clear = true })
-        
+
         -- Change to project root when opening files
         vim.api.nvim_create_autocmd({ "BufEnter", "BufNewFile" }, {
           group = group,
@@ -1468,7 +1469,7 @@ return {
             if buftype ~= "" and buftype ~= "acwrite" then
               return
             end
-            
+
             -- Don't change root for certain filetypes
             local filetype = vim.bo[ev.buf].filetype
             local ignore_fts = { "help", "qf", "fugitive", "gitcommit", "gitrebase" }
@@ -1477,13 +1478,13 @@ return {
                 return
               end
             end
-            
+
             vim.schedule(function()
               M.change_to_root(true) -- Silent mode for auto-changes
             end)
           end,
         })
-        
+
         -- Also run when Vim starts
         vim.api.nvim_create_autocmd("VimEnter", {
           group = group,
@@ -1494,27 +1495,26 @@ return {
           end,
         })
       end
-      
+
       -- Global access
       _G.ProjectRooter = M
-      
+
       -- Setup auto root detection
       M.setup_auto_root()
-      
+
       -- Create user commands
       vim.api.nvim_create_user_command("ProjectRoot", function()
         M.change_to_root()
       end, { desc = "Change to project root" })
-      
+
       vim.api.nvim_create_user_command("ProjectInfo", function()
         M.show_info()
       end, { desc = "Show project information" })
-      
+
       vim.api.nvim_create_user_command("ProjectFind", function()
         local root = M.find_root()
         vim.notify("Project root would be: " .. root, vim.log.levels.INFO)
       end, { desc = "Find project root without changing" })
-      
     end,
     keys = {
       {
@@ -1706,7 +1706,7 @@ return {
         ["Find Under"] = "",
         ["Find Subword Under"] = "",
       }
-      
+
       -- Custom highlighting to match theme
       vim.g.VM_Cursor_hl = "MultiCursor"
       vim.g.VM_Extend_hl = "MultiCursorExtend"
@@ -1856,13 +1856,13 @@ return {
             context = "test"
           },
           {
-            pattern = "(.*).tsx$", 
+            pattern = "(.*).tsx$",
             target = "%1.spec.tsx",
             context = "test"
           },
           {
             pattern = "(.*).js$",
-            target = "%1.spec.js", 
+            target = "%1.spec.js",
             context = "test"
           },
           {
@@ -1879,14 +1879,14 @@ return {
           {
             pattern = "(.*).cpp$",
             target = "%1.h",
-            context = "header"  
+            context = "header"
           },
           {
             pattern = "(.*).h$",
             target = {
-              { target = "%1.c", context = "implementation" },
+              { target = "%1.c",   context = "implementation" },
               { target = "%1.cpp", context = "implementation" },
-              { target = "%1.m", context = "implementation" },
+              { target = "%1.m",   context = "implementation" },
             }
           },
           -- Python
@@ -1908,7 +1908,7 @@ return {
           },
           {
             pattern = "(.*)_test.dart$",
-            target = "%1.dart", 
+            target = "%1.dart",
             context = "implementation"
           },
         },
@@ -1930,7 +1930,7 @@ return {
         desc = "Open related file"
       },
       {
-        "<leader>oA", 
+        "<leader>oA",
         "<cmd>OtherVSplit<cr>",
         desc = "Open related file (vsplit)"
       },
@@ -1943,7 +1943,7 @@ return {
     event = "VeryLazy",
     config = function()
       require("neoscroll").setup({
-        mappings = {"<C-u>", "<C-d>", "<C-b>", "<C-f>", "<C-y>", "<C-e>", "zt", "zz", "zb"},
+        mappings = { "<C-u>", "<C-d>", "<C-b>", "<C-f>", "<C-y>", "<C-e>", "zt", "zz", "zb" },
         hide_cursor = true,
         stop_eof = true,
         respect_scrolloff = false,
@@ -2067,7 +2067,7 @@ return {
     config = function()
       local map = vim.keymap.set
       map("n", "<leader>ci", function() require("lspimport").import() end, { desc = "Import symbol under cursor" })
-      
+
       -- Enhanced which-key integration
       local ok, wk = pcall(require, "which-key")
       if ok then
@@ -2089,20 +2089,21 @@ return {
       -- Use direnv to detect Python path, fallback to system python
       local python_path = vim.env.VIRTUAL_ENV and (vim.env.VIRTUAL_ENV .. "/bin/python") or "python3"
       require("dap-python").setup(python_path)
-      
+
       -- Enhanced Python debugging keybindings
       local map = vim.keymap.set
       map("n", "<leader>cpm", function() require("dap-python").test_method() end, { desc = "Python Test Method" })
       map("n", "<leader>cpc", function() require("dap-python").test_class() end, { desc = "Python Test Class" })
-      map("n", "<leader>cps", function() require("dap-python").debug_selection() end, { desc = "Python Debug Selection", mode = { "n", "v" } })
-      
+      map("n", "<leader>cps", function() require("dap-python").debug_selection() end,
+        { desc = "Python Debug Selection", mode = { "n", "v" } })
+
       -- Enhanced which-key integration
       local ok, wk = pcall(require, "which-key")
       if ok then
         wk.add({
-          { "<leader>cp", group = "python", ft = "python" },
-          { "<leader>cpm", desc = "test method", ft = "python" },
-          { "<leader>cpc", desc = "test class", ft = "python" },
+          { "<leader>cp",  group = "python",         ft = "python" },
+          { "<leader>cpm", desc = "test method",     ft = "python" },
+          { "<leader>cpc", desc = "test class",      ft = "python" },
           { "<leader>cps", desc = "debug selection", ft = "python" },
         })
       end
@@ -2260,11 +2261,11 @@ return {
     },
     config = function(_, opts)
       require("grug-far").setup(opts)
-      
+
       -- Integrate with snacks picker for better file selection
       local grug_far = require("grug-far")
       local original_get_current_files = grug_far.get_current_files
-      
+
       -- Override file selection to use snacks picker
       grug_far.get_current_files = function()
         return Snacks.picker.files({
@@ -2342,16 +2343,16 @@ return {
     event = "InsertEnter",
     config = function()
       local luasnip = require("luasnip")
-      
+
       -- Load snippets from friendly-snippets
       require("luasnip.loaders.from_vscode").lazy_load()
-      
+
       -- Custom snippets for common patterns
       local s = luasnip.snippet
       local t = luasnip.text_node
       local i = luasnip.insert_node
       local f = luasnip.function_node
-      
+
       luasnip.add_snippets("all", {
         s("todo", {
           t("// TODO: "),
@@ -2362,49 +2363,50 @@ return {
           i(1, "description"),
         }),
       })
-      
+
       -- Language-specific snippets
       luasnip.add_snippets("typescript", {
         s("comp", {
-          t({"export const "}), i(1, "Component"), t({" = () => {", "  return (", "    <div>"}),
-          i(2, "content"), t({"</div>", "  )", "}"}),
+          t({ "export const " }), i(1, "Component"), t({ " = () => {", "  return (", "    <div>" }),
+          i(2, "content"), t({ "</div>", "  )", "}" }),
         }),
         s("func", {
-          t("const "), i(1, "name"), t(" = ("), i(2, "params"), t("): "), i(3, "ReturnType"), t({" => {", "  "}),
-          i(4, "// implementation"), t({"", "}"}),
+          t("const "), i(1, "name"), t(" = ("), i(2, "params"), t("): "), i(3, "ReturnType"), t({ " => {", "  " }),
+          i(4, "// implementation"), t({ "", "}" }),
         }),
       })
-      
+
       luasnip.add_snippets("python", {
         s("def", {
-          t("def "), i(1, "function_name"), t("("), i(2, "params"), t(") -> "), i(3, "ReturnType"), t({":", "    "}),
-          i(4, '"""Docstring."""'), t({"", "    "}), i(5, "pass"),
+          t("def "), i(1, "function_name"), t("("), i(2, "params"), t(") -> "), i(3, "ReturnType"), t({ ":", "    " }),
+          i(4, '"""Docstring."""'), t({ "", "    " }), i(5, "pass"),
         }),
         s("class", {
-          t("class "), i(1, "ClassName"), t("("), i(2, "BaseClass"), t({"):", "    "}),
-          i(3, '"""Class docstring."""'), t({"", "", "    def __init__(self"}),
-          i(4, ", args"), t({"):", "        "}), i(5, "pass"),
+          t("class "), i(1, "ClassName"), t("("), i(2, "BaseClass"), t({ "):", "    " }),
+          i(3, '"""Class docstring."""'), t({ "", "", "    def __init__(self" }),
+          i(4, ", args"), t({ "):", "        " }), i(5, "pass"),
         }),
       })
-      
+
       luasnip.add_snippets("dart", {
         s("class", {
-          t("class "), i(1, "ClassName"), t({" {", "  "}), i(2, "// implementation"), t({"", "}"}),
+          t("class "), i(1, "ClassName"), t({ " {", "  " }), i(2, "// implementation"), t({ "", "}" }),
         }),
         s("widget", {
-          t({"class "}), i(1, "WidgetName"), t({" extends StatelessWidget {", "  const "}), 
-          f(function(args) return args[1][1] end, {1}), t({"({super.key});", "", "  @override", "  Widget build(BuildContext context) {", "    return "}),
-          i(2, "Container()"), t({";", "  }", "}"}),
+          t({ "class " }), i(1, "WidgetName"), t({ " extends StatelessWidget {", "  const " }),
+          f(function(args) return args[1][1] end, { 1 }), t({ "({super.key});", "", "  @override",
+          "  Widget build(BuildContext context) {", "    return " }),
+          i(2, "Container()"), t({ ";", "  }", "}" }),
         }),
       })
-      
+
       -- Enhanced which-key integration
       local ok, wk = pcall(require, "which-key")
       if ok then
         wk.add({
-          { "<leader>cs", group = "snippets" },
+          { "<leader>cs",  group = "snippets" },
           { "<leader>cse", function() require("luasnip.loaders").edit_snippet_files() end, desc = "edit snippets" },
-          { "<leader>csr", function() require("luasnip").unlink_current() end, desc = "unlink snippet" },
+          { "<leader>csr", function() require("luasnip").unlink_current() end,             desc = "unlink snippet" },
         })
       end
     end,
@@ -2520,10 +2522,10 @@ return {
     },
     config = function(_, opts)
       require("overseer").setup(opts)
-      
+
       -- Create custom task templates
       local overseer = require("overseer")
-      
+
       -- Flutter/Dart tasks
       overseer.register_template({
         name = "flutter run",
@@ -2538,7 +2540,7 @@ return {
           filetype = { "dart" },
         },
       })
-      
+
       overseer.register_template({
         name = "flutter test",
         builder = function()
@@ -2552,7 +2554,7 @@ return {
           filetype = { "dart" },
         },
       })
-      
+
       -- Node.js tasks
       overseer.register_template({
         name = "npm run dev",
@@ -2567,7 +2569,7 @@ return {
           filetype = { "javascript", "typescript", "javascriptreact", "typescriptreact" },
         },
       })
-      
+
       -- Python tasks
       overseer.register_template({
         name = "python run",
@@ -2582,12 +2584,12 @@ return {
           filetype = { "python" },
         },
       })
-      
+
       -- Enhanced which-key integration
       local ok, wk = pcall(require, "which-key")
       if ok then
         wk.add({
-          { "<leader>co", group = "overseer" },
+          { "<leader>co",  group = "overseer" },
           { "<leader>cor", desc = "run task" },
           { "<leader>cot", desc = "toggle task list" },
           { "<leader>coo", desc = "open task list" },
@@ -2598,22 +2600,26 @@ return {
       end
     end,
     keys = {
-      { "<leader>cor", "<cmd>OverseerRun<cr>", desc = "Run task" },
-      { "<leader>cot", "<cmd>OverseerToggle<cr>", desc = "Toggle task list" },
-      { "<leader>coo", "<cmd>OverseerOpen<cr>", desc = "Open task list" },
-      { "<leader>coc", "<cmd>OverseerClose<cr>", desc = "Close task list" },
+      { "<leader>cor", "<cmd>OverseerRun<cr>",         desc = "Run task" },
+      { "<leader>cot", "<cmd>OverseerToggle<cr>",      desc = "Toggle task list" },
+      { "<leader>coo", "<cmd>OverseerOpen<cr>",        desc = "Open task list" },
+      { "<leader>coc", "<cmd>OverseerClose<cr>",       desc = "Close task list" },
       { "<leader>coq", "<cmd>OverseerQuickAction<cr>", desc = "Quick action" },
-      { "<leader>coi", "<cmd>OverseerInfo<cr>", desc = "Task info" },
-      { "<leader>!!", function()
-        vim.ui.input({ prompt = "Command: " }, function(cmd)
-          if cmd and cmd ~= "" then
-            require("overseer").new_task({
-              cmd = vim.split(cmd, " "),
-              components = { "default" },
-            }):start()
-          end
-        end)
-      end, desc = "Run shell command" },
+      { "<leader>coi", "<cmd>OverseerInfo<cr>",        desc = "Task info" },
+      {
+        "<leader>!!",
+        function()
+          vim.ui.input({ prompt = "Command: " }, function(cmd)
+            if cmd and cmd ~= "" then
+              require("overseer").new_task({
+                cmd = vim.split(cmd, " "),
+                components = { "default" },
+              }):start()
+            end
+          end)
+        end,
+        desc = "Run shell command"
+      },
     },
   },
 
@@ -2628,53 +2634,53 @@ return {
       -- Only create folds for serious nesting (4+ levels deep)
       foldlevelstart = 4,
       h = {
-        auto_close = false,  -- Don't auto-close, let user decide
+        auto_close = false, -- Don't auto-close, let user decide
         auto_open = true,
       },
     },
     config = function(_, opts)
       require("origami").setup(opts)
-      
+
       -- Set folding method and levels for serious nesting only
       vim.opt.foldmethod = "indent"
-      vim.opt.foldlevel = 3        -- Start folding at level 4 (0-indexed)
-      vim.opt.foldlevelstart = 3   -- Open files with folds up to level 3
-      vim.opt.foldnestmax = 10     -- Maximum fold nesting
-      vim.opt.foldminlines = 4     -- Minimum lines needed to create a fold
-      
+      vim.opt.foldlevel = 3      -- Start folding at level 4 (0-indexed)
+      vim.opt.foldlevelstart = 3 -- Open files with folds up to level 3
+      vim.opt.foldnestmax = 10   -- Maximum fold nesting
+      vim.opt.foldminlines = 4   -- Minimum lines needed to create a fold
+
       -- Language-specific fold settings for serious nesting
       vim.api.nvim_create_autocmd("FileType", {
         group = vim.api.nvim_create_augroup("origami_filetype", { clear = true }),
         callback = function()
           local ft = vim.bo.filetype
-          
+
           -- For code files, use treesitter folding with higher threshold
-          if ft == "lua" or ft == "python" or ft == "javascript" or ft == "typescript" 
-             or ft == "jsx" or ft == "tsx" or ft == "rust" or ft == "go" 
-             or ft == "c" or ft == "cpp" or ft == "java" or ft == "dart" then
+          if ft == "lua" or ft == "python" or ft == "javascript" or ft == "typescript"
+              or ft == "jsx" or ft == "tsx" or ft == "rust" or ft == "go"
+              or ft == "c" or ft == "cpp" or ft == "java" or ft == "dart" then
             vim.opt_local.foldmethod = "expr"
             vim.opt_local.foldexpr = "nvim_treesitter#foldexpr()"
-            vim.opt_local.foldlevel = 4      -- Even more conservative for code
-            vim.opt_local.foldminlines = 6   -- Need at least 6 lines to fold
-          
-          -- For markup files, be more conservative  
+            vim.opt_local.foldlevel = 4    -- Even more conservative for code
+            vim.opt_local.foldminlines = 6 -- Need at least 6 lines to fold
+
+            -- For markup files, be more conservative
           elseif ft == "markdown" or ft == "rst" or ft == "asciidoc" then
             vim.opt_local.foldmethod = "expr"
             vim.opt_local.foldexpr = "nvim_treesitter#foldexpr()"
-            vim.opt_local.foldlevel = 2      -- Only fold deep sections
-            vim.opt_local.foldminlines = 8   -- Need substantial content
-          
-          -- For config files, minimal folding
+            vim.opt_local.foldlevel = 2    -- Only fold deep sections
+            vim.opt_local.foldminlines = 8 -- Need substantial content
+
+            -- For config files, minimal folding
           elseif ft == "yaml" or ft == "json" or ft == "toml" or ft == "xml" then
-            vim.opt_local.foldlevel = 5      -- Very deep nesting only
-            vim.opt_local.foldminlines = 10  -- Large blocks only
+            vim.opt_local.foldlevel = 5     -- Very deep nesting only
+            vim.opt_local.foldminlines = 10 -- Large blocks only
           end
         end,
       })
-      
+
       -- Enhanced folding keybindings (z-prefixed)
       local map = vim.keymap.set
-      
+
       -- Core fold navigation (enhance existing z motions)
       map("n", "zj", "zj", { desc = "Next fold start" })
       map("n", "zk", "zk", { desc = "Previous fold start" })
@@ -2686,27 +2692,27 @@ return {
         vim.cmd("normal! zk")
         vim.cmd("normal! zo")
       end, { desc = "Previous fold and open" })
-      
+
       -- Enhanced fold management (z-prefixed)
       map("n", "zO", "zR", { desc = "Open all folds" })
       map("n", "zC", "zM", { desc = "Close all folds" })
       map("n", "zt", "za", { desc = "Toggle fold" })
       map("n", "zr", "zr", { desc = "Reduce fold level" })
       map("n", "zm", "zm", { desc = "More fold level" })
-      
-      -- Fold creation and deletion (z-prefixed) 
+
+      -- Fold creation and deletion (z-prefixed)
       map("n", "zf", "zf", { desc = "Create fold" })
       map("v", "zf", "zf", { desc = "Create fold" })
       map("n", "zd", "zd", { desc = "Delete fold" })
       map("n", "zD", "zD", { desc = "Delete fold recursively" })
       map("n", "zE", "zE", { desc = "Eliminate all folds" })
-      
+
       -- Advanced fold operations (z-prefixed)
       map("n", "zn", "zN", { desc = "Fold none (disable folding)" })
       map("n", "zi", "zi", { desc = "Invert fold enable" })
       map("n", "zx", "zx", { desc = "Update folds" })
       map("n", "zX", "zX", { desc = "Undo manual folds" })
-      
+
       -- Fold level jumps (z-prefixed)
       map("n", "z1", function() vim.opt.foldlevel = 1 end, { desc = "Set fold level 1" })
       map("n", "z2", function() vim.opt.foldlevel = 2 end, { desc = "Set fold level 2" })
@@ -2714,12 +2720,12 @@ return {
       map("n", "z4", function() vim.opt.foldlevel = 4 end, { desc = "Set fold level 4" })
       map("n", "z5", function() vim.opt.foldlevel = 5 end, { desc = "Set fold level 5" })
       map("n", "z0", function() vim.opt.foldlevel = 0 end, { desc = "Set fold level 0 (close all)" })
-      
+
       -- Enhanced which-key integration
       local ok, wk = pcall(require, "which-key")
       if ok then
         wk.add({
-          { "z", group = "fold" },
+          { "z",  group = "fold" },
           -- Core fold operations
           { "za", desc = "toggle fold" },
           { "zo", desc = "open fold" },
@@ -2812,5 +2818,186 @@ return {
       },
     },
   },
-}
 
+  -- iOS/macOS development with xcodebuild integration
+  {
+    "wojciech-kulik/xcodebuild.nvim",
+    dependencies = {
+      "MunifTanjim/nui.nvim",
+      "folke/snacks.nvim",
+    },
+    ft = { "swift", "objc", "objcpp" },
+    config = function()
+      require("xcodebuild").setup({
+        restore_on_start = true,
+        auto_save = true,
+        -- Use snacks.nvim instead of telescope
+        picker = {
+          name = "snacks",
+          commands = {
+            select_device = function()
+              local devices = require("xcodebuild.core.config").devices
+              local items = {}
+              for _, device in ipairs(devices or {}) do
+                table.insert(items, {
+                  text = device.name .. " (" .. device.platform .. ")",
+                  value = device,
+                })
+              end
+              
+              Snacks.picker.pick({
+                items = items,
+                format = function(item) return item.text end,
+                confirm = function(item)
+                  require("xcodebuild.actions").select_device(item.value)
+                end,
+                title = "Select Device",
+              })
+            end,
+            select_scheme = function()
+              local schemes = require("xcodebuild.core.config").schemes
+              local items = {}
+              for _, scheme in ipairs(schemes or {}) do
+                table.insert(items, {
+                  text = scheme,
+                  value = scheme,
+                })
+              end
+              
+              Snacks.picker.pick({
+                items = items,
+                format = function(item) return item.text end,
+                confirm = function(item)
+                  require("xcodebuild.actions").select_scheme(item.value)
+                end,
+                title = "Select Scheme",
+              })
+            end,
+            select_config = function()
+              local configs = { "Debug", "Release" }
+              local items = {}
+              for _, config in ipairs(configs) do
+                table.insert(items, {
+                  text = config,
+                  value = config,
+                })
+              end
+              
+              Snacks.picker.pick({
+                items = items,
+                format = function(item) return item.text end,
+                confirm = function(item)
+                  require("xcodebuild.actions").select_config(item.value)
+                end,
+                title = "Select Configuration",
+              })
+            end,
+          },
+        },
+        test_search = {
+          file_matching = "filename_lsp",
+          target_matching = true,
+          lsp_client = "sourcekit",
+          lsp_timeout = 200,
+        },
+        commands = {
+          cache_devices = true,
+        },
+        logs = {
+          auto_open_on_success_tests = false,
+          auto_open_on_failed_tests = false,
+          auto_open_on_success_build = false,
+          auto_open_on_failed_build = true,
+          auto_close_on_app_launch = false,
+          auto_close_on_success_build = false,
+          auto_focus = true,
+          filetype = "objc",
+          open_command = "silent botright 20split {path}",
+          logs_formatter = {
+            mark_progress = true,
+            mark_succeeded_tests = true,
+            mark_failed_tests = true,
+            show_warnings = true,
+            show_errors = true,
+            show_build_warnings = true,
+            show_build_errors = true,
+            show_filepath_in_logs = false,
+            show_xcodebuild_warnings = true,
+          },
+        },
+        marks = {
+          show_signs = true,
+          success_sign = "✓",
+          failure_sign = "✗",
+          show_test_duration = true,
+          show_diagnostics = true,
+          file_pattern = "*Tests.swift",
+        },
+        quickfix = {
+          show_errors_on_quickfixlist = true,
+          show_warnings_on_quickfixlist = true,
+        },
+        test_explorer = {
+          enabled = true,
+          auto_open = true,
+          auto_focus = false,
+          open_command = "botright 42vsplit Test Explorer",
+          open_expanded = true,
+          success_sign = "✓",
+          failure_sign = "✗",
+          progress_sign = "…",
+          disabled_sign = "⏸",
+          partial_execution_sign = "‐",
+          not_executed_sign = "",
+          show_disabled_tests = false,
+          animate_status = true,
+          cursor_follows_tests = true,
+        },
+        code_coverage = {
+          enabled = false,
+          file_pattern = "*.swift",
+          covered_sign = "",
+          partially_covered_sign = "┃",
+          not_covered_sign = "┃",
+          not_executable_sign = "",
+        },
+        integrations = {
+          oil_nvim = {
+            enabled = true,
+            should_update_project = function(path)
+              return true
+            end,
+          },
+        },
+      })
+    end,
+    keys = {
+      -- Build commands under cx prefix (xcodebuild)
+      { "<leader>cxl", "<cmd>XcodebuildToggleLogs<cr>", desc = "Toggle Xcode logs" },
+      { "<leader>cxb", "<cmd>XcodebuildBuild<cr>", desc = "Build project" },
+      { "<leader>cxr", "<cmd>XcodebuildBuildRun<cr>", desc = "Build & Run project" },
+      { "<leader>cxt", "<cmd>XcodebuildTest<cr>", desc = "Run tests" },
+      { "<leader>cxT", "<cmd>XcodebuildTestClass<cr>", desc = "Run class tests" },
+      { "<leader>cx.", "<cmd>XcodebuildTestSelected<cr>", desc = "Run selected tests", mode = "v" },
+      
+      -- Project management
+      { "<leader>cxd", "<cmd>XcodebuildSelectDevice<cr>", desc = "Select device" },
+      { "<leader>cxp", "<cmd>XcodebuildSelectTestPlan<cr>", desc = "Select test plan" },
+      { "<leader>cxs", "<cmd>XcodebuildSelectScheme<cr>", desc = "Select scheme" },
+      { "<leader>cxc", "<cmd>XcodebuildSelectConfig<cr>", desc = "Select config" },
+      { "<leader>cxq", "<cmd>XcodebuildQuickfixLine<cr>", desc = "Quickfix line" },
+      { "<leader>cxa", "<cmd>XcodebuildCodeActions<cr>", desc = "Show code actions" },
+      
+      -- Test Explorer
+      { "<leader>cxe", "<cmd>XcodebuildTestExplorerToggle<cr>", desc = "Toggle Test Explorer" },
+      { "<leader>cxi", "<cmd>XcodebuildTestExplorerRunSelectedTests<cr>", desc = "Run selected tests" },
+      { "<leader>cxf", "<cmd>XcodebuildFailingSnapshots<cr>", desc = "Show failing snapshots" },
+      
+      -- Utilities
+      { "<leader>cxX", "<cmd>XcodebuildCleanBuild<cr>", desc = "Clean build folder" },
+      { "<leader>cxC", "<cmd>XcodebuildToggleCodeCoverage<cr>", desc = "Toggle code coverage" },
+      { "<leader>cxS", "<cmd>XcodebuildFailingSnapshots<cr>", desc = "Show failing snapshots" },
+      { "<leader>cxD", "<cmd>XcodebuildSelectDeveloperDir<cr>", desc = "Select Xcode version" },
+    },
+  },
+}
