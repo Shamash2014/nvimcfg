@@ -112,6 +112,7 @@ local plugins = {
         { "<leader>s", group = "search", mode = { "n", "v" } },
         { "<leader>w", group = "window", mode = { "n", "v" } },
         { "<leader>t", group = "toggle", mode = { "n", "v" } },
+        { "<leader>r", group = "run", mode = { "n", "v" } },
         { "<leader>o", group = "open", mode = { "n", "v" } },
         { "<leader>d", group = "debug", mode = { "n", "v" } },
         { "<leader>m", group = "mcp", mode = { "n", "v" } },
@@ -1029,6 +1030,93 @@ local plugins = {
       { "<leader>cd", function() Snacks.picker.diagnostics({ layout = { preset = "vscode", preview = "main" } }) end, desc = "Diagnostics" },
       { "<leader>cs", function() Snacks.picker.lsp_symbols({ layout = { preset = "vscode", preview = "main" } }) end, desc = "Document symbols" },
       { "<leader>cw", function() Snacks.picker.lsp_workspace_symbols({ layout = { preset = "vscode", preview = "main" } }) end, desc = "Workspace symbols" },
+      { 
+        "<leader>ca", 
+        function() 
+          -- Custom code actions picker using snacks
+          local bufnr = vim.api.nvim_get_current_buf()
+          local cursor = vim.api.nvim_win_get_cursor(0)
+          local row = cursor[1] - 1
+          local col = cursor[2]
+          
+          local params = vim.lsp.util.make_range_params()
+          params.context = {
+            only = nil,
+            diagnostics = vim.diagnostic.get(bufnr, { lnum = row })
+          }
+          
+          vim.lsp.buf_request(bufnr, 'textDocument/codeAction', params, function(err, result, ctx)
+            if err then
+              vim.notify("Error getting code actions: " .. vim.inspect(err), vim.log.levels.ERROR)
+              return
+            end
+            
+            if not result or #result == 0 then
+              vim.notify("No code actions available", vim.log.levels.INFO)
+              return
+            end
+            
+            local actions = {}
+            for i, action in ipairs(result) do
+              table.insert(actions, {
+                text = action.title,
+                action = action,
+                index = i,
+              })
+            end
+            
+            Snacks.picker.pick({
+              items = actions,
+              format = function(item)
+                local kind_icon = ""
+                if item.action.kind then
+                  if string.match(item.action.kind, "quickfix") then
+                    kind_icon = "🔧 "
+                  elseif string.match(item.action.kind, "refactor") then
+                    kind_icon = "🔄 "
+                  elseif string.match(item.action.kind, "source") then
+                    kind_icon = "📝 "
+                  else
+                    kind_icon = "⚡ "
+                  end
+                end
+                return kind_icon .. item.text
+              end,
+              confirm = function(item)
+                if item.action.edit or item.action.command then
+                  if item.action.edit then
+                    vim.lsp.util.apply_workspace_edit(item.action.edit, "utf-8")
+                  end
+                  if item.action.command then
+                    vim.lsp.buf.execute_command(item.action.command)
+                  end
+                else
+                  -- Resolve the action if needed
+                  local client = vim.lsp.get_clients({ bufnr = bufnr })[1]
+                  if client then
+                    client.request('codeAction/resolve', item.action, function(resolve_err, resolved_action)
+                      if resolve_err then
+                        vim.notify("Error resolving code action: " .. vim.inspect(resolve_err), vim.log.levels.ERROR)
+                        return
+                      end
+                      
+                      if resolved_action.edit then
+                        vim.lsp.util.apply_workspace_edit(resolved_action.edit, "utf-8")
+                      end
+                      if resolved_action.command then
+                        vim.lsp.buf.execute_command(resolved_action.command)
+                      end
+                    end)
+                  end
+                end
+              end,
+              layout = { preset = "vscode" },
+              title = "Code Actions",
+            })
+          end)
+        end, 
+        desc = "Code Actions (Snacks)" 
+      },
       { "<leader>ct", function() Snacks.terminal.toggle() end, desc = "Terminal" },
       
       -- Toggle operations
@@ -1037,126 +1125,65 @@ local plugins = {
     },
   },
 
-  -- Minimal statusline with LSP and lint info
+  -- Ultra-minimal statusline with mini.statusline
   {
-    "nvim-lualine/lualine.nvim",
+    "echasnovski/mini.statusline",
     event = "UIEnter",
-    dependencies = { "echasnovski/mini.icons" },
     opts = {
-      options = {
-        theme = {
-          normal = {
-            a = { bg = "#444444", fg = "#ffffff", gui = "bold" },
-            b = { bg = "#333333", fg = "#ffffff" },
-            c = { bg = "#222222", fg = "#aaaaaa" },
-          },
-          insert = {
-            a = { bg = "#bb9af7", fg = "#000000", gui = "bold" },
-            b = { bg = "#333333", fg = "#ffffff" },
-            c = { bg = "#222222", fg = "#aaaaaa" },
-          },
-          visual = {
-            a = { bg = "#bb9af7", fg = "#000000", gui = "bold" },
-            b = { bg = "#333333", fg = "#ffffff" },
-            c = { bg = "#222222", fg = "#aaaaaa" },
-          },
-          command = {
-            a = { bg = "#bb9af7", fg = "#000000", gui = "bold" },
-            b = { bg = "#333333", fg = "#ffffff" },
-            c = { bg = "#222222", fg = "#aaaaaa" },
-          },
-        },
-        component_separators = "",
-        section_separators = "",
-        globalstatus = true,
+      content = {
+        active = function()
+          local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
+          local filename = MiniStatusline.section_filename({ trunc_width = 140 })
+          local location = MiniStatusline.section_location({ trunc_width = 75 })
+          
+          -- Simple diagnostic count
+          local diagnostics = ""
+          local error_count = #vim.diagnostic.get(0, { severity = vim.diagnostic.severity.ERROR })
+          local warn_count = #vim.diagnostic.get(0, { severity = vim.diagnostic.severity.WARN })
+          
+          if error_count > 0 or warn_count > 0 then
+            diagnostics = string.format(" E:%d W:%d", error_count, warn_count)
+          end
+          
+          -- LSP status
+          local lsp_status = ""
+          local ok, clients = pcall(vim.lsp.get_clients, { bufnr = 0 })
+          if ok and clients and #clients > 0 then
+            local client_names = {}
+            for _, client in pairs(clients) do
+              if client.name then
+                table.insert(client_names, client.name)
+              end
+            end
+            if #client_names > 0 then
+              lsp_status = " LSP:" .. table.concat(client_names, ",")
+            end
+          end
+          
+          return MiniStatusline.combine_groups({
+            { hl = 'StatusLine', strings = { filename } },
+            '%=', -- Right align
+            { hl = 'StatusLine', strings = { lsp_status, diagnostics, location } },
+          })
+        end,
+        inactive = function()
+          return MiniStatusline.combine_groups({
+            { hl = 'StatusLineNC', strings = { MiniStatusline.section_filename({ trunc_width = 140 }) } },
+            '%=',
+            { hl = 'StatusLineNC', strings = { MiniStatusline.section_location({ trunc_width = 75 }) } },
+          })
+        end,
       },
-      sections = {
-        lualine_a = { "mode" },
-        lualine_b = {
-          "branch",
-          {
-            "diff",
-            colored = false,
-            symbols = { added = "+", modified = "~", removed = "-" },
-          },
-        },
-        lualine_c = {
-          {
-            "filename",
-            path = 1,
-            color = { fg = "#ffffff" },
-          },
-          {
-            "diagnostics",
-            sources = { "nvim_lsp" },
-            sections = { "error", "warn", "info", "hint" },
-            symbols = { error = "E:", warn = "W:", info = "I:", hint = "H:" },
-            colored = false,
-            update_in_insert = false,
-            always_visible = false,
-          },
-        },
-        lualine_x = {
-          {
-            function()
-              -- Safely get LSP clients
-              local ok, clients = pcall(vim.lsp.get_clients, { bufnr = 0 })
-              if not ok or not clients then
-                return ""
-              end
-              
-              local client_names = {}
-              for _, client in pairs(clients) do
-                if client.name then
-                  table.insert(client_names, client.name)
-                end
-              end
-              
-              if #client_names > 0 then
-                return "LSP:" .. table.concat(client_names, ",")
-              end
-              return ""
-            end,
-            color = { fg = "#666666" },
-            cond = function()
-              -- Only show if LSP is available and attached
-              local ok, clients = pcall(vim.lsp.get_clients, { bufnr = 0 })
-              return ok and clients and #clients > 0
-            end,
-          },
-          {
-            function()
-              -- Safely check for nvim-lint
-              local ok, lint = pcall(require, "lint")
-              if not ok then
-                return ""
-              end
-              
-              local linters = lint.linters_by_ft[vim.bo.filetype] or {}
-              if #linters > 0 then
-                return "Lint:" .. table.concat(linters, ",")
-              end
-              return ""
-            end,
-            color = { fg = "#666666" },
-            cond = function()
-              -- Only show if nvim-lint is available
-              return pcall(require, "lint")
-            end,
-          },
-        },
-        lualine_y = { "filetype" },
-        lualine_z = { "location" },
-      },
-      inactive_sections = {
-        lualine_a = {},
-        lualine_b = {},
-        lualine_c = { "filename" },
-        lualine_x = { "location" },
-        lualine_y = {},
-        lualine_z = {},
-      },
+      use_icons = false,
+      set_vim_settings = true,
     },
+    config = function(_, opts)
+      require('mini.statusline').setup(opts)
+      
+      -- Custom highlights to match minimal theme
+      vim.api.nvim_set_hl(0, "StatusLine", { fg = "#ffffff", bg = "#222222" })
+      vim.api.nvim_set_hl(0, "StatusLineNC", { fg = "#666666", bg = "#222222" })
+    end,
   },
 
   -- Leap motion (Doom Emacs style)
@@ -1653,6 +1680,52 @@ local plugins = {
         vim.g["terminal_color_" .. i] = "#ffffff"
         vim.g["terminal_color_" .. (i + 8)] = "#666666"
       end
+    end,
+  },
+
+  -- Diagflow.nvim for VSCode-style diagnostic display
+  {
+    "dgagn/diagflow.nvim",
+    event = "LspAttach",
+    opts = {
+      enable = true,
+      max_width = 60,  -- Max width of the diagnostic messages
+      max_height = 10, -- Max height of the popup
+      severity_colors = {
+        error = "DiagnosticFloatingError",
+        warning = "DiagnosticFloatingWarn",
+        info = "DiagnosticFloatingInfo",
+        hint = "DiagnosticFloatingHint",
+      },
+      gap_size = 1,
+      scope = 'cursor', -- 'cursor' or 'line'
+      padding_top = 0,
+      padding_right = 0,
+      text_align = 'right', -- 'left' or 'right'
+      placement = 'top', -- 'top' or 'inline'
+      inline_padding_left = 0,
+      update_event = { 'DiagnosticChanged', 'BufReadPost' },
+      toggle_event = {}, -- If you want to toggle the diagnostics
+      show_sign = false, -- set to true if you want to render the diagnostic sign before the diagnostic message
+      render_event = { 'DiagnosticChanged', 'CursorMoved' },
+      border_chars = {
+        top_left = "┌",
+        top_right = "┐",
+        bottom_left = "└",
+        bottom_right = "┘",
+        horizontal = "─",
+        vertical = "│"
+      },
+      show_borders = false,
+    },
+    config = function(_, opts)
+      require('diagflow').setup(opts)
+      
+      -- Custom highlight groups to match your minimal theme
+      vim.api.nvim_set_hl(0, "DiagnosticFloatingError", { fg = "#ff5555", bg = "#111111" })
+      vim.api.nvim_set_hl(0, "DiagnosticFloatingWarn", { fg = "#ffffff", bg = "#111111" })
+      vim.api.nvim_set_hl(0, "DiagnosticFloatingInfo", { fg = "#ffffff", bg = "#111111" })
+      vim.api.nvim_set_hl(0, "DiagnosticFloatingHint", { fg = "#666666", bg = "#111111" })
     end,
   },
 }

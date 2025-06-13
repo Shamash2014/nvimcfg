@@ -441,68 +441,68 @@ return {
     },
   },
 
-  -- Virtual line diagnostics (current line only)
-  {
-    "https://git.sr.ht/~whynothugo/lsp_lines.nvim",
-    event = "LspAttach",
-    config = function()
-      require("lsp_lines").setup()
-
-      -- Disable virtual text (we'll use lsp_lines instead)
-      vim.diagnostic.config({
-        virtual_text = false,
-        virtual_lines = { only_current_line = true },
-      })
-
-      -- Auto-toggle: show diagnostics only for current line
-      local group = vim.api.nvim_create_augroup("lsp_lines_current_line", { clear = true })
-
-      vim.api.nvim_create_autocmd("CursorMoved", {
-        group = group,
-        callback = function()
-          -- Hide all virtual lines first
-          vim.diagnostic.config({ virtual_lines = false })
-
-          -- Show virtual lines only for current line if it has diagnostics
-          local line = vim.api.nvim_win_get_cursor(0)[1] - 1
-          local diagnostics = vim.diagnostic.get(0, { lnum = line })
-
-          if #diagnostics > 0 then
-            vim.diagnostic.config({ virtual_lines = { only_current_line = true } })
-          end
-        end,
-      })
-
-      -- Also show on CursorHold for a bit more stability
-      vim.api.nvim_create_autocmd("CursorHold", {
-        group = group,
-        callback = function()
-          local line = vim.api.nvim_win_get_cursor(0)[1] - 1
-          local diagnostics = vim.diagnostic.get(0, { lnum = line })
-
-          if #diagnostics > 0 then
-            vim.diagnostic.config({ virtual_lines = { only_current_line = true } })
-          else
-            vim.diagnostic.config({ virtual_lines = false })
-          end
-        end,
-      })
-    end,
-    keys = {
-      {
-        "<leader>dl",
-        function()
-          local config = vim.diagnostic.config() or {}
-          if config.virtual_lines then
-            vim.diagnostic.config({ virtual_lines = false })
-          else
-            vim.diagnostic.config({ virtual_lines = { only_current_line = true } })
-          end
-        end,
-        desc = "Toggle LSP lines",
-      },
-    },
-  },
+  -- Virtual line diagnostics disabled in favor of diagflow.nvim
+  -- {
+  --   "https://git.sr.ht/~whynothugo/lsp_lines.nvim",
+  --   event = "LspAttach",
+  --   config = function()
+  --     require("lsp_lines").setup()
+  --
+  --     -- Disable virtual text (we'll use lsp_lines instead)
+  --     vim.diagnostic.config({
+  --       virtual_text = false,
+  --       virtual_lines = { only_current_line = true },
+  --     })
+  --
+  --     -- Auto-toggle: show diagnostics only for current line
+  --     local group = vim.api.nvim_create_augroup("lsp_lines_current_line", { clear = true })
+  --
+  --     vim.api.nvim_create_autocmd("CursorMoved", {
+  --       group = group,
+  --       callback = function()
+  --         -- Hide all virtual lines first
+  --         vim.diagnostic.config({ virtual_lines = false })
+  --
+  --         -- Show virtual lines only for current line if it has diagnostics
+  --         local line = vim.api.nvim_win_get_cursor(0)[1] - 1
+  --         local diagnostics = vim.diagnostic.get(0, { lnum = line })
+  --
+  --         if #diagnostics > 0 then
+  --           vim.diagnostic.config({ virtual_lines = { only_current_line = true } })
+  --         end
+  --       end,
+  --     })
+  --
+  --     -- Also show on CursorHold for a bit more stability
+  --     vim.api.nvim_create_autocmd("CursorHold", {
+  --       group = group,
+  --       callback = function()
+  --         local line = vim.api.nvim_win_get_cursor(0)[1] - 1
+  --         local diagnostics = vim.diagnostic.get(0, { lnum = line })
+  --
+  --         if #diagnostics > 0 then
+  --           vim.diagnostic.config({ virtual_lines = { only_current_line = true } })
+  --         else
+  --           vim.diagnostic.config({ virtual_lines = false })
+  --         end
+  --       end,
+  --     })
+  --   end,
+  --   keys = {
+  --     {
+  --       "<leader>dl",
+  --       function()
+  --         local config = vim.diagnostic.config() or {}
+  --         if config.virtual_lines then
+  --           vim.diagnostic.config({ virtual_lines = false })
+  --         else
+  --           vim.diagnostic.config({ virtual_lines = { only_current_line = true } })
+  --         end
+  --       end,
+  --       desc = "Toggle LSP lines",
+  --     },
+  --   },
+  -- },
 
   -- Flutter tools integration
   {
@@ -2589,23 +2589,23 @@ return {
       local ok, wk = pcall(require, "which-key")
       if ok then
         wk.add({
-          { "<leader>co",  group = "overseer" },
-          { "<leader>cor", desc = "run task" },
-          { "<leader>cot", desc = "toggle task list" },
-          { "<leader>coo", desc = "open task list" },
-          { "<leader>coc", desc = "close task list" },
-          { "<leader>coq", desc = "quick action" },
-          { "<leader>coi", desc = "task info" },
+          { "<leader>r",  group = "run" },
+          { "<leader>rr", desc = "run task" },
+          { "<leader>rt", desc = "toggle task list" },
+          { "<leader>ro", desc = "open task list" },
+          { "<leader>rc", desc = "close task list" },
+          { "<leader>rq", desc = "quick action" },
+          { "<leader>ri", desc = "task info" },
         })
       end
     end,
     keys = {
-      { "<leader>cor", "<cmd>OverseerRun<cr>",         desc = "Run task" },
-      { "<leader>cot", "<cmd>OverseerToggle<cr>",      desc = "Toggle task list" },
-      { "<leader>coo", "<cmd>OverseerOpen<cr>",        desc = "Open task list" },
-      { "<leader>coc", "<cmd>OverseerClose<cr>",       desc = "Close task list" },
-      { "<leader>coq", "<cmd>OverseerQuickAction<cr>", desc = "Quick action" },
-      { "<leader>coi", "<cmd>OverseerInfo<cr>",        desc = "Task info" },
+      { "<leader>rr", "<cmd>OverseerRun<cr>",         desc = "Run task" },
+      { "<leader>rt", "<cmd>OverseerToggle<cr>",      desc = "Toggle task list" },
+      { "<leader>ro", "<cmd>OverseerOpen<cr>",        desc = "Open task list" },
+      { "<leader>rc", "<cmd>OverseerClose<cr>",       desc = "Close task list" },
+      { "<leader>rq", "<cmd>OverseerQuickAction<cr>", desc = "Quick action" },
+      { "<leader>ri", "<cmd>OverseerInfo<cr>",        desc = "Task info" },
       {
         "<leader>!!",
         function()

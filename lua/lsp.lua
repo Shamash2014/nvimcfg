@@ -135,31 +135,59 @@ vim.lsp.config.dartls = {
       openDevTools = "never",
     }
   },
-  capabilities = {
-    textDocument = {
-      codeAction = {
-        dynamicRegistration = true,
-        codeActionLiteralSupport = {
-          codeActionKind = {
-            valueSet = {
-              "source.organizeImports.dart",
-              "source.fixAll.dart",
-              "quickfix.dart",
-              "refactor.dart",
-            }
-          }
-        }
+  capabilities = (function()
+    local capabilities = vim.lsp.protocol.make_client_capabilities()
+    
+    -- Enhanced completion capabilities for blink.cmp
+    capabilities.textDocument.completion.completionItem = {
+      documentationFormat = { "markdown", "plaintext" },
+      snippetSupport = true,
+      preselectSupport = true,
+      insertReplaceSupport = true,
+      labelDetailsSupport = true,
+      deprecatedSupport = true,
+      commitCharactersSupport = true,
+      tagSupport = { valueSet = { 1 } },
+      resolveSupport = {
+        properties = {
+          "documentation",
+          "detail",
+          "additionalTextEdits",
+        },
       },
-      completion = {
-        completionItem = {
-          snippetSupport = true,
-          resolveSupport = {
-            properties = { "documentation", "detail", "additionalTextEdits" }
+    }
+    
+    -- Dart-specific capabilities
+    capabilities.textDocument.codeAction = {
+      dynamicRegistration = true,
+      isPreferredSupport = true,
+      disabledSupport = true,
+      dataSupport = true,
+      honorsChangeAnnotations = false,
+      resolveSupport = {
+        properties = { "edit" }
+      },
+      codeActionLiteralSupport = {
+        codeActionKind = {
+          valueSet = {
+            "",
+            "quickfix",
+            "refactor",
+            "refactor.extract",
+            "refactor.inline",
+            "refactor.rewrite",
+            "source",
+            "source.organizeImports",
+            "source.organizeImports.dart",
+            "source.fixAll",
+            "source.fixAll.dart",
           }
         }
       }
     }
-  }
+    
+    return capabilities
+  end)()
 }
 
 vim.lsp.config.elixirls = {
@@ -521,7 +549,17 @@ vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.s
 vim.lsp.handlers["textDocument/publishDiagnostics"] = vim.lsp.with(vim.lsp.diagnostic.on_publish_diagnostics, {
   update_in_insert = false, -- Don't update diagnostics while typing
   severity_sort = true,
-  virtual_text = false, -- We use lsp_lines for this
+  virtual_text = false, -- We use diagflow.nvim for this
+})
+
+-- Configure diagnostic display (no virtual text/lines, diagflow handles it)
+vim.diagnostic.config({
+  virtual_text = false,
+  virtual_lines = false,
+  signs = true,
+  underline = true,
+  update_in_insert = false,
+  severity_sort = true,
 })
 
 -- Optimize completion performance
@@ -563,8 +601,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
       vim.keymap.set(mode, keys, func, { buffer = args.buf, desc = 'LSP: ' .. desc })
     end
 
-    -- Doom Emacs/Spacemacs style LSP keybindings
-    map('<leader>ca', vim.lsp.buf.code_action, 'Code Action', { 'n', 'x' })
+    -- Doom Emacs/Spacemacs style LSP keybindings (ca is handled by snacks in plugins.lua)
     map('<leader>cr', vim.lsp.buf.rename, 'Rename')
     map('<leader>cf', vim.lsp.buf.format, 'Format Document')
     
@@ -599,6 +636,44 @@ vim.api.nvim_create_autocmd('LspAttach', {
           apply = true,
         })
       end, 'Organize Imports')
+    end
+    
+    if filetype == "dart" then
+      -- Dart/Flutter specific code actions
+      map('<leader>co', function()
+        vim.lsp.buf.code_action({
+          filter = function(action)
+            return action.kind and string.match(action.kind, "source.organizeImports")
+          end,
+          apply = true,
+        })
+      end, 'Organize Imports')
+      
+      map('<leader>cF', function()
+        vim.lsp.buf.code_action({
+          filter = function(action)
+            return action.kind and string.match(action.kind, "source.fixAll")
+          end,
+          apply = true,
+        })
+      end, 'Fix All')
+      
+      map('<leader>cw', function()
+        vim.lsp.buf.code_action({
+          filter = function(action)
+            return action.title and string.match(action.title:lower(), "wrap")
+          end,
+          apply = true,
+        })
+      end, 'Wrap with Widget')
+      
+      map('<leader>ce', function()
+        vim.lsp.buf.code_action({
+          filter = function(action)
+            return action.title and (string.match(action.title:lower(), "extract") or string.match(action.title:lower(), "refactor"))
+          end,
+        })
+      end, 'Extract Widget/Method')
     end
     map('gd', vim.lsp.buf.definition, 'Goto Definition')
     map('gD', vim.lsp.buf.declaration, 'Goto Declaration')
