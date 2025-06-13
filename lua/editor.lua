@@ -663,18 +663,14 @@ return {
             windows = {
               height = 40,
               position = "right",
-              width = 80,
               terminal = {
                 position = "below",
-                height = 12,
                 -- List of debug adapters for which the terminal should be ALWAYS hidden
                 hide = {},
                 -- Hide the terminal when starting a new session
                 start_hidden = false,
               },
             },
-            auto_close = true,
-            auto_open = true,
           })
           
           -- Auto-open dap-view when debugging starts
