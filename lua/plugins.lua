@@ -1607,9 +1607,12 @@ local plugins = {
       -- UI components
       Group.new("StatusLine", colors.fg, colors.dark_gray)
       Group.new("StatusLineNC", colors.gray, colors.dark_gray)
+      Group.new("WinBar", colors.accent, colors.dark_gray, styles.bold)
+      Group.new("WinBarNC", colors.gray, colors.dark_gray)
       Group.new("Pmenu", colors.fg, colors.selection)
       Group.new("PmenuSel", colors.bg, colors.accent)
-      Group.new("FloatBorder", colors.gray)
+      Group.new("FloatBorder", colors.accent)
+      Group.new("FloatTitle", colors.accent, nil, styles.bold)
       Group.new("NormalFloat", colors.fg, colors.bg)
 
       -- TreeSitter (all white)
@@ -1680,6 +1683,22 @@ local plugins = {
         vim.g["terminal_color_" .. i] = "#ffffff"
         vim.g["terminal_color_" .. (i + 8)] = "#666666"
       end
+      
+      -- DAP (Debug Adapter Protocol) highlights
+      Group.new("DapBreakpoint", colors.error, nil, styles.bold)
+      Group.new("DapBreakpointCondition", colors.accent, nil, styles.bold)
+      Group.new("DapBreakpointRejected", colors.gray)
+      Group.new("DapStopped", colors.accent, nil, styles.bold)
+      Group.new("DapStoppedLine", nil, colors.selection)
+      Group.new("NvimDapVirtualText", colors.gray, nil, styles.italic)
+      Group.new("NvimDapVirtualTextChanged", colors.accent, nil, styles.italic)
+      Group.new("NvimDapVirtualTextError", colors.error, nil, styles.italic)
+      
+      -- DAP View winbar highlights (purple theme)
+      Group.new("DapViewWinBar", colors.accent, colors.dark_gray, styles.bold)
+      Group.new("DapViewWinBarNC", colors.gray, colors.dark_gray)
+      Group.new("DapViewTitle", colors.accent, nil, styles.bold)
+      Group.new("DapViewBorder", colors.accent)
     end,
   },
 

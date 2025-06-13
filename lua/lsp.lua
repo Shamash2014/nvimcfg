@@ -516,8 +516,61 @@ vim.lsp.config.docker_compose_language_service = {
   settings = {}
 }
 
+vim.lsp.config.jsonls = {
+  cmd = { 'vscode-json-language-server', '--stdio' },
+  filetypes = { 'json', 'jsonc' },
+  root_markers = { 'package.json', '.git' },
+  init_options = {
+    provideFormatter = true,
+  },
+  settings = {
+    json = {
+      schemas = {
+        {
+          fileMatch = { "package.json" },
+          url = "https://json.schemastore.org/package.json"
+        },
+        {
+          fileMatch = { "tsconfig*.json" },
+          url = "https://json.schemastore.org/tsconfig.json"
+        },
+        {
+          fileMatch = { ".eslintrc", ".eslintrc.json" },
+          url = "https://json.schemastore.org/eslintrc.json"
+        },
+        {
+          fileMatch = { ".prettierrc", ".prettierrc.json" },
+          url = "https://json.schemastore.org/prettierrc.json"
+        },
+        {
+          fileMatch = { "composer.json" },
+          url = "https://json.schemastore.org/composer.json"
+        },
+        {
+          fileMatch = { ".babelrc", ".babelrc.json", "babel.config.json" },
+          url = "https://json.schemastore.org/babelrc.json"
+        },
+        {
+          fileMatch = { "*.workflow" },
+          url = "https://json.schemastore.org/github-workflow.json"
+        }
+      },
+      validate = { enable = true },
+      format = {
+        enable = true,
+      },
+    },
+    jsonc = {
+      validate = { enable = true },
+      format = {
+        enable = true,
+      },
+    }
+  }
+}
+
 -- Enable configured LSP servers
-vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'pyright', 'rust_analyzer', 'clangd', 'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service' })
+vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'pyright', 'rust_analyzer', 'clangd', 'sourcekit', 'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service', 'jsonls' })
 
 -- Performance: Configure LSP with optimizations
 vim.lsp.set_log_level("WARN") -- Reduce LSP logging overhead
@@ -639,8 +692,8 @@ vim.api.nvim_create_autocmd('LspAttach', {
     end
     
     if filetype == "dart" then
-      -- Dart/Flutter specific code actions
-      map('<leader>co', function()
+      -- Dart/Flutter specific code actions under <leader>cd (code dart)
+      map('<leader>cdo', function()
         vim.lsp.buf.code_action({
           filter = function(action)
             return action.kind and string.match(action.kind, "source.organizeImports")
@@ -649,7 +702,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
         })
       end, 'Organize Imports')
       
-      map('<leader>cF', function()
+      map('<leader>cdf', function()
         vim.lsp.buf.code_action({
           filter = function(action)
             return action.kind and string.match(action.kind, "source.fixAll")
@@ -658,7 +711,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
         })
       end, 'Fix All')
       
-      map('<leader>cw', function()
+      map('<leader>cdw', function()
         vim.lsp.buf.code_action({
           filter = function(action)
             return action.title and string.match(action.title:lower(), "wrap")
@@ -667,7 +720,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
         })
       end, 'Wrap with Widget')
       
-      map('<leader>ce', function()
+      map('<leader>cde', function()
         vim.lsp.buf.code_action({
           filter = function(action)
             return action.title and (string.match(action.title:lower(), "extract") or string.match(action.title:lower(), "refactor"))

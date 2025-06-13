@@ -596,26 +596,26 @@ return {
       }
     },
     keys = {
-      { "<leader>cfr", "<cmd>FlutterRun<cr>",           desc = "Flutter Run" },
-      { "<leader>cfR", "<cmd>FlutterRestart<cr>",       desc = "Flutter Restart" },
-      { "<leader>cfq", "<cmd>FlutterQuit<cr>",          desc = "Flutter Quit" },
-      { "<leader>cfh", "<cmd>FlutterReload<cr>",        desc = "Flutter Hot Reload" },
-      { "<leader>cfH", "<cmd>FlutterRestart<cr>",       desc = "Flutter Hot Restart" },
-      { "<leader>cfd", "<cmd>FlutterDevices<cr>",       desc = "Flutter Devices" },
-      { "<leader>cfe", "<cmd>FlutterEmulators<cr>",     desc = "Flutter Emulators" },
-      { "<leader>cfo", "<cmd>FlutterOutlineToggle<cr>", desc = "Flutter Outline" },
-      { "<leader>cfD", "<cmd>FlutterDevTools<cr>",      desc = "Flutter DevTools" },
-      { "<leader>cfL", "<cmd>FlutterLogClear<cr>",      desc = "Flutter Log Clear" },
-      { "<leader>cfs", "<cmd>FlutterSuper<cr>",         desc = "Flutter Super" },
-      { "<leader>cfg", "<cmd>FlutterPubGet<cr>",        desc = "Flutter Pub Get" },
-      { "<leader>cfG", "<cmd>FlutterPubUpgrade<cr>",    desc = "Flutter Pub Upgrade" },
-      { "<leader>cfc", "<cmd>FlutterClean<cr>",         desc = "Flutter Clean" },
-      { "<leader>cft", "<cmd>FlutterTest<cr>",          desc = "Flutter Test" },
-      { "<leader>cfT", "<cmd>FlutterTestAll<cr>",       desc = "Flutter Test All" },
-      { "<leader>cfv", "<cmd>FlutterVersion<cr>",       desc = "Flutter Version" },
-      { "<leader>cfp", "<cmd>FlutterPubDeps<cr>",       desc = "Flutter Pub Deps" },
-      { "<leader>cfn", "<cmd>FlutterRename<cr>",        desc = "Flutter Rename" },
-      { "<leader>cfi", "<cmd>FlutterScreenshot<cr>",    desc = "Flutter Screenshot" },
+      { "<leader>ofr", "<cmd>FlutterRun<cr>",           desc = "Flutter Run" },
+      { "<leader>ofR", "<cmd>FlutterRestart<cr>",       desc = "Flutter Restart" },
+      { "<leader>ofq", "<cmd>FlutterQuit<cr>",          desc = "Flutter Quit" },
+      { "<leader>ofh", "<cmd>FlutterReload<cr>",        desc = "Flutter Hot Reload" },
+      { "<leader>ofH", "<cmd>FlutterRestart<cr>",       desc = "Flutter Hot Restart" },
+      { "<leader>ofd", "<cmd>FlutterDevices<cr>",       desc = "Flutter Devices" },
+      { "<leader>ofe", "<cmd>FlutterEmulators<cr>",     desc = "Flutter Emulators" },
+      { "<leader>ofo", "<cmd>FlutterOutlineToggle<cr>", desc = "Flutter Outline" },
+      { "<leader>ofD", "<cmd>FlutterDevTools<cr>",      desc = "Flutter DevTools" },
+      { "<leader>ofL", "<cmd>FlutterLogClear<cr>",      desc = "Flutter Log Clear" },
+      { "<leader>ofs", "<cmd>FlutterSuper<cr>",         desc = "Flutter Super" },
+      { "<leader>ofg", "<cmd>FlutterPubGet<cr>",        desc = "Flutter Pub Get" },
+      { "<leader>ofG", "<cmd>FlutterPubUpgrade<cr>",    desc = "Flutter Pub Upgrade" },
+      { "<leader>ofc", "<cmd>FlutterClean<cr>",         desc = "Flutter Clean" },
+      { "<leader>oft", "<cmd>FlutterTest<cr>",          desc = "Flutter Test" },
+      { "<leader>ofT", "<cmd>FlutterTestAll<cr>",       desc = "Flutter Test All" },
+      { "<leader>ofv", "<cmd>FlutterVersion<cr>",       desc = "Flutter Version" },
+      { "<leader>ofp", "<cmd>FlutterPubDeps<cr>",       desc = "Flutter Pub Deps" },
+      { "<leader>ofn", "<cmd>FlutterRename<cr>",        desc = "Flutter Rename" },
+      { "<leader>ofi", "<cmd>FlutterScreenshot<cr>",    desc = "Flutter Screenshot" },
     },
     config = function(_, opts)
       require("flutter-tools").setup(opts)
@@ -624,27 +624,27 @@ return {
       local ok, wk = pcall(require, "which-key")
       if ok then
         wk.add({
-          { "<leader>cf",  group = "flutter",    ft = "dart" },
-          { "<leader>cfr", desc = "run",         ft = "dart" },
-          { "<leader>cfR", desc = "restart",     ft = "dart" },
-          { "<leader>cfq", desc = "quit",        ft = "dart" },
-          { "<leader>cfh", desc = "hot reload",  ft = "dart" },
-          { "<leader>cfH", desc = "hot restart", ft = "dart" },
-          { "<leader>cfd", desc = "devices",     ft = "dart" },
-          { "<leader>cfe", desc = "emulators",   ft = "dart" },
-          { "<leader>cfo", desc = "outline",     ft = "dart" },
-          { "<leader>cfD", desc = "devtools",    ft = "dart" },
-          { "<leader>cfL", desc = "log clear",   ft = "dart" },
-          { "<leader>cfs", desc = "super",       ft = "dart" },
-          { "<leader>cfg", desc = "pub get",     ft = "dart" },
-          { "<leader>cfG", desc = "pub upgrade", ft = "dart" },
-          { "<leader>cfc", desc = "clean",       ft = "dart" },
-          { "<leader>cft", desc = "test",        ft = "dart" },
-          { "<leader>cfT", desc = "test all",    ft = "dart" },
-          { "<leader>cfv", desc = "version",     ft = "dart" },
-          { "<leader>cfp", desc = "pub deps",    ft = "dart" },
-          { "<leader>cfn", desc = "rename",      ft = "dart" },
-          { "<leader>cfi", desc = "screenshot",  ft = "dart" },
+          { "<leader>of",  group = "flutter",    ft = "dart" },
+          { "<leader>ofr", desc = "run",         ft = "dart" },
+          { "<leader>ofR", desc = "restart",     ft = "dart" },
+          { "<leader>ofq", desc = "quit",        ft = "dart" },
+          { "<leader>ofh", desc = "hot reload",  ft = "dart" },
+          { "<leader>ofH", desc = "hot restart", ft = "dart" },
+          { "<leader>ofd", desc = "devices",     ft = "dart" },
+          { "<leader>ofe", desc = "emulators",   ft = "dart" },
+          { "<leader>ofo", desc = "outline",     ft = "dart" },
+          { "<leader>ofD", desc = "devtools",    ft = "dart" },
+          { "<leader>ofL", desc = "log clear",   ft = "dart" },
+          { "<leader>ofs", desc = "super",       ft = "dart" },
+          { "<leader>ofg", desc = "pub get",     ft = "dart" },
+          { "<leader>ofG", desc = "pub upgrade", ft = "dart" },
+          { "<leader>ofc", desc = "clean",       ft = "dart" },
+          { "<leader>oft", desc = "test",        ft = "dart" },
+          { "<leader>ofT", desc = "test all",    ft = "dart" },
+          { "<leader>ofv", desc = "version",     ft = "dart" },
+          { "<leader>ofp", desc = "pub deps",    ft = "dart" },
+          { "<leader>ofn", desc = "rename",      ft = "dart" },
+          { "<leader>ofi", desc = "screenshot",  ft = "dart" },
         })
       end
     end,
@@ -661,18 +661,35 @@ return {
         config = function()
           require("dap-view").setup({
             windows = {
-              height = 12,
-              position = "below",
+              height = 40,
+              position = "right",
+              width = 80,
               terminal = {
-                position = "right",
-                width = 0.5,
+                position = "below",
+                height = 12,
                 -- List of debug adapters for which the terminal should be ALWAYS hidden
                 hide = {},
                 -- Hide the terminal when starting a new session
                 start_hidden = false,
               },
             },
+            auto_close = true,
+            auto_open = true,
           })
+          
+          -- Auto-open dap-view when debugging starts
+          local dap = require("dap")
+          dap.listeners.after.event_initialized["dap-view"] = function()
+            require("dap-view").toggle()
+          end
+          
+          -- Auto-close dap-view when debugging ends
+          dap.listeners.before.event_terminated["dap-view"] = function()
+            require("dap-view").close()
+          end
+          dap.listeners.before.event_exited["dap-view"] = function()
+            require("dap-view").close()
+          end
         end,
       },
     },
@@ -693,19 +710,25 @@ return {
       { "<leader>dr", function() require("dap").repl.toggle() end,                                          desc = "Toggle REPL" },
       { "<leader>ds", function() require("dap").session() end,                                              desc = "Session" },
       { "<leader>dt", function() require("dap").terminate() end,                                            desc = "Terminate" },
-      { "<leader>dw", function() require("dap.ui.widgets").hover() end,                                     desc = "Widgets" },
       { "<leader>dv", function() require("dap-view").toggle() end,                                          desc = "DAP View" },
     },
     config = function()
       local dap = require("dap")
 
-      -- Configure signs
-      vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DiagnosticError" })
-      vim.fn.sign_define("DapBreakpointCondition", { text = "◐", texthl = "DiagnosticWarn" })
-      vim.fn.sign_define("DapBreakpointRejected", { text = "○", texthl = "DiagnosticInfo" })
-      vim.fn.sign_define("DapStopped", { text = "→", texthl = "DiagnosticWarn", linehl = "Visual" })
+      -- Configure signs with theme-matching colors
+      vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DapBreakpoint" })
+      vim.fn.sign_define("DapBreakpointCondition", { text = "◐", texthl = "DapBreakpointCondition" })
+      vim.fn.sign_define("DapBreakpointRejected", { text = "○", texthl = "DapBreakpointRejected" })
+      vim.fn.sign_define("DapStopped", { text = "→", texthl = "DapStopped", linehl = "DapStoppedLine" })
+      
+      -- Custom DAP highlight groups that match your minimal theme
+      vim.api.nvim_set_hl(0, "DapBreakpoint", { fg = "#ff5555", bold = true })           -- Error red
+      vim.api.nvim_set_hl(0, "DapBreakpointCondition", { fg = "#bb9af7", bold = true })  -- Accent purple
+      vim.api.nvim_set_hl(0, "DapBreakpointRejected", { fg = "#666666" })                -- Gray
+      vim.api.nvim_set_hl(0, "DapStopped", { fg = "#bb9af7", bold = true })              -- Accent purple
+      vim.api.nvim_set_hl(0, "DapStoppedLine", { bg = "#222222" })                       -- Selection background
 
-      -- DAP Virtual Text
+      -- DAP Virtual Text with theme-matching colors
       require("nvim-dap-virtual-text").setup({
         enabled = true,
         enabled_commands = true,
@@ -720,6 +743,27 @@ return {
         all_frames = false,
         virt_lines = false,
         virt_text_win_col = nil,
+      })
+      
+      -- Custom virtual text highlight groups
+      vim.api.nvim_set_hl(0, "NvimDapVirtualText", { fg = "#666666", italic = true })
+      vim.api.nvim_set_hl(0, "NvimDapVirtualTextChanged", { fg = "#bb9af7", italic = true })
+      vim.api.nvim_set_hl(0, "NvimDapVirtualTextError", { fg = "#ff5555", italic = true })
+      
+      -- DAP View winbar highlights (purple theme) - using actual highlight groups
+      vim.api.nvim_set_hl(0, "WinBar", { fg = "#bb9af7", bg = "#444444", bold = true })
+      vim.api.nvim_set_hl(0, "WinBarNC", { fg = "#666666", bg = "#444444" })
+      vim.api.nvim_set_hl(0, "FloatTitle", { fg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "FloatBorder", { fg = "#bb9af7" })
+      
+      -- Also try dap-view specific groups if they exist
+      vim.api.nvim_create_autocmd("ColorScheme", {
+        callback = function()
+          vim.api.nvim_set_hl(0, "WinBar", { fg = "#bb9af7", bg = "#444444", bold = true })
+          vim.api.nvim_set_hl(0, "WinBarNC", { fg = "#666666", bg = "#444444" })
+          vim.api.nvim_set_hl(0, "FloatTitle", { fg = "#bb9af7", bold = true })
+          vim.api.nvim_set_hl(0, "FloatBorder", { fg = "#bb9af7" })
+        end,
       })
 
       -- Language-specific configurations
