@@ -657,35 +657,11 @@ return {
       "theHamsta/nvim-dap-virtual-text",
       "nvim-neotest/nvim-nio",
       {
-        "igorlfs/nvim-dap-view",
+        "miroshQa/debugmaster.nvim",
         config = function()
-          require("dap-view").setup({
-            windows = {
-              height = 40,
-              position = "right",
-              terminal = {
-                position = "below",
-                -- List of debug adapters for which the terminal should be ALWAYS hidden
-                hide = {},
-                -- Hide the terminal when starting a new session
-                start_hidden = false,
-              },
-            },
-          })
-          
-          -- Auto-open dap-view when debugging starts
-          local dap = require("dap")
-          dap.listeners.after.event_initialized["dap-view"] = function()
-            require("dap-view").toggle()
-          end
-          
-          -- Auto-close dap-view when debugging ends
-          dap.listeners.before.event_terminated["dap-view"] = function()
-            require("dap-view").close()
-          end
-          dap.listeners.before.event_exited["dap-view"] = function()
-            require("dap-view").close()
-          end
+          local dm = require("debugmaster")
+          -- Enable Neovim Lua debugging integration
+          dm.plugins.osv_integration.enabled = true
         end,
       },
     },
@@ -706,7 +682,7 @@ return {
       { "<leader>dr", function() require("dap").repl.toggle() end,                                          desc = "Toggle REPL" },
       { "<leader>ds", function() require("dap").session() end,                                              desc = "Session" },
       { "<leader>dt", function() require("dap").terminate() end,                                            desc = "Terminate" },
-      { "<leader>dv", function() require("dap-view").toggle() end,                                          desc = "DAP View" },
+      { "<leader>dd", function() require("debugmaster").mode.toggle() end,                                desc = "Debug Mode" },
     },
     config = function()
       local dap = require("dap")
@@ -1319,6 +1295,24 @@ return {
     keys = {
       { "<leader>ojc", ":JupytextConvert<CR>", desc = "Convert Jupyter notebook" },
       { "<leader>ojs", ":JupytextSync<CR>",    desc = "Sync Jupyter notebook" },
+      
+      -- Quarto-specific commands (using <leader>oq* to avoid conflicts)
+      { "<leader>oqp", ":QuartoPreview<CR>",    desc = "Quarto preview",     ft = { "quarto", "qmd" } },
+      { "<leader>oqc", ":QuartoClosePreview<CR>", desc = "Quarto close preview", ft = { "quarto", "qmd" } },
+      { "<leader>oqr", function() 
+          if vim.bo.filetype == "quarto" or vim.bo.filetype == "qmd" then
+            vim.cmd("QuartoSendAbove")
+          else
+            vim.notify("Quarto commands only available in .qmd files", vim.log.levels.WARN)
+          end
+        end, desc = "Quarto run to cursor" },
+      { "<leader>oqa", function()
+          if vim.bo.filetype == "quarto" or vim.bo.filetype == "qmd" then
+            vim.cmd("QuartoSendAll")
+          else
+            vim.notify("Quarto commands only available in .qmd files", vim.log.levels.WARN)
+          end
+        end, desc = "Quarto run all" },
     },
   },
 
@@ -2115,6 +2109,48 @@ return {
           { "<leader>ci", desc = "import symbol" },
         })
       end
+    end,
+  },
+
+  -- Python import management and refactoring
+  {
+    "alexpasmantier/pymple.nvim",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "MunifTanjim/nui.nvim",
+      "nvim-treesitter/nvim-treesitter",
+    },
+    build = ":PympleBuild",
+    ft = "python",
+    keys = {
+      { "<leader>ci", function() require('pymple.api').resolve_import_under_cursor() end, desc = "Resolve import under cursor" },
+      { "<leader>cio", function() require('pymple.api').optimize_imports() end, desc = "Optimize imports" },
+      { "<leader>ciu", function() require('pymple.api').remove_unused_imports() end, desc = "Remove unused imports" },
+    },
+    config = function()
+      require('pymple').setup({
+        keymaps = {
+          resolve_import_under_cursor = {
+            desc = "Resolve import under cursor",
+            keys = "<leader>ci",
+          },
+        },
+        python = {
+          analysis = {
+            auto_update_imports_on_move = true, -- Works with oil.nvim
+            update_imports_on_folder_move = true, -- Useful for refactoring
+          },
+        },
+        -- Integration with existing tools
+        integrations = {
+          ruff = true, -- Uses your existing ruff formatter/linter
+        },
+        -- File explorer integration
+        file_explorer = {
+          enabled = true,
+          oil = true, -- Integrates with your oil.nvim setup
+        },
+      })
     end,
   },
 

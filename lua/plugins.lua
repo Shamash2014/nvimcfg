@@ -119,6 +119,7 @@ local plugins = {
         { "<leader>a", group = "ai", mode = { "n", "v" } },
         { "<leader>i", group = "import", mode = { "n", "v" } },
         { "<leader>oj", group = "jupyter", mode = { "n", "v" } },
+        { "<leader>oq", group = "quarto", mode = { "n", "v" } },
         { "<leader>fw", group = "workspace", mode = { "n", "v" } },
         { "g", group = "goto", mode = { "n", "v" } },
         { "z", group = "fold", mode = { "n", "v" } },
@@ -229,11 +230,10 @@ local plugins = {
       local configs = require("nvim-treesitter.configs")
       configs.setup({
         ensure_installed = {
-          "c", "lua", "vim", "vimdoc", "query", "javascript", "typescript",
-          "html", "css", "scss", "python", "bash", "json", "yaml", "markdown",
-          "r", "julia", "latex", "astro", "go", "gomod", "gowork", "gosum",
-          "dockerfile", "toml", "xml", "rust", "elixir", "dart"
+          -- Core essentials only - install others on-demand
+          "lua", "vim", "vimdoc", "query"
         },
+        auto_install = true, -- Install parsers automatically when needed
         sync_install = false,
         highlight = { enable = true },
         indent = { enable = true },
@@ -631,10 +631,10 @@ local plugins = {
     },
   },
 
-  -- Modern Git Blame with virtual lines (Zed-style)
+  -- Modern Git Blame with virtual lines (Zed-style)  
   {
     "f-person/git-blame.nvim",
-    event = "VeryLazy", -- Load even later for better startup
+    cmd = { "GitBlameToggle", "GitBlameEnable", "GitBlameDisable" }, -- Only load when needed
     opts = {
       enabled = false, -- Start disabled, toggle when needed
       message_template = "  <author>, <date> - <summary>",
@@ -837,67 +837,29 @@ local plugins = {
       { "<leader>gdh", "<cmd>DiffviewFileHistory<cr>", desc = "Project history" },
       { "<leader>gdr", "<cmd>DiffviewRefresh<cr>", desc = "Refresh diff view" },
       
-      -- Inline diff toggle command
-      {
-        "<leader>gdi",
-        function()
-          -- Toggle inline diff for current file against HEAD in bottom split
-          if vim.wo.diff then
-            -- Turn off diff mode and close any diff windows
-            vim.cmd("diffoff!")
-            local wins = vim.api.nvim_list_wins()
-            for _, win in ipairs(wins) do
-              local buf = vim.api.nvim_win_get_buf(win)
-              local buf_name = vim.api.nvim_buf_get_name(buf)
-              if buf_name:match("%(HEAD%)") or buf_name:match("%(staged%)") then
-                vim.api.nvim_win_close(win, true)
-              end
-            end
-          else
-            -- Show native diff for current file against HEAD in bottom split
-            local file = vim.fn.expand("%:p")
-            local filename = vim.fn.expand("%:t")
-            if file ~= "" then
-              -- Get HEAD version of file
-              local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
-              if vim.v.shell_error == 0 then
-                local relative_path = vim.fn.fnamemodify(file, ":~:.")
-                local head_content = vim.fn.system("git show HEAD:" .. vim.fn.shellescape(relative_path) .. " 2>/dev/null")
-                
-                if vim.v.shell_error == 0 then
-                  -- Create bottom split
-                  vim.cmd("botright split")
-                  vim.cmd("resize 15")
-                  
-                  -- Create temporary buffer with HEAD content
-                  local bufnr = vim.api.nvim_create_buf(false, true)
-                  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, vim.split(head_content, "\n"))
-                  vim.api.nvim_buf_set_name(bufnr, filename .. " (HEAD)")
-                  vim.api.nvim_win_set_buf(0, bufnr)
-                  
-                  -- Set filetype to match original
-                  local ft = vim.bo[vim.fn.bufnr(file)].filetype
-                  vim.bo[bufnr].filetype = ft
-                  vim.bo[bufnr].readonly = true
-                  
-                  -- Enable diff mode
-                  vim.cmd("diffthis")
-                  vim.cmd("wincmd k")
-                  vim.cmd("diffthis")
-                else
-                  vim.notify("Could not get HEAD version of file", vim.log.levels.WARN)
-                end
-              else
-                vim.notify("Not in a git repository", vim.log.levels.WARN)
-              end
-            else
-              vim.notify("No file to diff", vim.log.levels.WARN)
-            end
-          end
-        end,
-        desc = "Toggle inline diff vs HEAD"
-      },
+      { "<leader>gdi", "<cmd>Unified<cr>", desc = "Toggle unified inline diff" },
     },
+  },
+
+  -- Unified inline diffs
+  {
+    "axkirillov/unified.nvim",
+    cmd = "Unified",
+    config = function()
+      require("unified").setup({
+        signs = {
+          add = "┊",
+          delete = "┊", 
+          change = "┊"
+        },
+        auto_refresh = true,
+      })
+      
+      -- Match minimal theme
+      vim.api.nvim_set_hl(0, "UnifiedAdd", { fg = "#666666" })
+      vim.api.nvim_set_hl(0, "UnifiedChange", { fg = "#666666" })
+      vim.api.nvim_set_hl(0, "UnifiedDelete", { fg = "#666666" })
+    end,
   },
 
   -- Collection of small QoL plugins
@@ -1125,6 +1087,34 @@ local plugins = {
     },
   },
 
+  -- JSON to types converter
+  {
+    "redoxahmii/json-to-types.nvim",
+    build = "sh install.sh npm",
+    ft = "json",
+    keys = {
+      { "<leader>cjt", "<cmd>ConvertJSONtoLang typescript<cr>", desc = "JSON to TypeScript" },
+      { "<leader>cjT", "<cmd>ConvertJSONtoLangBuffer typescript<cr>", desc = "JSON to TS (buffer)" },
+      { "<leader>cjp", "<cmd>ConvertJSONtoLang python<cr>", desc = "JSON to Python" },
+      { "<leader>cjP", "<cmd>ConvertJSONtoLangBuffer python<cr>", desc = "JSON to Python (buffer)" },
+      { "<leader>cjr", "<cmd>ConvertJSONtoLang rust<cr>", desc = "JSON to Rust" },
+      { "<leader>cjR", "<cmd>ConvertJSONtoLangBuffer rust<cr>", desc = "JSON to Rust (buffer)" },
+      { "<leader>cjg", "<cmd>ConvertJSONtoLang go<cr>", desc = "JSON to Go" },
+      { "<leader>cjG", "<cmd>ConvertJSONtoLangBuffer go<cr>", desc = "JSON to Go (buffer)" },
+      { "<leader>cjz", "<cmd>ConvertJSONtoLang zod<cr>", desc = "JSON to Zod" },
+      { "<leader>cjZ", "<cmd>ConvertJSONtoLangBuffer zod<cr>", desc = "JSON to Zod (buffer)" },
+    },
+    config = function()
+      require("json-to-types").setup()
+      
+      -- Add which-key group for JSON conversion
+      local wk = require("which-key")
+      wk.add({
+        { "<leader>cj", group = "json conversion" },
+      })
+    end,
+  },
+
   -- Ultra-minimal statusline with mini.statusline
   {
     "echasnovski/mini.statusline",
@@ -1238,10 +1228,88 @@ local plugins = {
     },
   },
 
+  -- Tailwind CSS tools and utilities
+  {
+    "luckasRanarison/tailwind-tools.nvim",
+    dependencies = { "nvim-treesitter/nvim-treesitter" },
+    ft = { "html", "css", "scss", "javascript", "typescript", "javascriptreact", "typescriptreact", "vue", "svelte", "astro" },
+    keys = {
+      { "<leader>twc", "<cmd>TailwindConcealToggle<cr>", desc = "Toggle Tailwind conceal" },
+      { "<leader>tws", "<cmd>TailwindSort<cr>", desc = "Sort Tailwind classes" },
+      { "<leader>twn", "<cmd>TailwindNextClass<cr>", desc = "Next Tailwind class" },
+      { "<leader>twp", "<cmd>TailwindPrevClass<cr>", desc = "Previous Tailwind class" },
+      { "<leader>twt", "<cmd>TailwindColorToggle<cr>", desc = "Toggle Tailwind colors" },
+    },
+    opts = {
+      document_color = {
+        enabled = true,
+        kind = "inline", -- "inline" | "foreground" | "background"
+        inline_symbol = "󰝤 ", -- symbol for inline color
+        debounce = 200,
+      },
+      conceal = {
+        enabled = false, -- Start disabled, toggle with <leader>twc
+        min_length = nil,
+        symbol = "󱏿",
+        highlight = {
+          fg = "#38BDF8",
+        }
+      },
+      custom_filetypes = {}
+    },
+    config = function(_, opts)
+      require("tailwind-tools").setup(opts)
+      
+      -- Add which-key integration for Tailwind commands
+      local wk = require("which-key")
+      wk.add({
+        { "<leader>tw", group = "tailwind" },
+        { "<leader>twc", desc = "toggle conceal" },
+        { "<leader>tws", desc = "sort classes" },
+        { "<leader>twn", desc = "next class" },
+        { "<leader>twp", desc = "prev class" },
+        { "<leader>twt", desc = "toggle colors" },
+      })
+    end,
+  },
+
+  -- JSX/TSX element text objects
+  {
+    "mawkler/jsx-element.nvim",
+    dependencies = {
+      "nvim-treesitter/nvim-treesitter",
+      "nvim-treesitter/nvim-treesitter-textobjects",
+    },
+    ft = { "typescriptreact", "javascriptreact", "javascript", "typescript" },
+    opts = {
+      keymaps = {
+        enable = true,
+        jsx_element = 't'
+      }
+    },
+    config = function(_, opts)
+      require("jsx-element").setup(opts)
+      
+      -- Add which-key descriptions for JSX text objects
+      local wk = require("which-key")
+      wk.add({
+        mode = { "o", "x" },
+        { "it", desc = "inside JSX element" },
+        { "at", desc = "around JSX element" },
+      })
+      
+      -- Add movement descriptions
+      wk.add({
+        { "]t", desc = "next JSX element" },
+        { "[t", desc = "prev JSX element" },
+      })
+    end,
+  },
+
   -- Enhanced matchit (better % matching)
   {
     "andymass/vim-matchup",
-    event = { "BufReadPost", "BufNewFile" },
+    keys = { "%", "g%", "[%", "]%", "z%" }, -- Only load when using matchit keys
     config = function()
       -- Performance optimizations
       vim.g.matchup_matchparen_enabled = 0 -- Disable real-time paren highlighting
@@ -1289,7 +1357,7 @@ local plugins = {
   -- Unimpaired commands (Helix style)
   {
     "echasnovski/mini.bracketed",
-    event = { "BufReadPost", "BufNewFile" },
+    keys = { "]", "[" }, -- Only load when using bracket navigation
     config = function()
       require("mini.bracketed").setup({
         buffer     = { suffix = 'b', options = {} },
@@ -1544,7 +1612,8 @@ local plugins = {
   -- Direnv integration
   {
     "direnv/direnv.vim",
-    event = { "BufReadPre", "BufNewFile" },
+    cmd = { "DirenvExport" },
+    event = { "DirChanged" }, -- Only load when changing directories
   },
 
   -- Minimal theme with colorbuddy (custom)
@@ -1699,6 +1768,72 @@ local plugins = {
       Group.new("DapViewWinBarNC", colors.gray, colors.dark_gray)
       Group.new("DapViewTitle", colors.accent, nil, styles.bold)
       Group.new("DapViewBorder", colors.accent)
+    end,
+  },
+
+  -- Global marks management
+  {
+    "mohseenrm/marko.nvim",
+    event = { "BufReadPost", "BufNewFile" },
+    config = function()
+      require("marko").setup({
+        debug = false,
+      })
+    end,
+  },
+
+  -- Enhanced quickfix window with context and editing
+  {
+    "stevearc/quicker.nvim",
+    event = "FileType qf",
+    keys = {
+      { ">", function() require("quicker").expand({ before = 2, after = 2, add_to_existing = true }) end, desc = "Expand quickfix context", ft = "qf" },
+      { "<", function() require("quicker").collapse() end, desc = "Collapse quickfix context", ft = "qf" },
+    },
+    opts = {},
+  },
+
+  -- Enhanced command line (Helix-style)
+  {
+    "vzze/cmdline.nvim",
+    event = "CmdlineEnter",
+    config = function()
+      require('cmdline').setup({
+        cmdtype = ":", -- supports ":/?"
+        window = {
+          matchFuzzy = true,
+          offset = 1,
+          debounceMs = 10
+        },
+        hl = {
+          default = "Pmenu",
+          selection = "PmenuSel"
+        }
+      })
+    end,
+  },
+
+  -- LSP function signature hints in echo area
+  {
+    "amnn/lsp-echohint.nvim",
+    event = "LspAttach",
+    opts = {
+      show_all_params = false,
+      timeout = 500,
+      show_parameter_names = true,
+      highlight = "Comment", -- Match your minimal theme
+    },
+  },
+
+  -- LSP hover in split windows
+  {
+    "roobert/hoversplit.nvim",
+    event = "LspAttach",
+    keys = {
+      { "<leader>ch", function() require("hoversplit").vsplit_remain_focused() end, desc = "Hover split" },
+    },
+    config = function()
+      require("hoversplit").setup()
     end,
   },
 
