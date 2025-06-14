@@ -569,8 +569,51 @@ vim.lsp.config.jsonls = {
   }
 }
 
+vim.lsp.config.ruby_lsp = {
+  cmd = { 'ruby-lsp' },
+  filetypes = { 'ruby' },
+  root_markers = { 'Gemfile', 'Rakefile', '.git' },
+  init_options = {
+    enabledFeatures = {
+      "codeActions",
+      "diagnostics", 
+      "documentHighlights",
+      "documentLink",
+      "documentSymbols",
+      "foldingRanges",
+      "formatting",
+      "hover",
+      "inlayHint",
+      "onTypeFormatting",
+      "selectionRanges",
+      "semanticHighlighting",
+      "completion",
+      "codeLens",
+      "definition",
+      "workspaceSymbol",
+      "signatureHelp",
+      "typeHierarchy"
+    },
+    featuresConfiguration = {
+      inlayHint = {
+        enableAll = true,
+      },
+    },
+    formatter = "rubocop",
+    linters = { "rubocop" },
+  },
+  settings = {
+    rubyLsp = {
+      rubyVersionManager = "auto",
+      formatter = "rubocop",
+      linters = { "rubocop" },
+      enableExperimentalFeatures = true,
+    },
+  },
+}
+
 -- Enable configured LSP servers
-vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'pyright', 'rust_analyzer', 'clangd', 'sourcekit', 'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service', 'jsonls' })
+vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'pyright', 'rust_analyzer', 'clangd', 'sourcekit', 'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service', 'jsonls', 'ruby_lsp' })
 
 -- Performance: Configure LSP with optimizations
 vim.lsp.set_log_level("WARN") -- Reduce LSP logging overhead

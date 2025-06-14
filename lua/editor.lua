@@ -51,6 +51,7 @@ return {
         go = { "goimports", "gofumpt" },
         dockerfile = { "prettier" },
         ["yaml.docker-compose"] = { "prettier" },
+        ruby = { "rubocop" },
       },
       format_on_save = {
         timeout_ms = 500,
@@ -96,6 +97,7 @@ return {
         css = { "stylelint" },
         scss = { "stylelint" },
         less = { "stylelint" },
+        ruby = { "rubocop" },
       }
 
       -- Configure eslint to use project config
@@ -831,6 +833,37 @@ return {
       -- C/C++
       dap.configurations.c = dap.configurations.rust
       dap.configurations.cpp = dap.configurations.rust
+
+      -- Ruby (debug gem)
+      dap.adapters.ruby = function(callback, config)
+        callback {
+          type = "server",
+          host = "127.0.0.1",
+          port = "${port}",
+          executable = {
+            command = "bundle",
+            args = { "exec", "rdbg", "-n", "--open", "--port", "${port}", "-c", "--", "ruby", config.program }
+          },
+        }
+      end
+
+      dap.configurations.ruby = {
+        {
+          type = "ruby",
+          name = "debug current file",
+          request = "attach",
+          localfs = true,
+          program = "${file}",
+        },
+        {
+          type = "ruby",
+          name = "run current spec file",
+          request = "attach", 
+          localfs = true,
+          program = "bundle",
+          args = { "exec", "rspec", "${file}" },
+        },
+      }
 
       -- Dart/Flutter (enhanced by flutter-tools.nvim)
       dap.adapters.dart = {
