@@ -684,7 +684,7 @@ return {
       { "<leader>dr", function() require("dap").repl.toggle() end,                                          desc = "Toggle REPL" },
       { "<leader>ds", function() require("dap").session() end,                                              desc = "Session" },
       { "<leader>dt", function() require("dap").terminate() end,                                            desc = "Terminate" },
-      { "<leader>dd", function() require("debugmaster").mode.toggle() end,                                desc = "Debug Mode" },
+      { "<leader>dd", function() require("debugmaster").mode.toggle() end,                                  desc = "Debug Mode" },
     },
     config = function()
       local dap = require("dap")
@@ -694,13 +694,13 @@ return {
       vim.fn.sign_define("DapBreakpointCondition", { text = "◐", texthl = "DapBreakpointCondition" })
       vim.fn.sign_define("DapBreakpointRejected", { text = "○", texthl = "DapBreakpointRejected" })
       vim.fn.sign_define("DapStopped", { text = "→", texthl = "DapStopped", linehl = "DapStoppedLine" })
-      
+
       -- Custom DAP highlight groups that match your minimal theme
-      vim.api.nvim_set_hl(0, "DapBreakpoint", { fg = "#ff5555", bold = true })           -- Error red
-      vim.api.nvim_set_hl(0, "DapBreakpointCondition", { fg = "#bb9af7", bold = true })  -- Accent purple
-      vim.api.nvim_set_hl(0, "DapBreakpointRejected", { fg = "#666666" })                -- Gray
-      vim.api.nvim_set_hl(0, "DapStopped", { fg = "#bb9af7", bold = true })              -- Accent purple
-      vim.api.nvim_set_hl(0, "DapStoppedLine", { bg = "#222222" })                       -- Selection background
+      vim.api.nvim_set_hl(0, "DapBreakpoint", { fg = "#ff5555", bold = true })          -- Error red
+      vim.api.nvim_set_hl(0, "DapBreakpointCondition", { fg = "#bb9af7", bold = true }) -- Accent purple
+      vim.api.nvim_set_hl(0, "DapBreakpointRejected", { fg = "#666666" })               -- Gray
+      vim.api.nvim_set_hl(0, "DapStopped", { fg = "#bb9af7", bold = true })             -- Accent purple
+      vim.api.nvim_set_hl(0, "DapStoppedLine", { bg = "#222222" })                      -- Selection background
 
       -- DAP Virtual Text with theme-matching colors
       require("nvim-dap-virtual-text").setup({
@@ -718,18 +718,18 @@ return {
         virt_lines = false,
         virt_text_win_col = nil,
       })
-      
+
       -- Custom virtual text highlight groups
       vim.api.nvim_set_hl(0, "NvimDapVirtualText", { fg = "#666666", italic = true })
       vim.api.nvim_set_hl(0, "NvimDapVirtualTextChanged", { fg = "#bb9af7", italic = true })
       vim.api.nvim_set_hl(0, "NvimDapVirtualTextError", { fg = "#ff5555", italic = true })
-      
+
       -- DAP View winbar highlights (purple theme) - using actual highlight groups
       vim.api.nvim_set_hl(0, "WinBar", { fg = "#bb9af7", bg = "#444444", bold = true })
       vim.api.nvim_set_hl(0, "WinBarNC", { fg = "#666666", bg = "#444444" })
       vim.api.nvim_set_hl(0, "FloatTitle", { fg = "#bb9af7", bold = true })
       vim.api.nvim_set_hl(0, "FloatBorder", { fg = "#bb9af7" })
-      
+
       -- Also try dap-view specific groups if they exist
       vim.api.nvim_create_autocmd("ColorScheme", {
         callback = function()
@@ -858,7 +858,7 @@ return {
         {
           type = "ruby",
           name = "run current spec file",
-          request = "attach", 
+          request = "attach",
           localfs = true,
           program = "bundle",
           args = { "exec", "rspec", "${file}" },
@@ -1050,7 +1050,113 @@ return {
       "ravitemer/mcphub.nvim", -- MCP integration
     },
     config = function(_, opts)
+      -- Dialog button highlights - purple background when selected
+      -- vim.ui.select and telescope highlights (commonly used for dialogs)
+      vim.api.nvim_set_hl(0, "TelescopeSelection", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "TelescopeSelectionCaret", { fg = "#bb9af7", bg = "#bb9af7" })
+      vim.api.nvim_set_hl(0, "TelescopeMatching", { fg = "#bb9af7", bold = true })
+      
+      -- Native vim.ui highlights
+      vim.api.nvim_set_hl(0, "FloatBorder", { fg = "#bb9af7" })
+      vim.api.nvim_set_hl(0, "FloatTitle", { fg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "NormalFloat", { fg = "#ffffff", bg = "#1a1a1a" })
+      vim.api.nvim_set_hl(0, "PmenuSel", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "WildMenu", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      
+      -- Common UI highlight groups
+      vim.api.nvim_set_hl(0, "Question", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "MoreMsg", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "WarningMsg", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "ErrorMsg", { fg = "#ffffff", bg = "#f7768e", bold = true })
+      
+      -- Configure dressing.nvim for CodeCompanion dialogs
+      require("dressing").setup({
+        select = {
+          backend = { "nui", "telescope", "fzf_lua", "fzf", "builtin" },
+          nui = {
+            position = "50%",
+            size = nil,
+            relative = "cursor",
+            border = {
+              style = "rounded",
+            },
+            buf_options = {
+              swapfile = false,
+              filetype = "DressingSelect",
+            },
+            win_options = {
+              winblend = 10,
+            },
+            max_width = 80,
+            max_height = 40,
+            min_width = 40,
+            min_height = 10,
+          },
+        },
+        input = {
+          override = function(conf)
+            conf.col = -1
+            conf.row = 0
+            return conf
+          end,
+          get_config = nil,
+          default_prompt = "Input:",
+          insert_only = true,
+          start_in_insert = true,
+          border = "rounded",
+          relative = "cursor",
+          prefer_width = 40,
+          width = nil,
+          max_width = { 140, 0.9 },
+          min_width = { 20, 0.2 },
+          buf_options = {},
+          win_options = {
+            winblend = 10,
+            wrap = false,
+            list = true,
+            listchars = "precedes:…,extends:…",
+            sidescrolloff = 0,
+          },
+        },
+      })
+      
+      -- Set dressing highlight groups for purple selection
+      vim.api.nvim_set_hl(0, "DressingSelectIdx", { fg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "DressingSelectText", { fg = "#ffffff" })
+      vim.api.nvim_set_hl(0, "DressingSelectCursor", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      
+      -- MCP/NUI dialog specific highlights (for the confirmation dialog)
+      vim.api.nvim_set_hl(0, "NuiComponentsButton", { fg = "#ffffff", bg = "#333333" })
+      vim.api.nvim_set_hl(0, "NuiComponentsButtonFocused", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "NuiComponentsButtonSelected", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "NuiComponentsButtonHover", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      
+      -- Alternative NUI highlight groups
+      vim.api.nvim_set_hl(0, "NuiText", { fg = "#ffffff" })
+      vim.api.nvim_set_hl(0, "NuiTextSelected", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "NuiTextFocused", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "NuiButtonSelected", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "NuiButtonFocused", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      
+      -- MCP specific highlights
+      vim.api.nvim_set_hl(0, "MCPButton", { fg = "#ffffff", bg = "#333333" })
+      vim.api.nvim_set_hl(0, "MCPButtonSelected", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "MCPButtonFocused", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      
+      -- Generic button highlights that might be used
+      vim.api.nvim_set_hl(0, "Button", { fg = "#ffffff", bg = "#333333" })
+      vim.api.nvim_set_hl(0, "ButtonSelected", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "ButtonFocused", { fg = "#ffffff", bg = "#bb9af7", bold = true })
+      
       require("codecompanion").setup(opts)
+      
+      -- Custom highlight groups for CodeCompanion dialogs
+      vim.api.nvim_set_hl(0, "CodeCompanionChatHeader", { fg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "CodeCompanionChatSeparator", { fg = "#444444" })
+      vim.api.nvim_set_hl(0, "CodeCompanionChatTokens", { fg = "#666666", italic = true })
+      vim.api.nvim_set_hl(0, "CodeCompanionChatUser", { fg = "#ffffff" })
+      vim.api.nvim_set_hl(0, "CodeCompanionChatModel", { fg = "#bb9af7" })
+      vim.api.nvim_set_hl(0, "CodeCompanionVirtualText", { fg = "#666666", italic = true })
     end,
     keys = {
       {
@@ -1122,7 +1228,8 @@ return {
             schema = {
               model = {
                 -- default = "qwen3-32b-mlx" -- Default model (change as needed)
-                default = "uigen-t3-14b-preview"
+                -- default = "uigen-t3-14b-preview"
+                default = "mistralai/magistral-small"
               },
               temperature = {
                 order = 2,
@@ -1326,26 +1433,34 @@ return {
       },
     },
     keys = {
-      { "<leader>ojc", ":JupytextConvert<CR>", desc = "Convert Jupyter notebook" },
-      { "<leader>ojs", ":JupytextSync<CR>",    desc = "Sync Jupyter notebook" },
-      
+      { "<leader>ojc", ":JupytextConvert<CR>",    desc = "Convert Jupyter notebook" },
+      { "<leader>ojs", ":JupytextSync<CR>",       desc = "Sync Jupyter notebook" },
+
       -- Quarto-specific commands (using <leader>oq* to avoid conflicts)
-      { "<leader>oqp", ":QuartoPreview<CR>",    desc = "Quarto preview",     ft = { "quarto", "qmd" } },
-      { "<leader>oqc", ":QuartoClosePreview<CR>", desc = "Quarto close preview", ft = { "quarto", "qmd" } },
-      { "<leader>oqr", function() 
+      { "<leader>oqp", ":QuartoPreview<CR>",      desc = "Quarto preview",          ft = { "quarto", "qmd" } },
+      { "<leader>oqc", ":QuartoClosePreview<CR>", desc = "Quarto close preview",    ft = { "quarto", "qmd" } },
+      {
+        "<leader>oqr",
+        function()
           if vim.bo.filetype == "quarto" or vim.bo.filetype == "qmd" then
             vim.cmd("QuartoSendAbove")
           else
             vim.notify("Quarto commands only available in .qmd files", vim.log.levels.WARN)
           end
-        end, desc = "Quarto run to cursor" },
-      { "<leader>oqa", function()
+        end,
+        desc = "Quarto run to cursor"
+      },
+      {
+        "<leader>oqa",
+        function()
           if vim.bo.filetype == "quarto" or vim.bo.filetype == "qmd" then
             vim.cmd("QuartoSendAll")
           else
             vim.notify("Quarto commands only available in .qmd files", vim.log.levels.WARN)
           end
-        end, desc = "Quarto run all" },
+        end,
+        desc = "Quarto run all"
+      },
     },
   },
 
@@ -2156,9 +2271,9 @@ return {
     build = ":PympleBuild",
     ft = "python",
     keys = {
-      { "<leader>ci", function() require('pymple.api').resolve_import_under_cursor() end, desc = "Resolve import under cursor" },
-      { "<leader>cio", function() require('pymple.api').optimize_imports() end, desc = "Optimize imports" },
-      { "<leader>ciu", function() require('pymple.api').remove_unused_imports() end, desc = "Remove unused imports" },
+      { "<leader>ci",  function() require('pymple.api').resolve_import_under_cursor() end, desc = "Resolve import under cursor" },
+      { "<leader>cio", function() require('pymple.api').optimize_imports() end,            desc = "Optimize imports" },
+      { "<leader>ciu", function() require('pymple.api').remove_unused_imports() end,       desc = "Remove unused imports" },
     },
     config = function()
       require('pymple').setup({
@@ -2170,7 +2285,7 @@ return {
         },
         python = {
           analysis = {
-            auto_update_imports_on_move = true, -- Works with oil.nvim
+            auto_update_imports_on_move = true,   -- Works with oil.nvim
             update_imports_on_folder_move = true, -- Useful for refactoring
           },
         },
@@ -2953,7 +3068,7 @@ return {
                   value = device,
                 })
               end
-              
+
               Snacks.picker.pick({
                 items = items,
                 format = function(item) return item.text end,
@@ -2972,7 +3087,7 @@ return {
                   value = scheme,
                 })
               end
-              
+
               Snacks.picker.pick({
                 items = items,
                 format = function(item) return item.text end,
@@ -2991,7 +3106,7 @@ return {
                   value = config,
                 })
               end
-              
+
               Snacks.picker.pick({
                 items = items,
                 format = function(item) return item.text end,
@@ -3082,31 +3197,379 @@ return {
     end,
     keys = {
       -- Build commands under cx prefix (xcodebuild)
-      { "<leader>cxl", "<cmd>XcodebuildToggleLogs<cr>", desc = "Toggle Xcode logs" },
-      { "<leader>cxb", "<cmd>XcodebuildBuild<cr>", desc = "Build project" },
-      { "<leader>cxr", "<cmd>XcodebuildBuildRun<cr>", desc = "Build & Run project" },
-      { "<leader>cxt", "<cmd>XcodebuildTest<cr>", desc = "Run tests" },
-      { "<leader>cxT", "<cmd>XcodebuildTestClass<cr>", desc = "Run class tests" },
-      { "<leader>cx.", "<cmd>XcodebuildTestSelected<cr>", desc = "Run selected tests", mode = "v" },
-      
+      { "<leader>cxl", "<cmd>XcodebuildToggleLogs<cr>",                   desc = "Toggle Xcode logs" },
+      { "<leader>cxb", "<cmd>XcodebuildBuild<cr>",                        desc = "Build project" },
+      { "<leader>cxr", "<cmd>XcodebuildBuildRun<cr>",                     desc = "Build & Run project" },
+      { "<leader>cxt", "<cmd>XcodebuildTest<cr>",                         desc = "Run tests" },
+      { "<leader>cxT", "<cmd>XcodebuildTestClass<cr>",                    desc = "Run class tests" },
+      { "<leader>cx.", "<cmd>XcodebuildTestSelected<cr>",                 desc = "Run selected tests",    mode = "v" },
+
       -- Project management
-      { "<leader>cxd", "<cmd>XcodebuildSelectDevice<cr>", desc = "Select device" },
-      { "<leader>cxp", "<cmd>XcodebuildSelectTestPlan<cr>", desc = "Select test plan" },
-      { "<leader>cxs", "<cmd>XcodebuildSelectScheme<cr>", desc = "Select scheme" },
-      { "<leader>cxc", "<cmd>XcodebuildSelectConfig<cr>", desc = "Select config" },
-      { "<leader>cxq", "<cmd>XcodebuildQuickfixLine<cr>", desc = "Quickfix line" },
-      { "<leader>cxa", "<cmd>XcodebuildCodeActions<cr>", desc = "Show code actions" },
-      
+      { "<leader>cxd", "<cmd>XcodebuildSelectDevice<cr>",                 desc = "Select device" },
+      { "<leader>cxp", "<cmd>XcodebuildSelectTestPlan<cr>",               desc = "Select test plan" },
+      { "<leader>cxs", "<cmd>XcodebuildSelectScheme<cr>",                 desc = "Select scheme" },
+      { "<leader>cxc", "<cmd>XcodebuildSelectConfig<cr>",                 desc = "Select config" },
+      { "<leader>cxq", "<cmd>XcodebuildQuickfixLine<cr>",                 desc = "Quickfix line" },
+      { "<leader>cxa", "<cmd>XcodebuildCodeActions<cr>",                  desc = "Show code actions" },
+
       -- Test Explorer
-      { "<leader>cxe", "<cmd>XcodebuildTestExplorerToggle<cr>", desc = "Toggle Test Explorer" },
+      { "<leader>cxe", "<cmd>XcodebuildTestExplorerToggle<cr>",           desc = "Toggle Test Explorer" },
       { "<leader>cxi", "<cmd>XcodebuildTestExplorerRunSelectedTests<cr>", desc = "Run selected tests" },
-      { "<leader>cxf", "<cmd>XcodebuildFailingSnapshots<cr>", desc = "Show failing snapshots" },
-      
+      { "<leader>cxf", "<cmd>XcodebuildFailingSnapshots<cr>",             desc = "Show failing snapshots" },
+
       -- Utilities
-      { "<leader>cxX", "<cmd>XcodebuildCleanBuild<cr>", desc = "Clean build folder" },
-      { "<leader>cxC", "<cmd>XcodebuildToggleCodeCoverage<cr>", desc = "Toggle code coverage" },
-      { "<leader>cxS", "<cmd>XcodebuildFailingSnapshots<cr>", desc = "Show failing snapshots" },
-      { "<leader>cxD", "<cmd>XcodebuildSelectDeveloperDir<cr>", desc = "Select Xcode version" },
+      { "<leader>cxX", "<cmd>XcodebuildCleanBuild<cr>",                   desc = "Clean build folder" },
+      { "<leader>cxC", "<cmd>XcodebuildToggleCodeCoverage<cr>",           desc = "Toggle code coverage" },
+      { "<leader>cxS", "<cmd>XcodebuildFailingSnapshots<cr>",             desc = "Show failing snapshots" },
+      { "<leader>cxD", "<cmd>XcodebuildSelectDeveloperDir<cr>",           desc = "Select Xcode version" },
     },
+  },
+
+  -- Modern Test Runner with UI (neotest)
+  {
+    "nvim-neotest/neotest",
+    dependencies = {
+      "nvim-neotest/nvim-nio",
+      "nvim-lua/plenary.nvim",
+      "antoinemadec/FixCursorHold.nvim",
+      "nvim-treesitter/nvim-treesitter",
+      
+      -- Language-specific adapters
+      "nvim-neotest/neotest-python",        -- Python (pytest, unittest)
+      "nvim-neotest/neotest-jest",          -- JavaScript/TypeScript (Jest)
+      "nvim-neotest/neotest-vitest",        -- JavaScript/TypeScript (Vitest)  
+      "marilari88/neotest-vitest",          -- Enhanced Vitest support
+      "nvim-neotest/neotest-go",            -- Go testing
+      "rouge8/neotest-rust",                -- Rust (cargo test)
+      "rcasia/neotest-java",                -- Java (JUnit, TestNG)
+      "sidlatau/neotest-dart",              -- Dart/Flutter
+      "olimorris/neotest-rspec",            -- Ruby (RSpec)
+      "zidhuss/neotest-minitest",           -- Ruby (Minitest)
+      "nvim-neotest/neotest-plenary",       -- Neovim plugin testing
+      "thenbe/neotest-playwright",          -- Playwright e2e tests
+      "lawrence-laz/neotest-zig",           -- Zig testing
+      "mrcjkb/neotest-haskell",             -- Haskell testing
+      "jfpedroza/neotest-elixir",           -- Elixir testing
+    },
+    cmd = { "Neotest" },
+    keys = {
+      -- Test running (using <leader>nt* for neotest)
+      { "<leader>ntr", function() require("neotest").run.run() end, desc = "Run nearest test" },
+      { "<leader>ntf", function() require("neotest").run.run(vim.fn.expand("%")) end, desc = "Run tests in file" },
+      { "<leader>nta", function() require("neotest").run.run(vim.fn.getcwd()) end, desc = "Run all tests" },
+      { "<leader>nts", function() require("neotest").run.run({ suite = true }) end, desc = "Run test suite" },
+      { "<leader>ntl", function() require("neotest").run.run_last() end, desc = "Run last test" },
+      { "<leader>ntd", function() require("neotest").run.run({ strategy = "dap" }) end, desc = "Debug nearest test" },
+      
+      -- Test output and results
+      { "<leader>nto", function() require("neotest").output.open({ enter = true }) end, desc = "Open test output" },
+      { "<leader>ntO", function() require("neotest").output_panel.toggle() end, desc = "Toggle output panel" },
+      { "<leader>ntS", function() require("neotest").summary.toggle() end, desc = "Toggle test summary" },
+      
+      -- Test navigation (use ]N/[N for neotest navigation)
+      { "]N", function() require("neotest").jump.next({ status = "failed" }) end, desc = "Next failed test" },
+      { "[N", function() require("neotest").jump.prev({ status = "failed" }) end, desc = "Prev failed test" },
+      
+      -- Test watching (continuous testing)
+      { "<leader>ntw", function() require("neotest").watch.toggle() end, desc = "Toggle test watching" },
+      { "<leader>ntW", function() require("neotest").watch.toggle(vim.fn.expand("%")) end, desc = "Watch current file" },
+      
+      -- Test coverage (if supported)
+      { "<leader>ntc", function() require("neotest").coverage.toggle() end, desc = "Toggle test coverage" },
+    },
+    opts = function()
+      return {
+        adapters = {
+          -- Python testing (pytest, unittest)
+          require("neotest-python")({
+            dap = { justMyCode = false, console = "integratedTerminal" },
+            args = { "--log-level", "DEBUG", "--quiet", "--tb=short" },
+            runner = "pytest", -- or "unittest"
+            python = "python3",
+            pytest_discover_instances = true,
+          }),
+          
+          -- JavaScript/TypeScript - Jest
+          require("neotest-jest")({
+            jestCommand = "npm test --",
+            jestConfigFile = "jest.config.js",
+            env = { CI = true },
+            cwd = function() return vim.fn.getcwd() end,
+          }),
+          
+          -- JavaScript/TypeScript - Vitest (preferred for modern projects)
+          require("neotest-vitest")({
+            vitestCommand = "npx vitest",
+            vitestConfigFile = "vitest.config.ts",
+            env = { CI = true },
+            cwd = function() return vim.fn.getcwd() end,
+          }),
+          
+          -- Go testing
+          require("neotest-go")({
+            experimental = {
+              test_table = true,
+            },
+            args = { "-count=1", "-timeout=60s", "-race", "-cover" }
+          }),
+          
+          -- Rust testing
+          require("neotest-rust")({
+            args = { "--no-capture" },
+            dap_adapter = "codelldb",
+          }),
+          
+          -- Dart/Flutter testing (integrate with your existing flutter-tools)
+          require("neotest-dart")({
+            command = "flutter",
+            use_lsp = true,
+            custom_test_method_names = { "testWidgets", "test", "group" },
+          }),
+          
+          -- Ruby RSpec
+          require("neotest-rspec")({
+            rspec_cmd = function() return vim.tbl_flatten({ "bundle", "exec", "rspec" }) end,
+            transform_spec_path = function(path) return path end,
+            results_path = function() return async.fn.tempname() end,
+          }),
+          
+          -- Ruby Minitest
+          require("neotest-minitest")({
+            test_cmd = function() return vim.tbl_flatten({ "bundle", "exec", "ruby" }) end
+          }),
+          
+          -- Java testing
+          require("neotest-java")({
+            ignore_wrapper = false,
+          }),
+          
+          -- Playwright e2e tests
+          require("neotest-playwright").adapter({
+            options = {
+              persist_project_selection = true,
+              enable_dynamic_test_discovery = true,
+            }
+          }),
+          
+          -- Neovim plugin testing
+          require("neotest-plenary"),
+        },
+        
+        -- General neotest configuration
+        benchmark = {
+          enabled = true
+        },
+        consumers = {
+          overseer = require("neotest.consumers.overseer"),
+        },
+        default_strategy = "integrated", -- or "dap" for debugging
+        diagnostic = {
+          enabled = true,
+          severity = vim.diagnostic.severity.ERROR,
+        },
+        discovery = {
+          concurrent = 1,
+          enabled = true,
+        },
+        floating = {
+          border = "rounded",
+          max_height = 0.6,
+          max_width = 0.6,
+          options = {},
+        },
+        highlights = {
+          adapter_name = "NeotestAdapterName",
+          border = "NeotestBorder",
+          dir = "NeotestDir",
+          expand_marker = "NeotestExpandMarker",
+          failed = "NeotestFailed",
+          file = "NeotestFile",
+          focused = "NeotestFocused",
+          indent = "NeotestIndent",
+          marked = "NeotestMarked",
+          namespace = "NeotestNamespace",
+          passed = "NeotestPassed",
+          running = "NeotestRunning",
+          select_win = "NeotestWinSelect",
+          skipped = "NeotestSkipped",
+          target = "NeotestTarget",
+          test = "NeotestTest",
+          unknown = "NeotestUnknown",
+        },
+        icons = {
+          child_indent = "│",
+          child_prefix = "├",
+          collapsed = "─",
+          expanded = "╮",
+          failed = "✖",
+          final_child_indent = " ",
+          final_child_prefix = "╰",
+          non_collapsible = "─",
+          passed = "✓",
+          running = "↻",
+          running_animated = { "/", "|", "\\", "-", "/", "|", "\\", "-" },
+          skipped = "○",
+          unknown = "?",
+        },
+        jump = {
+          enabled = true
+        },
+        log_level = vim.log.levels.WARN,
+        output = {
+          enabled = true,
+          open_on_run = "short", -- "short", "long", false
+        },
+        output_panel = {
+          enabled = true,
+          open = "botright split | resize 15",
+        },
+        projects = {},
+        quickfix = {
+          enabled = true,
+          open = false,
+        },
+        run = {
+          enabled = true,
+        },
+        running = {
+          concurrent = true,
+        },
+        state = {
+          enabled = true,
+        },
+        status = {
+          enabled = true,
+          signs = true,
+          virtual_text = true,
+        },
+        strategies = {
+          integrated = {
+            height = 40,
+            width = 120,
+          },
+        },
+        summary = {
+          animated = true,
+          enabled = true,
+          expand_errors = true,
+          follow = true,
+          mappings = {
+            attach = "a",
+            clear_marked = "M",
+            clear_target = "T",
+            debug = "d",
+            debug_marked = "D",
+            expand = { "<CR>", "<2-LeftMouse>" },
+            expand_all = "e",
+            jumpto = "i",
+            mark = "m",
+            next_failed = "J",
+            output = "o",
+            prev_failed = "K",
+            run = "r",
+            run_marked = "R",
+            short = "O",
+            stop = "u",
+            target = "t",
+            watch = "w",
+          },
+          open = "botright vsplit | vertical resize 50",
+        },
+        watch = {
+          enabled = true,
+          symbol_queries = {
+            python = "class",
+            javascript = "class",
+            typescript = "class",
+            go = "function",
+            rust = "impl",
+            dart = "class",
+          },
+        },
+      }
+    end,
+    config = function(_, opts)
+      -- Custom highlight groups for neotest (match your purple theme)
+      local highlights = {
+        NeotestPassed = { fg = "#ffffff" },
+        NeotestFailed = { fg = "#f7768e", bold = true },
+        NeotestRunning = { fg = "#bb9af7", bold = true },
+        NeotestSkipped = { fg = "#666666" },
+        NeotestTest = { fg = "#ffffff" },
+        NeotestNamespace = { fg = "#bb9af7" },
+        NeotestFile = { fg = "#ffffff" },
+        NeotestDir = { fg = "#bb9af7" },
+        NeotestBorder = { fg = "#bb9af7" },
+        NeotestIndent = { fg = "#444444" },
+        NeotestExpandMarker = { fg = "#bb9af7" },
+        NeotestAdapterName = { fg = "#bb9af7", bold = true },
+        NeotestWinSelect = { fg = "#ffffff", bg = "#bb9af7", bold = true },
+        NeotestMarked = { fg = "#ffffff", bg = "#bb9af7", bold = true },
+        NeotestTarget = { fg = "#ffffff", bg = "#bb9af7" },
+        NeotestUnknown = { fg = "#666666" },
+        NeotestFocused = { fg = "#ffffff", bg = "#333333" },
+      }
+      
+      for name, hl in pairs(highlights) do
+        vim.api.nvim_set_hl(0, name, hl)
+      end
+      
+      require("neotest").setup(opts)
+      
+      -- Enhanced which-key integration
+      local ok, wk = pcall(require, "which-key")
+      if ok then
+        wk.add({
+          { "<leader>nt", group = "neotest" },
+          { "<leader>ntr", desc = "run nearest test" },
+          { "<leader>ntf", desc = "run tests in file" },
+          { "<leader>nta", desc = "run all tests" },
+          { "<leader>nts", desc = "run test suite" },
+          { "<leader>ntl", desc = "run last test" },
+          { "<leader>ntd", desc = "debug nearest test" },
+          { "<leader>nto", desc = "open test output" },
+          { "<leader>ntO", desc = "toggle output panel" },
+          { "<leader>ntS", desc = "toggle test summary" },
+          { "<leader>ntw", desc = "toggle test watching" },
+          { "<leader>ntW", desc = "watch current file" },
+          { "<leader>ntc", desc = "toggle test coverage" },
+          { "<leader>ntdd", desc = "debug with DAP" },
+          { "]N", desc = "next failed test" },
+          { "[N", desc = "prev failed test" },
+        })
+      end
+      
+      -- Integration with existing DAP setup
+      local neotest = require("neotest")
+      local dap = require("dap")
+      
+      -- Enhanced debugging integration
+      vim.keymap.set("n", "<leader>ntdd", function()
+        neotest.run.run({ strategy = "dap" })
+      end, { desc = "Debug nearest test with DAP" })
+      
+      -- Integration with overseer for running tests as tasks
+      if pcall(require, "overseer") then
+        local overseer = require("overseer")
+        
+        -- Register neotest as overseer consumer
+        require("neotest.consumers.overseer").setup()
+        
+        -- Add test templates for overseer
+        overseer.register_template({
+          name = "neotest file",
+          builder = function()
+            return {
+              cmd = { "neotest" },
+              args = { "run", vim.fn.expand("%") },
+              components = { "default" },
+            }
+          end,
+          condition = {
+            filetype = { "python", "javascript", "typescript", "go", "rust", "dart", "ruby", "java" },
+          },
+        })
+      end
+    end,
   },
 }
