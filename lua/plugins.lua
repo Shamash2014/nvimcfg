@@ -922,6 +922,36 @@ local plugins = {
         end
       end
     end,
+    config = function(_, opts)
+      require("snacks").setup(opts)
+      
+      -- Set snacks highlight groups to match VSCode theme
+      -- Background: #111111, Foreground: #ffffff, Accent: #bb9af7
+      vim.api.nvim_set_hl(0, "SnacksPickerBorder", { fg = "#bb9af7" })
+      vim.api.nvim_set_hl(0, "SnacksPickerTitle", { fg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "SnacksPickerNormal", { fg = "#ffffff", bg = "#111111" })
+      vim.api.nvim_set_hl(0, "SnacksPickerMatch", { fg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "SnacksPickerSelect", { fg = "#111111", bg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "SnacksPickerCursor", { fg = "#111111", bg = "#bb9af7" })
+      vim.api.nvim_set_hl(0, "SnacksPickerPreview", { fg = "#ffffff", bg = "#111111" })
+      vim.api.nvim_set_hl(0, "SnacksPickerPreviewBorder", { fg = "#bb9af7" })
+      vim.api.nvim_set_hl(0, "SnacksPickerPreviewTitle", { fg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "SnacksPickerCount", { fg = "#666666", italic = true })
+      vim.api.nvim_set_hl(0, "SnacksPickerIcon", { fg = "#bb9af7" })
+      vim.api.nvim_set_hl(0, "SnacksPickerDir", { fg = "#bb9af7" })
+      vim.api.nvim_set_hl(0, "SnacksPickerFile", { fg = "#ffffff" })
+      vim.api.nvim_set_hl(0, "SnacksPickerLineNr", { fg = "#666666" })
+      vim.api.nvim_set_hl(0, "SnacksPickerInfo", { fg = "#666666" })
+      vim.api.nvim_set_hl(0, "SnacksPickerPrompt", { fg = "#ffffff" })
+      vim.api.nvim_set_hl(0, "SnacksPickerMulti", { fg = "#bb9af7", bold = true })
+      
+      -- Fallback to common highlight groups in case snacks uses different names
+      vim.api.nvim_set_hl(0, "SnacksNormal", { fg = "#ffffff", bg = "#111111" })
+      vim.api.nvim_set_hl(0, "SnacksBorder", { fg = "#bb9af7" })
+      vim.api.nvim_set_hl(0, "SnacksTitle", { fg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "SnacksSearch", { fg = "#bb9af7", bold = true })
+      vim.api.nvim_set_hl(0, "SnacksSelection", { fg = "#111111", bg = "#bb9af7", bold = true })
+    end,
     keys = {
       -- File operations
       { "<leader>ff", function() Snacks.picker.files({ layout = { preset = "vscode", preview = "main" } }) end, desc = "Find files" },
