@@ -1233,9 +1233,9 @@ return {
                         local file_content = table.concat(content, "\n")
                         chat:add_reference({
                           role = "user",
-                          content = string.format("File: %s\n\n```%s\n%s\n```", 
-                            file.path, 
-                            vim.fn.fnamemodify(file.path, ":e"), 
+                          content = string.format("File: %s\n\n```%s\n%s\n```",
+                            file.path,
+                            vim.fn.fnamemodify(file.path, ":e"),
                             file_content)
                         }, "file", file.path)
                       end
@@ -1276,9 +1276,9 @@ return {
                           local file_content = table.concat(content, "\n")
                           chat:add_reference({
                             role = "user",
-                            content = string.format("Modified file: %s\n\n```%s\n%s\n```", 
-                              item.path, 
-                              vim.fn.fnamemodify(item.path, ":e"), 
+                            content = string.format("Modified file: %s\n\n```%s\n%s\n```",
+                              item.path,
+                              vim.fn.fnamemodify(item.path, ":e"),
                               file_content)
                           }, "git", item.path)
                         end
@@ -1325,7 +1325,8 @@ return {
                 -- default = "qwen3-32b-mlx" -- Default model (change as needed)
                 -- default = "uigen-t3-14b-preview"
                 -- default = "mistralai/magistral-small"
-                default = "qwen3-14b"
+                default = "devstral-small-2505-mlx"
+                -- default = "qwen3-14b"
               },
               temperature = {
                 order = 2,
