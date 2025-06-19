@@ -607,6 +607,7 @@ return {
       { "<leader>ofe", "<cmd>FlutterEmulators<cr>",     desc = "Flutter Emulators" },
       { "<leader>ofo", "<cmd>FlutterOutlineToggle<cr>", desc = "Flutter Outline" },
       { "<leader>ofD", "<cmd>FlutterDevTools<cr>",      desc = "Flutter DevTools" },
+      { "<leader>ofl", "<cmd>FlutterLogToggle<cr>",     desc = "Flutter Log Toggle" },
       { "<leader>ofL", "<cmd>FlutterLogClear<cr>",      desc = "Flutter Log Clear" },
       { "<leader>ofs", "<cmd>FlutterSuper<cr>",         desc = "Flutter Super" },
       { "<leader>ofg", "<cmd>FlutterPubGet<cr>",        desc = "Flutter Pub Get" },
@@ -682,6 +683,7 @@ return {
       { "<leader>dO", function() require("dap").step_over() end,                                            desc = "Step Over" },
       { "<leader>dp", function() require("dap").pause() end,                                                desc = "Pause" },
       { "<leader>dr", function() require("dap").repl.toggle() end,                                          desc = "Toggle REPL" },
+      { "<leader>dR", function() require("dap").repl.clear() end,                                           desc = "Clear REPL" },
       { "<leader>ds", function() require("dap").session() end,                                              desc = "Session" },
       { "<leader>dt", function() require("dap").terminate() end,                                            desc = "Terminate" },
       { "<leader>dd", function() require("debugmaster").mode.toggle() end,                                  desc = "Debug Mode" },
@@ -2412,8 +2414,8 @@ return {
       local map = vim.keymap.set
       map("n", "<leader>cpm", function() require("dap-python").test_method() end, { desc = "Python Test Method" })
       map("n", "<leader>cpc", function() require("dap-python").test_class() end, { desc = "Python Test Class" })
-      map("n", "<leader>cps", function() require("dap-python").debug_selection() end,
-        { desc = "Python Debug Selection", mode = { "n", "v" } })
+      map({ "n", "v" }, "<leader>cps", function() require("dap-python").debug_selection() end,
+        { desc = "Python Debug Selection" })
 
       -- Enhanced which-key integration
       local ok, wk = pcall(require, "which-key")
@@ -2722,9 +2724,9 @@ return {
       local ok, wk = pcall(require, "which-key")
       if ok then
         wk.add({
-          { "<leader>cs",  group = "snippets" },
-          { "<leader>cse", function() require("luasnip.loaders").edit_snippet_files() end, desc = "edit snippets" },
-          { "<leader>csr", function() require("luasnip").unlink_current() end,             desc = "unlink snippet" },
+          { "<leader>cS",  group = "snippets" },
+          { "<leader>cSe", function() require("luasnip.loaders").edit_snippet_files() end, desc = "edit snippets" },
+          { "<leader>cSr", function() require("luasnip").unlink_current() end,             desc = "unlink snippet" },
         })
       end
     end,
@@ -2941,26 +2943,14 @@ return {
     },
   },
 
-  -- Modern folding with nvim-origami (serious nesting only)
+  -- Enhanced treesitter folding with conservative settings
   {
-    "chrisgrieser/nvim-origami",
+    "nvim-treesitter/nvim-treesitter",
     event = "BufReadPost",
-    opts = {
-      keepFoldsAcrossSessions = true,
-      pauseFoldsOnSearch = true,
-      setupFoldKeymaps = true,
-      -- Only create folds for serious nesting (4+ levels deep)
-      foldlevelstart = 4,
-      h = {
-        auto_close = false, -- Don't auto-close, let user decide
-        auto_open = true,
-      },
-    },
-    config = function(_, opts)
-      require("origami").setup(opts)
-
-      -- Set folding method and levels for serious nesting only
-      vim.opt.foldmethod = "indent"
+    config = function()
+      -- Set global folding defaults (conservative approach)
+      vim.opt.foldmethod = "expr"
+      vim.opt.foldexpr = "nvim_treesitter#foldexpr()"
       vim.opt.foldlevel = 3      -- Start folding at level 4 (0-indexed)
       vim.opt.foldlevelstart = 3 -- Open files with folds up to level 3
       vim.opt.foldnestmax = 10   -- Maximum fold nesting
@@ -2968,7 +2958,7 @@ return {
 
       -- Language-specific fold settings for serious nesting
       vim.api.nvim_create_autocmd("FileType", {
-        group = vim.api.nvim_create_augroup("origami_filetype", { clear = true }),
+        group = vim.api.nvim_create_augroup("treesitter_folding", { clear = true }),
         callback = function()
           local ft = vim.bo.filetype
 
