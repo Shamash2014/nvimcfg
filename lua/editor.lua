@@ -207,7 +207,7 @@ return {
       "ravitemer/mcphub.nvim", -- MCP integration
     },
     opts = {
-      provider = "claude",
+      provider = "lmstudio",
       auto_suggestions_provider = "copilot",
       providers = {
         claude = {
@@ -217,6 +217,15 @@ return {
             temperature = 0,
             max_tokens = 4096,
           },
+        },
+        lmstudio = {
+          __inherited_from = "openai",
+          endpoint = "http://localhost:1234/v1/",
+          -- model = "qwen/qwen3-14b",
+          -- model = "deepseek/deepseek-r1-0528-qwen3-8b",
+          model = "mistralai/devstral-small-2505",
+          timeout = 30000,
+          max_tokens = 34096,
         },
       },
       behaviour = {

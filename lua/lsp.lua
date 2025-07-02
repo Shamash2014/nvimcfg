@@ -110,25 +110,25 @@ vim.lsp.config.dartls = {
         if flutter_root and vim.fn.isdirectory(flutter_root) == 1 then
           return flutter_root
         end
-        
+
         -- Check for FVM
         local fvm_default = vim.fn.expand("~/fvm/default")
         if vim.fn.isdirectory(fvm_default) == 1 then
           return fvm_default
         end
-        
+
         -- Check .fvm/flutter_sdk in current project
         local fvm_local = vim.fn.getcwd() .. "/.fvm/flutter_sdk"
         if vim.fn.isdirectory(fvm_local) == 1 then
           return fvm_local
         end
-        
+
         -- Fallback to standard locations
         local flutter_home = vim.fn.expand("~/flutter")
         if vim.fn.isdirectory(flutter_home) == 1 then
           return flutter_home
         end
-        
+
         return nil
       end)(),
       checkForSdkUpdates = false,
@@ -137,7 +137,7 @@ vim.lsp.config.dartls = {
   },
   capabilities = (function()
     local capabilities = vim.lsp.protocol.make_client_capabilities()
-    
+
     -- Enhanced completion capabilities for blink.cmp
     capabilities.textDocument.completion.completionItem = {
       documentationFormat = { "markdown", "plaintext" },
@@ -156,7 +156,7 @@ vim.lsp.config.dartls = {
         },
       },
     }
-    
+
     -- Dart-specific capabilities
     capabilities.textDocument.codeAction = {
       dynamicRegistration = true,
@@ -185,18 +185,21 @@ vim.lsp.config.dartls = {
         }
       }
     }
-    
+
     return capabilities
   end)()
 }
 
 vim.lsp.config.elixirls = {
-  cmd = { 'elixir-ls' }, -- Make sure elixir-ls is in your PATH
+  cmd = { vim.fn.expand('~/.tools/elixir-ls/launch.sh') },
   filetypes = { 'elixir', 'eelixir', 'heex', 'surface' },
   root_markers = { 'mix.exs', '.git' },
+  cmd_env = {
+    ELS_MODE = "language_server"
+  },
   settings = {
     elixirLS = {
-      dialyzerEnabled = false,
+      dialyzerEnabled = true,
       fetchDeps = false,
     }
   }
@@ -576,7 +579,7 @@ vim.lsp.config.ruby_lsp = {
   init_options = {
     enabledFeatures = {
       "codeActions",
-      "diagnostics", 
+      "diagnostics",
       "documentHighlights",
       "documentLink",
       "documentSymbols",
@@ -613,7 +616,9 @@ vim.lsp.config.ruby_lsp = {
 }
 
 -- Enable configured LSP servers
-vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'pyright', 'rust_analyzer', 'clangd', 'sourcekit', 'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service', 'jsonls', 'ruby_lsp' })
+vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'pyright', 'rust_analyzer', 'clangd', 'sourcekit',
+  'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service',
+  'jsonls', 'ruby_lsp' })
 
 -- Performance: Configure LSP with optimizations
 vim.lsp.set_log_level("WARN") -- Reduce LSP logging overhead
@@ -645,7 +650,7 @@ vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.s
 vim.lsp.handlers["textDocument/publishDiagnostics"] = vim.lsp.with(vim.lsp.diagnostic.on_publish_diagnostics, {
   update_in_insert = false, -- Don't update diagnostics while typing
   severity_sort = true,
-  virtual_text = false, -- We use diagflow.nvim for this
+  virtual_text = false,     -- We use diagflow.nvim for this
 })
 
 -- Configure diagnostic display (no virtual text/lines, diagflow handles it)
@@ -672,7 +677,7 @@ local function debounce(func, timeout)
     if timer_id then
       vim.fn.timer_stop(timer_id)
     end
-    local args = {...}
+    local args = { ... }
     timer_id = vim.fn.timer_start(timeout, function()
       func(unpack(args))
     end)
@@ -690,7 +695,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
     if vim.b[args.buf].large_file then
       return
     end
-    
+
     local client = vim.lsp.get_client_by_id(args.data.client_id)
     local map = function(keys, func, desc, mode)
       mode = mode or 'n'
@@ -700,7 +705,10 @@ vim.api.nvim_create_autocmd('LspAttach', {
     -- Doom Emacs/Spacemacs style LSP keybindings (ca is handled by snacks in plugins.lua)
     map('<leader>cr', vim.lsp.buf.rename, 'Rename')
     map('<leader>cf', vim.lsp.buf.format, 'Format Document')
-    
+    map('<leader>cR', function()
+      vim.cmd('LspRestart')
+    end, 'Restart LSP')
+
     -- Language-specific enhancements
     local filetype = vim.bo[args.buf].filetype
     if filetype == "typescript" or filetype == "typescriptreact" or filetype == "javascript" or filetype == "javascriptreact" then
@@ -712,7 +720,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
           apply = true,
         })
       end, 'Organize Imports')
-      
+
       map('<leader>cu', function()
         vim.lsp.buf.code_action({
           filter = function(action)
@@ -722,7 +730,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
         })
       end, 'Remove Unused')
     end
-    
+
     if filetype == "python" then
       map('<leader>co', function()
         vim.lsp.buf.code_action({
@@ -733,7 +741,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
         })
       end, 'Organize Imports')
     end
-    
+
     if filetype == "dart" then
       -- Dart/Flutter specific code actions under <leader>cd (code dart)
       map('<leader>cdo', function()
@@ -744,7 +752,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
           apply = true,
         })
       end, 'Organize Imports')
-      
+
       map('<leader>cdf', function()
         vim.lsp.buf.code_action({
           filter = function(action)
@@ -753,7 +761,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
           apply = true,
         })
       end, 'Fix All')
-      
+
       map('<leader>cdw', function()
         vim.lsp.buf.code_action({
           filter = function(action)
@@ -762,11 +770,12 @@ vim.api.nvim_create_autocmd('LspAttach', {
           apply = true,
         })
       end, 'Wrap with Widget')
-      
+
       map('<leader>cde', function()
         vim.lsp.buf.code_action({
           filter = function(action)
-            return action.title and (string.match(action.title:lower(), "extract") or string.match(action.title:lower(), "refactor"))
+            return action.title and
+            (string.match(action.title:lower(), "extract") or string.match(action.title:lower(), "refactor"))
           end,
         })
       end, 'Extract Widget/Method')
@@ -796,3 +805,4 @@ vim.api.nvim_create_autocmd('LspAttach', {
     end
   end,
 })
+
