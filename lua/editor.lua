@@ -224,7 +224,8 @@ return {
           -- model = "qwen/qwen3-14b",
           -- model = "deepseek/deepseek-r1-0528-qwen3-8b",
           model = "mistralai/devstral-small-2505",
-          timeout = 30000,
+          -- model = "mistralai/magistral-small",
+          timeout = 20000,
           max_tokens = 34096,
         },
       },
@@ -1333,8 +1334,8 @@ return {
               model = {
                 -- default = "qwen3-32b-mlx" -- Default model (change as needed)
                 -- default = "uigen-t3-14b-preview"
-                -- default = "mistralai/magistral-small"
-                default = "devstral-small-2505-mlx"
+                default = "mistralai/magistral-small"
+                -- default = "devstral-small-2505-mlx"
                 -- default = "qwen3-14b"
               },
               temperature = {
