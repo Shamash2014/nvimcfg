@@ -615,10 +615,50 @@ vim.lsp.config.ruby_lsp = {
   },
 }
 
+vim.lsp.config.jdtls = {
+  cmd = { 'jdtls' },
+  filetypes = { 'java' },
+  root_markers = { 'pom.xml', 'build.gradle', 'build.gradle.kts', '.git', 'gradlew', 'mvnw' },
+  settings = {
+    java = {
+      eclipse = {
+        downloadSources = true,
+      },
+      configuration = {
+        updateBuildConfiguration = "interactive",
+      },
+      maven = {
+        downloadSources = true,
+      },
+      implementationsCodeLens = {
+        enabled = true,
+      },
+      referencesCodeLens = {
+        enabled = true,
+      },
+      references = {
+        includeDecompiledSources = true,
+      },
+      format = {
+        enabled = true,
+        settings = {
+          url = vim.fn.stdpath("config") .. "/lang-servers/intellij-java-google-style.xml",
+          profile = "GoogleStyle",
+        },
+      },
+      signatureHelp = { enabled = true },
+      contentProvider = { preferred = 'fernflower' },
+    },
+  },
+  init_options = {
+    bundles = {}
+  },
+}
+
 -- Enable configured LSP servers
 vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'pyright', 'rust_analyzer', 'clangd', 'sourcekit',
   'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service',
-  'jsonls', 'ruby_lsp' })
+  'jsonls', 'ruby_lsp', 'jdtls' })
 
 -- Performance: Configure LSP with optimizations
 vim.lsp.set_log_level("WARN") -- Reduce LSP logging overhead
