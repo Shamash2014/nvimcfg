@@ -51,6 +51,8 @@ return {
         { "<leader>s",  group = "Search" },
         { "<leader>t",  group = "Terminal / Toggle" },
         { "<leader>w",  group = "Windows" },
+        { "]",          group = "Next" },
+        { "[",          group = "Previous" },
       },
     },
   },
