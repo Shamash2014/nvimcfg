@@ -47,6 +47,7 @@ return {
         { "<leader>gc", group = "Git Conflicts" },
         { "<leader>m", group = "Marks" },
         { "<leader>p", group = "Projects / Workspaces" },
+        { "<leader>r", group = "Runner / Overseer" },
         { "<leader>s", group = "Search" },
         { "<leader>t", group = "Terminal / Toggle" },
         { "<leader>w", group = "Windows" },
@@ -479,12 +480,7 @@ return {
       "OverseerClearCache",
     },
     opts = {
-      strategy = {
-        "jobstart",
-        use_terminal = function(cmd)
-          require("snacks").terminal(cmd, { win = { position = "bottom", height = 0.3 } })
-        end,
-      },
+      strategy = "jobstart",
       task_list = {
         direction = "bottom",
         min_height = 25,
@@ -509,6 +505,14 @@ return {
           winblend = 0,
         },
       },
+      component_aliases = {
+        default = {
+          "display_duration",
+          "on_output_summarize",
+          "on_exit_set_status",
+          "on_complete_notify",
+        },
+      },
     },
     config = function(_, opts)
       require("overseer").setup(opts)
@@ -517,13 +521,41 @@ return {
     end,
     keys = {
       { "<leader>rt", "<cmd>OverseerToggle<cr>", desc = "Toggle task list" },
-      { "<leader>rr", "<cmd>OverseerRun<cr>", desc = "Run task" },
-      { "<leader>ra", "<cmd>OverseerTaskAction<cr>", desc = "Task action" },
+      { 
+        "<leader>rr", 
+        function()
+          require("overseer-snacks").run_task_picker()
+        end,
+        desc = "Run task (snacks picker)" 
+      },
+      { 
+        "<leader>ra", 
+        function()
+          vim.cmd("OverseerTaskAction")
+        end,
+        desc = "Task action" 
+      },
       { "<leader>ri", "<cmd>OverseerInfo<cr>", desc = "Overseer info" },
       { "<leader>rb", "<cmd>OverseerBuild<cr>", desc = "Build task" },
       { "<leader>rq", "<cmd>OverseerQuickAction<cr>", desc = "Quick action" },
-      { "<leader>rx", "<cmd>OverseerDeleteTask<cr>", desc = "Delete task" },
+      { 
+        "<leader>rx", 
+        function()
+          -- Simple approach - let user use overseer's built-in task management
+          vim.cmd("OverseerToggle")
+          vim.notify("Use 'd' to delete tasks in the overseer window")
+        end,
+        desc = "Delete task" 
+      },
       { "<leader>rc", "<cmd>OverseerClearCache<cr>", desc = "Clear cache" },
+      { 
+        "<leader>rh", 
+        function()
+          vim.cmd("OverseerToggle")
+          vim.notify("Task history available in overseer window")
+        end,
+        desc = "Task history" 
+      },
     },
   },
   {
