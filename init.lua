@@ -72,7 +72,7 @@ vim.opt.bufhidden = "hide"
 vim.opt.clipboard = "unnamedplus"
 vim.opt.completeopt = { "menuone", "noselect", "popup" }
 
--- Omnifunc completion setup with Supermaven integration
+-- Omnifunc completion setup with Supermaven and snippet integration
 local function supermaven_omnifunc(findstart, base)
   if findstart == 1 then
     local line = vim.api.nvim_get_current_line()
@@ -86,28 +86,90 @@ local function supermaven_omnifunc(findstart, base)
     
     return start
   else
-    -- Try Supermaven first if available
+    local completions = {}
+    
+    -- Try snippets first if LuaSnip is available
+    local luasnip_ok, luasnip = pcall(require, "luasnip")
+    if luasnip_ok then
+      local snippets = luasnip.get_snippets(vim.bo.filetype)
+      for _, snippet in pairs(snippets or {}) do
+        if snippet.trigger:match("^" .. vim.pesc(base)) then
+          table.insert(completions, {
+            word = snippet.trigger,
+            menu = "[Snippet]",
+            info = snippet.description or snippet.name or "",
+            kind = "Snippet"
+          })
+        end
+      end
+    end
+    
+    -- Try Supermaven if available
     local supermaven_ok, supermaven = pcall(require, "supermaven-nvim.completion_preview")
     if supermaven_ok and supermaven.has_suggestion then
       local suggestion = supermaven.get_suggestion()
       if suggestion and suggestion ~= "" then
-        return { suggestion }
+        table.insert(completions, {
+          word = suggestion,
+          menu = "[AI]",
+          info = "AI suggestion",
+          kind = "Text"
+        })
       end
     end
     
     -- Fallback to LSP omnifunc
     if vim.lsp.omnifunc then
-      return vim.lsp.omnifunc(0, base)
+      local lsp_completions = vim.lsp.omnifunc(0, base)
+      if type(lsp_completions) == "table" then
+        for _, completion in ipairs(lsp_completions) do
+          table.insert(completions, completion)
+        end
+      end
     end
     
-    return {}
+    return completions
   end
+end
+
+-- Helper function to check if buffer is a text buffer
+local function is_text_buffer()
+  local ft = vim.bo.filetype
+  local bt = vim.bo.buftype
+  
+  -- Only enable in text file types and normal buffers
+  local text_filetypes = {
+    "text", "markdown", "asciidoc", "org", "rst", "tex", "latex", "plaintex",
+    "mail", "gitcommit", "help", "man", "info", "conf", "config", "yaml", "yml",
+    "toml", "json", "xml", "html", "css", "scss", "sass", "less", "javascript",
+    "typescript", "lua", "python", "sh", "bash", "zsh", "fish", "vim", "vimdoc",
+    "r", "rmd", "quarto", "dart", "swift", "rust", "go", "c", "cpp", "java",
+    "kotlin", "scala", "haskell", "elixir", "erlang", "ruby", "php", "perl",
+    "astro", "svelte", "vue", "jsx", "tsx", "dockerfile", "makefile", "cmake",
+    "sql", "proto", "graphql", "prisma", "solidity", "zig", "nim", "crystal",
+    "julia", "ocaml", "fsharp", "reason", "elm", "purescript", "clojure",
+    "racket", "scheme", "lisp", "commonlisp", "fennel", "janet", "wren", "raku"
+  }
+  
+  -- Exclude special buffer types
+  if bt ~= "" and bt ~= "help" and bt ~= "quickfix" then
+    return false
+  end
+  
+  -- Check if filetype is in our text filetypes list
+  for _, text_ft in ipairs(text_filetypes) do
+    if ft == text_ft then
+      return true
+    end
+  end
+  
+  return false
 end
 
 vim.api.nvim_create_autocmd("FileType", {
   pattern = "*",
   callback = function()
-    if vim.bo.omnifunc == "" then
+    if vim.bo.omnifunc == "" and is_text_buffer() then
       vim.bo.omnifunc = "v:lua.supermaven_omnifunc"
     end
   end,
@@ -121,9 +183,13 @@ vim.keymap.set("i", "<C-x><C-o>", "<C-x><C-o>", { desc = "Omnifunc completion" }
 vim.keymap.set("i", "<C-x><C-l>", "<C-x><C-l>", { desc = "Line completion" })
 vim.keymap.set("i", "<C-x><C-f>", "<C-x><C-f>", { desc = "File completion" })
 
--- Auto-trigger omnifunc completion
+-- Auto-trigger omnifunc completion (only in text buffers)
 vim.api.nvim_create_autocmd("InsertCharPre", {
   callback = function()
+    if not is_text_buffer() then
+      return
+    end
+    
     if vim.v.char:match("[%w_.]") then
       local line = vim.api.nvim_get_current_line()
       local col = vim.api.nvim_win_get_cursor(0)[2]

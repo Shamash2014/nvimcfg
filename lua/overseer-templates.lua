@@ -5,7 +5,6 @@ overseer.register_template({
   name = "flutter run",
   builder = function()
     return {
-      strategy = "terminal",
       cmd = { "flutter" },
       args = { "run" },
       components = {

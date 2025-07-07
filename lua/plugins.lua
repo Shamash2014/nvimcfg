@@ -53,6 +53,34 @@ return {
         { "<leader>w",  group = "Windows" },
         { "]",          group = "Next" },
         { "[",          group = "Previous" },
+        { "]b",         desc = "Next buffer" },
+        { "[b",         desc = "Previous buffer" },
+        { "]c",         desc = "Next comment" },
+        { "[c",         desc = "Previous comment" },
+        { "]x",         desc = "Next conflict" },
+        { "[x",         desc = "Previous conflict" },
+        { "]d",         desc = "Next diagnostic" },
+        { "[d",         desc = "Previous diagnostic" },
+        { "]f",         desc = "Next file" },
+        { "[f",         desc = "Previous file" },
+        { "]i",         desc = "Next indent" },
+        { "[i",         desc = "Previous indent" },
+        { "]j",         desc = "Next jump" },
+        { "[j",         desc = "Previous jump" },
+        { "]l",         desc = "Next location" },
+        { "[l",         desc = "Previous location" },
+        { "]o",         desc = "Next oldfile" },
+        { "[o",         desc = "Previous oldfile" },
+        { "]q",         desc = "Next quickfix" },
+        { "[q",         desc = "Previous quickfix" },
+        { "]t",         desc = "Next treesitter" },
+        { "[t",         desc = "Previous treesitter" },
+        { "]u",         desc = "Next undo" },
+        { "[u",         desc = "Previous undo" },
+        { "]w",         desc = "Next window" },
+        { "[w",         desc = "Previous window" },
+        { "]y",         desc = "Next yank" },
+        { "[y",         desc = "Previous yank" },
       },
     },
   },
@@ -76,8 +104,7 @@ return {
   {
     "echasnovski/mini.bracketed",
     version = "*",
-    lazy = true,
-    keys = { "]", "[" },
+    lazy = false,
     config = function()
       require("mini.bracketed").setup({
         buffer     = { suffix = "b", options = {} },
@@ -273,27 +300,8 @@ return {
       },
     },
     keys = {
-      {
-        "<leader>tt",
-        function()
-          Snacks.terminal()
-        end,
-        desc = "Toggle Terminal",
-      },
-      {
-        "<leader>tf",
-        function()
-          Snacks.terminal(nil, { cwd = vim.fn.expand("%:p:h") })
-        end,
-        desc = "Terminal (current file dir)",
-      },
-      {
-        "<leader>gg",
-        function()
-          Snacks.terminal("lazygit", { win = { position = "right", width = 0.5 } })
-        end,
-        desc = "Lazygit",
-      },
+      { "<leader>tt", function() Snacks.terminal() end, desc = "Terminal" },
+      { "<leader>gg", function() Snacks.terminal("lazygit", { win = { position = "right", width = 0.5 } }) end, desc = "Lazygit" },
       {
         "<leader>tc",
         function()
@@ -304,7 +312,7 @@ return {
             end
           end)
         end,
-        desc = "Run command in terminal (hsplit)",
+        desc = "Run command (hsplit)",
       },
       {
         "<leader>tv",
@@ -316,57 +324,7 @@ return {
             end
           end)
         end,
-        desc = "Run command in terminal (vsplit)",
-      },
-      {
-        "<leader>bt",
-        function()
-          local all_bufs = vim.api.nvim_list_bufs()
-          local items = {}
-
-          for _, buf in ipairs(all_bufs) do
-            if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "terminal" then
-              local name = vim.api.nvim_buf_get_name(buf)
-              local display_name = name:match("term://.*:(.*)") or "Terminal"
-              local is_visible = vim.fn.bufwinnr(buf) ~= -1
-
-              table.insert(items, {
-                text = display_name .. (is_visible and " (visible)" or " (hidden)"),
-                buf = buf,
-                visible = is_visible
-              })
-            end
-          end
-
-          if #items == 0 then
-            print("No terminals found")
-            return
-          end
-
-          Snacks.picker.pick({
-            items = items,
-            prompt = "Select terminal:",
-            preview = { enabled = false },
-            layout = "vscode",
-            on_select = function(choice)
-              if choice then
-                if choice.visible then
-                  vim.api.nvim_set_current_win(vim.fn.bufwinnr(choice.buf))
-                else
-                  vim.cmd("vsplit")
-                  vim.api.nvim_set_current_buf(choice.buf)
-                  vim.cmd("startinsert")
-                end
-              end
-            end
-          })
-        end,
-        desc = "Pick terminal",
-      },
-      {
-        "<leader>ca",
-        vim.lsp.buf.code_action,
-        desc = "Code action",
+        desc = "Run command (vsplit)",
       },
       {
         "<leader>tr",
@@ -375,22 +333,10 @@ return {
           if last_cmd and last_cmd ~= "" then
             Snacks.terminal(last_cmd)
           else
-            vim.notify("No previous terminal command found")
+            vim.notify("No previous command")
           end
         end,
-        desc = "Rerun last terminal command",
-      },
-      {
-        "<leader>th",
-        function()
-          local current_buf = vim.api.nvim_get_current_buf()
-          if vim.bo[current_buf].buftype == "terminal" then
-            vim.api.nvim_win_hide(vim.api.nvim_get_current_win())
-          else
-            print("Not in a terminal buffer")
-          end
-        end,
-        desc = "Hide current terminal",
+        desc = "Rerun last command",
       },
       {
         "<leader>ff",
@@ -546,7 +492,10 @@ return {
       "OverseerClearCache",
     },
     opts = {
-      strategy = "jobstart",
+      strategy = {
+        "jobstart",
+        use_terminal = false,
+      },
       task_list = {
         direction = "bottom",
         min_height = 25,
@@ -585,7 +534,6 @@ return {
           "on_complete_notify",
         },
       },
-      -- Add error handling for window management
       auto_scroll = true,
       auto_detect_success_color = true,
     },
@@ -803,6 +751,144 @@ return {
         end,
         desc = "Avante: Edit",
         mode = "v",
+      },
+    },
+  },
+  {
+    "olimorris/codecompanion.nvim",
+    lazy = true,
+    cmd = { "CodeCompanion", "CodeCompanionChat", "CodeCompanionActions" },
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "nvim-treesitter/nvim-treesitter",
+      "folke/snacks.nvim",
+    },
+    config = function()
+      require("codecompanion").setup({
+        strategies = {
+          chat = {
+            adapter = "openai",
+            roles = {
+              llm = "CodeCompanion",
+              user = "You",
+            },
+            keymaps = {
+              send = {
+                modes = {
+                  n = "<CR>",
+                  i = "<C-s>",
+                },
+                index = 1,
+                callback = "keymaps.send",
+                description = "Send",
+              },
+              close = {
+                modes = {
+                  n = "q",
+                  i = "<C-c>",
+                },
+                index = 2,
+                callback = "keymaps.close",
+                description = "Close Chat",
+              },
+              stop = {
+                modes = {
+                  n = "<C-c>",
+                },
+                index = 3,
+                callback = "keymaps.stop",
+                description = "Stop Request",
+              },
+            },
+          },
+          inline = {
+            adapter = "openai",
+          },
+        },
+        adapters = {
+          openai = function()
+            return require("codecompanion.adapters").extend("openai", {
+              env = {
+                api_key = "sk-no-key-required",
+              },
+              url = "http://127.0.0.1:1234/v1/chat/completions",
+              schema = {
+                model = {
+                  default = "mistralai/devstral-small-2505",
+                },
+              },
+            })
+          end,
+        },
+        display = {
+          diff = {
+            provider = "mini_diff",
+          },
+          chat = {
+            window = {
+              layout = "vertical",
+              width = 0.45,
+              height = 0.8,
+              relative = "editor",
+              opts = {
+                breakindent = true,
+                cursorcolumn = false,
+                cursorline = false,
+                foldcolumn = "0",
+                linebreak = true,
+                list = false,
+                signcolumn = "no",
+                spell = false,
+                wrap = true,
+              },
+            },
+            intro_message = "Welcome to CodeCompanion! Type your message and press Enter to send.",
+          },
+          inline = {
+            diff = {
+              min_context = 3,
+              max_context = 10,
+              close_chat_at = 240,
+            },
+          },
+        },
+        opts = {
+          log_level = "ERROR",
+          system_prompt = "You are an AI programming assistant. Follow the user's requirements carefully & to the letter. Your code should be correct, efficient, and follow best practices. Provide concise explanations for your code when helpful.",
+        },
+      })
+    end,
+    keys = {
+      {
+        "<leader>ac",
+        function()
+          require("codecompanion").chat()
+        end,
+        desc = "CodeCompanion: Chat",
+        mode = { "n", "v" },
+      },
+      {
+        "<leader>ai",
+        function()
+          require("codecompanion").inline()
+        end,
+        desc = "CodeCompanion: Inline",
+        mode = { "v" },
+      },
+      {
+        "<leader>ap",
+        function()
+          require("codecompanion").prompt()
+        end,
+        desc = "CodeCompanion: Prompt",
+        mode = { "n", "v" },
+      },
+      {
+        "<leader>at",
+        function()
+          require("codecompanion").toggle()
+        end,
+        desc = "CodeCompanion: Toggle",
       },
     },
   },
