@@ -6,7 +6,7 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
   if vim.v.shell_error ~= 0 then
     vim.api.nvim_echo({
       { "Failed to clone lazy.nvim:\n", "ErrorMsg" },
-      { out, "WarningMsg" },
+      { out,                            "WarningMsg" },
       { "\nPress any key to exit..." },
     }, true, {})
     vim.fn.getchar()
@@ -67,23 +67,92 @@ vim.opt.incsearch = true
 vim.opt.termguicolors = true
 vim.opt.scrolloff = 15
 vim.opt.signcolumn = "yes"
-vim.opt.updatetime = 50
+vim.opt.updatetime = 100
+vim.opt.bufhidden = "hide"
+vim.opt.clipboard = "unnamedplus"
+vim.opt.completeopt = { "menuone", "noselect", "popup" }
+
+-- Omnifunc completion setup with Supermaven integration
+local function supermaven_omnifunc(findstart, base)
+  if findstart == 1 then
+    local line = vim.api.nvim_get_current_line()
+    local col = vim.api.nvim_win_get_cursor(0)[2]
+    local start = col
+    
+    -- Find start of word
+    while start > 0 and line:sub(start, start):match("[%w_]") do
+      start = start - 1
+    end
+    
+    return start
+  else
+    -- Try Supermaven first if available
+    local supermaven_ok, supermaven = pcall(require, "supermaven-nvim.completion_preview")
+    if supermaven_ok and supermaven.has_suggestion then
+      local suggestion = supermaven.get_suggestion()
+      if suggestion and suggestion ~= "" then
+        return { suggestion }
+      end
+    end
+    
+    -- Fallback to LSP omnifunc
+    if vim.lsp.omnifunc then
+      return vim.lsp.omnifunc(0, base)
+    end
+    
+    return {}
+  end
+end
+
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "*",
+  callback = function()
+    if vim.bo.omnifunc == "" then
+      vim.bo.omnifunc = "v:lua.supermaven_omnifunc"
+    end
+  end,
+})
+
+-- Make the function globally available
+_G.supermaven_omnifunc = supermaven_omnifunc
+
+-- Enhanced completion mappings
+vim.keymap.set("i", "<C-x><C-o>", "<C-x><C-o>", { desc = "Omnifunc completion" })
+vim.keymap.set("i", "<C-x><C-l>", "<C-x><C-l>", { desc = "Line completion" })
+vim.keymap.set("i", "<C-x><C-f>", "<C-x><C-f>", { desc = "File completion" })
+
+-- Auto-trigger omnifunc completion
+vim.api.nvim_create_autocmd("InsertCharPre", {
+  callback = function()
+    if vim.v.char:match("[%w_.]") then
+      local line = vim.api.nvim_get_current_line()
+      local col = vim.api.nvim_win_get_cursor(0)[2]
+      local before_cursor = line:sub(1, col)
+      
+      -- Trigger completion after typing identifier characters
+      if before_cursor:match("[%w_]+$") and #before_cursor:match("[%w_]+$") >= 2 then
+        vim.schedule(function()
+          if vim.fn.pumvisible() == 0 then
+            vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-x><C-o>", true, false, true), "n", false)
+          end
+        end)
+      end
+    end
+  end,
+})
 
 -- Performance optimizations - defer non-critical options
 vim.schedule(function()
-  -- Clipboard sync (expensive operation)
-  vim.opt.clipboard = "unnamedplus"
-  
   -- Visual enhancements that can wait
   vim.opt.list = true
   vim.opt.listchars = "trail:~,tab:┊─,nbsp:␣,extends:◣,precedes:◢"
   vim.opt.cursorline = true
   vim.opt.showmatch = true
-  
+
   -- Wildmenu optimizations
   vim.opt.wildignore:append("*/tmp/*,*.so,*.swp,*.zip,*.pyc,*.o,*/target/*,*/node_modules/*")
   vim.opt.wildmode = "list:longest,full"
-  
+
   -- Fold settings for large files
   vim.opt.foldcolumn = "1"
   vim.opt.foldminlines = 10
@@ -98,9 +167,9 @@ vim.opt.splitright = true
 vim.opt.splitbelow = true
 
 -- Faster redraw and responsiveness
-vim.opt.redrawtime = 1500
-vim.opt.timeoutlen = 300
-vim.opt.ttimeoutlen = 10
+vim.opt.redrawtime = 2000
+vim.opt.timeoutlen = 400
+vim.opt.ttimeoutlen = 5
 
 -- Memory and swap optimizations
 vim.opt.history = 1000
@@ -137,6 +206,25 @@ set('n', '<leader>w-', '<C-w>-', { desc = 'Decrease window height' })
 set('n', '<leader>w>', '<C-w>>', { desc = 'Increase window width' })
 set('n', '<leader>w<', '<C-w><', { desc = 'Decrease window width' })
 
+-- Marks mappings
+set('n', '<leader>bm', ':marks<CR>', { desc = 'List marks' })
+set('n', '<leader>ma', 'mA', { desc = 'Set mark A' })
+set('n', '<leader>mb', 'mB', { desc = 'Set mark B' })
+set('n', '<leader>mc', 'mC', { desc = 'Set mark C' })
+set('n', '<leader>md', 'mD', { desc = 'Set mark D' })
+set('n', '<leader>me', 'mE', { desc = 'Set mark E' })
+set('n', '<leader>mf', 'mF', { desc = 'Set mark F' })
+set('n', '<leader>mg', 'mG', { desc = 'Set mark G' })
+set('n', '<leader>mh', 'mH', { desc = 'Set mark H' })
+set('n', '<leader>mA', '\'A', { desc = 'Go to mark A' })
+set('n', '<leader>mB', '\'B', { desc = 'Go to mark B' })
+set('n', '<leader>mC', '\'C', { desc = 'Go to mark C' })
+set('n', '<leader>mD', '\'D', { desc = 'Go to mark D' })
+set('n', '<leader>mE', '\'E', { desc = 'Go to mark E' })
+set('n', '<leader>mF', '\'F', { desc = 'Go to mark F' })
+set('n', '<leader>mG', '\'G', { desc = 'Go to mark G' })
+set('n', '<leader>mH', '\'H', { desc = 'Go to mark H' })
+
 -- Filetype associations for R, Jupyter, and Astro
 vim.filetype.add({
   extension = {
@@ -172,7 +260,12 @@ vim.api.nvim_create_autocmd({ "BufRead", "BufNewFile" }, {
 })
 
 -- Setup lazy.nvim with safe performance optimizations
-require("lazy").setup("plugins", {
+require("lazy").setup({
+  spec = {
+    { import = "plugins" },
+    { import = "editor" },
+  },
+}, {
   defaults = {
     lazy = true, -- Make all plugins lazy by default
   },
@@ -186,7 +279,7 @@ require("lazy").setup("plugins", {
       disabled_plugins = {
         -- Only disable truly unused plugins
         "gzip",
-        "matchparen", -- We use vim-matchup instead
+        "matchparen",  -- We use vim-matchup instead
         "netrwPlugin", -- We use oil.nvim
         "tarPlugin",
         "tohtml",
@@ -208,15 +301,13 @@ require("lazy").setup("plugins", {
     enabled = false, -- Disable for better performance
     notify = false,
   },
+  ui = {
+    backdrop = 100, -- Dim inactive windows
+  },
 })
 
--- Setup performance monitoring
+-- Initialize performance optimizations
 require("performance").setup()
 
--- Load LSP configuration after UI is ready
-vim.api.nvim_create_autocmd("User", {
-  pattern = "VeryLazy",
-  callback = function()
-    require("lsp")
-  end,
-})
+-- Enable LSP configuration
+require("lsp")

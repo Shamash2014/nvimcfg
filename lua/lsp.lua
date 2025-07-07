@@ -655,13 +655,48 @@ vim.lsp.config.jdtls = {
   },
 }
 
--- Enable configured LSP servers
-vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'pyright', 'rust_analyzer', 'clangd', 'sourcekit',
-  'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service',
-  'jsonls', 'ruby_lsp', 'jdtls' })
+-- Enable configured LSP servers conditionally based on filetype
+local function setup_lsp_on_filetype()
+  vim.api.nvim_create_autocmd('FileType', {
+    callback = function(args)
+      local ft = vim.bo[args.buf].filetype
+      local server_map = {
+        lua = 'lua_ls',
+        javascript = 'vtsls',
+        typescript = 'vtsls',
+        javascriptreact = 'vtsls',
+        typescriptreact = 'vtsls',
+        dart = 'dartls',
+        elixir = 'elixirls',
+        python = 'pyright',
+        rust = 'rust_analyzer',
+        c = 'clangd',
+        cpp = 'clangd',
+        swift = 'sourcekit',
+        r = 'r_language_server',
+        astro = 'astro',
+        go = 'gopls',
+        yaml = 'yamlls',
+        html = 'html',
+        css = 'cssls',
+        dockerfile = 'dockerls',
+        json = 'jsonls',
+        ruby = 'ruby_lsp',
+        java = 'jdtls'
+      }
+
+      local server = server_map[ft]
+      if server then
+        vim.lsp.enable(server)
+      end
+    end
+  })
+end
+
+setup_lsp_on_filetype()
 
 -- Performance: Configure LSP with optimizations
-vim.lsp.set_log_level("WARN") -- Reduce LSP logging overhead
+vim.lsp.set_log_level("ERROR") -- Reduce LSP logging overhead further
 
 -- Optimize LSP handlers for better performance
 local orig_util_open_floating_preview = vim.lsp.util.open_floating_preview
@@ -688,9 +723,10 @@ vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.s
 
 -- Reduce LSP update frequency for better performance
 vim.lsp.handlers["textDocument/publishDiagnostics"] = vim.lsp.with(vim.lsp.diagnostic.on_publish_diagnostics, {
-  update_in_insert = false, -- Don't update diagnostics while typing
+  update_in_insert = false,    -- Don't update diagnostics while typing
   severity_sort = true,
-  virtual_text = false,     -- We use diagflow.nvim for this
+  virtual_text = false,        -- We use diagflow.nvim for this
+  debounce_text_changes = 200, -- Debounce diagnostics updates
 })
 
 -- Configure diagnostic display (no virtual text/lines, diagflow handles it)
@@ -724,8 +760,8 @@ local function debounce(func, timeout)
   end
 end
 
--- Debounced document highlight
-local highlight_debounced = debounce(vim.lsp.buf.document_highlight, 100)
+-- Debounced document highlight with longer timeout
+local highlight_debounced = debounce(vim.lsp.buf.document_highlight, 200)
 
 -- LSP attach autocommand for keybindings
 vim.api.nvim_create_autocmd('LspAttach', {
@@ -815,7 +851,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
         vim.lsp.buf.code_action({
           filter = function(action)
             return action.title and
-            (string.match(action.title:lower(), "extract") or string.match(action.title:lower(), "refactor"))
+                (string.match(action.title:lower(), "extract") or string.match(action.title:lower(), "refactor"))
           end,
         })
       end, 'Extract Widget/Method')
@@ -846,3 +882,21 @@ vim.api.nvim_create_autocmd('LspAttach', {
   end,
 })
 
+-- LSP Restart command
+vim.api.nvim_create_user_command('LspRestart', function()
+  local clients = vim.lsp.get_clients()
+  if #clients == 0 then
+    vim.notify('No LSP clients running', vim.log.levels.INFO)
+    return
+  end
+
+  for _, client in ipairs(clients) do
+    vim.notify('Restarting LSP client: ' .. client.name, vim.log.levels.INFO)
+    vim.lsp.stop_client(client.id)
+  end
+
+  vim.defer_fn(function()
+    vim.cmd('edit')
+    vim.notify('LSP clients restarted', vim.log.levels.INFO)
+  end, 500)
+end, { desc = 'Restart all LSP clients' })
