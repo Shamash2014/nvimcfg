@@ -39,18 +39,18 @@ return {
         padding = { 1, 2 },
       },
       spec = {
-        { "<leader>a", group = "AI / Avante" },
-        { "<leader>b", group = "Buffers" },
-        { "<leader>c", group = "Code / LSP" },
-        { "<leader>f", group = "Files" },
-        { "<leader>g", group = "Git" },
+        { "<leader>a",  group = "AI / Avante" },
+        { "<leader>b",  group = "Buffers" },
+        { "<leader>c",  group = "Code / LSP" },
+        { "<leader>f",  group = "Files" },
+        { "<leader>g",  group = "Git" },
         { "<leader>gc", group = "Git Conflicts" },
-        { "<leader>m", group = "Marks" },
-        { "<leader>p", group = "Projects / Workspaces" },
-        { "<leader>r", group = "Runner / Overseer" },
-        { "<leader>s", group = "Search" },
-        { "<leader>t", group = "Terminal / Toggle" },
-        { "<leader>w", group = "Windows" },
+        { "<leader>m",  group = "Marks" },
+        { "<leader>p",  group = "Projects / Workspaces" },
+        { "<leader>r",  group = "Runner / Overseer" },
+        { "<leader>s",  group = "Search" },
+        { "<leader>t",  group = "Terminal / Toggle" },
+        { "<leader>w",  group = "Windows" },
       },
     },
   },
@@ -321,13 +321,13 @@ return {
         function()
           local all_bufs = vim.api.nvim_list_bufs()
           local items = {}
-          
+
           for _, buf in ipairs(all_bufs) do
             if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "terminal" then
               local name = vim.api.nvim_buf_get_name(buf)
               local display_name = name:match("term://.*:(.*)") or "Terminal"
               local is_visible = vim.fn.bufwinnr(buf) ~= -1
-              
+
               table.insert(items, {
                 text = display_name .. (is_visible and " (visible)" or " (hidden)"),
                 buf = buf,
@@ -335,12 +335,12 @@ return {
               })
             end
           end
-          
+
           if #items == 0 then
             print("No terminals found")
             return
           end
-          
+
           Snacks.picker.pick({
             items = items,
             prompt = "Select terminal:",
@@ -443,6 +443,60 @@ return {
     },
   },
   {
+    "L3MON4D3/LuaSnip",
+    version = "v2.*",
+    lazy = true,
+    event = "InsertEnter",
+    build = "make install_jsregexp",
+    dependencies = {
+      "rafamadriz/friendly-snippets",
+    },
+    config = function()
+      local luasnip = require("luasnip")
+      
+      -- Load snippets from friendly-snippets
+      require("luasnip.loaders.from_vscode").lazy_load()
+      
+      -- Load custom snippets
+      require("luasnip.loaders.from_lua").lazy_load({ paths = { vim.fn.stdpath("config") .. "/snippets" } })
+      
+      luasnip.config.setup({
+        region_check_events = "InsertEnter",
+        delete_check_events = "InsertLeave",
+        enable_autosnippets = false,
+        store_selection_keys = "<Tab>",
+        update_events = { "TextChanged", "TextChangedI" },
+        history = true,
+        ext_opts = {
+          [require("luasnip.util.types").choiceNode] = {
+            active = {
+              virt_text = { { "●", "Special" } },
+            },
+          },
+        },
+      })
+      
+      -- Keybindings for snippet expansion and navigation
+      vim.keymap.set({ "i", "s" }, "<C-l>", function()
+        if luasnip.expand_or_jumpable() then
+          luasnip.expand_or_jump()
+        end
+      end, { desc = "Expand or jump to next snippet placeholder" })
+      
+      vim.keymap.set({ "i", "s" }, "<C-h>", function()
+        if luasnip.jumpable(-1) then
+          luasnip.jump(-1)
+        end
+      end, { desc = "Jump to previous snippet placeholder" })
+      
+      vim.keymap.set({ "i", "s" }, "<C-e>", function()
+        if luasnip.choice_active() then
+          luasnip.change_choice(1)
+        end
+      end, { desc = "Change snippet choice" })
+    end,
+  },
+  {
     "supermaven-inc/supermaven-nvim",
     lazy = true,
     event = "InsertEnter",
@@ -453,7 +507,17 @@ return {
           clear_suggestion = "<C-]>",
           accept_word = "<C-j>",
         },
-        ignore_filetypes = { "TelescopePrompt" },
+        ignore_filetypes = { 
+          "TelescopePrompt", "oil", "netrw", "help", "qf", "quickfix", "alpha", 
+          "dashboard", "neo-tree", "Trouble", "trouble", "lazy", "mason", "notify",
+          "toggleterm", "floaterm", "lazyterm", "terminal", "prompt", "noice",
+          "NvimTree", "fzf", "fzf-lua", "snacks_picker", "snacks_terminal",
+          "snacks_notifier", "snacks_lazygit", "dap-repl", "dapui_breakpoints",
+          "dapui_console", "dapui_scopes", "dapui_stacks", "dapui_watches",
+          "overseer", "gitcommit", "git", "fugitive", "fugitiveblame",
+          "startuptime", "checkhealth", "man", "lspinfo", "null-ls-info",
+          "conform", "lint", "copilot", "copilot-chat", "avante", "avante-chat"
+        },
         color = {
           suggestion_color = "#ffffff",
           cterm = 244,
@@ -486,6 +550,12 @@ return {
         min_height = 25,
         max_height = 25,
         default_detail = 1,
+        bindings = {
+          ["<C-h>"] = false,
+          ["<C-j>"] = false,
+          ["<C-k>"] = false,
+          ["<C-l>"] = false,
+        },
       },
       form = {
         border = "rounded",
@@ -513,6 +583,9 @@ return {
           "on_complete_notify",
         },
       },
+      -- Add error handling for window management
+      auto_scroll = true,
+      auto_detect_success_color = true,
     },
     config = function(_, opts)
       require("overseer").setup(opts)
@@ -520,41 +593,98 @@ return {
       require("overseer-templates")
     end,
     keys = {
-      { "<leader>rt", "<cmd>OverseerToggle<cr>", desc = "Toggle task list" },
-      { 
-        "<leader>rr", 
+      { "<leader>rt", "<cmd>OverseerToggle<cr>",      desc = "Toggle task list" },
+      {
+        "<leader>rr",
         function()
           require("overseer-snacks").run_task_picker()
         end,
-        desc = "Run task (snacks picker)" 
+        desc = "Run task (snacks picker)"
       },
-      { 
-        "<leader>ra", 
+      {
+        "<leader>ra",
         function()
           vim.cmd("OverseerTaskAction")
         end,
-        desc = "Task action" 
+        desc = "Task action"
       },
-      { "<leader>ri", "<cmd>OverseerInfo<cr>", desc = "Overseer info" },
-      { "<leader>rb", "<cmd>OverseerBuild<cr>", desc = "Build task" },
+      { "<leader>ri", "<cmd>OverseerInfo<cr>",        desc = "Overseer info" },
+      { "<leader>rb", "<cmd>OverseerBuild<cr>",       desc = "Build task" },
       { "<leader>rq", "<cmd>OverseerQuickAction<cr>", desc = "Quick action" },
-      { 
-        "<leader>rx", 
+      {
+        "<leader>rx",
         function()
           -- Simple approach - let user use overseer's built-in task management
           vim.cmd("OverseerToggle")
           vim.notify("Use 'd' to delete tasks in the overseer window")
         end,
-        desc = "Delete task" 
+        desc = "Delete task"
       },
       { "<leader>rc", "<cmd>OverseerClearCache<cr>", desc = "Clear cache" },
-      { 
-        "<leader>rh", 
+      {
+        "<leader>rh",
         function()
           vim.cmd("OverseerToggle")
           vim.notify("Task history available in overseer window")
         end,
-        desc = "Task history" 
+        desc = "Task history"
+      },
+      {
+        "<leader>rC",
+        function()
+          vim.ui.input({ prompt = "Command: " }, function(cmd)
+            if cmd and cmd ~= "" then
+              require("overseer").run_template({
+                name = "terminal command",
+                params = { cmd = cmd }
+              })
+            end
+          end)
+        end,
+        desc = "Run custom command"
+      },
+      {
+        "<leader>rs",
+        function()
+          vim.ui.input({ prompt = "Script path: " }, function(script)
+            if script and script ~= "" then
+              require("overseer").run_template({
+                name = "shell script",
+                params = { script = script }
+              })
+            end
+          end)
+        end,
+        desc = "Run script"
+      },
+      {
+        "<leader>rd",
+        function()
+          local templates = {
+            "docker compose up",
+            "docker compose down",
+            "docker compose build",
+            "docker compose logs",
+            "docker compose exec",
+            "docker run",
+            "docker build",
+            "docker exec",
+            "docker logs"
+          }
+
+          Snacks.picker.pick({
+            items = templates,
+            prompt = "Docker command:",
+            preview = { enabled = false },
+            layout = "vscode",
+            on_select = function(choice)
+              if choice then
+                require("overseer").run_template({ name = choice })
+              end
+            end
+          })
+        end,
+        desc = "Docker commands"
       },
     },
   },

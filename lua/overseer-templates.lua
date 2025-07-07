@@ -9,8 +9,24 @@ overseer.register_template({
       args = { "run" },
       components = {
         "default",
-        "restart_on_save",
-        "on_output_parse",
+        {
+          "on_output_parse",
+          problem_matcher = {
+            {
+              owner = "flutter",
+              pattern = {
+                {
+                  regexp = "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                  file = 1,
+                  line = 2,
+                  column = 3,
+                  severity = 4,
+                  message = 5,
+                },
+              },
+            },
+          },
+        },
         "on_exit_set_status",
         "on_complete_notify",
       },
@@ -419,6 +435,119 @@ overseer.register_template({
   condition = {
     callback = function()
       return vim.fn.executable("docker") == 1
+    end,
+  },
+})
+
+-- Docker Compose Exec
+overseer.register_template({
+  name = "docker compose exec",
+  builder = function()
+    local service = vim.fn.input("Service name: ")
+    if service == "" then
+      vim.notify("Service name is required", vim.log.levels.ERROR)
+      return nil
+    end
+    
+    local args = { "compose", "exec", service }
+    
+    local cmd = vim.fn.input("Command to execute (default: /bin/bash): ", "/bin/bash")
+    for part in cmd:gmatch("%S+") do
+      table.insert(args, part)
+    end
+    
+    return {
+      cmd = { "docker" },
+      args = args,
+      components = {
+        "default",
+        "on_exit_set_status",
+        "on_complete_notify",
+      },
+    }
+  end,
+  condition = {
+    callback = function()
+      return vim.fn.filereadable("docker-compose.yml") == 1 or 
+             vim.fn.filereadable("docker-compose.yaml") == 1 or
+             vim.fn.filereadable("compose.yml") == 1 or
+             vim.fn.filereadable("compose.yaml") == 1
+    end,
+  },
+})
+
+-- Terminal Arbitrary Command
+overseer.register_template({
+  name = "terminal command",
+  builder = function()
+    local cmd = vim.fn.input("Command to run: ")
+    if cmd == "" then
+      vim.notify("Command is required", vim.log.levels.ERROR)
+      return nil
+    end
+    
+    local parts = {}
+    for part in cmd:gmatch("%S+") do
+      table.insert(parts, part)
+    end
+    
+    local command = table.remove(parts, 1)
+    
+    return {
+      cmd = { command },
+      args = parts,
+      components = {
+        "default",
+        "on_exit_set_status",
+        "on_complete_notify",
+      },
+    }
+  end,
+  condition = {
+    callback = function()
+      return true -- Always available
+    end,
+  },
+})
+
+-- Shell Script Runner
+overseer.register_template({
+  name = "shell script",
+  builder = function()
+    local script = vim.fn.input("Script to run: ")
+    if script == "" then
+      vim.notify("Script is required", vim.log.levels.ERROR)
+      return nil
+    end
+    
+    local interpreter = "bash"
+    local extension = script:match("%.(%w+)$")
+    
+    if extension == "py" then
+      interpreter = "python"
+    elseif extension == "js" then
+      interpreter = "node"
+    elseif extension == "rb" then
+      interpreter = "ruby"
+    elseif extension == "sh" then
+      interpreter = "bash"
+    elseif extension == "zsh" then
+      interpreter = "zsh"
+    end
+    
+    return {
+      cmd = { interpreter },
+      args = { script },
+      components = {
+        "default",
+        "on_exit_set_status",
+        "on_complete_notify",
+      },
+    }
+  end,
+  condition = {
+    callback = function()
+      return true -- Always available
     end,
   },
 })
