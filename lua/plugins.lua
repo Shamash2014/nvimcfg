@@ -135,60 +135,112 @@ return {
     end,
   },
   {
-    "echasnovski/mini.completion",
-    version = "*",
-    lazy = true,
+    "hrsh7th/nvim-cmp",
     event = "InsertEnter",
-    dependencies = { "L3MON4D3/LuaSnip" },
+    dependencies = {
+      "hrsh7th/cmp-nvim-lsp",
+      "hrsh7th/cmp-buffer", 
+      "hrsh7th/cmp-path",
+      "hrsh7th/cmp-cmdline",
+      "saadparwaiz1/cmp_luasnip",
+      "supermaven-inc/supermaven-nvim",
+      "tzachar/cmp-tabnine",
+      "L3MON4D3/LuaSnip",
+      "rafamadriz/friendly-snippets",
+    },
     config = function()
-      require("mini.completion").setup({
-        delay = { completion = 100, info = 100, signature = 50 },
-        window = {
-          info = { height = 25, width = 80, border = 'none' },
-          signature = { height = 25, width = 80, border = 'none' },
-        },
-        lsp_completion = {
-          source_func = 'omnifunc',
-          auto_setup = false,
-          process_items = function(items, base)
-            -- Add snippet completions from LuaSnip
-            local luasnip_ok, luasnip = pcall(require, "luasnip")
-            if luasnip_ok then
-              local snippets = luasnip.get_snippets(vim.bo.filetype)
-              for _, snippet in ipairs(snippets) do
-                if snippet.trigger:match("^" .. vim.pesc(base)) then
-                  table.insert(items, {
-                    label = snippet.trigger,
-                    kind = 15, -- snippet completion kind
-                    detail = snippet.name or snippet.trigger,
-                    documentation = snippet.dscr or "LuaSnip snippet",
-                    insertText = snippet.trigger,
-                    insertTextFormat = 2, -- snippet format
-                  })
-                end
-              end
-            end
-            
-            table.sort(items, function(a, b)
-              local a_priority = a.sortText or a.label
-              local b_priority = b.sortText or b.label
-              return a_priority < b_priority
-            end)
-            return items
+      local cmp = require("cmp")
+      local luasnip = require("luasnip")
+      
+      -- Load friendly snippets
+      require("luasnip.loaders.from_vscode").lazy_load()
+      
+      cmp.setup({
+        snippet = {
+          expand = function(args)
+            luasnip.lsp_expand(args.body)
           end,
         },
-        fallback_action = function() end,
-        mappings = {
-          force_twostep = '',
-          force_fallback = '',
+        mapping = cmp.mapping.preset.insert({
+          ['<C-j>'] = cmp.mapping.select_next_item(),
+          ['<C-l>'] = cmp.mapping.select_prev_item(),
+          ['<C-d>'] = cmp.mapping.scroll_docs(-4),
+          ['<C-f>'] = cmp.mapping.scroll_docs(4),
+          ['<C-Space>'] = cmp.mapping.complete(),
+          ['<C-e>'] = cmp.mapping.abort(),
+          ['<CR>'] = cmp.mapping.confirm({ select = true }),
+          ['<Tab>'] = cmp.mapping(function(fallback)
+            if cmp.visible() then
+              cmp.select_next_item()
+            elseif luasnip.expand_or_jumpable() then
+              luasnip.expand_or_jump()
+            else
+              fallback()
+            end
+          end, { 'i', 's' }),
+          ['<S-Tab>'] = cmp.mapping(function(fallback)
+            if cmp.visible() then
+              cmp.select_prev_item()
+            elseif luasnip.jumpable(-1) then
+              luasnip.jump(-1)
+            else
+              fallback()
+            end
+          end, { 'i', 's' }),
+        }),
+        sources = cmp.config.sources({
+          { name = 'nvim_lsp', priority = 1000 },
+          { name = 'supermaven', priority = 900 },
+          { name = 'cmp_tabnine', priority = 800 },
+          { name = 'luasnip', priority = 700 },
+          { name = 'buffer', priority = 500 },
+          { name = 'path', priority = 400 },
+        }),
+        window = {
+          completion = cmp.config.window.bordered(),
+          documentation = cmp.config.window.bordered(),
         },
-        set_vim_settings = false,
+        formatting = {
+          format = function(entry, vim_item)
+            vim_item.menu = ({
+              nvim_lsp = "[LSP]",
+              supermaven = "[Supermaven]",
+              cmp_tabnine = "[TabNine]", 
+              luasnip = "[Snippet]",
+              buffer = "[Buffer]",
+              path = "[Path]",
+            })[entry.source.name]
+            return vim_item
+          end,
+        },
       })
       
-      -- Set up completion navigation with Ctrl-j/l
-      vim.keymap.set('i', '<C-j>', '<C-n>', { desc = 'Next completion', silent = true })
-      vim.keymap.set('i', '<C-l>', '<C-p>', { desc = 'Previous completion', silent = true })
-      vim.keymap.set('i', '<CR>', '<C-y>', { desc = 'Accept completion', silent = true })
+      -- Command line completion
+      cmp.setup.cmdline(':', {
+        mapping = cmp.mapping.preset.cmdline(),
+        sources = cmp.config.sources({
+          { name = 'path' }
+        }, {
+          { name = 'cmdline' }
+        })
+      })
+    end,
+  },
+  {
+    "tzachar/cmp-tabnine",
+    lazy = true,
+    event = "InsertEnter",
+    build = "./install.sh",
+    config = function()
+      require('cmp_tabnine.config'):setup({
+        max_lines = 1000,
+        max_num_results = 10,
+        sort = true,
+        run_on_every_keystroke = true,
+        snippet_placeholder = '...',
+        ignored_file_types = {},
+        show_prediction_strength = false,
+      })
     end,
   },
   {
@@ -509,9 +561,9 @@ return {
     config = function()
       require("supermaven-nvim").setup({
         keymaps = {
-          accept_suggestion = "<Tab>",
-          clear_suggestion = "<C-]>",
-          accept_word = "<C-w>",
+          accept_suggestion = "<M-l>",
+          clear_suggestion = "<M-c>",
+          accept_word = "<M-w>",
         },
         ignore_filetypes = { 
           "TelescopePrompt", "oil", "netrw", "help", "qf", "quickfix", "alpha", 
@@ -529,9 +581,8 @@ return {
           cterm = 244,
         },
         log_level = "info",
-        disable_inline_completion = false,
-        disable_keymaps = false,
-      })
+        disable_inline_completion = true,
+        disable_keymaps = true,
     end,
   },
   {
@@ -542,8 +593,8 @@ return {
     config = function()
       require("tabnine").setup({
         disable_auto_comment = true,
-        accept_keymap = "<M-Tab>",
-        dismiss_keymap = "<M-]>",
+        accept_keymap = "",
+        dismiss_keymap = "",
         debounce_ms = 800,
         suggestion_color = { gui = "#606060", cterm = 240 },
         exclude_filetypes = {
@@ -561,7 +612,7 @@ return {
         max_lines = 1000,
         max_num_results = 10,
         sort = true,
-        run_on_every_keystroke = false,
+        run_on_every_keystroke = true,
         snippet_placeholder_enabled = false,
         show_prediction_strength = false,
         min_percent = 0,
@@ -585,7 +636,7 @@ return {
       "OverseerClearCache",
     },
     opts = {
-      strategy = "jobstart",
+      strategy = "terminal",
       task_list = {
         direction = "bottom",
         min_height = 25,
@@ -637,9 +688,10 @@ return {
       {
         "<leader>rr",
         function()
-          require("overseer-snacks").run_task_picker()
+          local overseer = require("overseer")
+          overseer.run_template()
         end,
-        desc = "Run task (snacks picker)"
+        desc = "Run task"
       },
       {
         "<leader>ra",
@@ -674,10 +726,10 @@ return {
         function()
           vim.ui.input({ prompt = "Command: " }, function(cmd)
             if cmd and cmd ~= "" then
-              require("overseer").run_template({
-                name = "terminal command",
-                params = { cmd = cmd }
-              })
+              require("overseer").new_task({
+                cmd = vim.split(cmd, " "),
+                name = "Custom: " .. cmd,
+              }):start()
             end
           end)
         end,
@@ -688,43 +740,14 @@ return {
         function()
           vim.ui.input({ prompt = "Script path: " }, function(script)
             if script and script ~= "" then
-              require("overseer").run_template({
-                name = "shell script",
-                params = { script = script }
-              })
+              require("overseer").new_task({
+                cmd = { "bash", script },
+                name = "Script: " .. vim.fn.fnamemodify(script, ":t"),
+              }):start()
             end
           end)
         end,
         desc = "Run script"
-      },
-      {
-        "<leader>rd",
-        function()
-          local templates = {
-            "docker compose up",
-            "docker compose down",
-            "docker compose build",
-            "docker compose logs",
-            "docker compose exec",
-            "docker run",
-            "docker build",
-            "docker exec",
-            "docker logs"
-          }
-
-          Snacks.picker.pick({
-            items = templates,
-            prompt = "Docker command:",
-            preview = { enabled = false },
-            layout = "vscode",
-            on_select = function(choice)
-              if choice then
-                require("overseer").run_template({ name = choice })
-              end
-            end
-          })
-        end,
-        desc = "Docker commands"
       },
     },
   },

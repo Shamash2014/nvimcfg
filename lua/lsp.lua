@@ -778,9 +778,12 @@ vim.api.nvim_create_autocmd('LspAttach', {
       vim.keymap.set(mode, keys, func, { buffer = args.buf, desc = 'LSP: ' .. desc })
     end
 
-    -- Doom Emacs/Spacemacs style LSP keybindings (ca is handled by snacks in plugins.lua)
+    -- Doom Emacs/Spacemacs style LSP keybindings
+    map('<leader>ca', vim.lsp.buf.code_action, 'Code Action')
     map('<leader>cr', vim.lsp.buf.rename, 'Rename')
     map('<leader>cf', vim.lsp.buf.format, 'Format Document')
+    map('<leader>ch', vim.lsp.buf.hover, 'Hover Documentation')
+    map('<leader>cs', vim.lsp.buf.signature_help, 'Signature Help')
     map('<leader>cR', function()
       vim.cmd('LspRestart')
     end, 'Restart LSP')

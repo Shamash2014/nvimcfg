@@ -104,6 +104,43 @@ local function enhanced_omnifunc(findstart, base)
       end
     end
     
+    -- Try Supermaven completions
+    local supermaven_ok, supermaven_preview = pcall(require, "supermaven-nvim.completion_preview")
+    if supermaven_ok then
+      local inlay_instance = supermaven_preview:get_inlay_instance()
+      if inlay_instance and inlay_instance.is_active and inlay_instance.completion_text then
+        local completion_text = inlay_instance.completion_text
+        if completion_text and completion_text ~= "" then
+          table.insert(completions, {
+            word = completion_text,
+            menu = "[Supermaven]",
+            info = "AI completion",
+            kind = "Text"
+          })
+        end
+      end
+    end
+    
+    -- Try TabNine completions (using cached results for sync operation)
+    local tabnine_ok, tabnine_state = pcall(require, "tabnine.state")
+    if tabnine_ok and tabnine_state.completions_cache then
+      local cache = tabnine_state.completions_cache
+      if cache.results and #cache.results > 0 then
+        for _, result in ipairs(cache.results) do
+          if result.new_prefix and result.new_prefix ~= "" then
+            local word = result.new_prefix
+            if word:match("^" .. vim.pesc(base)) then
+              table.insert(completions, {
+                word = word,
+                menu = "[TabNine]",
+                info = result.detail or "AI completion",
+                kind = "Text"
+              })
+            end
+          end
+        end
+      end
+    end
     
     -- Fallback to LSP omnifunc
     if vim.lsp.omnifunc then
