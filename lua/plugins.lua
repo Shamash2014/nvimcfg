@@ -629,7 +629,11 @@ return {
       "OverseerClearCache",
     },
     opts = {
-      strategy = "terminal",
+      strategy = {
+        "jobstart",
+        preserve_output = true,
+        use_terminal = false,
+      },
       task_list = {
         direction = "bottom",
         min_height = 25,
@@ -666,6 +670,13 @@ return {
           "on_output_summarize",
           "on_exit_set_status",
           "on_complete_notify",
+        },
+        background = {
+          "display_duration",
+          "on_output_summarize",
+          "on_exit_set_status",
+          { "restart_on_failure", max_restarts = 3, delay = 2000 },
+          { "unique", replace = true },
         },
       },
       auto_scroll = true,
@@ -722,6 +733,7 @@ return {
               require("overseer").new_task({
                 cmd = vim.split(cmd, " "),
                 name = "Custom: " .. cmd,
+                components = { "background" },
               }):start()
             end
           end)
@@ -736,6 +748,7 @@ return {
               require("overseer").new_task({
                 cmd = { "bash", script },
                 name = "Script: " .. vim.fn.fnamemodify(script, ":t"),
+                components = { "background" },
               }):start()
             end
           end)
