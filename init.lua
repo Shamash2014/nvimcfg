@@ -72,8 +72,8 @@ vim.opt.bufhidden = "hide"
 vim.opt.clipboard = "unnamedplus"
 vim.opt.completeopt = { "menuone", "noselect", "popup" }
 
--- Omnifunc completion setup with Supermaven and snippet integration
-local function supermaven_omnifunc(findstart, base)
+-- Omnifunc completion setup with snippet integration
+local function enhanced_omnifunc(findstart, base)
   if findstart == 1 then
     local line = vim.api.nvim_get_current_line()
     local col = vim.api.nvim_win_get_cursor(0)[2]
@@ -101,20 +101,6 @@ local function supermaven_omnifunc(findstart, base)
             kind = "Snippet"
           })
         end
-      end
-    end
-    
-    -- Try Supermaven if available
-    local supermaven_ok, supermaven = pcall(require, "supermaven-nvim.completion_preview")
-    if supermaven_ok and supermaven.has_suggestion then
-      local suggestion = supermaven.get_suggestion()
-      if suggestion and suggestion ~= "" then
-        table.insert(completions, {
-          word = suggestion,
-          menu = "[AI]",
-          info = "AI suggestion",
-          kind = "Text"
-        })
       end
     end
     
@@ -170,13 +156,13 @@ vim.api.nvim_create_autocmd("FileType", {
   pattern = "*",
   callback = function()
     if vim.bo.omnifunc == "" and is_text_buffer() then
-      vim.bo.omnifunc = "v:lua.supermaven_omnifunc"
+      vim.bo.omnifunc = "v:lua.enhanced_omnifunc"
     end
   end,
 })
 
 -- Make the function globally available
-_G.supermaven_omnifunc = supermaven_omnifunc
+_G.enhanced_omnifunc = enhanced_omnifunc
 
 -- Enhanced completion mappings
 vim.keymap.set("i", "<C-x><C-o>", "<C-x><C-o>", { desc = "Omnifunc completion" })
@@ -271,6 +257,28 @@ set('n', '<leader>w+', '<C-w>+', { desc = 'Increase window height' })
 set('n', '<leader>w-', '<C-w>-', { desc = 'Decrease window height' })
 set('n', '<leader>w>', '<C-w>>', { desc = 'Increase window width' })
 set('n', '<leader>w<', '<C-w><', { desc = 'Decrease window width' })
+
+-- Tab control (perfect tab management)
+set('n', '<leader>wgn', ':tabnew<CR>', { desc = 'New tab' })
+set('n', '<leader>wgc', ':tabclose<CR>', { desc = 'Close tab' })
+set('n', '<leader>wgo', ':tabonly<CR>', { desc = 'Close other tabs' })
+set('n', '<leader>wgl', ':tabnext<CR>', { desc = 'Next tab' })
+set('n', '<leader>wgh', ':tabprevious<CR>', { desc = 'Previous tab' })
+set('n', '<leader>wgL', ':tabmove +1<CR>', { desc = 'Move tab right' })
+set('n', '<leader>wgH', ':tabmove -1<CR>', { desc = 'Move tab left' })
+set('n', '<leader>wg1', '1gt', { desc = 'Go to tab 1' })
+set('n', '<leader>wg2', '2gt', { desc = 'Go to tab 2' })
+set('n', '<leader>wg3', '3gt', { desc = 'Go to tab 3' })
+set('n', '<leader>wg4', '4gt', { desc = 'Go to tab 4' })
+set('n', '<leader>wg5', '5gt', { desc = 'Go to tab 5' })
+set('n', '<leader>wg6', '6gt', { desc = 'Go to tab 6' })
+set('n', '<leader>wg7', '7gt', { desc = 'Go to tab 7' })
+set('n', '<leader>wg8', '8gt', { desc = 'Go to tab 8' })
+set('n', '<leader>wg9', '9gt', { desc = 'Go to tab 9' })
+set('n', '<leader>wg0', ':tablast<CR>', { desc = 'Go to last tab' })
+set('n', '<leader>wgf', ':tabfirst<CR>', { desc = 'Go to first tab' })
+set('n', '<leader>wgd', ':tab split<CR>', { desc = 'Duplicate tab' })
+set('n', '<leader>wge', ':tabedit ', { desc = 'Edit file in new tab' })
 
 -- Marks mappings
 set('n', '<leader>bm', ':marks<CR>', { desc = 'List marks' })

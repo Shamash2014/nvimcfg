@@ -51,6 +51,7 @@ return {
         { "<leader>s",  group = "Search" },
         { "<leader>t",  group = "Terminal / Toggle" },
         { "<leader>w",  group = "Windows" },
+        { "<leader>wg", group = "Tabs" },
         { "]",          group = "Next" },
         { "[",          group = "Previous" },
         { "]b",         desc = "Next buffer" },
@@ -131,6 +132,81 @@ return {
     event = "InsertEnter",
     config = function()
       require("mini.pairs").setup()
+    end,
+  },
+  {
+    "echasnovski/mini.completion",
+    version = "*",
+    lazy = true,
+    event = "InsertEnter",
+    dependencies = { "L3MON4D3/LuaSnip" },
+    config = function()
+      require("mini.completion").setup({
+        delay = { completion = 100, info = 100, signature = 50 },
+        window = {
+          info = { height = 25, width = 80, border = 'none' },
+          signature = { height = 25, width = 80, border = 'none' },
+        },
+        lsp_completion = {
+          source_func = 'omnifunc',
+          auto_setup = false,
+          process_items = function(items, base)
+            -- Add snippet completions from LuaSnip
+            local luasnip_ok, luasnip = pcall(require, "luasnip")
+            if luasnip_ok then
+              local snippets = luasnip.get_snippets(vim.bo.filetype)
+              for _, snippet in ipairs(snippets) do
+                if snippet.trigger:match("^" .. vim.pesc(base)) then
+                  table.insert(items, {
+                    label = snippet.trigger,
+                    kind = 15, -- snippet completion kind
+                    detail = snippet.name or snippet.trigger,
+                    documentation = snippet.dscr or "LuaSnip snippet",
+                    insertText = snippet.trigger,
+                    insertTextFormat = 2, -- snippet format
+                  })
+                end
+              end
+            end
+            
+            table.sort(items, function(a, b)
+              local a_priority = a.sortText or a.label
+              local b_priority = b.sortText or b.label
+              return a_priority < b_priority
+            end)
+            return items
+          end,
+        },
+        fallback_action = function() end,
+        mappings = {
+          force_twostep = '',
+          force_fallback = '',
+        },
+        set_vim_settings = true,
+      })
+      
+      -- Add Ctrl-j/Ctrl-k for scrolling through completions
+      vim.schedule(function()
+        -- Force override any existing Ctrl-k mapping
+        vim.keymap.del('i', '<C-k>', { silent = true })
+        vim.schedule(function()
+          vim.keymap.set('i', '<C-j>', function()
+            if vim.fn.pumvisible() == 1 then
+              return '<C-n>'
+            else
+              return '<C-j>'
+            end
+          end, { expr = true, desc = 'Next completion or default C-j', noremap = true, replace = true })
+          
+          vim.keymap.set('i', '<C-k>', function()
+            if vim.fn.pumvisible() == 1 then
+              return '<C-p>'
+            else
+              return '<C-k>'
+            end
+          end, { expr = true, desc = 'Previous completion or default C-k', noremap = true, replace = true })
+        end)
+      end)
     end,
   },
   {
@@ -453,7 +529,7 @@ return {
         keymaps = {
           accept_suggestion = "<Tab>",
           clear_suggestion = "<C-]>",
-          accept_word = "<C-j>",
+          accept_word = "<C-w>",
         },
         ignore_filetypes = { 
           "TelescopePrompt", "oil", "netrw", "help", "qf", "quickfix", "alpha", 
@@ -473,6 +549,33 @@ return {
         log_level = "info",
         disable_inline_completion = false,
         disable_keymaps = false,
+      })
+    end,
+  },
+  {
+    "codota/tabnine-nvim",
+    lazy = true,
+    event = "InsertEnter",
+    build = "./dl_binaries.sh",
+    config = function()
+      require("tabnine").setup({
+        disable_auto_comment = true,
+        accept_keymap = "<M-Tab>",
+        dismiss_keymap = "<C-]>",
+        debounce_ms = 800,
+        suggestion_color = { gui = "#808080", cterm = 244 },
+        exclude_filetypes = {
+          "TelescopePrompt", "oil", "netrw", "help", "qf", "quickfix", "alpha", 
+          "dashboard", "neo-tree", "Trouble", "trouble", "lazy", "mason", "notify",
+          "toggleterm", "floaterm", "lazyterm", "terminal", "prompt", "noice",
+          "NvimTree", "fzf", "fzf-lua", "snacks_picker", "snacks_terminal",
+          "snacks_notifier", "snacks_lazygit", "dap-repl", "dapui_breakpoints",
+          "dapui_console", "dapui_scopes", "dapui_stacks", "dapui_watches",
+          "overseer", "gitcommit", "git", "fugitive", "fugitiveblame",
+          "startuptime", "checkhealth", "man", "lspinfo", "null-ls-info",
+          "conform", "lint", "copilot", "copilot-chat", "avante", "avante-chat"
+        },
+        log_file_path = nil,
       })
     end,
   },
