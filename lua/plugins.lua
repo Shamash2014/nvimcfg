@@ -182,31 +182,13 @@ return {
           force_twostep = '',
           force_fallback = '',
         },
-        set_vim_settings = true,
+        set_vim_settings = false,
       })
       
-      -- Add Ctrl-j/Ctrl-k for scrolling through completions
-      vim.schedule(function()
-        -- Force override any existing Ctrl-k mapping
-        vim.keymap.del('i', '<C-k>', { silent = true })
-        vim.schedule(function()
-          vim.keymap.set('i', '<C-j>', function()
-            if vim.fn.pumvisible() == 1 then
-              return '<C-n>'
-            else
-              return '<C-j>'
-            end
-          end, { expr = true, desc = 'Next completion or default C-j', noremap = true, replace = true })
-          
-          vim.keymap.set('i', '<C-k>', function()
-            if vim.fn.pumvisible() == 1 then
-              return '<C-p>'
-            else
-              return '<C-k>'
-            end
-          end, { expr = true, desc = 'Previous completion or default C-k', noremap = true, replace = true })
-        end)
-      end)
+      -- Set up completion navigation with Ctrl-j/l
+      vim.keymap.set('i', '<C-j>', '<C-n>', { desc = 'Next completion', silent = true })
+      vim.keymap.set('i', '<C-l>', '<C-p>', { desc = 'Previous completion', silent = true })
+      vim.keymap.set('i', '<CR>', '<C-y>', { desc = 'Accept completion', silent = true })
     end,
   },
   {
@@ -561,9 +543,9 @@ return {
       require("tabnine").setup({
         disable_auto_comment = true,
         accept_keymap = "<M-Tab>",
-        dismiss_keymap = "<C-]>",
+        dismiss_keymap = "<M-]>",
         debounce_ms = 800,
-        suggestion_color = { gui = "#808080", cterm = 244 },
+        suggestion_color = { gui = "#606060", cterm = 240 },
         exclude_filetypes = {
           "TelescopePrompt", "oil", "netrw", "help", "qf", "quickfix", "alpha", 
           "dashboard", "neo-tree", "Trouble", "trouble", "lazy", "mason", "notify",
@@ -576,6 +558,14 @@ return {
           "conform", "lint", "copilot", "copilot-chat", "avante", "avante-chat"
         },
         log_file_path = nil,
+        max_lines = 1000,
+        max_num_results = 10,
+        sort = true,
+        run_on_every_keystroke = false,
+        snippet_placeholder_enabled = false,
+        show_prediction_strength = false,
+        min_percent = 0,
+        completions_request_timeout = 0.5,
       })
     end,
   },
@@ -595,10 +585,7 @@ return {
       "OverseerClearCache",
     },
     opts = {
-      strategy = {
-        "jobstart",
-        use_terminal = false,
-      },
+      strategy = "jobstart",
       task_list = {
         direction = "bottom",
         min_height = 25,

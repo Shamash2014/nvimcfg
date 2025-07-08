@@ -72,7 +72,7 @@ vim.opt.bufhidden = "hide"
 vim.opt.clipboard = "unnamedplus"
 vim.opt.completeopt = { "menuone", "noselect", "popup" }
 
--- Omnifunc completion setup with snippet integration
+-- Omnifunc completion setup with AI and snippet integration
 local function enhanced_omnifunc(findstart, base)
   if findstart == 1 then
     local line = vim.api.nvim_get_current_line()
@@ -103,6 +103,7 @@ local function enhanced_omnifunc(findstart, base)
         end
       end
     end
+    
     
     -- Fallback to LSP omnifunc
     if vim.lsp.omnifunc then
