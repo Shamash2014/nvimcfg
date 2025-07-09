@@ -500,7 +500,72 @@ return {
   -- Oil.nvim file explorer
   {
     "stevearc/oil.nvim",
-    opts = {},
+    lazy = false,
+    opts = {
+      default_file_explorer = true,
+      columns = {
+        "icon",
+        "permissions",
+        "size",
+        "mtime",
+      },
+      buf_options = {
+        buflisted = false,
+        bufhidden = "hide",
+      },
+      win_options = {
+        wrap = false,
+        signcolumn = "no",
+        cursorcolumn = false,
+        foldcolumn = "0",
+        spell = false,
+        list = false,
+        conceallevel = 3,
+        concealcursor = "nvic",
+      },
+      delete_to_trash = true,
+      skip_confirm_for_simple_edits = false,
+      prompt_save_on_select_new_entry = true,
+      cleanup_delay_ms = 2000,
+      lsp_file_methods = {
+        timeout_ms = 1000,
+        autosave_changes = false,
+      },
+      constrain_cursor = "editable",
+      experimental_watch_for_changes = false,
+      keymaps = {
+        ["g?"] = "actions.show_help",
+        ["<CR>"] = "actions.select",
+        ["<C-s>"] = "actions.select_vsplit",
+        ["<C-h>"] = "actions.select_split",
+        ["<C-t>"] = "actions.select_tab",
+        ["<C-p>"] = "actions.preview",
+        ["<C-c>"] = "actions.close",
+        ["<C-l>"] = "actions.refresh",
+        ["-"] = "actions.parent",
+        ["_"] = "actions.open_cwd",
+        ["`"] = "actions.cd",
+        ["~"] = "actions.tcd",
+        ["gs"] = "actions.change_sort",
+        ["gx"] = "actions.open_external",
+        ["g."] = "actions.toggle_hidden",
+        ["g\\"] = "actions.toggle_trash",
+      },
+      use_default_keymaps = true,
+      view_options = {
+        show_hidden = false,
+        is_hidden_file = function(name, bufnr)
+          return vim.startswith(name, ".")
+        end,
+        is_always_hidden = function(name, bufnr)
+          return false
+        end,
+        sort = {
+          { "type", "asc" },
+          { "name", "asc" },
+        },
+      },
+    },
     dependencies = { "nvim-tree/nvim-web-devicons" },
     keys = {
       { "<leader>-", "<cmd>Oil<cr>", desc = "Open Oil" },
@@ -763,26 +828,31 @@ return {
       { "<leader>rq", "<cmd>OverseerQuickAction<cr>", desc = "Quick Action" },
       { "<leader>ra", "<cmd>OverseerTaskAction<cr>", desc = "Task Action" },
     },
-    opts = {
-      task_list = {
-        direction = "bottom",
-        min_height = 10,
-        max_height = 20,
-        default_detail = 1,
-      },
-      dap = false,  -- Disable DAP integration initially
-      strategy = {
-        "toggleterm",
-        direction = "horizontal",
-        auto_scroll = true,
-        quit_on_exit = "never",
-        open_on_start = false,
-        hidden = true,
-      },
-    },
+    opts = function()
+      return {
+        task_list = {
+          direction = "bottom",
+          min_height = 10,
+          max_height = 20,
+          default_detail = 1,
+        },
+        dap = false,  -- Disable DAP integration initially, enable later if available
+        strategy = "terminal",
+      }
+    end,
     config = function(_, opts)
       local overseer = require("overseer")
       overseer.setup(opts)
+      
+      -- Enable DAP integration after both plugins are available
+      vim.defer_fn(function()
+        local dap_ok, dap = pcall(require, "dap")
+        if dap_ok and dap.listeners then
+          -- Enable DAP integration in overseer
+          overseer.setup({ dap = true })
+          vim.notify("DAP-Overseer integration enabled", vim.log.levels.INFO)
+        end
+      end, 100)  -- Small delay to ensure DAP is loaded
       
       -- Flutter/Dart task templates
       overseer.register_template({
@@ -827,10 +897,83 @@ return {
         },
       })
 
-      -- DAP integration keybindings
+      -- Docker Compose task templates
+      overseer.register_template({
+        name = "docker-compose up",
+        builder = function()
+          return {
+            cmd = { "docker-compose" },
+            args = { "up", "-d" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "docker-compose down",
+        builder = function()
+          return {
+            cmd = { "docker-compose" },
+            args = { "down" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "docker-compose exec",
+        builder = function()
+          local service = vim.fn.input("Service name: ")
+          local command = vim.fn.input("Command: ", "/bin/bash")
+          return {
+            cmd = { "docker-compose" },
+            args = { "exec", service, command },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "docker-compose run --rm",
+        builder = function()
+          local service = vim.fn.input("Service name: ")
+          local command = vim.fn.input("Command: ", "/bin/bash")
+          return {
+            cmd = { "docker-compose" },
+            args = { "run", "--rm", service, command },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      -- DAP integration keybindings (conditional)
       vim.keymap.set("n", "<leader>rd", function()
-        local dap = require("dap")
-        dap.continue()
+        local dap_ok, dap = pcall(require, "dap")
+        if dap_ok then
+          dap.continue()
+        else
+          vim.notify("DAP not available", vim.log.levels.WARN)
+        end
       end, { desc = "Debug with DAP" })
     end,
   },

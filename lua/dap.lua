@@ -5,7 +5,18 @@ return {
     lazy = true,
     dependencies = {
       "miroshQa/debugmaster.nvim",
-      "stevearc/overseer.nvim",
+    },
+    keys = {
+      { "<leader>db", desc = "Toggle Breakpoint" },
+      { "<leader>dc", desc = "Continue" },
+      { "<leader>do", desc = "Step Over" },
+      { "<leader>di", desc = "Step Into" },
+      { "<leader>dr", desc = "Open REPL" },
+      { "<leader>dt", desc = "Terminate" },
+      { "<leader>du", desc = "Step Out" },
+      { "<leader>dF", desc = "Debug Flutter App" },
+      { "<leader>dP", desc = "Debug Flutter Profile" },
+      { "<leader>dm", desc = "Toggle Debugmaster UI" },
     },
     config = function()
       local dap = require("dap")
@@ -107,17 +118,19 @@ return {
       vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DapBreakpoint" })
       vim.fn.sign_define("DapStopped", { text = "→", texthl = "DapStopped", linehl = "DapCurrentLine" })
       
-      -- DAP UI integration with overseer
-      dap.listeners.after.event_initialized["overseer"] = function()
-        local overseer = require("overseer")
-        vim.notify("DAP session started", vim.log.levels.INFO)
-        overseer.open()
-      end
-      
-      dap.listeners.before.event_terminated["overseer"] = function()
-        local overseer = require("overseer")
-        vim.notify("DAP session terminated", vim.log.levels.INFO)
-        overseer.close()
+      -- DAP UI integration with overseer (conditional)
+      -- Only set up listeners if overseer is available
+      local overseer_ok, overseer = pcall(require, "overseer")
+      if overseer_ok and dap.listeners then
+        dap.listeners.after.event_initialized["overseer"] = function()
+          vim.notify("DAP session started", vim.log.levels.INFO)
+          overseer.open()
+        end
+        
+        dap.listeners.before.event_terminated["overseer"] = function()
+          vim.notify("DAP session terminated", vim.log.levels.INFO)
+          overseer.close()
+        end
       end
     end,
   },

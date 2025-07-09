@@ -35,6 +35,11 @@ vim.opt.updatetime = 250
 vim.opt.timeoutlen = 300
 vim.opt.splitright = true
 vim.opt.splitbelow = true
+vim.opt.clipboard = "unnamedplus"
+
+-- Disable netrw to use oil.nvim as default file manager
+vim.g.loaded_netrw = 1
+vim.g.loaded_netrwPlugin = 1
 
 -- Load plugin configurations
 require("lazy").setup("plugins")
