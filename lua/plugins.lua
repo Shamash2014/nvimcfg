@@ -29,6 +29,8 @@ return {
         { "<leader>o", group = "open" },
         { "<leader>q", group = "quit" },
         { "<leader>h", group = "help" },
+        { "<leader>r", group = "run" },
+        { "<leader>a", group = "ai" },
       },
     },
   },
@@ -409,6 +411,56 @@ return {
     event = { "BufReadPre", "BufNewFile" },
     config = function()
       local lint = require("lint")
+      
+      -- Custom Dart linter using dart analyze command
+      lint.linters.dart_analyze = {
+        cmd = "dart",
+        stdin = false,
+        args = { "analyze", "--fatal-infos", "--fatal-warnings", "." },
+        stream = "stderr",
+        ignore_exitcode = true,
+        parser = function(output, bufnr)
+          local diagnostics = {}
+          
+          -- Parse dart analyze output format
+          for line in output:gmatch("[^\r\n]+") do
+            -- Try to match different dart analyze output formats
+            -- Format: "severity • message • file:line:col • rule_name"
+            local severity, message, location, rule = line:match("^%s*(%w+)%s*•%s*(.-)%s*•%s*(.-)%s*•%s*(.-)%s*$")
+            
+            if severity and message and location then
+              local line_str, col_str = location:match(":(%d+):(%d+)")
+              
+              if line_str and col_str then
+                local line_num = tonumber(line_str) - 1  -- Convert to 0-based indexing
+                local col_num = tonumber(col_str) - 1
+                
+                -- Map severity levels
+                local diagnostic_severity = vim.diagnostic.severity.INFO
+                if severity == "error" then
+                  diagnostic_severity = vim.diagnostic.severity.ERROR
+                elseif severity == "warning" then
+                  diagnostic_severity = vim.diagnostic.severity.WARN
+                elseif severity == "info" then
+                  diagnostic_severity = vim.diagnostic.severity.INFO
+                end
+                
+                table.insert(diagnostics, {
+                  lnum = line_num,
+                  col = col_num,
+                  message = message,
+                  severity = diagnostic_severity,
+                  source = "dart_analyze",
+                  code = rule or "dart_analyze",
+                })
+              end
+            end
+          end
+          
+          return diagnostics
+        end,
+      }
+      
       lint.linters_by_ft = {
         python = { "ruff" },
         javascript = { "eslint_d" },
@@ -424,6 +476,25 @@ return {
         end,
       })
     end,
+  },
+
+  -- Diagflow for Helix-style diagnostic display
+  {
+    "dgagn/diagflow.nvim",
+    event = "LspAttach",
+    opts = {
+      placement = "top",
+      scope = "cursor",
+      severity_colors = {
+        error = "DiagnosticError",
+        warning = "DiagnosticWarn",
+        info = "DiagnosticInfo",
+        hint = "DiagnosticHint",
+      },
+      format = function(diagnostic)
+        return "[" .. diagnostic.source .. "] " .. diagnostic.message
+      end,
+    },
   },
 
   -- Oil.nvim file explorer
@@ -515,7 +586,7 @@ return {
           vim.notify("No previous command to restart", vim.log.levels.WARN)
         end
       end, desc = "Restart Last Command" },
-      { "<leader>gg", function() require("snacks").terminal.open("lazygit") end, desc = "Lazygit" },
+      { "<leader>gg", function() require("snacks").terminal.open("lazygit", { win = { position = "right" } }) end, desc = "Lazygit" },
     },
   },
 
@@ -535,4 +606,232 @@ return {
 
   -- DAP configuration
   { import = "dap" },
+
+  -- Avante.nvim AI assistant
+  {
+    "yetone/avante.nvim",
+    event = "VeryLazy",
+    lazy = false,
+    version = false,
+    opts = {
+      provider = "lm_studio",
+      providers = {
+        lm_studio = {
+          __inherited_from = "openai",
+          endpoint = "http://localhost:1234/v1",
+          model = "helpingai_dhanishtha-2.0-preview",
+          api_key_name = "",
+          timeout = 30000,
+          context_window = 128000,
+          extra_request_body = {
+            temperature = 0,
+            max_tokens = 4096,
+          },
+        },
+      },
+      behaviour = {
+        auto_suggestions = false,
+        auto_set_highlight_group = true,
+        auto_set_keymaps = true,
+        auto_apply_diff_after_generation = false,
+        support_paste_from_clipboard = false,
+      },
+      mappings = {
+        ask = "<leader>aa",
+        edit = "<leader>ae",
+        refresh = "<leader>ar",
+        diff = {
+          ours = "co",
+          theirs = "ct",
+          none = "c0",
+          both = "cb",
+          next = "]x",
+          prev = "[x",
+        },
+        jump = {
+          next = "]]",
+          prev = "[[",
+        },
+        submit = {
+          normal = "<CR>",
+          insert = "<C-s>",
+        },
+        sidebar = {
+          switch_windows = "<Tab>",
+          reverse_switch_windows = "<S-Tab>",
+        },
+      },
+      hints = { enabled = true },
+      windows = {
+        wrap = true,
+        width = 30,
+        sidebar_header = {
+          align = "center",
+          rounded = true,
+        },
+      },
+      highlights = {
+        diff = {
+          current = "DiffText",
+          incoming = "DiffAdd",
+        },
+      },
+    },
+    build = "make",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "MunifTanjim/nui.nvim",
+      "nvim-tree/nvim-web-devicons",
+      "zbirenbaum/copilot.lua",
+      {
+        "HakonHarnes/img-clip.nvim",
+        event = "VeryLazy",
+        opts = {
+          default = {
+            embed_image_as_base64 = false,
+            prompt_for_file_name = false,
+            drag_and_drop = {
+              insert_mode = true,
+            },
+            use_absolute_path = true,
+          },
+        },
+      },
+      {
+        "MeanderingProgrammer/render-markdown.nvim",
+        opts = {
+          file_types = { "markdown", "Avante" },
+        },
+        ft = { "markdown", "Avante" },
+      },
+    },
+  },
+
+  -- CodeCompanion.nvim AI chat
+  {
+    "olimorris/codecompanion.nvim",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "nvim-treesitter/nvim-treesitter",
+      "folke/snacks.nvim",
+    },
+    config = function()
+      require("codecompanion").setup({
+        strategies = {
+          chat = {
+            adapter = "lm_studio",
+          },
+          inline = {
+            adapter = "lm_studio",
+          },
+          agent = {
+            adapter = "lm_studio",
+          },
+        },
+        adapters = {
+          lm_studio = function()
+            return require("codecompanion.adapters").extend("openai", {
+              env = {
+                api_key = "lm-studio",
+              },
+              url = "http://localhost:1234/v1/chat/completions",
+              model = "helpingai_dhanishtha-2.0-preview",
+            })
+          end,
+        },
+        opts = {
+          log_level = "ERROR",
+        },
+      })
+    end,
+    keys = {
+      { "<leader>ac", "<cmd>CodeCompanionChat<cr>", desc = "CodeCompanion Chat" },
+      { "<leader>ai", "<cmd>CodeCompanionActions<cr>", desc = "CodeCompanion Actions" },
+      { "<leader>at", "<cmd>CodeCompanionChat Toggle<cr>", desc = "Toggle CodeCompanion Chat" },
+      { "<leader>ap", "<cmd>CodeCompanionActions<cr>", mode = "v", desc = "CodeCompanion Actions" },
+    },
+  },
+
+  -- Overseer.nvim for task management with DAP integration
+  {
+    "stevearc/overseer.nvim",
+    cmd = { "OverseerRun", "OverseerToggle", "OverseerBuild", "OverseerQuickAction" },
+    keys = {
+      { "<leader>rr", "<cmd>OverseerRun<cr>", desc = "Run Task" },
+      { "<leader>rt", "<cmd>OverseerToggle<cr>", desc = "Toggle Overseer" },
+      { "<leader>rb", "<cmd>OverseerBuild<cr>", desc = "Build Task" },
+      { "<leader>rq", "<cmd>OverseerQuickAction<cr>", desc = "Quick Action" },
+      { "<leader>ra", "<cmd>OverseerTaskAction<cr>", desc = "Task Action" },
+    },
+    opts = {
+      task_list = {
+        direction = "bottom",
+        min_height = 10,
+        max_height = 20,
+        default_detail = 1,
+      },
+      dap = false,  -- Disable DAP integration initially
+      strategy = {
+        "toggleterm",
+        direction = "horizontal",
+        auto_scroll = true,
+        quit_on_exit = "never",
+        open_on_start = false,
+        hidden = true,
+      },
+    },
+    config = function(_, opts)
+      local overseer = require("overseer")
+      overseer.setup(opts)
+      
+      -- Flutter/Dart task templates
+      overseer.register_template({
+        name = "flutter run",
+        builder = function()
+          return {
+            cmd = { "flutter" },
+            args = { "run", "--debug" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "dart" },
+        },
+      })
+
+      overseer.register_template({
+        name = "flutter build",
+        builder = function()
+          return {
+            cmd = { "flutter" },
+            args = { "build", "apk", "--debug" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "dart" },
+        },
+      })
+
+      overseer.register_template({
+        name = "flutter test",
+        builder = function()
+          return {
+            cmd = { "flutter" },
+            args = { "test" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "dart" },
+        },
+      })
+
+      -- DAP integration keybindings
+      vim.keymap.set("n", "<leader>rd", function()
+        local dap = require("dap")
+        dap.continue()
+      end, { desc = "Debug with DAP" })
+    end,
+  },
 }

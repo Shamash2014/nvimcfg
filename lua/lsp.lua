@@ -144,6 +144,28 @@ return {
           })
         end,
       })
+
+      vim.api.nvim_create_autocmd("FileType", {
+        pattern = "dart",
+        callback = function()
+          vim.lsp.start({
+            name = "dartls",
+            cmd = { "dart", "language-server", "--protocol=lsp" },
+            settings = {
+              dart = {
+                analysisExcludedFolders = {
+                  vim.fn.expand("~/.pub-cache"),
+                  vim.fn.expand("~/fvm"),
+                },
+                updateImportsOnRename = true,
+                completeFunctionCalls = true,
+                showTodos = true,
+                enableSnippets = true,
+              },
+            },
+          })
+        end,
+      })
     end,
   },
 }
