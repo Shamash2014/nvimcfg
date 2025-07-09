@@ -281,6 +281,18 @@ return {
       })
 
       overseer.register_template({
+        name = "aider --watch-files",
+        builder = function()
+          return {
+            cmd = { "aider" },
+            args = { "--watch-files" },
+            components = { "default" },
+          }
+        end,
+      })
+
+
+      overseer.register_template({
         name = "docker-compose up -d --build",
         builder = function()
           return {
@@ -335,6 +347,14 @@ return {
       vim.keymap.set("n", "<leader>rb", "<cmd>OverseerBuild<cr>", { desc = "Build Task" })
       vim.keymap.set("n", "<leader>rq", "<cmd>OverseerQuickAction<cr>", { desc = "Quick Action" })
       vim.keymap.set("n", "<leader>ra", "<cmd>OverseerTaskAction<cr>", { desc = "Task Action" })
+
+      -- Set up global terminal escape mapping
+      vim.api.nvim_create_autocmd("TermOpen", {
+        pattern = "*",
+        callback = function()
+          vim.keymap.set("t", "jk", "<C-\\><C-n>", { buffer = true, desc = "Exit terminal mode" })
+        end,
+      })
     end,
   },
 }
