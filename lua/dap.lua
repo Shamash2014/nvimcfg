@@ -2,9 +2,10 @@ return {
   -- DAP (Debug Adapter Protocol)
   {
     "mfussenegger/nvim-dap",
-    lazy = true,
+    event = "VeryLazy",
     dependencies = {
       "miroshQa/debugmaster.nvim",
+      { "stevearc/overseer.nvim" },
     },
     keys = {
       { "<leader>db", desc = "Toggle Breakpoint" },
@@ -20,14 +21,30 @@ return {
     },
     config = function()
       local dap = require("dap")
-      
+
+      -- Ensure DAP is fully loaded before configuration
+      if not dap.adapters then
+        dap.adapters = {}
+      end
+
+      if not dap.configurations then
+        dap.configurations = {}
+      end
+
+
+      if not dap.listeners then
+        dap.listeners = {}
+      end
+
+
+
       -- Flutter/Dart Debug Adapter
       dap.adapters.dart = {
         type = "executable",
         command = "dart",
         args = { "debug_adapter" },
       }
-      
+
       -- Flutter Debug Adapter
       dap.adapters.flutter = {
         type = "executable",
@@ -47,7 +64,7 @@ return {
         },
         {
           type = "flutter",
-          request = "launch", 
+          request = "launch",
           name = "Launch Flutter",
           dartSdkPath = vim.fn.expand("~/flutter/bin/cache/dart-sdk/"),
           flutterSdkPath = vim.fn.expand("~/flutter/"),
@@ -94,18 +111,18 @@ return {
       vim.keymap.set("n", "<leader>dr", function() dap.repl.open() end, { desc = "Open REPL" })
       vim.keymap.set("n", "<leader>dt", function() dap.terminate() end, { desc = "Terminate" })
       vim.keymap.set("n", "<leader>du", function() dap.step_out() end, { desc = "Step Out" })
-      
+
       -- Flutter/Dart specific debug keybindings
       vim.keymap.set("n", "<leader>dF", function()
         dap.run(dap.configurations.dart[2]) -- Launch Flutter
       end, { desc = "Debug Flutter App" })
-      
+
       vim.keymap.set("n", "<leader>dP", function()
         dap.run(dap.configurations.dart[3]) -- Launch Flutter Profile
       end, { desc = "Debug Flutter Profile" })
-      
+
       -- Debugmaster integration
-      vim.keymap.set("n", "<leader>dm", function() 
+      vim.keymap.set("n", "<leader>dm", function()
         local ok, debugmaster = pcall(require, "debugmaster")
         if ok then
           debugmaster.toggle()
@@ -117,21 +134,159 @@ return {
       -- Enhanced DAP signs
       vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DapBreakpoint" })
       vim.fn.sign_define("DapStopped", { text = "→", texthl = "DapStopped", linehl = "DapCurrentLine" })
-      
-      -- DAP UI integration with overseer (conditional)
-      -- Only set up listeners if overseer is available
-      local overseer_ok, overseer = pcall(require, "overseer")
-      if overseer_ok and dap.listeners then
-        dap.listeners.after.event_initialized["overseer"] = function()
-          vim.notify("DAP session started", vim.log.levels.INFO)
-          overseer.open()
-        end
-        
-        dap.listeners.before.event_terminated["overseer"] = function()
-          vim.notify("DAP session terminated", vim.log.levels.INFO)
-          overseer.close()
-        end
-      end
+
+      -- Configure overseer since it's a dependency
+      local overseer = require("overseer")
+      overseer.setup({
+        task_list = {
+          direction = "bottom",
+          min_height = 10,
+          max_height = 20,
+          default_detail = 1,
+        },
+        dap = false, -- Disable DAP integration during setup
+        strategy = "terminal",
+      })
+
+      -- Enable DAP integration after overseer is configured
+      -- overseer.enable_dap()
+
+      -- Register overseer task templates
+      -- Flutter/Dart task templates
+      overseer.register_template({
+        name = "flutter run",
+        builder = function()
+          return {
+            cmd = { "flutter" },
+            args = { "run", "--debug" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "dart" },
+        },
+      })
+
+      overseer.register_template({
+        name = "flutter build",
+        builder = function()
+          return {
+            cmd = { "flutter" },
+            args = { "build", "apk", "--debug" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "dart" },
+        },
+      })
+
+      overseer.register_template({
+        name = "flutter test",
+        builder = function()
+          return {
+            cmd = { "flutter" },
+            args = { "test" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "dart" },
+        },
+      })
+
+      overseer.register_template({
+        name = "flutter pub get",
+        builder = function()
+          return {
+            cmd = { "flutter" },
+            args = { "pub", "get" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("pubspec.yaml") == 1
+          end,
+        },
+      })
+
+      -- Docker Compose task templates
+      overseer.register_template({
+        name = "docker-compose up",
+        builder = function()
+          return {
+            cmd = { "docker-compose" },
+            args = { "up", "-d" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "docker-compose down",
+        builder = function()
+          return {
+            cmd = { "docker-compose" },
+            args = { "down" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "docker-compose exec",
+        builder = function()
+          local service = vim.fn.input("Service name: ")
+          local command = vim.fn.input("Command: ", "/bin/bash")
+          return {
+            cmd = { "docker-compose" },
+            args = { "exec", service, command },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "docker-compose run --rm",
+        builder = function()
+          local service = vim.fn.input("Service name: ")
+          local command = vim.fn.input("Command: ", "/bin/bash")
+          return {
+            cmd = { "docker-compose" },
+            args = { "run", "--rm", service, command },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      -- Set up overseer keybindings
+      vim.keymap.set("n", "<leader>rr", "<cmd>OverseerRun<cr>", { desc = "Run Task" })
+      vim.keymap.set("n", "<leader>rt", "<cmd>OverseerToggle<cr>", { desc = "Toggle Overseer" })
+      vim.keymap.set("n", "<leader>rb", "<cmd>OverseerBuild<cr>", { desc = "Build Task" })
+      vim.keymap.set("n", "<leader>rq", "<cmd>OverseerQuickAction<cr>", { desc = "Quick Action" })
+      vim.keymap.set("n", "<leader>ra", "<cmd>OverseerTaskAction<cr>", { desc = "Task Action" })
     end,
   },
 }
+
