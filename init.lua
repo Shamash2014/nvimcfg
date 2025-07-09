@@ -41,5 +41,8 @@ vim.opt.clipboard = "unnamedplus"
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1
 
+-- Global jk escape mapping for insert mode
+vim.keymap.set("i", "jk", "<Esc>", { desc = "Exit insert mode" })
+
 -- Load plugin configurations
 require("lazy").setup("plugins")
