@@ -463,10 +463,10 @@ return {
       
       lint.linters_by_ft = {
         python = { "ruff" },
-        javascript = { "eslint_d" },
-        typescript = { "eslint_d" },
-        typescriptreact = { "eslint_d" },
-        javascriptreact = { "eslint_d" },
+        javascript = { "eslint" },
+        typescript = { "eslint" },
+        typescriptreact = { "eslint" },
+        javascriptreact = { "eslint" },
         dart = { "dart_analyze" },
       }
       
@@ -684,7 +684,7 @@ return {
         lm_studio = {
           __inherited_from = "openai",
           endpoint = "http://localhost:1234/v1",
-          model = "helpingai_dhanishtha-2.0-preview",
+          model = "mistralai/devstral-small-2505",
           api_key_name = "",
           timeout = 30000,
           context_window = 128000,
@@ -800,7 +800,7 @@ return {
                 api_key = "lm-studio",
               },
               url = "http://localhost:1234/v1/chat/completions",
-              model = "helpingai_dhanishtha-2.0-preview",
+              model = "mistralai/devstral-small-2505",
             })
           end,
         },

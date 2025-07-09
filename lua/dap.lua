@@ -280,6 +280,55 @@ return {
         },
       })
 
+      overseer.register_template({
+        name = "docker-compose up -d --build",
+        builder = function()
+          return {
+            cmd = { "docker-compose" },
+            args = { "build", "--no-cache" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      -- iOS CocoaPods task templates
+      overseer.register_template({
+        name = "pod install",
+        builder = function()
+          return {
+            cmd = { "pod" },
+            args = { "install" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("Podfile") == 1 or vim.fn.filereadable("ios/Podfile") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "pod update",
+        builder = function()
+          return {
+            cmd = { "pod" },
+            args = { "update" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("Podfile") == 1 or vim.fn.filereadable("ios/Podfile") == 1
+          end,
+        },
+      })
+
       -- Set up overseer keybindings
       vim.keymap.set("n", "<leader>rr", "<cmd>OverseerRun<cr>", { desc = "Run Task" })
       vim.keymap.set("n", "<leader>rt", "<cmd>OverseerToggle<cr>", { desc = "Toggle Overseer" })
@@ -289,4 +338,3 @@ return {
     end,
   },
 }
-
