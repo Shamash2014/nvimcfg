@@ -1,141 +1,7 @@
 return {
-  -- DAP (Debug Adapter Protocol)
   {
-    "mfussenegger/nvim-dap",
-    event = "VeryLazy",
-    dependencies = {
-      "miroshQa/debugmaster.nvim",
-      { "stevearc/overseer.nvim" },
-    },
-    keys = {
-      { "<leader>db", desc = "Toggle Breakpoint" },
-      { "<leader>dc", desc = "Continue" },
-      { "<leader>do", desc = "Step Over" },
-      { "<leader>di", desc = "Step Into" },
-      { "<leader>dr", desc = "Open REPL" },
-      { "<leader>dt", desc = "Terminate" },
-      { "<leader>du", desc = "Step Out" },
-      { "<leader>dF", desc = "Debug Flutter App" },
-      { "<leader>dP", desc = "Debug Flutter Profile" },
-      { "<leader>dm", desc = "Toggle Debugmaster UI" },
-    },
+    "stevearc/overseer.nvim",
     config = function()
-      local dap = require("dap")
-
-      -- Ensure DAP is fully loaded before configuration
-      if not dap.adapters then
-        dap.adapters = {}
-      end
-
-      if not dap.configurations then
-        dap.configurations = {}
-      end
-
-
-      if not dap.listeners then
-        dap.listeners = {}
-      end
-
-
-
-      -- Flutter/Dart Debug Adapter
-      dap.adapters.dart = {
-        type = "executable",
-        command = "dart",
-        args = { "debug_adapter" },
-      }
-
-      -- Flutter Debug Adapter
-      dap.adapters.flutter = {
-        type = "executable",
-        command = "flutter",
-        args = { "debug_adapter" },
-      }
-
-      -- Dart configurations
-      dap.configurations.dart = {
-        {
-          type = "dart",
-          request = "launch",
-          name = "Launch Dart",
-          dartSdkPath = vim.fn.expand("~/flutter/bin/cache/dart-sdk/"),
-          program = "${workspaceFolder}/lib/main.dart",
-          cwd = "${workspaceFolder}",
-        },
-        {
-          type = "flutter",
-          request = "launch",
-          name = "Launch Flutter",
-          dartSdkPath = vim.fn.expand("~/flutter/bin/cache/dart-sdk/"),
-          flutterSdkPath = vim.fn.expand("~/flutter/"),
-          program = "${workspaceFolder}/lib/main.dart",
-          cwd = "${workspaceFolder}",
-          args = { "--debug" },
-        },
-        {
-          type = "flutter",
-          request = "launch",
-          name = "Launch Flutter (Profile)",
-          dartSdkPath = vim.fn.expand("~/flutter/bin/cache/dart-sdk/"),
-          flutterSdkPath = vim.fn.expand("~/flutter/"),
-          program = "${workspaceFolder}/lib/main.dart",
-          cwd = "${workspaceFolder}",
-          args = { "--profile" },
-        },
-      }
-
-      -- Python
-      dap.adapters.python = {
-        type = "executable",
-        command = "python",
-        args = { "-m", "debugpy.adapter" },
-      }
-
-      dap.configurations.python = {
-        {
-          type = "python",
-          request = "launch",
-          name = "Launch file",
-          program = "${file}",
-          pythonPath = function()
-            return "/usr/bin/python3"
-          end,
-        },
-      }
-
-      -- Set up keybindings after DAP is loaded
-      vim.keymap.set("n", "<leader>db", function() dap.toggle_breakpoint() end, { desc = "Toggle Breakpoint" })
-      vim.keymap.set("n", "<leader>dc", function() dap.continue() end, { desc = "Continue" })
-      vim.keymap.set("n", "<leader>do", function() dap.step_over() end, { desc = "Step Over" })
-      vim.keymap.set("n", "<leader>di", function() dap.step_into() end, { desc = "Step Into" })
-      vim.keymap.set("n", "<leader>dr", function() dap.repl.open() end, { desc = "Open REPL" })
-      vim.keymap.set("n", "<leader>dt", function() dap.terminate() end, { desc = "Terminate" })
-      vim.keymap.set("n", "<leader>du", function() dap.step_out() end, { desc = "Step Out" })
-
-      -- Flutter/Dart specific debug keybindings
-      vim.keymap.set("n", "<leader>dF", function()
-        dap.run(dap.configurations.dart[2]) -- Launch Flutter
-      end, { desc = "Debug Flutter App" })
-
-      vim.keymap.set("n", "<leader>dP", function()
-        dap.run(dap.configurations.dart[3]) -- Launch Flutter Profile
-      end, { desc = "Debug Flutter Profile" })
-
-      -- Debugmaster integration
-      vim.keymap.set("n", "<leader>dm", function()
-        local ok, debugmaster = pcall(require, "debugmaster")
-        if ok then
-          debugmaster.toggle()
-        else
-          vim.notify("Debugmaster not available", vim.log.levels.WARN)
-        end
-      end, { desc = "Toggle Debugmaster UI" })
-
-      -- Enhanced DAP signs
-      vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DapBreakpoint" })
-      vim.fn.sign_define("DapStopped", { text = "→", texthl = "DapStopped", linehl = "DapCurrentLine" })
-
-      -- Configure overseer since it's a dependency
       local overseer = require("overseer")
       overseer.setup({
         task_list = {
@@ -291,7 +157,6 @@ return {
         end,
       })
 
-
       overseer.register_template({
         name = "docker-compose up -d --build",
         builder = function()
@@ -341,14 +206,6 @@ return {
         },
       })
 
-      -- Set up overseer keybindings
-      vim.keymap.set("n", "<leader>rr", "<cmd>OverseerRun<cr>", { desc = "Run Task" })
-      vim.keymap.set("n", "<leader>rt", "<cmd>OverseerToggle<cr>", { desc = "Toggle Overseer" })
-      vim.keymap.set("n", "<leader>rb", "<cmd>OverseerBuild<cr>", { desc = "Build Task" })
-      vim.keymap.set("n", "<leader>rq", "<cmd>OverseerQuickAction<cr>", { desc = "Quick Action" })
-      vim.keymap.set("n", "<leader>ra", "<cmd>OverseerTaskAction<cr>", { desc = "Task Action" })
-
-      -- Set up global terminal escape mapping
       vim.api.nvim_create_autocmd("TermOpen", {
         pattern = "*",
         callback = function()
@@ -356,5 +213,90 @@ return {
         end,
       })
     end,
+    keys = {
+      { "<leader>rr", "<cmd>OverseerRun<cr>",         desc = "Run Task" },
+      { "<leader>rt", "<cmd>OverseerToggle<cr>",      desc = "Toggle Overseer" },
+      { "<leader>rb", "<cmd>OverseerBuild<cr>",       desc = "Build Task" },
+      { "<leader>rq", "<cmd>OverseerQuickAction<cr>", desc = "Quick Action" },
+      { "<leader>ra", "<cmd>OverseerTaskAction<cr>",  desc = "Task Action" },
+    },
+  },
+
+  -- DAP (Debug Adapter Protocol)
+  {
+    "mfussenegger/nvim-dap",
+    dependencies = {
+      "stevearc/overseer.nvim",
+      "miroshQa/debugmaster.nvim",
+    },
+    keys = {
+      { "<leader>d", function() require("debugmaster").mode.toggle() end, desc = "Toggle Debug Mode", nowait = true },
+    },
+    config = function()
+      local dap = require("dap")
+
+      -- Properly initialize DAP listeners table structure per nvim-dap docs
+      if not dap.listeners then
+        dap.listeners = {
+          before = {},
+          after = {}
+        }
+      end
+      if not dap.listeners.before then
+        dap.listeners.before = {}
+      end
+      if not dap.listeners.after then
+        dap.listeners.after = {}
+      end
+
+      -- Configure debug adapters
+      dap.adapters.dart = {
+        type = "executable",
+        command = "dart",
+        args = { "debug_adapter" },
+      }
+
+      dap.adapters.python = {
+        type = "executable",
+        command = "python3",
+        args = { "-m", "debugpy.adapter" },
+      }
+
+      -- Configure debug configurations
+      dap.configurations.dart = {
+        {
+          type = "dart",
+          request = "launch",
+          name = "Launch Dart",
+          program = "${file}",
+          cwd = "${workspaceFolder}",
+        },
+        {
+          type = "dart",
+          request = "launch",
+          name = "Launch Flutter",
+          program = "${workspaceFolder}/lib/main.dart",
+          cwd = "${workspaceFolder}",
+          toolArgs = { "--debug" },
+        },
+      }
+
+      dap.configurations.python = {
+        {
+          type = "python",
+          request = "launch",
+          name = "Launch file",
+          program = "${file}",
+          pythonPath = function()
+            return "/usr/bin/python3"
+          end,
+        },
+      }
+
+      -- Set up signs
+      vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DapBreakpoint" })
+      vim.fn.sign_define("DapStopped", { text = "→", texthl = "DapStopped", linehl = "DapCurrentLine" })
+    end,
   },
 }
+

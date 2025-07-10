@@ -264,8 +264,8 @@ return {
             enable = true,
             border = "none",
             peek_definition_code = {
-              ["<leader>df"] = "@function.outer",
-              ["<leader>dF"] = "@class.outer",
+              ["<leader>vf"] = "@function.outer",
+              ["<leader>vF"] = "@class.outer",
             },
           },
         },
@@ -500,7 +500,7 @@ return {
   -- Oil.nvim file explorer
   {
     "stevearc/oil.nvim",
-    lazy = false,
+    lazy = false, -- Keep non-lazy for default file manager
     opts = {
       default_file_explorer = true,
       columns = {
@@ -818,4 +818,89 @@ return {
   },
 
   -- Overseer.nvim is now configured as a dependency in dap.lua
+
+  -- Xcodebuild.nvim for iOS/macOS development
+  {
+    "wojciech-kulik/xcodebuild.nvim",
+    dependencies = {
+      "MunifTanjim/nui.nvim",
+      "nvim-treesitter/nvim-treesitter",
+      "folke/snacks.nvim",
+    },
+    config = function()
+      require("xcodebuild").setup({
+        -- Restore options on startup
+        restore_on_start = true,
+        -- Auto save before running actions
+        auto_save = true,
+        -- Show build progress
+        show_build_progress_bar = true,
+        -- Logs settings
+        logs = {
+          auto_open_on_success_tests = false,
+          auto_open_on_failed_tests = false,
+          auto_open_on_success_build = false,
+          auto_open_on_failed_build = true,
+          auto_focus = true,
+          auto_close_on_app_launch = false,
+          auto_close_on_success = false,
+          only_summary = false,
+          notify = function(message, severity)
+            vim.notify(message, severity)
+          end,
+        },
+        -- Marks settings
+        marks = {
+          show_signs = true,
+          success_sign = "✓",
+          failure_sign = "✗",
+          show_test_duration = true,
+          show_diagnostics = true,
+          file_pattern = "*.swift",
+        },
+        -- Quickfix settings
+        quickfix = {
+          show_errors_on_quickfixlist = true,
+          show_warnings_on_quickfixlist = true,
+        },
+        -- Test explorer settings
+        test_explorer = {
+          enabled = true,
+          auto_open = true,
+          auto_focus = false,
+        },
+        -- Code coverage settings
+        code_coverage = {
+          enabled = true,
+          file_pattern = "*.swift",
+        },
+      })
+    end,
+    keys = {
+      -- Main xcodebuild picker
+      { "<leader>cx", "<cmd>XcodebuildPicker<cr>", desc = "Xcodebuild Actions" },
+      
+      -- Build and run
+      { "<leader>cxb", "<cmd>XcodebuildBuild<cr>", desc = "Build Project" },
+      { "<leader>cxr", "<cmd>XcodebuildBuildRun<cr>", desc = "Build & Run" },
+      
+      -- Testing
+      { "<leader>cxt", "<cmd>XcodebuildTest<cr>", desc = "Run Tests" },
+      { "<leader>cxT", "<cmd>XcodebuildTestClass<cr>", desc = "Run Class Tests" },
+      { "<leader>cxe", "<cmd>XcodebuildTestExplorer<cr>", desc = "Toggle Test Explorer" },
+      
+      -- Device/scheme/configuration selection
+      { "<leader>cxd", "<cmd>XcodebuildSelectDevice<cr>", desc = "Select Device" },
+      { "<leader>cxs", "<cmd>XcodebuildSelectScheme<cr>", desc = "Select Scheme" },
+      { "<leader>cxc", "<cmd>XcodebuildSelectTestPlan<cr>", desc = "Select Test Plan" },
+      
+      -- Logs and debugging
+      { "<leader>cxl", "<cmd>XcodebuildToggleLogs<cr>", desc = "Toggle Build Logs" },
+      { "<leader>cxX", "<cmd>XcodebuildCleanBuild<cr>", desc = "Clean Build Folder" },
+      
+      -- Code coverage
+      { "<leader>cxv", "<cmd>XcodebuildToggleCodeCoverage<cr>", desc = "Toggle Code Coverage" },
+      { "<leader>cxC", "<cmd>XcodebuildShowCodeCoverageReport<cr>", desc = "Show Coverage Report" },
+    },
+  },
 }
