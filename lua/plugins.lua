@@ -252,12 +252,12 @@ return {
           swap = {
             enable = true,
             swap_next = {
-              ["<leader>a"] = "@parameter.inner",
-              ["<leader>f"] = "@function.outer",
+              ["]a"] = "@parameter.inner",
+              ["]f"] = "@function.outer",
             },
             swap_previous = {
-              ["<leader>A"] = "@parameter.inner",
-              ["<leader>F"] = "@function.outer",
+              ["[a"] = "@parameter.inner",
+              ["[f"] = "@function.outer",
             },
           },
           lsp_interop = {
@@ -816,6 +816,86 @@ return {
       { "<leader>ai", "<cmd>CodeCompanionActions<cr>",     desc = "CodeCompanion Actions" },
       { "<leader>at", "<cmd>CodeCompanionChat Toggle<cr>", desc = "Toggle CodeCompanion Chat" },
       { "<leader>ap", "<cmd>CodeCompanionActions<cr>",     mode = "v",                        desc = "CodeCompanion Actions" },
+    },
+  },
+
+  -- Mini.hipatterns for highlighting patterns
+  {
+    "echasnovski/mini.hipatterns",
+    version = false,
+    event = "VeryLazy",
+    config = function()
+      require("mini.hipatterns").setup({
+        highlighters = {
+          -- Highlight standalone 'FIXME', 'HACK', 'TODO', 'NOTE'
+          fixme = { pattern = '%f[%w]()FIXME()%f[%W]', group = 'MiniHipatternsFixme' },
+          hack  = { pattern = '%f[%w]()HACK()%f[%W]',  group = 'MiniHipatternsHack' },
+          todo  = { pattern = '%f[%w]()TODO()%f[%W]',  group = 'MiniHipatternsTodo' },
+          note  = { pattern = '%f[%w]()NOTE()%f[%W]',  group = 'MiniHipatternsNote' },
+
+          -- Highlight hex color in '#rrggbb' format
+          hex_color = require('mini.hipatterns').gen_highlighter.hex_color(),
+        },
+      })
+    end,
+  },
+
+  -- Vim repeat for better dot command support
+  {
+    "tpope/vim-repeat",
+    event = "VeryLazy",
+  },
+
+  -- Neorg for note-taking and task management
+  {
+    "nvim-neorg/neorg",
+    dependencies = { "nvim-lua/plenary.nvim" },
+    ft = "norg",
+    cmd = "Neorg",
+    config = function()
+      require("neorg").setup {
+        load = {
+          ["core.defaults"] = {},
+          ["core.concealer"] = {
+            config = {
+              icon_preset = "basic"
+            }
+          },
+          ["core.dirman"] = {
+            config = {
+              workspaces = {
+                notes = "~/notes",
+                work = "~/work",
+              },
+              default_workspace = "notes",
+            },
+          },
+          ["core.qol.todo_items"] = {
+            config = {
+              order = { "undone", "pending", "done", "cancelled" }
+            }
+          },
+          ["core.keybinds"] = {
+            config = {
+              default_keybinds = true,
+              neorg_leader = "<LocalLeader>",
+            }
+          },
+        },
+      }
+      
+      -- Set up the t mapping after neorg loads
+      vim.api.nvim_create_autocmd("FileType", {
+        pattern = "norg",
+        callback = function()
+          vim.keymap.set("n", "t", "<Plug>(neorg.qol.todo-items.todo.task-cycle)", { buffer = true, desc = "Toggle Todo" })
+        end,
+      })
+    end,
+    keys = {
+      { "<leader>otn", "<cmd>Neorg workspace notes<cr>", desc = "Open Notes" },
+      { "<leader>otw", "<cmd>Neorg workspace work<cr>", desc = "Open Work" },
+      { "<leader>ott", "<cmd>Neorg return<cr>", desc = "Return to Index" },
     },
   },
 

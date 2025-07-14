@@ -3,11 +3,7 @@ return {
     "stevearc/overseer.nvim",
     event = "VeryLazy",
     config = function()
-      -- Prevent overseer from checking DAP
       local overseer = require("overseer")
-
-      -- Explicitly disable DAP before setup
-      overseer.enable_dap(false)
 
       overseer.setup({
         task_list = {
@@ -16,7 +12,7 @@ return {
           max_height = 20,
           default_detail = 1,
         },
-        dap = false, -- Disable DAP integration completely
+        dap = false,
         strategy = "terminal",
       })
 
@@ -77,6 +73,20 @@ return {
           callback = function()
             return vim.fn.filereadable("pubspec.yaml") == 1
           end,
+        },
+      })
+
+      overseer.register_template({
+        name = "flutter clean",
+        builder = function()
+          return {
+            cmd = { "flutter" },
+            args = { "clean" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "dart" },
         },
       })
 
@@ -228,13 +238,13 @@ return {
   -- DAP (Debug Adapter Protocol)
   {
     "mfussenegger/nvim-dap",
-    event = "VeryLazy",
     dependencies = {
+      "theHamsta/nvim-dap-virtual-text",
+      "nvim-neotest/nvim-nio",
       {
         "miroshQa/debugmaster.nvim",
         config = function()
           local dm = require("debugmaster")
-          -- Enable Neovim Lua debugging integration
           dm.plugins.osv_integration.enabled = true
         end,
       },
@@ -312,20 +322,35 @@ return {
           cwd = "${workspaceFolder}",
         }
       }
-      -- Signs
-      vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DapBreakpoint", linehl = "", numhl = "" })
-      vim.fn.sign_define("DapBreakpointCondition",
-        { text = "●", texthl = "DapBreakpointCondition", linehl = "", numhl = "" })
-      vim.fn.sign_define("DapLogPoint", { text = "◆", texthl = "DapLogPoint", linehl = "", numhl = "" })
-      vim.fn.sign_define("DapStopped", { text = "", texthl = "DapStopped", linehl = "DapStoppedLine", numhl = "" })
-      vim.fn.sign_define("DapBreakpointRejected",
-        { text = "", texthl = "DapBreakpointRejected", linehl = "", numhl = "" })
+      -- Configure signs with proper symbols
+      vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DapBreakpoint" })
+      vim.fn.sign_define("DapBreakpointCondition", { text = "◐", texthl = "DapBreakpointCondition" })
+      vim.fn.sign_define("DapBreakpointRejected", { text = "○", texthl = "DapBreakpointRejected" })
+      vim.fn.sign_define("DapStopped", { text = "→", texthl = "DapStopped", linehl = "DapStoppedLine" })
 
-      -- Highlights
-      vim.api.nvim_set_hl(0, "DapBreakpoint", { ctermbg = 0, fg = "#993939", bg = "#31353f" })
-      vim.api.nvim_set_hl(0, "DapLogPoint", { ctermbg = 0, fg = "#61afef", bg = "#31353f" })
-      vim.api.nvim_set_hl(0, "DapStopped", { ctermbg = 0, fg = "#98c379", bg = "#31353f" })
-      vim.api.nvim_set_hl(0, "DapStoppedLine", { default = true, link = "Visual" })
+      -- Setup virtual text
+      require("nvim-dap-virtual-text").setup({
+        enabled = true,
+        enabled_commands = true,
+        highlight_changed_variables = true,
+        highlight_new_as_changed = false,
+        show_stop_reason = true,
+        commented = false,
+        only_first_definition = true,
+        all_references = false,
+        clear_on_continue = false,
+        display_callback = function(variable, buf, stackframe, node, options)
+          if options.virt_text_pos == 'inline' then
+            return ' = ' .. variable.value
+          else
+            return variable.name .. ' = ' .. variable.value
+          end
+        end,
+        virt_text_pos = vim.fn.has 'nvim-0.10' == 1 and 'inline' or 'eol',
+        all_frames = false,
+        virt_lines = false,
+        virt_text_win_col = nil
+      })
     end,
   },
 }
