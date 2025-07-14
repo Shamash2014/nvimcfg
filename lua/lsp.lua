@@ -102,28 +102,7 @@ return {
         end,
       })
 
-      -- Configure LSP servers using vim.lsp.config (Neovim 0.11+)
-      vim.lsp.config("lua_ls", {
-        cmd = { "lua-language-server" },
-        filetypes = { "lua" },
-        settings = {
-          Lua = {
-            diagnostics = {
-              globals = { "vim" },
-            },
-            workspace = {
-              library = vim.api.nvim_get_runtime_file("", true),
-            },
-            telemetry = {
-              enable = false,
-            },
-          },
-        },
-      })
-
       -- LSP Configuration (Neovim 0.11 native API)
-
-      -- Configure LSP servers using vim.lsp.config
       vim.lsp.config.lua_ls = {
         cmd = { 'lua-language-server' },
         filetypes = { 'lua' },
@@ -328,8 +307,8 @@ return {
         }
       }
 
-      vim.lsp.config.pyright = {
-        cmd = { 'pyright-langserver', '--stdio' },
+      vim.lsp.config.basedpyright = {
+        cmd = { 'basedpyright-langserver', '--stdio' },
         filetypes = { 'python' },
         root_markers = { 'pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile', '.envrc', '.git' },
         settings = {
@@ -340,6 +319,10 @@ return {
               autoImportCompletions = true,
               diagnosticMode = "workspace",
               typeCheckingMode = "basic",
+              autoFormatStrings = true,
+              indexing = true,
+              logLevel = "Information",
+              stubPath = vim.fn.stdpath("data") .. "/lazy/python-type-stubs",
             },
             pythonPath = function()
               -- Use direnv environment if available
@@ -350,8 +333,15 @@ return {
               return "python3"
             end,
           },
-          pyright = {
+          basedpyright = {
             disableOrganizeImports = false,
+            analysis = {
+              autoImportCompletions = true,
+              typeCheckingMode = "basic",
+              diagnosticMode = "workspace",
+              useLibraryCodeForTypes = true,
+              autoSearchPaths = true,
+            },
           },
         },
       }
@@ -779,7 +769,7 @@ return {
       }
 
       -- Enable configured LSP servers
-      vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'pyright', 'rust_analyzer', 'clangd', 'sourcekit',
+      vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'basedpyright', 'rust_analyzer', 'clangd', 'sourcekit',
         'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service',
         'jsonls', 'ruby_lsp', 'jdtls' })
 
@@ -969,5 +959,16 @@ return {
         end,
       })
     end,
+  },
+
+
+  {
+    "stevearc/quicker.nvim",
+    event = "FileType qf",
+    keys = {
+      { ">", function() require("quicker").expand({ before = 2, after = 2, add_to_existing = true }) end, desc = "Expand quickfix context",   ft = "qf" },
+      { "<", function() require("quicker").collapse() end,                                                desc = "Collapse quickfix context", ft = "qf" },
+    },
+    opts = {},
   },
 }

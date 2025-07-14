@@ -14,23 +14,23 @@ return {
         ["<tab>"] = "TAB",
       },
       spec = {
-        { "<leader>f", group = "find" },
-        { "<leader>p", group = "project" },
-        { "<leader>s", group = "search" },
-        { "<leader>g", group = "git" },
-        { "<leader>d", group = "debug" },
-        { "<leader>c", group = "code" },
+        { "<leader>f",  group = "find" },
+        { "<leader>p",  group = "project" },
+        { "<leader>s",  group = "search" },
+        { "<leader>g",  group = "git" },
+        { "<leader>d",  group = "debug" },
+        { "<leader>c",  group = "code" },
         { "<leader>cr", group = "refactor" },
-        { "<leader>w", group = "window" },
-        { "<leader>b", group = "buffer" },
+        { "<leader>w",  group = "window" },
+        { "<leader>b",  group = "buffer" },
         { "<leader>bw", group = "window/tab" },
-        { "<leader>t", group = "toggle" },
-        { "<leader>v", group = "view" },
-        { "<leader>o", group = "open" },
-        { "<leader>q", group = "quit" },
-        { "<leader>h", group = "help" },
-        { "<leader>r", group = "run" },
-        { "<leader>a", group = "ai" },
+        { "<leader>t",  group = "toggle" },
+        { "<leader>v",  group = "view" },
+        { "<leader>o",  group = "open" },
+        { "<leader>q",  group = "quit" },
+        { "<leader>h",  group = "help" },
+        { "<leader>r",  group = "run" },
+        { "<leader>a",  group = "ai" },
       },
     },
   },
@@ -49,7 +49,7 @@ return {
         -- - <options> (table) - options for mappings.
         -- - <forward> (function) - function for forward movement.
         -- - <backward> (function) - function for backward movement.
-        
+
         buffer = { suffix = 'b', options = {} },
         comment = { suffix = 'c', options = {} },
         conflict = { suffix = 'x', options = {} },
@@ -65,10 +65,10 @@ return {
         window = { suffix = 'w', options = {} },
         yank = { suffix = 'y', options = {} },
       })
-      
+
       -- Add custom unimpaired-style mappings
       local keymap = vim.keymap.set
-      
+
       -- Line manipulation
       keymap("n", "]<Space>", "o<Esc>", { desc = "Add blank line below" })
       keymap("n", "[<Space>", "O<Esc>", { desc = "Add blank line above" })
@@ -76,13 +76,13 @@ return {
       keymap("n", "[e", ":move .-2<CR>==", { desc = "Move line up" })
       keymap("v", "]e", ":move '>+1<CR>gv=gv", { desc = "Move selection down" })
       keymap("v", "[e", ":move '<-2<CR>gv=gv", { desc = "Move selection up" })
-      
+
       -- Duplicate lines
       keymap("n", "]d", "yyp", { desc = "Duplicate line down" })
       keymap("n", "[d", "yyP", { desc = "Duplicate line up" })
       keymap("v", "]d", "y`>p", { desc = "Duplicate selection down" })
       keymap("v", "[d", "y`<P", { desc = "Duplicate selection up" })
-      
+
       -- Option toggles
       keymap("n", "]on", function() vim.opt.number = true end, { desc = "Enable line numbers" })
       keymap("n", "[on", function() vim.opt.number = false end, { desc = "Disable line numbers" })
@@ -96,11 +96,11 @@ return {
       keymap("n", "[oh", function() vim.opt.hlsearch = false end, { desc = "Disable search highlight" })
       keymap("n", "]oc", function() vim.opt.cursorline = true end, { desc = "Enable cursor line" })
       keymap("n", "[oc", function() vim.opt.cursorline = false end, { desc = "Disable cursor line" })
-      
+
       -- Paste settings
       keymap("n", "]op", function() vim.opt.paste = true end, { desc = "Enable paste mode" })
       keymap("n", "[op", function() vim.opt.paste = false end, { desc = "Disable paste mode" })
-      
+
       -- Folding
       keymap("n", "]z", "zj", { desc = "Next fold" })
       keymap("n", "[z", "zk", { desc = "Previous fold" })
@@ -270,7 +270,7 @@ return {
           },
         },
       })
-      
+
       -- Set up treesitter folding
       vim.opt.foldmethod = "expr"
       vim.opt.foldexpr = "nvim_treesitter#foldexpr()"
@@ -282,8 +282,8 @@ return {
   {
     "ggandor/leap.nvim",
     keys = {
-      { "s", mode = { "n", "x", "o" }, desc = "Leap forward to" },
-      { "S", mode = { "n", "x", "o" }, desc = "Leap backward to" },
+      { "s",  mode = { "n", "x", "o" }, desc = "Leap forward to" },
+      { "S",  mode = { "n", "x", "o" }, desc = "Leap backward to" },
       { "gs", mode = { "n", "x", "o" }, desc = "Leap from windows" },
     },
     config = function(_, opts)
@@ -340,23 +340,23 @@ return {
     },
     config = function()
       local luasnip = require("luasnip")
-      
+
       -- Load snippets
       require("luasnip.loaders.from_vscode").lazy_load()
-      
+
       -- Keymaps
       vim.keymap.set({ "i", "s" }, "<C-k>", function()
         if luasnip.expand_or_jumpable() then
           luasnip.expand_or_jump()
         end
       end, { desc = "Expand or jump snippet" })
-      
+
       vim.keymap.set({ "i", "s" }, "<C-j>", function()
         if luasnip.jumpable(-1) then
           luasnip.jump(-1)
         end
       end, { desc = "Jump back in snippet" })
-      
+
       vim.keymap.set({ "i", "s" }, "<C-l>", function()
         if luasnip.choice_active() then
           luasnip.change_choice(1)
@@ -411,7 +411,7 @@ return {
     event = { "BufReadPre", "BufNewFile" },
     config = function()
       local lint = require("lint")
-      
+
       -- Custom Dart linter using dart analyze command
       lint.linters.dart_analyze = {
         cmd = "dart",
@@ -421,20 +421,20 @@ return {
         ignore_exitcode = true,
         parser = function(output, bufnr)
           local diagnostics = {}
-          
+
           -- Parse dart analyze output format
           for line in output:gmatch("[^\r\n]+") do
             -- Try to match different dart analyze output formats
             -- Format: "severity • message • file:line:col • rule_name"
             local severity, message, location, rule = line:match("^%s*(%w+)%s*•%s*(.-)%s*•%s*(.-)%s*•%s*(.-)%s*$")
-            
+
             if severity and message and location then
               local line_str, col_str = location:match(":(%d+):(%d+)")
-              
+
               if line_str and col_str then
-                local line_num = tonumber(line_str) - 1  -- Convert to 0-based indexing
+                local line_num = tonumber(line_str) - 1 -- Convert to 0-based indexing
                 local col_num = tonumber(col_str) - 1
-                
+
                 -- Map severity levels
                 local diagnostic_severity = vim.diagnostic.severity.INFO
                 if severity == "error" then
@@ -444,7 +444,7 @@ return {
                 elseif severity == "info" then
                   diagnostic_severity = vim.diagnostic.severity.INFO
                 end
-                
+
                 table.insert(diagnostics, {
                   lnum = line_num,
                   col = col_num,
@@ -456,11 +456,11 @@ return {
               end
             end
           end
-          
+
           return diagnostics
         end,
       }
-      
+
       lint.linters_by_ft = {
         python = { "ruff" },
         javascript = { "eslint" },
@@ -469,7 +469,7 @@ return {
         javascriptreact = { "eslint" },
         dart = { "dart_analyze" },
       }
-      
+
       vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost", "InsertLeave" }, {
         callback = function()
           lint.try_lint()
@@ -578,7 +578,7 @@ return {
     priority = 1000,
     lazy = false,
     opts = {
-      picker = { 
+      picker = {
         enabled = true,
         layout = {
           preset = "vscode",
@@ -588,69 +588,77 @@ return {
     },
     keys = {
       -- Find operations
-      { "<leader>ff", function() require("snacks").picker.files() end, desc = "Find Files" },
-      { "<leader>fr", function() require("snacks").picker.recent() end, desc = "Recent Files" },
-      { "<leader>fg", function() require("snacks").picker.grep() end, desc = "Grep Files" },
-      { "<leader>fb", function() require("snacks").picker.buffers() end, desc = "Find Buffers" },
-      { "<leader>fh", function() require("snacks").picker.help() end, desc = "Find Help" },
-      { "<leader>fk", function() require("snacks").picker.keymaps() end, desc = "Find Keymaps" },
-      { "<leader>fc", function() require("snacks").picker.commands() end, desc = "Find Commands" },
-      
+      { "<leader>ff",  function() require("snacks").picker.files() end,          desc = "Find Files" },
+      { "<leader>fr",  function() require("snacks").picker.recent() end,         desc = "Recent Files" },
+      { "<leader>fg",  function() require("snacks").picker.grep() end,           desc = "Grep Files" },
+      { "<leader>fb",  function() require("snacks").picker.buffers() end,        desc = "Find Buffers" },
+      { "<leader>fh",  function() require("snacks").picker.help() end,           desc = "Find Help" },
+      { "<leader>fk",  function() require("snacks").picker.keymaps() end,        desc = "Find Keymaps" },
+      { "<leader>fc",  function() require("snacks").picker.commands() end,       desc = "Find Commands" },
+
       -- Project operations
-      { "<leader>pf", function() require("snacks").picker.files() end, desc = "Find Files in Project" },
-      { "<leader>pr", function() require("snacks").picker.recent() end, desc = "Recent Files in Project" },
-      { "<leader>pg", function() require("snacks").picker.grep() end, desc = "Grep in Project" },
-      { "<leader>ps", function() require("snacks").picker.lsp_symbols() end, desc = "Project Symbols" },
-      
+      { "<leader>pf",  function() require("snacks").picker.files() end,          desc = "Find Files in Project" },
+      { "<leader>pr",  function() require("snacks").picker.recent() end,         desc = "Recent Files in Project" },
+      { "<leader>pg",  function() require("snacks").picker.grep() end,           desc = "Grep in Project" },
+      { "<leader>ps",  function() require("snacks").picker.lsp_symbols() end,    desc = "Project Symbols" },
+
       -- Search operations
-      { "<leader>ss", function() require("snacks").picker.grep_word() end, desc = "Search Word" },
-      { "<leader>sg", function() require("snacks").picker.grep() end, desc = "Grep Search" },
-      { "<leader>sl", function() require("snacks").picker.lines() end, desc = "Search Lines" },
-      { "<leader>sr", function() require("snacks").picker.lsp_references() end, desc = "Search References" },
-      { "<leader>si", function() require("snacks").picker.lsp_symbols() end, desc = "Search Symbols" },
-      
+      { "<leader>ss",  function() require("snacks").picker.grep_word() end,      desc = "Search Word" },
+      { "<leader>sg",  function() require("snacks").picker.grep() end,           desc = "Grep Search" },
+      { "<leader>sl",  function() require("snacks").picker.lines() end,          desc = "Search Lines" },
+      { "<leader>sr",  function() require("snacks").picker.lsp_references() end, desc = "Search References" },
+      { "<leader>si",  function() require("snacks").picker.lsp_symbols() end,    desc = "Search Symbols" },
+
       -- Buffer operations
-      { "<leader>bb", function() require("snacks").picker.buffers() end, desc = "Buffer List" },
-      { "<leader>bd", "<cmd>bdelete<cr>", desc = "Delete Buffer" },
-      { "<leader>bwn", "<cmd>tabnew<cr>", desc = "New Tab" },
-      { "<leader>bwc", "<cmd>tabclose<cr>", desc = "Close Tab" },
-      { "<leader>bwo", "<cmd>tabonly<cr>", desc = "Close Other Tabs" },
-      { "<leader>bwh", "<cmd>tabprevious<cr>", desc = "Previous Tab" },
-      { "<leader>bwl", "<cmd>tabnext<cr>", desc = "Next Tab" },
-      
+      { "<leader>bb",  function() require("snacks").picker.buffers() end,        desc = "Buffer List" },
+      { "<leader>bd",  "<cmd>bdelete<cr>",                                       desc = "Delete Buffer" },
+      { "<leader>bwn", "<cmd>tabnew<cr>",                                        desc = "New Tab" },
+      { "<leader>bwc", "<cmd>tabclose<cr>",                                      desc = "Close Tab" },
+      { "<leader>bwo", "<cmd>tabonly<cr>",                                       desc = "Close Other Tabs" },
+      { "<leader>bwh", "<cmd>tabprevious<cr>",                                   desc = "Previous Tab" },
+      { "<leader>bwl", "<cmd>tabnext<cr>",                                       desc = "Next Tab" },
+
       -- Window operations (Doom Emacs style)
-      { "<leader>ww", "<C-w>w", desc = "Switch Window" },
-      { "<leader>wd", "<C-w>c", desc = "Delete Window" },
-      { "<leader>w-", "<C-w>s", desc = "Split Below" },
-      { "<leader>w|", "<C-w>v", desc = "Split Right" },
-      { "<leader>wh", "<C-w>h", desc = "Window Left" },
-      { "<leader>wj", "<C-w>j", desc = "Window Down" },
-      { "<leader>wk", "<C-w>k", desc = "Window Up" },
-      { "<leader>wl", "<C-w>l", desc = "Window Right" },
-      { "<leader>w=", "<C-w>=", desc = "Balance Windows" },
-      { "<leader>w_", "<C-w>_", desc = "Maximize Height" },
-      
+      { "<leader>ww",  "<C-w>w",                                                 desc = "Switch Window" },
+      { "<leader>wd",  "<C-w>c",                                                 desc = "Delete Window" },
+      { "<leader>w-",  "<C-w>s",                                                 desc = "Split Below" },
+      { "<leader>w|",  "<C-w>v",                                                 desc = "Split Right" },
+      { "<leader>wh",  "<C-w>h",                                                 desc = "Window Left" },
+      { "<leader>wj",  "<C-w>j",                                                 desc = "Window Down" },
+      { "<leader>wk",  "<C-w>k",                                                 desc = "Window Up" },
+      { "<leader>wl",  "<C-w>l",                                                 desc = "Window Right" },
+      { "<leader>w=",  "<C-w>=",                                                 desc = "Balance Windows" },
+      { "<leader>w_",  "<C-w>_",                                                 desc = "Maximize Height" },
+
       -- Help operations
-      { "<leader>hh", function() require("snacks").picker.help() end, desc = "Help Tags" },
-      { "<leader>hm", function() require("snacks").picker.man() end, desc = "Man Pages" },
-      { "<leader>hk", function() require("snacks").picker.keymaps() end, desc = "Keymaps" },
-      
+      { "<leader>hh",  function() require("snacks").picker.help() end,           desc = "Help Tags" },
+      { "<leader>hm",  function() require("snacks").picker.man() end,            desc = "Man Pages" },
+      { "<leader>hk",  function() require("snacks").picker.keymaps() end,        desc = "Keymaps" },
+
       -- Terminal operations
-      { "<leader>tt", function() require("snacks").terminal.toggle() end, desc = "Toggle Terminal" },
-      { "<leader>tc", function() 
-        local cmd = vim.fn.input("Command: ")
-        if cmd ~= "" then
-          vim.g.last_terminal_command = cmd
-          require("snacks").terminal.open(cmd, { win = { position = "right" } })
-        end
-      end, desc = "Run Custom Command" },
-      { "<leader>tr", function() 
-        if vim.g.last_terminal_command then
-          require("snacks").terminal.open(vim.g.last_terminal_command)
-        else
-          vim.notify("No previous command to restart", vim.log.levels.WARN)
-        end
-      end, desc = "Restart Last Command" },
+      { "<leader>tt",  function() require("snacks").terminal.toggle() end,       desc = "Toggle Terminal" },
+      {
+        "<leader>tc",
+        function()
+          local cmd = vim.fn.input("Command: ")
+          if cmd ~= "" then
+            vim.g.last_terminal_command = cmd
+            require("snacks").terminal.open(cmd, { win = { position = "right" } })
+          end
+        end,
+        desc = "Run Custom Command"
+      },
+      {
+        "<leader>tr",
+        function()
+          if vim.g.last_terminal_command then
+            require("snacks").terminal.open(vim.g.last_terminal_command)
+          else
+            vim.notify("No previous command to restart", vim.log.levels.WARN)
+          end
+        end,
+        desc = "Restart Last Command"
+      },
       { "<leader>gg", function() require("snacks").terminal.open("lazygit", { win = { position = "right" } }) end, desc = "Lazygit" },
     },
   },
@@ -665,13 +673,6 @@ return {
       require("theme").setup()
     end,
   },
-
-  -- LSP configuration
-  { import = "lsp" },
-
-  -- DAP configuration
-  { import = "dap" },
-
   -- Avante.nvim AI assistant
   {
     "yetone/avante.nvim",
@@ -684,10 +685,11 @@ return {
         lm_studio = {
           __inherited_from = "openai",
           endpoint = "http://localhost:1234/v1",
-          model = "mistralai/devstral-small-2505",
+          model = "devstral-small-2507_gguf",
+          -- model = "nextcoder-32b-mlx",
           api_key_name = "",
           timeout = 30000,
-          context_window = 128000,
+          context_window = 16000,
           extra_request_body = {
             temperature = 0,
             max_tokens = 4096,
@@ -800,7 +802,7 @@ return {
                 api_key = "lm-studio",
               },
               url = "http://localhost:1234/v1/chat/completions",
-              model = "mistralai/devstral-small-2505",
+              model = "devstral-small-2507_gguf",
             })
           end,
         },
@@ -810,10 +812,10 @@ return {
       })
     end,
     keys = {
-      { "<leader>ac", "<cmd>CodeCompanionChat<cr>", desc = "CodeCompanion Chat" },
-      { "<leader>ai", "<cmd>CodeCompanionActions<cr>", desc = "CodeCompanion Actions" },
+      { "<leader>ac", "<cmd>CodeCompanionChat<cr>",        desc = "CodeCompanion Chat" },
+      { "<leader>ai", "<cmd>CodeCompanionActions<cr>",     desc = "CodeCompanion Actions" },
       { "<leader>at", "<cmd>CodeCompanionChat Toggle<cr>", desc = "Toggle CodeCompanion Chat" },
-      { "<leader>ap", "<cmd>CodeCompanionActions<cr>", mode = "v", desc = "CodeCompanion Actions" },
+      { "<leader>ap", "<cmd>CodeCompanionActions<cr>",     mode = "v",                        desc = "CodeCompanion Actions" },
     },
   },
 
@@ -878,29 +880,37 @@ return {
     end,
     keys = {
       -- Main xcodebuild picker
-      { "<leader>cx", "<cmd>XcodebuildPicker<cr>", desc = "Xcodebuild Actions" },
-      
+      { "<leader>cx",  "<cmd>XcodebuildPicker<cr>",                 desc = "Xcodebuild Actions" },
+
       -- Build and run
-      { "<leader>cxb", "<cmd>XcodebuildBuild<cr>", desc = "Build Project" },
-      { "<leader>cxr", "<cmd>XcodebuildBuildRun<cr>", desc = "Build & Run" },
-      
+      { "<leader>cxb", "<cmd>XcodebuildBuild<cr>",                  desc = "Build Project" },
+      { "<leader>cxr", "<cmd>XcodebuildBuildRun<cr>",               desc = "Build & Run" },
+
       -- Testing
-      { "<leader>cxt", "<cmd>XcodebuildTest<cr>", desc = "Run Tests" },
-      { "<leader>cxT", "<cmd>XcodebuildTestClass<cr>", desc = "Run Class Tests" },
-      { "<leader>cxe", "<cmd>XcodebuildTestExplorer<cr>", desc = "Toggle Test Explorer" },
-      
+      { "<leader>cxt", "<cmd>XcodebuildTest<cr>",                   desc = "Run Tests" },
+      { "<leader>cxT", "<cmd>XcodebuildTestClass<cr>",              desc = "Run Class Tests" },
+      { "<leader>cxe", "<cmd>XcodebuildTestExplorer<cr>",           desc = "Toggle Test Explorer" },
+
       -- Device/scheme/configuration selection
-      { "<leader>cxd", "<cmd>XcodebuildSelectDevice<cr>", desc = "Select Device" },
-      { "<leader>cxs", "<cmd>XcodebuildSelectScheme<cr>", desc = "Select Scheme" },
-      { "<leader>cxc", "<cmd>XcodebuildSelectTestPlan<cr>", desc = "Select Test Plan" },
-      
+      { "<leader>cxd", "<cmd>XcodebuildSelectDevice<cr>",           desc = "Select Device" },
+      { "<leader>cxs", "<cmd>XcodebuildSelectScheme<cr>",           desc = "Select Scheme" },
+      { "<leader>cxc", "<cmd>XcodebuildSelectTestPlan<cr>",         desc = "Select Test Plan" },
+
       -- Logs and debugging
-      { "<leader>cxl", "<cmd>XcodebuildToggleLogs<cr>", desc = "Toggle Build Logs" },
-      { "<leader>cxX", "<cmd>XcodebuildCleanBuild<cr>", desc = "Clean Build Folder" },
-      
+      { "<leader>cxl", "<cmd>XcodebuildToggleLogs<cr>",             desc = "Toggle Build Logs" },
+      { "<leader>cxX", "<cmd>XcodebuildCleanBuild<cr>",             desc = "Clean Build Folder" },
+
       -- Code coverage
-      { "<leader>cxv", "<cmd>XcodebuildToggleCodeCoverage<cr>", desc = "Toggle Code Coverage" },
+      { "<leader>cxv", "<cmd>XcodebuildToggleCodeCoverage<cr>",     desc = "Toggle Code Coverage" },
       { "<leader>cxC", "<cmd>XcodebuildShowCodeCoverageReport<cr>", desc = "Show Coverage Report" },
     },
   },
+
+  -- LSP configuration
+  { import = "lsp" },
+
+  -- DAP configuration
+  { import = "dap" },
+
+
 }

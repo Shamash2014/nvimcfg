@@ -1,8 +1,14 @@
 return {
   {
     "stevearc/overseer.nvim",
+    event = "VeryLazy",
     config = function()
+      -- Prevent overseer from checking DAP
       local overseer = require("overseer")
+
+      -- Explicitly disable DAP before setup
+      overseer.enable_dap(false)
+
       overseer.setup({
         task_list = {
           direction = "bottom",
@@ -10,12 +16,9 @@ return {
           max_height = 20,
           default_detail = 1,
         },
-        dap = false, -- Disable DAP integration during setup
+        dap = false, -- Disable DAP integration completely
         strategy = "terminal",
       })
-
-      -- Enable DAP integration after overseer is configured
-      -- overseer.enable_dap()
 
       -- Register overseer task templates
       -- Flutter/Dart task templates
@@ -225,60 +228,41 @@ return {
   -- DAP (Debug Adapter Protocol)
   {
     "mfussenegger/nvim-dap",
+    event = "VeryLazy",
     dependencies = {
-      "stevearc/overseer.nvim",
-      "miroshQa/debugmaster.nvim",
+      {
+        "miroshQa/debugmaster.nvim",
+        config = function()
+          local dm = require("debugmaster")
+          -- Enable Neovim Lua debugging integration
+          dm.plugins.osv_integration.enabled = true
+        end,
+      },
     },
     keys = {
-      { "<leader>d", function() require("debugmaster").mode.toggle() end, desc = "Toggle Debug Mode", nowait = true },
+      { "dm",         function() require("debugmaster").mode.toggle() end,                                         desc = "Toggle Debug Mode", nowait = true },
+      { "<leader>dd", "<cmd>DapContinue<cr>",                                                                      desc = "Start Debug" },
+      { "<leader>do", "<cmd>DapStepOver<cr>",                                                                      desc = "Step Over" },
+      { "<leader>di", "<cmd>DapStepInto<cr>",                                                                      desc = "Step Into" },
+      { "<leader>du", "<cmd>DapStepOut<cr>",                                                                       desc = "Step Out" },
+      { "<leader>db", "<cmd>DapToggleBreakpoint<cr>",                                                              desc = "Toggle Breakpoint" },
+      { "<leader>dB", function() require("dap").set_breakpoint() end,                                              desc = "Set Breakpoint" },
+      { "<leader>dl", function() require("dap").set_breakpoint(nil, nil, vim.fn.input('Log point message: ')) end, desc = "Log Point" },
+      { "<leader>dr", "<cmd>DapToggleRepl<cr>",                                                                    desc = "Open REPL" },
+      { "<leader>dL", function() require("dap").run_last() end,                                                    desc = "Run Last" },
     },
     config = function()
       local dap = require("dap")
 
-      -- Properly initialize DAP listeners table structure per nvim-dap docs
-      if not dap.listeners then
-        dap.listeners = {
-          before = {},
-          after = {}
-        }
-      end
-      if not dap.listeners.before then
-        dap.listeners.before = {}
-      end
-      if not dap.listeners.after then
-        dap.listeners.after = {}
-      end
+      -- Ensure adapters and configurations tables exist
+      dap.adapters = dap.adapters or {}
+      dap.configurations = dap.configurations or {}
 
-      -- Configure debug adapters
-      dap.adapters.dart = {
-        type = "executable",
-        command = "dart",
-        args = { "debug_adapter" },
-      }
-
+      -- DAP Python configuration
       dap.adapters.python = {
         type = "executable",
         command = "python3",
         args = { "-m", "debugpy.adapter" },
-      }
-
-      -- Configure debug configurations
-      dap.configurations.dart = {
-        {
-          type = "dart",
-          request = "launch",
-          name = "Launch Dart",
-          program = "${file}",
-          cwd = "${workspaceFolder}",
-        },
-        {
-          type = "dart",
-          request = "launch",
-          name = "Launch Flutter",
-          program = "${workspaceFolder}/lib/main.dart",
-          cwd = "${workspaceFolder}",
-          toolArgs = { "--debug" },
-        },
       }
 
       dap.configurations.python = {
@@ -293,10 +277,55 @@ return {
         },
       }
 
-      -- Set up signs
-      vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DapBreakpoint" })
-      vim.fn.sign_define("DapStopped", { text = "→", texthl = "DapStopped", linehl = "DapCurrentLine" })
+      -- DAP Dart configuration
+      dap.configurations.dart = {
+        {
+          type = "dart",
+          request = "launch",
+          name = "Launch Dart",
+          dartSdkPath = function()
+            local flutter_root = vim.env.FLUTTER_ROOT
+            if flutter_root then
+              return flutter_root .. "/bin/cache/dart-sdk"
+            end
+            return "dart"
+          end,
+          program = "${file}",
+          cwd = "${workspaceFolder}",
+        },
+        {
+          type = "dart",
+          request = "launch",
+          name = "Launch Flutter",
+          flutterSdkPath = function()
+            local flutter_root = vim.env.FLUTTER_ROOT
+            if flutter_root then
+              return flutter_root
+            end
+            local fvm_local = vim.fn.getcwd() .. "/.fvm/flutter_sdk"
+            if vim.fn.isdirectory(fvm_local) == 1 then
+              return fvm_local
+            end
+            return "flutter"
+          end,
+          program = "${workspaceFolder}/lib/main.dart",
+          cwd = "${workspaceFolder}",
+        }
+      }
+      -- Signs
+      vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DapBreakpoint", linehl = "", numhl = "" })
+      vim.fn.sign_define("DapBreakpointCondition",
+        { text = "●", texthl = "DapBreakpointCondition", linehl = "", numhl = "" })
+      vim.fn.sign_define("DapLogPoint", { text = "◆", texthl = "DapLogPoint", linehl = "", numhl = "" })
+      vim.fn.sign_define("DapStopped", { text = "", texthl = "DapStopped", linehl = "DapStoppedLine", numhl = "" })
+      vim.fn.sign_define("DapBreakpointRejected",
+        { text = "", texthl = "DapBreakpointRejected", linehl = "", numhl = "" })
+
+      -- Highlights
+      vim.api.nvim_set_hl(0, "DapBreakpoint", { ctermbg = 0, fg = "#993939", bg = "#31353f" })
+      vim.api.nvim_set_hl(0, "DapLogPoint", { ctermbg = 0, fg = "#61afef", bg = "#31353f" })
+      vim.api.nvim_set_hl(0, "DapStopped", { ctermbg = 0, fg = "#98c379", bg = "#31353f" })
+      vim.api.nvim_set_hl(0, "DapStoppedLine", { default = true, link = "Visual" })
     end,
   },
 }
-
