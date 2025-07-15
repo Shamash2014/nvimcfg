@@ -1,10 +1,9 @@
+ -- Pure native LSP configuration 
 return {
-  -- Pure native LSP configuration
-  {
     "native-lsp",
     dir = vim.fn.stdpath("config"),
     event = { "BufReadPost", "BufNewFile" },
-    ft = { "lua", "typescript", "javascript", "python", "dart", "rust", "go", "swift", "c", "cpp", "ruby", "java", "elixir", "yaml", "html", "css", "json", "dockerfile", "r", "rmd", "astro" },
+    ft = { "lua", "typescript", "javascript", "python", "dart", "rust", "go", "swift", "c", "cpp", "ruby", "java", "elixir", "eelixir", "heex", "surface", "yaml", "html", "css", "json", "dockerfile", "r", "rmd", "astro" },
     config = function()
       -- Global mappings
       vim.keymap.set("n", "<leader>e", vim.diagnostic.open_float)
@@ -960,16 +959,6 @@ return {
         end,
       })
     end,
-  },
+  }
 
 
-  {
-    "stevearc/quicker.nvim",
-    event = "FileType qf",
-    keys = {
-      { ">", function() require("quicker").expand({ before = 2, after = 2, add_to_existing = true }) end, desc = "Expand quickfix context",   ft = "qf" },
-      { "<", function() require("quicker").collapse() end,                                                desc = "Collapse quickfix context", ft = "qf" },
-    },
-    opts = {},
-  },
-}
