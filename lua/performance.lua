@@ -22,8 +22,8 @@ function M.optimize_large_files()
       local file = vim.fn.expand("<afile>")
       local size = vim.fn.getfsize(file)
       
-      -- Files larger than 500KB get performance optimizations
-      if size > 500 * 1024 then
+      -- Files larger than 100KB get performance optimizations
+      if size > 100 * 1024 then
         vim.opt_local.syntax = "off"
         vim.opt_local.spell = false
         vim.opt_local.swapfile = false
@@ -35,8 +35,8 @@ function M.optimize_large_files()
         vim.notify("Large file detected, performance optimizations applied", vim.log.levels.INFO)
       end
       
-      -- Files larger than 2MB get more aggressive optimizations
-      if size > 2 * 1024 * 1024 then
+      -- Files larger than 500KB get more aggressive optimizations
+      if size > 500 * 1024 then
         vim.opt_local.syntax = "off"
         vim.cmd("TSBufDisable highlight")
         vim.cmd("TSBufDisable indent")
@@ -66,6 +66,46 @@ function M.cached_executable(name)
   return executable_cache[name]
 end
 
+-- Plugin loading optimizations
+function M.optimize_plugins()
+  -- Disable plugins for large files
+  vim.api.nvim_create_autocmd("BufReadPre", {
+    callback = function()
+      local file = vim.fn.expand("<afile>")
+      local size = vim.fn.getfsize(file)
+      
+      if size > 100 * 1024 then -- 100KB
+        vim.b.large_file = true
+        -- Disable expensive plugins
+        vim.b.supermaven_disable = true
+        vim.b.avante_disable = true
+        vim.b.codecompanion_disable = true
+      end
+    end,
+  })
+  
+  -- Fast filetype detection
+  vim.g.do_filetype_lua = 1
+  vim.g.did_load_filetypes = 0
+end
+
+-- Startup optimizations
+function M.optimize_startup()
+  -- Defer expensive operations
+  vim.defer_fn(function()
+    -- Re-enable features after startup
+    vim.o.lazyredraw = false
+    
+    -- Setup syntax highlighting for smaller files
+    vim.cmd("syntax on")
+    
+    -- Load treesitter highlighting
+    if vim.fn.exists(":TSEnable") > 0 then
+      vim.cmd("TSEnable highlight")
+    end
+  end, 100)
+end
+
 -- Initialize performance optimizations
 function M.setup()
   -- Report startup time after lazy loading is complete
@@ -80,6 +120,12 @@ function M.setup()
   
   -- Defer non-essential features
   M.defer_non_essential()
+  
+  -- Optimize startup
+  M.optimize_startup()
+  
+  -- Optimize plugin loading
+  M.optimize_plugins()
 end
 
 return M

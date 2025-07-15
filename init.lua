@@ -19,6 +19,13 @@ vim.opt.rtp:prepend(lazypath)
 -- Performance optimizations
 vim.loader.enable() -- Enable Lua module loader cache (Neovim 0.9+)
 
+-- Memory optimizations
+vim.o.hidden = true -- Allow hidden buffers
+vim.o.lazyredraw = true -- Don't redraw while executing macros
+vim.o.ttyfast = true -- Faster terminal connection
+vim.o.synmaxcol = 200 -- Limit syntax highlighting to 200 columns
+vim.o.re = 0 -- Use new regex engine for performance
+
 -- Disable some builtin vim plugins for faster startup (keeping essential ones)
 vim.g.loaded_getscript = 1
 vim.g.loaded_getscriptPlugin = 1
@@ -30,6 +37,11 @@ vim.g.loaded_rrhelper = 1
 vim.g.loaded_spellfile_plugin = 1
 vim.g.loaded_shada_plugin = 1
 vim.g.loaded_tutor_mode_plugin = 1
+vim.g.loaded_matchit = 1
+vim.g.loaded_matchparen = 1
+vim.g.loaded_tarPlugin = 1
+vim.g.loaded_zipPlugin = 1
+vim.g.loaded_gzip = 1
 
 -- Basic settings
 vim.g.mapleader = " "
@@ -48,6 +60,7 @@ vim.opt.termguicolors = true
 vim.opt.signcolumn = "yes"
 vim.opt.updatetime = 250
 vim.opt.timeoutlen = 300
+vim.opt.ttimeoutlen = 10
 vim.opt.splitright = true
 vim.opt.splitbelow = true
 vim.opt.clipboard = "unnamedplus"
@@ -79,6 +92,19 @@ require("lazy").setup("plugins", {
         "netrwPlugin",
         "tohtml",
         "tutor",
+        "getscript",
+        "getscriptPlugin",
+        "vimball",
+        "vimballPlugin",
+        "2html_plugin",
+        "logipat",
+        "rrhelper",
+        "spellfile_plugin",
+        "matchit",
+        "matchparen",
+        "tarPlugin",
+        "zipPlugin",
+        "gzip",
       },
     },
   },

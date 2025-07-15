@@ -3,7 +3,8 @@ return {
   {
     "native-lsp",
     dir = vim.fn.stdpath("config"),
-    event = { "BufReadPre", "BufNewFile" },
+    event = { "BufReadPost", "BufNewFile" },
+    ft = { "lua", "typescript", "javascript", "python", "dart", "rust", "go", "swift", "c", "cpp", "ruby", "java", "elixir", "yaml", "html", "css", "json", "dockerfile", "r", "rmd", "astro" },
     config = function()
       -- Global mappings
       vim.keymap.set("n", "<leader>e", vim.diagnostic.open_float)

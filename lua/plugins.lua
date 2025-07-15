@@ -2,7 +2,7 @@ return {
   -- Which-key for keybinding help (Helix-style)
   {
     "folke/which-key.nvim",
-    event = "VeryLazy",
+    keys = { "<leader>", "[", "]", "g" },
     opts = {
       preset = "helix",
       delay = 200,
@@ -39,6 +39,7 @@ return {
   {
     "echasnovski/mini.bracketed",
     version = false,
+    keys = { "[", "]" },
     config = function()
       require("mini.bracketed").setup({
         -- First-level elements are tables describing behavior of a target:
@@ -121,7 +122,10 @@ return {
   {
     "echasnovski/mini.ai",
     version = false,
-    event = "VeryLazy",
+    keys = {
+      { "a", mode = { "x", "o" } },
+      { "i", mode = { "x", "o" } },
+    },
     config = function()
       require("mini.ai").setup({
         custom_textobjects = {
@@ -301,13 +305,20 @@ return {
   -- Multi-cursors
   {
     "mg979/vim-visual-multi",
-    event = "VeryLazy",
+    keys = {
+      { "<C-n>", mode = { "n", "v" } },
+      { "<C-Up>", mode = { "n", "v" } },
+      { "<C-Down>", mode = { "n", "v" } },
+    },
   },
 
   -- Supermaven AI completion
   {
     "supermaven-inc/supermaven-nvim",
     event = "InsertEnter",
+    cond = function()
+      return vim.fn.getfsize(vim.fn.expand("%")) < 100000 -- Disable for files > 100KB
+    end,
     config = function()
       require("supermaven-nvim").setup({
         keymaps = {
@@ -335,6 +346,10 @@ return {
     version = "v2.*",
     build = "make install_jsregexp",
     event = "InsertEnter",
+    opts = {
+      history = false,
+      update_events = "TextChanged,TextChangedI",
+    },
     dependencies = {
       "rafamadriz/friendly-snippets",
     },
@@ -381,6 +396,7 @@ return {
     "stevearc/conform.nvim",
     event = { "BufWritePre" },
     cmd = { "ConformInfo" },
+    ft = { "lua", "python", "javascript", "typescript", "typescriptreact", "javascriptreact", "json", "html", "css", "markdown", "dart" },
     keys = {
       { "<leader>cf", function() require("conform").format({ async = true }) end, desc = "Format" },
     },
@@ -408,7 +424,8 @@ return {
   -- Linting
   {
     "mfussenegger/nvim-lint",
-    event = { "BufReadPre", "BufNewFile" },
+    event = { "BufReadPost", "BufNewFile" },
+    ft = { "python", "javascript", "typescript", "typescriptreact", "javascriptreact", "dart" },
     config = function()
       local lint = require("lint")
 
@@ -482,6 +499,7 @@ return {
   {
     "dgagn/diagflow.nvim",
     event = "LspAttach",
+    ft = { "lua", "typescript", "javascript", "python", "dart", "rust", "go" },
     opts = {
       placement = "top",
       scope = "cursor",
@@ -500,7 +518,8 @@ return {
   -- Oil.nvim file explorer
   {
     "stevearc/oil.nvim",
-    lazy = false, -- Keep non-lazy for default file manager
+    lazy = true,
+    cmd = "Oil",
     opts = {
       default_file_explorer = true,
       columns = {
@@ -576,7 +595,8 @@ return {
   {
     "folke/snacks.nvim",
     priority = 1000,
-    lazy = false,
+    lazy = true,
+    event = "VeryLazy",
     opts = {
       picker = {
         enabled = true,
@@ -676,8 +696,8 @@ return {
   -- Avante.nvim AI assistant
   {
     "yetone/avante.nvim",
-    event = "VeryLazy",
-    lazy = false,
+    lazy = true,
+    cmd = {"AvanteAsk", "AvanteChat", "AvanteEdit", "AvanteRefresh"},
     version = false,
     opts = {
       provider = "lm_studio",
@@ -766,6 +786,7 @@ return {
       },
       {
         "MeanderingProgrammer/render-markdown.nvim",
+        lazy = true,
         opts = {
           file_types = { "markdown", "Avante" },
         },
@@ -823,7 +844,8 @@ return {
   {
     "echasnovski/mini.hipatterns",
     version = false,
-    event = "VeryLazy",
+    event = "BufReadPost",
+    ft = { "lua", "typescript", "javascript", "python", "dart", "rust", "go" },
     config = function()
       require("mini.hipatterns").setup({
         highlighters = {
@@ -852,6 +874,7 @@ return {
     dependencies = { "nvim-lua/plenary.nvim" },
     ft = "norg",
     cmd = "Neorg",
+    lazy = true,
     config = function()
       require("neorg").setup {
         load = {
