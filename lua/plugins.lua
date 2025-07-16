@@ -518,21 +518,21 @@ return {
   -- Oil.nvim file explorer
   {
     "stevearc/oil.nvim",
-    lazy = true,
-    cmd = "Oil",
-    opts = {
-      default_file_explorer = true,
-      columns = {
-        "icon",
-        "permissions",
-        "size",
-        "mtime",
-      },
-      buf_options = {
-        buflisted = false,
-        bufhidden = "hide",
-      },
-      win_options = {
+    lazy = false,
+    config = function()
+      require("oil").setup({
+        default_file_explorer = true,
+        columns = {
+          "icon",
+          "permissions",
+          "size",
+          "mtime",
+          },
+        buf_options = {
+          buflisted = false,
+          bufhidden = "hide",
+        },
+        win_options = {
         wrap = false,
         signcolumn = "no",
         cursorcolumn = false,
@@ -583,8 +583,9 @@ return {
           { "type", "asc" },
           { "name", "asc" },
         },
-      },
-    },
+        }
+      })
+    end,
     dependencies = { "nvim-tree/nvim-web-devicons" },
     keys = {
       { "<leader>-", "<cmd>Oil<cr>", desc = "Open Oil" },
