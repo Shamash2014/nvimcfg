@@ -124,6 +124,22 @@ return {
       })
 
       overseer.register_template({
+        name = "docker-compose stop",
+        builder = function()
+          return {
+            cmd = { "docker-compose" },
+            args = { "stop" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
         name = "docker-compose exec",
         builder = function()
           local service = vim.fn.input("Service name: ")
