@@ -202,6 +202,417 @@ return {
         },
       })
 
+      -- Ionic task templates (using zsh with asdf for proper Node.js version)
+      overseer.register_template({
+        name = "ionic serve",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ionic serve" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("ionic.config.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ionic serve --lab",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ionic serve --lab" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("ionic.config.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ionic serve --port",
+        builder = function()
+          local port = vim.fn.input("Port: ", "8100")
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ionic serve --port " .. port },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("ionic.config.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ionic build",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ionic build" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("ionic.config.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ionic capacitor run ios",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ionic capacitor run ios" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("ionic.config.json") == 1 and vim.fn.isdirectory("ios") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ionic capacitor run android",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ionic capacitor run android" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("ionic.config.json") == 1 and vim.fn.isdirectory("android") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ionic generate component",
+        builder = function()
+          local component_name = vim.fn.input("Component name: ")
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ionic generate component " .. component_name },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("ionic.config.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ionic generate page",
+        builder = function()
+          local page_name = vim.fn.input("Page name: ")
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ionic generate page " .. page_name },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("ionic.config.json") == 1
+          end,
+        },
+      })
+
+      -- Angular CLI task templates (using zsh with asdf for proper Node.js version)
+      overseer.register_template({
+        name = "ng serve",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng serve" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng serve --port",
+        builder = function()
+          local port = vim.fn.input("Port: ", "4200")
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng serve --port " .. port },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng serve --open",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng serve --open" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng build",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng build" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng build --prod",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng build --configuration=production" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng test",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng test" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng test --watch=false",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng test --watch=false" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng e2e",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng e2e" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng lint",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng lint" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng generate component",
+        builder = function()
+          local component_name = vim.fn.input("Component name: ")
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng generate component " .. component_name },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng generate service",
+        builder = function()
+          local service_name = vim.fn.input("Service name: ")
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng generate service " .. service_name },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng generate module",
+        builder = function()
+          local module_name = vim.fn.input("Module name: ")
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng generate module " .. module_name },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng generate guard",
+        builder = function()
+          local guard_name = vim.fn.input("Guard name: ")
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng generate guard " .. guard_name },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "ng generate pipe",
+        builder = function()
+          local pipe_name = vim.fn.input("Pipe name: ")
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && ng generate pipe " .. pipe_name },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("angular.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "npm install",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && npm install" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("package.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "npm run build",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && npm run build" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("package.json") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "npm run start",
+        builder = function()
+          return {
+            cmd = { "zsh" },
+            args = { "-c", "source ~/.zshrc && npm run start" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("package.json") == 1
+          end,
+        },
+      })
+
       -- iOS CocoaPods task templates
       overseer.register_template({
         name = "pod install",
