@@ -312,6 +312,32 @@ return {
     },
   },
 
+  -- Twilight - dim inactive portions of code
+  {
+    "folke/twilight.nvim",
+    cmd = { "Twilight", "TwilightEnable", "TwilightDisable" },
+    keys = {
+      { "<leader>vt", "<cmd>Twilight<cr>", desc = "Toggle Twilight" },
+    },
+    opts = {
+      dimming = {
+        alpha = 0.25, -- amount of dimming
+        color = { "Normal", "#ffffff" },
+        term_bg = "#000000", -- if guibg=NONE, this will be used to calculate text color
+        inactive = false, -- when true, other windows will be fully dimmed (unless they contain the same buffer)
+      },
+      context = 10, -- amount of lines we will try to show around the current line
+      treesitter = true, -- use treesitter when available for the filetype
+      expand = { -- for treesitter, we can always expand function bodies
+        "function",
+        "method",
+        "table",
+        "if_statement",
+      },
+      exclude = {}, -- exclude these filetypes
+    },
+  },
+
   -- Supermaven AI completion
   {
     "supermaven-inc/supermaven-nvim",
@@ -923,7 +949,8 @@ return {
     },
   },
 
-  -- Overseer.nvim is now configured as a dependency in dap.lua
+  -- Overseer configuration
+  { import = "overseer" },
 
   -- Xcodebuild.nvim for iOS/macOS development
   {
