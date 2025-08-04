@@ -72,6 +72,14 @@ vim.g.loaded_netrwPlugin = 1
 -- Global jk escape mapping for insert mode
 vim.keymap.set("i", "jk", "<Esc>", { desc = "Exit insert mode" })
 
+-- Terminal mode escape mapping
+vim.api.nvim_create_autocmd("TermOpen", {
+  pattern = "*",
+  callback = function()
+    vim.keymap.set("t", "jk", "<C-\\><C-n>", { buffer = true, desc = "Exit terminal mode" })
+  end,
+})
+
 -- Initialize performance optimizations
 require("performance").setup()
 
