@@ -961,12 +961,52 @@ return {
       },
       dap = true,  -- Enable DAP integration
       strategy = "terminal",
+      templates = { "builtin", "user.vscode" },  -- Include VS Code tasks
+      component_aliases = {
+        default = {
+          { "display_duration", detail_level = 2 },
+          "on_output_summarize",
+          "on_exit_set_status",
+          "on_complete_notify",
+          { "on_complete_dispose", require_view = { "SUCCESS", "FAILURE" } },
+        },
+      },
     },
     config = function(_, opts)
       require("overseer").setup(opts)
       
       -- Register overseer task templates after setup
       local overseer = require("overseer")
+      
+      -- Create a helper function to run VS Code tasks with DAP
+      _G.run_vscode_task_before_debug = function(task_name)
+        local tasks = overseer.list_tasks()
+        for _, task in ipairs(tasks) do
+          if task.name == task_name then
+            task:start()
+            task:add_component({ "on_complete_callback", on_complete = function(_, status)
+              if status == "SUCCESS" then
+                vim.cmd("DapContinue")
+              else
+                vim.notify("Task failed: " .. task_name, vim.log.levels.ERROR)
+              end
+            end })
+            return
+          end
+        end
+        -- If task not found, try to run it
+        overseer.run_template({ name = task_name }, function(task)
+          if task then
+            task:add_component({ "on_complete_callback", on_complete = function(_, status)
+              if status == "SUCCESS" then
+                vim.cmd("DapContinue")
+              else
+                vim.notify("Task failed: " .. task_name, vim.log.levels.ERROR)
+              end
+            end })
+          end
+        end)
+      end
       
       -- Flutter/Dart task templates
       overseer.register_template({
@@ -1362,6 +1402,12 @@ return {
       { "<leader>rb", "<cmd>OverseerBuild<cr>",       desc = "Build Task" },
       { "<leader>rq", "<cmd>OverseerQuickAction<cr>", desc = "Quick Action" },
       { "<leader>ra", "<cmd>OverseerTaskAction<cr>",  desc = "Task Action" },
+      { "<leader>rv", function()
+          -- Run VS Code tasks specifically
+          require("overseer").run_template({ tags = { "vscode" } })
+        end, desc = "Run VS Code Task" },
+      { "<leader>rl", "<cmd>OverseerLoadBundle<cr>",  desc = "Load Task Bundle" },
+      { "<leader>rs", "<cmd>OverseerSaveBundle<cr>",  desc = "Save Task Bundle" },
     },
   },
 
@@ -1485,6 +1531,16 @@ return {
       -- Ensure adapters and configurations tables exist
       dap.adapters = dap.adapters or {}
       dap.configurations = dap.configurations or {}
+      
+      -- Load VS Code launch.json if it exists
+      require('dap.ext.vscode').load_launchjs(nil, {
+        ["pwa-node"] = { "javascript", "typescript" },
+        ["node"] = { "javascript", "typescript" },
+        ["chrome"] = { "javascript", "typescript" },
+        ["python"] = { "python" },
+        ["dart"] = { "dart" },
+        ["flutter"] = { "dart" },
+      })
 
       -- DAP Python configuration
       dap.adapters.python = {
@@ -1545,6 +1601,25 @@ return {
           type = "dart",
           request = "launch",
           name = "Launch Flutter",
+          flutterSdkPath = function()
+            local flutter_root = vim.env.FLUTTER_ROOT
+            if flutter_root then
+              return flutter_root
+            end
+            local fvm_local = vim.fn.getcwd() .. "/.fvm/flutter_sdk"
+            if vim.fn.isdirectory(fvm_local) == 1 then
+              return fvm_local
+            end
+            return "flutter"
+          end,
+          program = "${workspaceFolder}/lib/main.dart",
+          cwd = "${workspaceFolder}",
+        },
+        {
+          type = "dart",
+          request = "launch",
+          name = "Launch Flutter with Build",
+          preLaunchTask = "Build and Debug (Flutter)",
           flutterSdkPath = function()
             local flutter_root = vim.env.FLUTTER_ROOT
             if flutter_root then
