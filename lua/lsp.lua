@@ -3,7 +3,7 @@ return {
     "native-lsp",
     dir = vim.fn.stdpath("config"),
     event = { "BufReadPost", "BufNewFile" },
-    ft = { "lua", "typescript", "javascript", "python", "dart", "rust", "go", "swift", "c", "cpp", "ruby", "java", "elixir", "eelixir", "heex", "surface", "yaml", "html", "css", "json", "dockerfile", "r", "rmd", "astro" },
+    ft = { "lua", "typescript", "javascript", "typescriptreact", "javascriptreact", "python", "dart", "rust", "go", "swift", "c", "cpp", "ruby", "java", "elixir", "eelixir", "heex", "surface", "yaml", "html", "css", "json", "dockerfile", "r", "rmd", "astro" },
     config = function()
       -- Global mappings
       vim.keymap.set("n", "<leader>e", vim.diagnostic.open_float)
@@ -768,10 +768,26 @@ return {
         },
       }
 
+      vim.lsp.config.angularls = {
+        cmd = { 'ngserver', '--stdio', '--tsProbeLocations', '', '--ngProbeLocations', '' },
+        filetypes = { 'typescript', 'html', 'typescriptreact', 'typescript.tsx' },
+        root_markers = { 'angular.json', '.git' },
+        on_new_config = function(new_config, new_root_dir)
+          new_config.cmd = {
+            'ngserver',
+            '--stdio',
+            '--tsProbeLocations',
+            new_root_dir .. '/node_modules',
+            '--ngProbeLocations',
+            new_root_dir .. '/node_modules/@angular/language-service',
+          }
+        end,
+      }
+
       -- Enable configured LSP servers
       vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'basedpyright', 'rust_analyzer', 'clangd', 'sourcekit',
         'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service',
-        'jsonls', 'ruby_lsp', 'jdtls' })
+        'jsonls', 'ruby_lsp', 'jdtls', 'angularls' })
 
       -- Performance: Configure LSP with optimizations
       vim.lsp.set_log_level("WARN") -- Reduce LSP logging overhead

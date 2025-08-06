@@ -30,6 +30,7 @@ return {
         { "<leader>q",  group = "quit" },
         { "<leader>h",  group = "help" },
         { "<leader>r",  group = "run" },
+        { "<leader>i",  group = "repl" },
         { "<leader>a",  group = "ai" },
       },
     },
@@ -961,7 +962,7 @@ return {
       },
       dap = true,  -- Enable DAP integration
       strategy = "terminal",
-      templates = { "builtin", "user.vscode" },  -- Include VS Code tasks
+      templates = { "builtin" },
       component_aliases = {
         default = {
           { "display_duration", detail_level = 2 },
@@ -978,35 +979,6 @@ return {
       -- Register overseer task templates after setup
       local overseer = require("overseer")
       
-      -- Create a helper function to run VS Code tasks with DAP
-      _G.run_vscode_task_before_debug = function(task_name)
-        local tasks = overseer.list_tasks()
-        for _, task in ipairs(tasks) do
-          if task.name == task_name then
-            task:start()
-            task:add_component({ "on_complete_callback", on_complete = function(_, status)
-              if status == "SUCCESS" then
-                vim.cmd("DapContinue")
-              else
-                vim.notify("Task failed: " .. task_name, vim.log.levels.ERROR)
-              end
-            end })
-            return
-          end
-        end
-        -- If task not found, try to run it
-        overseer.run_template({ name = task_name }, function(task)
-          if task then
-            task:add_component({ "on_complete_callback", on_complete = function(_, status)
-              if status == "SUCCESS" then
-                vim.cmd("DapContinue")
-              else
-                vim.notify("Task failed: " .. task_name, vim.log.levels.ERROR)
-              end
-            end })
-          end
-        end)
-      end
       
       -- Flutter/Dart task templates
       overseer.register_template({
@@ -1388,6 +1360,97 @@ return {
         },
       })
 
+      -- Neotest integration templates
+      overseer.register_template({
+        name = "Run tests (neotest)",
+        builder = function()
+          return {
+            cmd = { vim.cmd.NeotestOverseer },
+            components = { "default" },
+          }
+        end,
+        desc = "Run tests using neotest with overseer backend",
+      })
+      
+      -- Generic test templates
+      overseer.register_template({
+        name = "pytest",
+        builder = function()
+          return {
+            cmd = { "pytest" },
+            args = { "-v", vim.fn.expand("%") },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "python" },
+        },
+      })
+      
+      overseer.register_template({
+        name = "jest",
+        builder = function()
+          return {
+            cmd = { "npm", "test", "--", vim.fn.expand("%") },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "javascript", "javascriptreact", "typescript", "typescriptreact" },
+          callback = function()
+            return vim.fn.filereadable("package.json") == 1
+          end,
+        },
+      })
+      
+      overseer.register_template({
+        name = "cargo test",
+        builder = function()
+          return {
+            cmd = { "cargo", "test" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "rust" },
+          callback = function()
+            return vim.fn.filereadable("Cargo.toml") == 1
+          end,
+        },
+      })
+      
+      overseer.register_template({
+        name = "go test",
+        builder = function()
+          return {
+            cmd = { "go", "test", "./..." },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "go" },
+          callback = function()
+            return vim.fn.filereadable("go.mod") == 1
+          end,
+        },
+      })
+      
+      overseer.register_template({
+        name = "flutter test",
+        builder = function()
+          return {
+            cmd = { "flutter", "test" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          filetype = { "dart" },
+          callback = function()
+            return vim.fn.filereadable("pubspec.yaml") == 1
+          end,
+        },
+      })
+
       -- Terminal mode exit mapping
       vim.api.nvim_create_autocmd("TermOpen", {
         pattern = "*",
@@ -1402,10 +1465,7 @@ return {
       { "<leader>rb", "<cmd>OverseerBuild<cr>",       desc = "Build Task" },
       { "<leader>rq", "<cmd>OverseerQuickAction<cr>", desc = "Quick Action" },
       { "<leader>ra", "<cmd>OverseerTaskAction<cr>",  desc = "Task Action" },
-      { "<leader>rv", function()
-          -- Run VS Code tasks specifically
-          require("overseer").run_template({ tags = { "vscode" } })
-        end, desc = "Run VS Code Task" },
+      { "<leader>rv", "<cmd>OverseerRun<cr>", desc = "Run Task" },
       { "<leader>rl", "<cmd>OverseerLoadBundle<cr>",  desc = "Load Task Bundle" },
       { "<leader>rs", "<cmd>OverseerSaveBundle<cr>",  desc = "Save Task Bundle" },
     },
@@ -1676,6 +1736,496 @@ return {
       { "<", function() require("quicker").collapse() end, desc = "Collapse quickfix context", ft = "qf" },
     },
     opts = {},
+  },
+
+  -- Iron.nvim for REPL support
+  {
+    "Vigemus/iron.nvim",
+    keys = {
+      { "<leader>ir", desc = "Toggle REPL" },
+      { "<leader>il", desc = "Send line" },
+      { "<leader>is", desc = "Send selection", mode = "v" },
+      { "<leader>if", desc = "Send file" },
+      { "<leader>ip", desc = "Send paragraph" },
+      { "<leader>ib", desc = "Send code block" },
+      { "<leader>in", desc = "Send block and move" },
+      { "<leader>ic", desc = "Clear REPL" },
+      { "<leader>iq", desc = "Close REPL" },
+      { "<leader>i<cr>", desc = "Send line and move" },
+      { "ctr", desc = "Send motion to REPL", mode = "n" },
+      { "cp", desc = "Send paragraph", mode = "n" },
+      { "cc", desc = "Send line", mode = "n" },
+      { "ce", desc = "Eval to end of line", mode = "n" },
+      { "cee", desc = "Eval current line", mode = "n" },
+      { "cew", desc = "Eval word", mode = "n" },
+      { "]b", desc = "Next code block", mode = "n" },
+      { "[b", desc = "Previous code block", mode = "n" },
+    },
+    config = function()
+      local iron = require("iron.core")
+      local view = require("iron.view")
+
+      iron.setup {
+        config = {
+          -- Whether a repl should be discarded or not
+          scratch_repl = true,
+          -- Your repl definitions come here
+          repl_definition = {
+            python = {
+              command = function()
+                -- Prefer ipython if available
+                if vim.fn.executable("ipython") == 1 then
+                  return { "ipython", "--no-autoindent" }
+                else
+                  return { "python3" }
+                end
+              end,
+              format = require("iron.fts.common").bracketed_paste_python,
+              block_dividers = { "# %%", "#%%" }  -- Jupyter-style code blocks
+            },
+            javascript = {
+              command = { "node" },
+              format = require("iron.fts.common").bracketed_paste,
+            },
+            typescript = {
+              command = { "ts-node" },
+              format = require("iron.fts.common").bracketed_paste,
+            },
+            lua = {
+              command = { "lua" },
+              format = require("iron.fts.common").bracketed_paste,
+            },
+            r = {
+              command = function()
+                -- Prefer radian if available
+                if vim.fn.executable("radian") == 1 then
+                  return { "radian" }
+                else
+                  return { "R", "--no-save", "--no-restore" }
+                end
+              end,
+              format = require("iron.fts.common").bracketed_paste,
+              block_dividers = { "# %%", "#%%" }  -- R markdown style blocks
+            },
+            dart = {
+              command = function()
+                -- Use interactive package for Dart REPL
+                -- Requires: dart pub global activate interactive
+                if vim.fn.executable("interactive") == 1 then
+                  return { "interactive" }
+                else
+                  -- Fallback to basic dart if interactive not installed
+                  vim.notify("Install 'interactive' for better REPL: dart pub global activate interactive", vim.log.levels.WARN)
+                  return { "dart" }
+                end
+              end,
+              format = require("iron.fts.common").bracketed_paste,
+              block_dividers = { "// ---", "//---" }  -- Dart style code blocks
+            },
+            sh = {
+              command = { "bash" },
+              format = require("iron.fts.common").bracketed_paste,
+            },
+            rust = {
+              command = { "evcxr" },  -- Requires cargo install evcxr_repl
+              format = require("iron.fts.common").bracketed_paste,
+            },
+            go = {
+              command = { "gore" },  -- Requires go install github.com/x-motemen/gore/cmd/gore@latest
+              format = require("iron.fts.common").bracketed_paste,
+            },
+            julia = {
+              command = { "julia" },
+              format = require("iron.fts.common").bracketed_paste,
+              block_dividers = { "##" }  -- Julia style blocks
+            },
+            clojure = {
+              command = function()
+                -- Check for different Clojure REPLs
+                if vim.fn.filereadable("deps.edn") == 1 then
+                  return { "clj" }  -- Clojure CLI tools
+                elseif vim.fn.filereadable("project.clj") == 1 then
+                  return { "lein", "repl" }  -- Leiningen
+                else
+                  return { "clj" }  -- Default to Clojure CLI
+                end
+              end,
+              format = require("iron.fts.common").bracketed_paste,
+            },
+            elixir = {
+              command = { "iex" },
+              format = require("iron.fts.common").bracketed_paste,
+            },
+            racket = {
+              command = { "racket" },
+              format = require("iron.fts.common").bracketed_paste,
+            },
+            scheme = {
+              command = { "mit-scheme" },
+              format = require("iron.fts.common").bracketed_paste,
+            },
+          },
+          -- How the repl window will be displayed
+          repl_open_cmd = view.split.vertical.botright(80),
+        },
+        -- Iron doesn't set keymaps by default anymore.
+        -- Set up operator-pending mode "ctr" style mappings for Clojure-like RDD
+        keymaps = {
+          send_motion = "ctr",  -- Operator-pending mode: ctr3j, ctrap, ctr}, ctri{, etc.
+          visual_send = "<leader>is",
+          send_file = "<leader>if",
+          send_line = "<leader>il",
+          send_paragraph = "<leader>ip",
+          send_until_cursor = "<leader>iu",
+          send_mark = "<leader>im",
+          send_code_block = "<leader>ib",  -- Send code block between dividers
+          send_code_block_and_move = "<leader>in",  -- Send and move to next block
+          mark_motion = "<leader>imc",
+          mark_visual = "<leader>imc",
+          remove_mark = "<leader>imd",
+          cr = "<leader>i<cr>",
+          interrupt = "<leader>i<space>",
+          exit = "<leader>iq",
+          clear = "<leader>ic",
+        },
+        -- If the highlight is on, you can change how it looks
+        -- For the available options, check nvim_set_hl
+        highlight = {
+          italic = true
+        },
+        ignore_blank_lines = true, -- ignore blank lines when sending visual select lines
+      }
+
+      -- Custom keymaps for better integration
+      vim.keymap.set("n", "<leader>ir", "<cmd>IronRepl<cr>", { desc = "Toggle REPL" })
+      vim.keymap.set("n", "<leader>iR", "<cmd>IronRestart<cr>", { desc = "Restart REPL" })
+      vim.keymap.set("n", "<leader>if", "<cmd>IronFocus<cr>", { desc = "Focus REPL" })
+      vim.keymap.set("n", "<leader>ih", "<cmd>IronHide<cr>", { desc = "Hide REPL" })
+      
+      -- Additional operator-pending mappings for RDD workflow
+      -- Send text object (works with any text object: w, W, }, {, ap, i{, etc.)
+      vim.keymap.set("n", "cp", "ctrip", { remap = true, desc = "Send paragraph" })
+      vim.keymap.set("n", "cc", "ctr_", { remap = true, desc = "Send current line" })
+      vim.keymap.set("n", "c{", "ctr{j", { remap = true, desc = "Send to previous empty line" })
+      vim.keymap.set("n", "c}", "ctr}k", { remap = true, desc = "Send to next empty line" })
+      
+      -- Send and move to next line (Clojure-style evaluation)
+      vim.keymap.set("n", "<leader>i<cr>", function()
+        require("iron.core").send_line()
+        vim.cmd("normal! j")
+      end, { desc = "Send line and move down" })
+      
+      -- Send paragraph and move to next
+      vim.keymap.set("n", "<leader>ip", function()
+        require("iron.core").send_paragraph()
+        vim.cmd("normal! }j")
+      end, { desc = "Send paragraph and move" })
+      
+      -- Send form/expression under cursor (useful for Lisp-like languages)
+      vim.keymap.set("n", "caf", "ctraf", { remap = true, desc = "Send outer function" })
+      vim.keymap.set("n", "cif", "ctrif", { remap = true, desc = "Send inner function" })
+      vim.keymap.set("n", "ca{", "ctra{", { remap = true, desc = "Send outer block" })
+      vim.keymap.set("n", "ci{", "ctri{", { remap = true, desc = "Send inner block" })
+      
+      -- Simple expression evaluation (Clojure-style)
+      vim.keymap.set("n", "ce", "ctr$", { remap = true, desc = "Eval to end of line" })
+      vim.keymap.set("n", "cee", "cc", { remap = true, desc = "Eval current line" })
+      vim.keymap.set("n", "cew", "ctriw", { remap = true, desc = "Eval word" })
+      
+      -- Visual mode enhancements
+      vim.keymap.set("v", "<leader>is", function()
+        require("iron.core").visual_send()
+        vim.cmd("normal! gv")  -- Reselect visual selection
+      end, { desc = "Send selection and reselect" })
+      
+      -- Code block navigation and sending (multi-language support)
+      vim.keymap.set("n", "]b", function()
+        -- Navigate to next code block based on filetype
+        local ft = vim.bo.filetype
+        if ft == "python" or ft == "r" or ft == "rmd" or ft == "quarto" then
+          vim.fn.search("^# %%\\|^#%%", "W")
+        elseif ft == "julia" then
+          vim.fn.search("^##", "W")
+        elseif ft == "dart" then
+          vim.fn.search("^// ---\\|^//---", "W")
+        else
+          -- Generic code block pattern
+          vim.fn.search("^# %%\\|^#%%\\|^##\\|^// ---", "W")
+        end
+      end, { desc = "Next code block" })
+      
+      vim.keymap.set("n", "[b", function()
+        -- Navigate to previous code block based on filetype
+        local ft = vim.bo.filetype
+        if ft == "python" or ft == "r" or ft == "rmd" or ft == "quarto" then
+          vim.fn.search("^# %%\\|^#%%", "bW")
+        elseif ft == "julia" then
+          vim.fn.search("^##", "bW")
+        elseif ft == "dart" then
+          vim.fn.search("^// ---\\|^//---", "bW")
+        else
+          -- Generic code block pattern
+          vim.fn.search("^# %%\\|^#%%\\|^##\\|^// ---", "bW")
+        end
+      end, { desc = "Previous code block" })
+      
+    end,
+  },
+
+  -- Neotest for testing
+  {
+    "nvim-neotest/neotest",
+    dependencies = {
+      "nvim-neotest/nvim-nio",
+      "nvim-lua/plenary.nvim",
+      "antoinemadec/FixCursorHold.nvim",
+      "nvim-treesitter/nvim-treesitter",
+      -- Test adapters
+      "nvim-neotest/neotest-python",
+      "nvim-neotest/neotest-jest",
+      "nvim-neotest/neotest-vitest", 
+      "nvim-neotest/neotest-go",
+      "rouge8/neotest-rust",
+      "sidlatau/neotest-dart",
+      "jfpedroza/neotest-elixir",
+      "olimorris/neotest-rspec",
+    },
+    keys = {
+      { "<leader>tn", function() require("neotest").run.run() end, desc = "Run Nearest Test" },
+      { "<leader>tf", function() require("neotest").run.run(vim.fn.expand("%")) end, desc = "Run File Tests" },
+      { "<leader>td", function() require("neotest").run.run({strategy = "dap"}) end, desc = "Debug Nearest Test" },
+      { "<leader>ts", function() require("neotest").run.stop() end, desc = "Stop Test" },
+      { "<leader>ta", function() require("neotest").run.attach() end, desc = "Attach to Test" },
+      { "<leader>to", function() require("neotest").output.open({ enter = true }) end, desc = "Open Test Output" },
+      { "<leader>tO", function() require("neotest").output_panel.toggle() end, desc = "Toggle Output Panel" },
+      { "<leader>tw", function() require("neotest").watch.toggle(vim.fn.expand("%")) end, desc = "Watch File Tests" },
+      { "<leader>tW", function() require("neotest").watch.toggle() end, desc = "Watch All Tests" },
+      { "<leader>tt", function() require("neotest").summary.toggle() end, desc = "Toggle Test Summary" },
+      { "[t", function() require("neotest").jump.prev({ status = "failed" }) end, desc = "Previous Failed Test" },
+      { "]t", function() require("neotest").jump.next({ status = "failed" }) end, desc = "Next Failed Test" },
+    },
+    config = function()
+      local neotest = require("neotest")
+      
+      neotest.setup({
+        adapters = {
+          require("neotest-python")({
+            dap = { justMyCode = false },
+            runner = "pytest",
+            python = ".venv/bin/python",
+            args = { "--tb=short", "-v" },
+          }),
+          require("neotest-jest")({
+            jestCommand = "npm test --",
+            jestConfigFile = "jest.config.js",
+            env = { CI = true },
+            cwd = function(path)
+              return vim.fn.getcwd()
+            end,
+          }),
+          require("neotest-vitest")({
+            vitestCommand = "npx vitest",
+            vitestConfigFile = "vitest.config.ts",
+          }),
+          require("neotest-go")({
+            experimental = {
+              test_table = true,
+            },
+            args = { "-count=1", "-timeout=60s" }
+          }),
+          require("neotest-rust")({
+            args = { "--no-capture" },
+            dap_adapter = "codelldb",
+          }),
+          require("neotest-dart")({
+            command = "flutter",
+            use_lsp = true,
+          }),
+          require("neotest-elixir"),
+          require("neotest-rspec")({
+            rspec_cmd = function()
+              return vim.tbl_flatten({
+                "bundle",
+                "exec",
+                "rspec",
+              })
+            end,
+          }),
+        },
+        discovery = {
+          enabled = true,
+          concurrent = 2,
+        },
+        diagnostic = {
+          enabled = true,
+          severity = vim.diagnostic.severity.ERROR,
+        },
+        floating = {
+          border = "rounded",
+          max_height = 0.8,
+          max_width = 0.8,
+          options = {}
+        },
+        highlights = {
+          adapter_name = "NeotestAdapterName",
+          border = "NeotestBorder",
+          dir = "NeotestDir",
+          expand_marker = "NeotestExpandMarker",
+          failed = "NeotestFailed",
+          file = "NeotestFile",
+          focused = "NeotestFocused",
+          indent = "NeotestIndent",
+          marked = "NeotestMarked",
+          namespace = "NeotestNamespace",
+          passed = "NeotestPassed",
+          running = "NeotestRunning",
+          select_win = "NeotestWinSelect",
+          skipped = "NeotestSkipped",
+          target = "NeotestTarget",
+          test = "NeotestTest",
+          unknown = "NeotestUnknown",
+          watching = "NeotestWatching",
+        },
+        icons = {
+          child_indent = "│",
+          child_prefix = "├",
+          collapsed = "─",
+          expanded = "╮",
+          failed = "✖",
+          final_child_indent = " ",
+          final_child_prefix = "╰",
+          non_collapsible = "─",
+          passed = "✔",
+          running = "⟳",
+          running_animated = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
+          skipped = "○",
+          unknown = "?",
+          watching = "👁",
+        },
+        output = {
+          enabled = true,
+          open_on_run = false,
+        },
+        output_panel = {
+          enabled = true,
+          open = "botright split | resize 10"
+        },
+        quickfix = {
+          enabled = true,
+          open = false,
+        },
+        run = {
+          enabled = true,
+        },
+        running = {
+          concurrent = true,
+        },
+        state = {
+          enabled = true,
+        },
+        status = {
+          enabled = true,
+          signs = true,
+          virtual_text = false,
+        },
+        strategies = {
+          integrated = {
+            height = 40,
+            width = 120,
+          },
+        },
+        summary = {
+          animated = true,
+          enabled = true,
+          expand_errors = true,
+          follow = true,
+          mappings = {
+            attach = "a",
+            clear_marked = "M",
+            clear_target = "T",
+            debug = "d",
+            debug_marked = "D",
+            expand = { "<CR>", "<2-LeftMouse>" },
+            expand_all = "e",
+            jumpto = "i",
+            mark = "m",
+            next_failed = "]F",
+            output = "o",
+            prev_failed = "[F",
+            run = "r",
+            run_marked = "R",
+            short = "O",
+            stop = "u",
+            target = "t",
+            watch = "w",
+          },
+          open = "botright vsplit | vertical resize 50"
+        },
+        watch = {
+          enabled = true,
+          symbol_queries = {
+            python = [[
+              ;query
+              ;Captures imports
+              (import_statement) @import
+              (import_from_statement) @import
+            ]],
+            go = [[
+              ;query
+              ;Captures imports
+              (import_declaration) @import
+              (import_spec) @import
+            ]],
+          },
+        },
+      })
+      
+      -- Integration with overseer
+      vim.api.nvim_create_user_command("NeotestOverseer", function()
+        require("neotest").run.run({
+          strategy = require("neotest.strategies.overseer"),
+        })
+      end, { desc = "Run tests with overseer strategy" })
+      
+      -- Custom overseer strategy for neotest
+      local overseer = require("overseer")
+      
+      require("neotest.strategies").overseer = function(spec)
+        local task = overseer.new_task({
+          cmd = spec.command,
+          args = spec.args,
+          cwd = spec.cwd,
+          env = spec.env,
+          name = "neotest: " .. (spec.context.id or "test"),
+          components = {
+            "default",
+            { "on_complete_notify", statuses = { "FAILURE" } },
+            { "on_complete_dispose", timeout = 300 },
+          },
+        })
+        
+        task:start()
+        
+        return {
+          is_complete = function()
+            return task:is_complete()
+          end,
+          output = function()
+            local lines = {}
+            for _, line in ipairs(task:get_lines()) do
+              table.insert(lines, line)
+            end
+            return table.concat(lines, "\n")
+          end,
+          stop = function()
+            task:stop()
+          end,
+          attach = function()
+            task:open_tab()
+          end,
+        }
+      end
+    end,
   },
 
 }
