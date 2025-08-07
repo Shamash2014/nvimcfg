@@ -124,3 +124,27 @@ require("lazy").setup("plugins", {
     notify = false, -- Don't notify about config changes
   },
 })
+
+-- Fix for LSP sync errors with conform.nvim
+-- This prevents the "attempt to get length of local 'prev_line' (a nil value)" error
+vim.api.nvim_create_autocmd("LspAttach", {
+  callback = function(args)
+    local client = vim.lsp.get_client_by_id(args.data.client_id)
+    if client then
+      -- Increase the sync timeout to prevent race conditions
+      if client.config and client.config.flags then
+        client.config.flags.debounce_text_changes = 150
+      end
+      
+      -- Ensure proper synchronization for incremental changes
+      if client.server_capabilities then
+        client.server_capabilities.textDocumentSync = client.server_capabilities.textDocumentSync or {}
+        if type(client.server_capabilities.textDocumentSync) == "table" then
+          -- Force incremental sync to be more conservative
+          client.server_capabilities.textDocumentSync.change = 2 -- Incremental
+        end
+      end
+    end
+  end,
+  desc = "Configure LSP client to prevent sync errors"
+})

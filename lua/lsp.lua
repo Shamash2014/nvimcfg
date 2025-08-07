@@ -10,6 +10,12 @@ return {
       vim.keymap.set("n", "[d", vim.diagnostic.goto_prev)
       vim.keymap.set("n", "]d", vim.diagnostic.goto_next)
       vim.keymap.set("n", "<leader>q", vim.diagnostic.setloclist)
+      
+      -- Global LSP restart (works even when not in LSP buffer)
+      vim.keymap.set("n", "<leader>lR", function()
+        vim.cmd('LspRestart')
+        vim.notify("All LSP servers restarted", vim.log.levels.INFO)
+      end, { desc = "Restart all LSP servers" })
 
       -- Enhanced workspace rename function
       local function workspace_rename()
@@ -99,6 +105,12 @@ return {
           vim.keymap.set("n", "<leader>f", function()
             vim.lsp.buf.format { async = true }
           end, opts)
+          
+          -- LSP restart keybinding
+          vim.keymap.set("n", "<leader>cR", function()
+            vim.cmd('LspRestart')
+            vim.notify("LSP servers restarted", vim.log.levels.INFO)
+          end, vim.tbl_extend("force", opts, { desc = "Restart LSP" }))
         end,
       })
 

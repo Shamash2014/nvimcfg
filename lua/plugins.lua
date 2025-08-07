@@ -425,7 +425,19 @@ return {
     cmd = { "ConformInfo" },
     ft = { "lua", "python", "javascript", "typescript", "typescriptreact", "javascriptreact", "json", "html", "css", "markdown", "dart" },
     keys = {
-      { "<leader>cf", function() require("conform").format({ async = true }) end, desc = "Format" },
+      { "<leader>cf", function() 
+        -- Wrap in pcall to handle LSP sync errors
+        local ok, err = pcall(function()
+          require("conform").format({ 
+            async = true,
+            lsp_fallback = true,
+            timeout_ms = 1000,
+          })
+        end)
+        if not ok then
+          vim.notify("Format failed: " .. tostring(err), vim.log.levels.WARN)
+        end
+      end, desc = "Format" },
     },
     opts = {
       formatters_by_ft = {
@@ -441,10 +453,29 @@ return {
         markdown = { "prettier" },
         dart = { "dart_format" },
       },
-      format_on_save = {
-        timeout_ms = 500,
-        lsp_fallback = true,
-      },
+      format_on_save = function(bufnr)
+        -- Disable autoformat on certain filetypes or large files
+        local ignore_filetypes = { "sql", "java" }
+        if vim.tbl_contains(ignore_filetypes, vim.bo[bufnr].filetype) then
+          return
+        end
+        
+        -- Disable for large files
+        if vim.fn.getfsize(vim.api.nvim_buf_get_name(bufnr)) > 100000 then
+          return
+        end
+        
+        -- Return format options
+        return {
+          timeout_ms = 1000,
+          lsp_fallback = true,
+          quiet = true, -- Don't show error notifications on save
+        }
+      end,
+      -- Log level for notifications
+      log_level = vim.log.levels.WARN,
+      -- Notify on format errors
+      notify_on_error = false,
     },
   },
 
@@ -519,6 +550,151 @@ return {
           lint.try_lint()
         end,
       })
+    end,
+  },
+
+  -- Neogit for Magit-like git interface
+  {
+    "NeogitOrg/neogit",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "sindrets/diffview.nvim",
+      "folke/snacks.nvim",
+    },
+    cmd = "Neogit",
+    keys = {
+      { "<leader>gg", "<cmd>Neogit<cr>", desc = "Neogit Status" },
+      { "<leader>gc", "<cmd>Neogit commit<cr>", desc = "Neogit Commit" },
+      { "<leader>gp", "<cmd>Neogit push<cr>", desc = "Neogit Push" },
+      { "<leader>gl", "<cmd>Neogit pull<cr>", desc = "Neogit Pull" },
+      { "<leader>gb", "<cmd>Neogit branch<cr>", desc = "Neogit Branch" },
+    },
+    opts = {
+      kind = "vsplit", -- Open in vertical split on the right
+      disable_hint = false,
+      disable_context_highlighting = false,
+      disable_signs = false,
+      disable_insert_on_commit = true,
+      signs = {
+        section = { ">", "v" },
+        item = { ">", "v" },
+        hunk = { "", "" },
+      },
+      integrations = {
+        diffview = true,
+      },
+      -- Use default section configuration
+      mappings = {
+        status = {
+          ["q"] = "Close",
+          ["<esc>"] = "Close",
+          ["1"] = "Depth1",
+          ["2"] = "Depth2",
+          ["3"] = "Depth3",
+          ["4"] = "Depth4",
+          ["<tab>"] = "Toggle",
+          ["x"] = "Discard",
+          ["s"] = "Stage",
+          ["S"] = "StageUnstaged",
+          ["<c-s>"] = "StageAll",
+          ["u"] = "Unstage",
+          ["U"] = "UnstageStaged",
+          ["$"] = "CommandHistory",
+          ["Y"] = "YankSelected",
+          ["<c-r>"] = "RefreshBuffer",
+          ["<enter>"] = "GoToFile",
+          ["<c-v>"] = "VSplitOpen",
+          ["<c-x>"] = "SplitOpen",
+          ["<c-t>"] = "TabOpen",
+          ["i"] = "InitRepo",
+          -- Popup commands are handled differently in newer versions
+          -- Remove invalid popup mappings
+        },
+      },
+    },
+    config = function(_, opts)
+      require("neogit").setup(opts)
+      
+      -- Additional git keybindings
+      vim.keymap.set("n", "<leader>gB", function()
+        require("neogit").open({ "branch" })
+      end, { desc = "Git branches" })
+      
+      vim.keymap.set("n", "<leader>gl", function()
+        require("neogit").open({ "log" })
+      end, { desc = "Git log" })
+      
+      vim.keymap.set("n", "<leader>gd", function()
+        require("neogit").open({ "diff" })
+      end, { desc = "Git diff" })
+    end,
+  },
+
+  -- Diffview for better diff visualization
+  {
+    "sindrets/diffview.nvim",
+    dependencies = "nvim-lua/plenary.nvim",
+    cmd = { "DiffviewOpen", "DiffviewClose", "DiffviewToggleFiles", "DiffviewFocusFiles" },
+    keys = {
+      { "<leader>gdo", "<cmd>DiffviewOpen<cr>", desc = "Open Diffview" },
+      { "<leader>gdc", "<cmd>DiffviewClose<cr>", desc = "Close Diffview" },
+      { "<leader>gdh", "<cmd>DiffviewFileHistory %<cr>", desc = "File History" },
+      { "<leader>gdH", "<cmd>DiffviewFileHistory<cr>", desc = "Branch History" },
+    },
+    opts = {
+      enhanced_diff_hl = true,
+      view = {
+        default = {
+          layout = "diff2_horizontal",
+          winbar_info = true,
+        },
+        merge_tool = {
+          layout = "diff3_mixed",
+          disable_diagnostics = true,
+          winbar_info = true,
+        },
+      },
+      file_panel = {
+        listing_style = "tree",
+        tree_options = {
+          flatten_dirs = true,
+          folder_statuses = "only_folded",
+        },
+      },
+      keymaps = {
+        view = {
+          ["<tab>"] = false,
+          ["<s-tab>"] = false,
+          ["<leader>e"] = false,
+          ["<leader>b"] = false,
+        },
+      },
+    },
+  },
+
+  -- Git conflict resolver
+  {
+    "akinsho/git-conflict.nvim",
+    version = "*",
+    event = "VeryLazy",
+    config = function()
+      require("git-conflict").setup({
+        default_mappings = true, -- disable the default mappings, refer to the table below
+        default_commands = true, -- disable commands created by this plugin
+        disable_diagnostics = false, -- disable diagnostics in conflicted files
+        list_opener = "copen", -- command or function to open the conflicts list
+        highlights = { -- They must have background color, otherwise the default color will be used
+          incoming = "DiffAdd",
+          current = "DiffText",
+        },
+      })
+      
+      -- Additional custom keymaps for git conflict resolution
+      vim.keymap.set("n", "<leader>gco", "<cmd>GitConflictChooseOurs<cr>", { desc = "Choose our changes" })
+      vim.keymap.set("n", "<leader>gct", "<cmd>GitConflictChooseTheirs<cr>", { desc = "Choose their changes" })
+      vim.keymap.set("n", "<leader>gcb", "<cmd>GitConflictChooseBoth<cr>", { desc = "Choose both changes" })
+      vim.keymap.set("n", "<leader>gc0", "<cmd>GitConflictChooseNone<cr>", { desc = "Choose none" })
+      vim.keymap.set("n", "<leader>gcl", "<cmd>GitConflictListQf<cr>", { desc = "List conflicts" })
     end,
   },
 
@@ -707,7 +883,7 @@ return {
         end,
         desc = "Restart Last Command"
       },
-      { "<leader>gg", function() require("snacks").terminal.open("lazygit", { win = { position = "right" } }) end, desc = "Lazygit" },
+      { "<leader>gg", "<cmd>Neogit<cr>", desc = "Neogit" },
     },
   },
 
@@ -733,14 +909,13 @@ return {
         lm_studio = {
           __inherited_from = "openai",
           endpoint = "http://localhost:1234/v1",
-          model = "devstral-small-2507_gguf",
-          -- model = "nextcoder-32b-mlx",
+          model = "gpt-oss-20b-mlx",
           api_key_name = "",
           timeout = 30000,
-          context_window = 16000,
+          context_window = 32768,  -- Increased for larger model
           extra_request_body = {
             temperature = 0,
-            max_tokens = 4096,
+            max_tokens = 8192,  -- Increased for larger model
           },
         },
       },
@@ -1983,7 +2158,6 @@ return {
       -- Test adapters
       "nvim-neotest/neotest-python",
       "nvim-neotest/neotest-jest",
-      "nvim-neotest/neotest-vitest", 
       "nvim-neotest/neotest-go",
       "rouge8/neotest-rust",
       "sidlatau/neotest-dart",
@@ -1991,16 +2165,16 @@ return {
       "olimorris/neotest-rspec",
     },
     keys = {
-      { "<leader>tn", function() require("neotest").run.run() end, desc = "Run Nearest Test" },
-      { "<leader>tf", function() require("neotest").run.run(vim.fn.expand("%")) end, desc = "Run File Tests" },
-      { "<leader>td", function() require("neotest").run.run({strategy = "dap"}) end, desc = "Debug Nearest Test" },
-      { "<leader>ts", function() require("neotest").run.stop() end, desc = "Stop Test" },
-      { "<leader>ta", function() require("neotest").run.attach() end, desc = "Attach to Test" },
-      { "<leader>to", function() require("neotest").output.open({ enter = true }) end, desc = "Open Test Output" },
-      { "<leader>tO", function() require("neotest").output_panel.toggle() end, desc = "Toggle Output Panel" },
-      { "<leader>tw", function() require("neotest").watch.toggle(vim.fn.expand("%")) end, desc = "Watch File Tests" },
-      { "<leader>tW", function() require("neotest").watch.toggle() end, desc = "Watch All Tests" },
-      { "<leader>tt", function() require("neotest").summary.toggle() end, desc = "Toggle Test Summary" },
+      { "<leader>ctn", function() require("neotest").run.run() end, desc = "Run Nearest Test" },
+      { "<leader>ctf", function() require("neotest").run.run(vim.fn.expand("%")) end, desc = "Run File Tests" },
+      { "<leader>ctd", function() require("neotest").run.run({strategy = "dap"}) end, desc = "Debug Nearest Test" },
+      { "<leader>cts", function() require("neotest").run.stop() end, desc = "Stop Test" },
+      { "<leader>cta", function() require("neotest").run.attach() end, desc = "Attach to Test" },
+      { "<leader>cto", function() require("neotest").output.open({ enter = true }) end, desc = "Open Test Output" },
+      { "<leader>ctO", function() require("neotest").output_panel.toggle() end, desc = "Toggle Output Panel" },
+      { "<leader>ctw", function() require("neotest").watch.toggle(vim.fn.expand("%")) end, desc = "Watch File Tests" },
+      { "<leader>ctW", function() require("neotest").watch.toggle() end, desc = "Watch All Tests" },
+      { "<leader>ctt", function() require("neotest").summary.toggle() end, desc = "Toggle Test Summary" },
       { "[t", function() require("neotest").jump.prev({ status = "failed" }) end, desc = "Previous Failed Test" },
       { "]t", function() require("neotest").jump.next({ status = "failed" }) end, desc = "Next Failed Test" },
     },
@@ -2022,10 +2196,6 @@ return {
             cwd = function(path)
               return vim.fn.getcwd()
             end,
-          }),
-          require("neotest-vitest")({
-            vitestCommand = "npx vitest",
-            vitestConfigFile = "vitest.config.ts",
           }),
           require("neotest-go")({
             experimental = {
