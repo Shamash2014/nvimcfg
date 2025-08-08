@@ -15,7 +15,6 @@ return {
       },
       spec = {
         { "<leader>f",  group = "find" },
-        { "<leader>p",  group = "project" },
         { "<leader>s",  group = "search" },
         { "<leader>g",  group = "git" },
         { "<leader>d",  group = "debug" },
@@ -27,6 +26,8 @@ return {
         { "<leader>t",  group = "toggle" },
         { "<leader>v",  group = "view" },
         { "<leader>o",  group = "open" },
+        { "<leader>op", group = "project" },
+        { "<leader>od", group = "database" },
         { "<leader>q",  group = "quit" },
         { "<leader>h",  group = "help" },
         { "<leader>r",  group = "run" },
@@ -113,7 +114,15 @@ return {
   {
     "kylechui/nvim-surround",
     version = "*",
-    event = "VeryLazy",
+    keys = {
+      { "ys", mode = "n", desc = "Add surround" },
+      { "yS", mode = "n", desc = "Add surround (line)" },
+      { "ds", mode = "n", desc = "Delete surround" },
+      { "cs", mode = "n", desc = "Change surround" },
+      { "cS", mode = "n", desc = "Change surround (line)" },
+      { "S", mode = "v", desc = "Add surround" },
+      { "gS", mode = "v", desc = "Add surround (line)" },
+    },
     config = function()
       require("nvim-surround").setup({})
     end,
@@ -166,7 +175,7 @@ return {
     build = ":TSUpdate",
     event = { "BufReadPost", "BufNewFile" },
     dependencies = {
-      "nvim-treesitter/nvim-treesitter-textobjects",
+      { "nvim-treesitter/nvim-treesitter-textobjects", lazy = true },
     },
     config = function()
       require("nvim-treesitter.configs").setup({
@@ -676,7 +685,7 @@ return {
   {
     "akinsho/git-conflict.nvim",
     version = "*",
-    event = "VeryLazy",
+    event = { "BufReadPre", "BufNewFile" },
     config = function()
       require("git-conflict").setup({
         default_mappings = true, -- disable the default mappings, refer to the table below
@@ -821,10 +830,10 @@ return {
       { "<leader>fc",  function() require("snacks").picker.commands() end,       desc = "Find Commands" },
 
       -- Project operations
-      { "<leader>pf",  function() require("snacks").picker.files() end,          desc = "Find Files in Project" },
-      { "<leader>pr",  function() require("snacks").picker.recent() end,         desc = "Recent Files in Project" },
-      { "<leader>pg",  function() require("snacks").picker.grep() end,           desc = "Grep in Project" },
-      { "<leader>ps",  function() require("snacks").picker.lsp_symbols() end,    desc = "Project Symbols" },
+      { "<leader>opf",  function() require("snacks").picker.files() end,          desc = "Find Files in Project" },
+      { "<leader>opr",  function() require("snacks").picker.recent() end,         desc = "Recent Files in Project" },
+      { "<leader>opg",  function() require("snacks").picker.grep() end,           desc = "Grep in Project" },
+      { "<leader>ops",  function() require("snacks").picker.lsp_symbols() end,    desc = "Project Symbols" },
 
       -- Search operations
       { "<leader>ss",  function() require("snacks").picker.grep_word() end,      desc = "Search Word" },
@@ -975,7 +984,10 @@ return {
       "zbirenbaum/copilot.lua",
       {
         "HakonHarnes/img-clip.nvim",
-        event = "VeryLazy",
+        cmd = "PasteImage",
+        keys = {
+          { "<leader>pi", "<cmd>PasteImage<cr>", desc = "Paste Image" },
+        },
         opts = {
           default = {
             embed_image_as_base64 = false,
@@ -1068,7 +1080,7 @@ return {
   -- Vim repeat for better dot command support
   {
     "tpope/vim-repeat",
-    event = "VeryLazy",
+    keys = { "." },
   },
 
   -- Neorg for note-taking and task management
@@ -1234,7 +1246,39 @@ return {
         builder = function()
           return {
             cmd = { "docker-compose" },
+            args = { "up", "--watch" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "docker-compose up -d",
+        builder = function()
+          return {
+            cmd = { "docker-compose" },
             args = { "up", "-d" },
+            components = { "default" },
+          }
+        end,
+        condition = {
+          callback = function()
+            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
+          end,
+        },
+      })
+
+      overseer.register_template({
+        name = "docker-compose up --force-recreate",
+        builder = function()
+          return {
+            cmd = { "docker-compose" },
+            args = { "up", "-d", "--force-recreate" },
             components = { "default" },
           }
         end,
@@ -2144,6 +2188,126 @@ return {
         end
       end, { desc = "Previous code block" })
       
+    end,
+  },
+
+  -- Database management with vim-dadbod
+  {
+    "tpope/vim-dadbod",
+    dependencies = {
+      {
+        "kristijanhusak/vim-dadbod-ui",
+        dependencies = {
+          { "kristijanhusak/vim-dadbod-completion", ft = { "sql", "mysql", "plsql" }, lazy = true },
+        },
+        cmd = {
+          "DBUI",
+          "DBUIToggle",
+          "DBUIAddConnection",
+          "DBUIFindBuffer",
+        },
+        init = function()
+          -- Your DBUI configuration
+          vim.g.db_ui_use_nerd_fonts = 1
+          vim.g.db_ui_show_database_icon = 1
+          vim.g.db_ui_force_echo_notifications = 1
+          vim.g.db_ui_win_position = "right"
+          vim.g.db_ui_winwidth = 40
+          vim.g.db_ui_default_query = "SELECT * FROM "
+          vim.g.db_ui_save_location = vim.fn.stdpath("data") .. "/db_ui"
+          vim.g.db_ui_tmp_query_location = vim.fn.stdpath("data") .. "/db_ui/tmp"
+          
+          -- Configure icons
+          vim.g.db_ui_icons = {
+            expanded = {
+              db = "▾ ",
+              buffers = "▾ ",
+              saved_queries = "▾ ",
+              schemas = "▾ ",
+              schema = "▾ ",
+              tables = "▾ ",
+              table = "▾ ",
+            },
+            collapsed = {
+              db = "▸ ",
+              buffers = "▸ ",
+              saved_queries = "▸ ",
+              schemas = "▸ ",
+              schema = "▸ ",
+              tables = "▸ ",
+              table = "▸ ",
+            },
+            saved_query = "",
+            new_query = "󰘶",
+            tables = "󰅩",
+            buffers = "󰯉",
+            add_connection = "",
+            connection_ok = "✓",
+            connection_error = "✗",
+          }
+          
+          -- Auto-completion for SQL
+          vim.api.nvim_create_autocmd("FileType", {
+            pattern = { "sql", "mysql", "plsql" },
+            callback = function()
+              -- Setup buffer-local completion with vim-dadbod-completion
+              vim.b.completion_chains = {
+                {
+                  complete_items = {
+                    'vim-dadbod-completion'
+                  }
+                }
+              }
+              
+              -- Enable SQL-specific settings
+              vim.opt_local.expandtab = true
+              vim.opt_local.shiftwidth = 2
+              vim.opt_local.tabstop = 2
+              vim.opt_local.softtabstop = 2
+            end,
+          })
+        end,
+        keys = {
+          { "<leader>od", "<cmd>DBUIToggle<cr>", desc = "Toggle Database UI" },
+          { "<leader>odf", "<cmd>DBUIFindBuffer<cr>", desc = "Find Database Buffer" },
+          { "<leader>oda", "<cmd>DBUIAddConnection<cr>", desc = "Add Database Connection" },
+          { "<leader>odr", "<cmd>DBUIRenameBuffer<cr>", desc = "Rename Database Buffer" },
+          { "<leader>odq", "<cmd>DBUILastQueryInfo<cr>", desc = "Last Query Info" },
+        },
+      },
+    },
+    cmd = {
+      "DB",
+      "DBCompleteTables",
+      "DBCompleteColumns",
+    },
+    config = function()
+      -- Setup vim-dadbod
+      vim.g.dadbod_manage_dbext = 1
+      
+      -- Add some common database URLs as examples (you can customize these)
+      -- PostgreSQL: postgresql://user:password@localhost:5432/dbname
+      -- MySQL: mysql://user:password@localhost:3306/dbname
+      -- SQLite: sqlite:///path/to/database.db
+      
+      -- Optional: Set up some default connections
+      -- vim.g.dbs = {
+      --   dev = 'postgresql://user:password@localhost:5432/devdb',
+      --   prod = 'postgresql://user:password@prod-server:5432/proddb',
+      --   local = 'sqlite:' .. vim.fn.expand('~/databases/local.db'),
+      -- }
+      
+      -- SQL specific keymaps
+      vim.api.nvim_create_autocmd("FileType", {
+        pattern = { "sql", "mysql", "plsql" },
+        callback = function()
+          vim.keymap.set("n", "<leader>ode", "<Plug>(DBUI_ExecuteQuery)", { buffer = true, desc = "Execute Query" })
+          vim.keymap.set("v", "<leader>ode", "<Plug>(DBUI_ExecuteQuery)", { buffer = true, desc = "Execute Query" })
+          vim.keymap.set("n", "<leader>odw", "<Plug>(DBUI_SaveQuery)", { buffer = true, desc = "Save Query" })
+          vim.keymap.set("n", "<leader>odp", "<Plug>(DBUI_EditBindParameters)", { buffer = true, desc = "Edit Bind Parameters" })
+          vim.keymap.set("n", "<leader>ods", "<Plug>(DBUI_ToggleResultLayout)", { buffer = true, desc = "Toggle Result Layout" })
+        end,
+      })
     end,
   },
 
