@@ -1,9 +1,8 @@
  -- Pure native LSP configuration 
 return {
-    "native-lsp",
+    name = "native-lsp",
     dir = vim.fn.stdpath("config"),
     event = { "BufReadPost", "BufNewFile" },
-    ft = { "lua", "typescript", "javascript", "typescriptreact", "javascriptreact", "python", "dart", "rust", "go", "swift", "c", "cpp", "ruby", "java", "elixir", "eelixir", "heex", "surface", "yaml", "html", "css", "json", "dockerfile", "r", "rmd", "astro" },
     config = function()
       -- Global mappings
       vim.keymap.set("n", "<leader>e", vim.diagnostic.open_float)
@@ -13,9 +12,20 @@ return {
       
       -- Global LSP restart (works even when not in LSP buffer)
       vim.keymap.set("n", "<leader>lR", function()
-        vim.cmd('LspRestart')
+        -- Stop all active LSP clients
+        local clients = vim.lsp.get_clients()
+        for _, client in ipairs(clients) do
+          vim.lsp.stop_client(client.id, true)
+        end
+        -- Trigger LSP to restart on next buffer entry
+        vim.cmd('edit')
         vim.notify("All LSP servers restarted", vim.log.levels.INFO)
       end, { desc = "Restart all LSP servers" })
+
+      -- Open LSP log
+      vim.keymap.set("n", "<leader>ll", function()
+        vim.cmd('edit ' .. vim.lsp.get_log_path())
+      end, { desc = "Open LSP log" })
 
       -- Enhanced workspace rename function
       local function workspace_rename()
@@ -114,7 +124,7 @@ return {
         end,
       })
 
-      -- LSP Configuration (Neovim 0.11 native API)
+      -- LSP Configuration using Neovim 0.11 native API
       vim.lsp.config.lua_ls = {
         cmd = { 'lua-language-server' },
         filetypes = { 'lua' },
@@ -132,6 +142,7 @@ return {
         cmd = { 'vtsls', '--stdio' },
         filetypes = { 'javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue' },
         root_markers = { 'package.json', 'tsconfig.json', 'jsconfig.json', '.git' },
+        workspace_required = false,
         settings = {
           vtsls = {
             enableMoveToFileCodeAction = true,
@@ -796,10 +807,27 @@ return {
         end,
       }
 
-      -- Enable configured LSP servers
-      vim.lsp.enable({ 'lua_ls', 'vtsls', 'dartls', 'elixirls', 'basedpyright', 'rust_analyzer', 'clangd', 'sourcekit',
-        'r_language_server', 'astro', 'gopls', 'yamlls', 'html', 'cssls', 'dockerls', 'docker_compose_language_service',
-        'jsonls', 'ruby_lsp', 'jdtls', 'angularls' })
+      -- Enable configured LSP servers directly
+      vim.lsp.enable('lua_ls')
+      vim.lsp.enable('vtsls')
+      vim.lsp.enable('dartls')
+      vim.lsp.enable('elixirls')
+      vim.lsp.enable('basedpyright')
+      vim.lsp.enable('rust_analyzer')
+      vim.lsp.enable('clangd')
+      vim.lsp.enable('sourcekit')
+      vim.lsp.enable('r_language_server')
+      vim.lsp.enable('astro')
+      vim.lsp.enable('gopls')
+      vim.lsp.enable('yamlls')
+      vim.lsp.enable('html')
+      vim.lsp.enable('cssls')
+      vim.lsp.enable('dockerls')
+      vim.lsp.enable('docker_compose_language_service')
+      vim.lsp.enable('jsonls')
+      vim.lsp.enable('ruby_lsp')
+      vim.lsp.enable('jdtls')
+      vim.lsp.enable('angularls')
 
       -- Performance: Configure LSP with optimizations
       vim.lsp.set_log_level("WARN") -- Reduce LSP logging overhead

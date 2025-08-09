@@ -322,31 +322,6 @@ return {
     },
   },
 
-  -- Twilight - dim inactive portions of code
-  {
-    "folke/twilight.nvim",
-    cmd = { "Twilight", "TwilightEnable", "TwilightDisable" },
-    keys = {
-      { "<leader>vt", "<cmd>Twilight<cr>", desc = "Toggle Twilight" },
-    },
-    opts = {
-      dimming = {
-        alpha = 0.25, -- amount of dimming
-        color = { "Normal", "#ffffff" },
-        term_bg = "#000000", -- if guibg=NONE, this will be used to calculate text color
-        inactive = false, -- when true, other windows will be fully dimmed (unless they contain the same buffer)
-      },
-      context = 10, -- amount of lines we will try to show around the current line
-      treesitter = true, -- use treesitter when available for the filetype
-      expand = { -- for treesitter, we can always expand function bodies
-        "function",
-        "method",
-        "table",
-        "if_statement",
-      },
-      exclude = {}, -- exclude these filetypes
-    },
-  },
 
   -- Supermaven AI completion
   {
@@ -416,16 +391,6 @@ return {
     end,
   },
 
-  -- Enhanced LSP rename with live preview
-  {
-    "smjonas/inc-rename.nvim",
-    cmd = "IncRename",
-    config = function()
-      require("inc_rename").setup({
-        preview_empty_name = false,
-      })
-    end,
-  },
 
   -- Formatting
   {
@@ -817,7 +782,33 @@ return {
           preset = "vscode",
         },
       },
-      terminal = { enabled = true },
+      terminal = { 
+        enabled = true,
+        win = {
+          position = "bottom",
+          height = 0.3,
+        },
+      },
+      -- Dim inactive code (replaces twilight.nvim)
+      dim = {
+        enabled = false, -- Toggle with keybind
+        animate = {
+          enabled = false, -- Better performance
+        },
+      },
+      -- Word highlighting (like vim-illuminate)
+      words = {
+        enabled = true,
+        debounce = 200,
+      },
+      -- LSP rename with preview (replaces inc-rename.nvim)
+      rename = {
+        enabled = true,
+      },
+      -- Better quickfix (replaces quicker.nvim)
+      quickfix = {
+        enabled = true,
+      },
     },
     keys = {
       -- Find operations
@@ -870,6 +861,8 @@ return {
 
       -- Terminal operations
       { "<leader>tt",  function() require("snacks").terminal.toggle() end,       desc = "Toggle Terminal" },
+      { "<leader>vt",  function() require("snacks").dim.toggle() end,            desc = "Toggle Dim (Twilight)" },
+      { "<leader>cr",  function() require("snacks").rename() end,                desc = "Rename Symbol" },
       {
         "<leader>tc",
         function()
@@ -1785,6 +1778,20 @@ return {
       "theHamsta/nvim-dap-virtual-text",
       "nvim-neotest/nvim-nio",
       {
+        "mxsdev/nvim-dap-vscode-js",
+        dependencies = { "mfussenegger/nvim-dap" },
+        config = function()
+          require("dap-vscode-js").setup({
+            -- Path to vscode-js-debug installation
+            debugger_path = vim.fn.expand("~/.local/share/nvim/vscode-js-debug"),
+            -- Command to use to launch the debug server (dist/src not out/src)
+            debugger_cmd = { "node", vim.fn.expand("~/.local/share/nvim/vscode-js-debug/dist/src/vsDebugServer.js") },
+            -- Which adapters to register
+            adapters = { 'pwa-node', 'pwa-chrome', 'pwa-msedge', 'node-terminal', 'pwa-extensionHost' },
+          })
+        end,
+      },
+      {
         "miroshQa/debugmaster.nvim",
         config = function()
           local dm = require("debugmaster")
@@ -1820,6 +1827,113 @@ return {
         ["dart"] = { "dart" },
         ["flutter"] = { "dart" },
       })
+
+      -- Node.js adapters are now configured by nvim-dap-vscode-js plugin above
+
+      -- Alternative: node-debug2 adapter (install with: npm install -g node-inspect)
+      dap.adapters.node2 = {
+        type = "executable",
+        command = "node",
+        args = {
+          vim.fn.expand("~/.local/share/nvim/debug-adapters/vscode-node-debug2/out/src/nodeDebug.js"),
+        },
+      }
+
+      -- Simple Node adapter using built-in inspector
+      dap.adapters.node = {
+        type = "executable",
+        command = "node",
+        args = { "--inspect-brk", "${file}" },
+      }
+
+      dap.configurations.javascript = {
+        {
+          type = "pwa-node",
+          request = "launch",
+          name = "Launch file",
+          program = "${file}",
+          cwd = "${workspaceFolder}",
+        },
+        {
+          type = "pwa-node",
+          request = "attach",
+          name = "Attach to Node Process",
+          processId = require("dap.utils").pick_process,
+          cwd = "${workspaceFolder}",
+        },
+        {
+          type = "pwa-node",
+          request = "launch",
+          name = "Launch with npm start",
+          runtimeExecutable = "npm",
+          runtimeArgs = { "start" },
+          cwd = "${workspaceFolder}",
+          console = "integratedTerminal",
+        },
+        {
+          type = "pwa-node",
+          request = "launch",
+          name = "Debug Jest Tests",
+          runtimeExecutable = "node",
+          runtimeArgs = {
+            "./node_modules/.bin/jest",
+            "--runInBand",
+          },
+          rootPath = "${workspaceFolder}",
+          cwd = "${workspaceFolder}",
+          console = "integratedTerminal",
+          internalConsoleOptions = "neverOpen",
+        },
+        {
+          type = "pwa-node",
+          request = "attach",
+          name = "Docker: Attach to Port 9229",
+          address = "localhost",
+          port = 9229,
+          localRoot = "${workspaceFolder}",
+          remoteRoot = "/app",
+          restart = true,
+          sourceMaps = true,
+          skipFiles = { "<node_internals>/**" },
+        },
+        {
+          type = "pwa-node",
+          request = "attach",
+          name = "Docker: Attach (Custom Settings)",
+          address = function()
+            return vim.fn.input("Host (default: localhost): ", "localhost")
+          end,
+          port = function()
+            return tonumber(vim.fn.input("Debug port (default: 9229): ", "9229"))
+          end,
+          localRoot = "${workspaceFolder}",
+          remoteRoot = function()
+            return vim.fn.input("Container path (default: /app): ", "/app")
+          end,
+          restart = true,
+          sourceMaps = true,
+          skipFiles = { "<node_internals>/**" },
+        },
+        {
+          type = "pwa-node",
+          request = "attach",
+          name = "Docker Compose: Attach Service",
+          address = "localhost",
+          port = 9229,
+          localRoot = "${workspaceFolder}",
+          remoteRoot = "/usr/src/app",
+          restart = true,
+          sourceMaps = true,
+          skipFiles = { "<node_internals>/**", "node_modules/**" },
+          resolveSourceMapLocations = {
+            "${workspaceFolder}/**",
+            "!**/node_modules/**",
+          },
+        },
+      }
+
+      -- TypeScript uses the same configurations as JavaScript
+      dap.configurations.typescript = dap.configurations.javascript
 
       -- DAP Python configuration
       dap.adapters.python = {
@@ -1946,16 +2060,6 @@ return {
     end,
   },
 
-  -- Quicker.nvim for better quickfix
-  {
-    "stevearc/quicker.nvim",
-    event = "FileType qf",
-    keys = {
-      { ">", function() require("quicker").expand({ before = 2, after = 2, add_to_existing = true }) end, desc = "Expand quickfix context", ft = "qf" },
-      { "<", function() require("quicker").collapse() end, desc = "Collapse quickfix context", ft = "qf" },
-    },
-    opts = {},
-  },
 
   -- Iron.nvim for REPL support
   {
@@ -2562,4 +2666,6 @@ return {
     end,
   },
 
+  -- Load LSP configuration
+  require("lsp"),
 }

@@ -80,8 +80,6 @@ vim.api.nvim_create_autocmd("TermOpen", {
   end,
 })
 
--- Initialize performance optimizations
-require("performance").setup()
 
 -- Load plugin configurations with performance optimizations
 require("lazy").setup("plugins", {
