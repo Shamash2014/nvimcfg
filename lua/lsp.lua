@@ -808,8 +808,15 @@ return {
       vim.lsp.config.angularls = {
         cmd = { 'ngserver', '--stdio', '--tsProbeLocations', '', '--ngProbeLocations', '' },
         filetypes = { 'typescript', 'html', 'typescriptreact', 'typescript.tsx' },
-        root_markers = { 'angular.json', '.git' },
+        root_markers = { 'angular.json' },  -- Only activate if angular.json exists
         on_new_config = function(new_config, new_root_dir)
+          -- Only configure if this is actually an Angular project
+          if vim.fn.filereadable(new_root_dir .. '/angular.json') == 0 then
+            -- Not an Angular project, disable the server
+            new_config.autostart = false
+            return
+          end
+          
           new_config.cmd = {
             'ngserver',
             '--stdio',
@@ -841,6 +848,9 @@ return {
       vim.lsp.enable('jsonls')
       vim.lsp.enable('ruby_lsp')
       vim.lsp.enable('jdtls')
+      
+      -- Only enable angularls if we're in an Angular project
+      -- It will auto-start when opening files in Angular projects due to root_markers
       vim.lsp.enable('angularls')
 
       -- Performance: Configure LSP with optimizations

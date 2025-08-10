@@ -1813,16 +1813,40 @@ return {
       "theHamsta/nvim-dap-virtual-text",
       "nvim-neotest/nvim-nio",
       {
+        "microsoft/vscode-js-debug",
+        lazy = true,
+        build = "npm install --legacy-peer-deps && npx gulp vsDebugServerBundle && rm -rf out && mv dist out",
+        version = "v1.x",
+      },
+      {
         "mxsdev/nvim-dap-vscode-js",
-        dependencies = { "mfussenegger/nvim-dap" },
+        dependencies = { 
+          "mfussenegger/nvim-dap",
+          "microsoft/vscode-js-debug"
+        },
         config = function()
+          -- Check if the debug server exists
+          local debugger_path = vim.fn.stdpath("data") .. "/lazy/vscode-js-debug"
+          local server_path = debugger_path .. "/out/src/vsDebugServer.js"
+          
+          if vim.fn.filereadable(server_path) == 0 then
+            vim.notify("vscode-js-debug not found. Run :Lazy build vscode-js-debug", vim.log.levels.ERROR)
+            return
+          end
+          
           require("dap-vscode-js").setup({
+            -- Node executable path (uses system node by default)
+            node_path = "node",
             -- Path to vscode-js-debug installation
-            debugger_path = vim.fn.expand("~/.local/share/nvim/vscode-js-debug"),
-            -- Command to use to launch the debug server (dist/src not out/src)
-            debugger_cmd = { "node", vim.fn.expand("~/.local/share/nvim/vscode-js-debug/dist/src/vsDebugServer.js") },
-            -- Which adapters to register
+            debugger_path = debugger_path,
+            -- Command to use (optional, overrides node_path and debugger_path)
+            -- debugger_cmd = { "node", server_path },
+            -- Which adapters to register in nvim-dap
             adapters = { 'pwa-node', 'pwa-chrome', 'pwa-msedge', 'node-terminal', 'pwa-extensionHost' },
+            -- Log file settings
+            log_file_path = false,
+            log_file_level = false,
+            log_console_level = vim.log.levels.ERROR,
           })
         end,
       },
@@ -1873,7 +1897,7 @@ return {
       },
     },
     keys = {
-      { "dm",         function() require("debugmaster").mode.toggle() end,                                         desc = "Toggle Debug Mode", nowait = true },
+      { "<leader>dm", function() require("debugmaster").mode.toggle() end,                                         desc = "Toggle Debug Mode" },
       { "<leader>dd", "<cmd>DapContinue<cr>",                                                                      desc = "Start/Continue Debug" },
       { "<leader>do", "<cmd>DapStepOver<cr>",                                                                      desc = "Step Over" },
       { "<leader>di", "<cmd>DapStepInto<cr>",                                                                      desc = "Step Into" },
@@ -1890,6 +1914,8 @@ return {
       -- Ensure adapters and configurations tables exist
       dap.adapters = dap.adapters or {}
       dap.configurations = dap.configurations or {}
+      
+      -- nvim-dap-vscode-js plugin should already be configured via its config function
       
       -- Load VS Code launch.json if it exists
       require('dap.ext.vscode').load_launchjs(nil, {
@@ -1912,90 +1938,54 @@ return {
         },
       }
 
-      -- Simple Node adapter using built-in inspector
+      -- Node adapter for attach configurations
+      -- This adapter connects through Chrome DevTools Protocol
       dap.adapters.node = {
-        type = "executable",
-        command = "node",
-        args = { "--inspect-brk", "${file}" },
+        type = "server",
+        host = "localhost",
+        port = 9229,  -- Default port, will be overridden by configuration
+        options = {
+          max_retries = 10,
+          delay_ms = 100,
+        },
       }
+      
+      -- Check if pwa-node works, provide diagnostic
+      vim.api.nvim_create_user_command("DapCheckNode", function()
+        local vscode_js_path = vim.fn.stdpath("data") .. "/lazy/vscode-js-debug"
+        local server_path = vscode_js_path .. "/out/src/vsDebugServer.js"
+        
+        if vim.fn.filereadable(server_path) == 1 then
+          vim.notify("✓ vscode-js-debug found at: " .. server_path, vim.log.levels.INFO)
+        else
+          vim.notify("✗ vscode-js-debug not found. Run :Lazy build vscode-js-debug", vim.log.levels.ERROR)
+        end
+        
+        -- Check if pwa-node adapter is registered
+        if dap.adapters["pwa-node"] then
+          vim.notify("✓ pwa-node adapter is registered", vim.log.levels.INFO)
+        else
+          vim.notify("✗ pwa-node adapter not registered", vim.log.levels.ERROR)
+        end
+        
+        -- Check node executable
+        if vim.fn.executable("node") == 1 then
+          local node_version = vim.fn.system("node --version"):gsub("\n", "")
+          vim.notify("✓ Node.js " .. node_version .. " found", vim.log.levels.INFO)
+        else
+          vim.notify("✗ Node.js not found in PATH", vim.log.levels.ERROR)
+        end
+      end, { desc = "Check DAP Node.js setup" })
 
-      dap.configurations.javascript = {
+      -- Generalized Node.js configurations (JS/TS)
+      -- Using both pwa-node (feature-rich) and node (fallback) adapters
+      local node_configs = {
         {
           type = "pwa-node",
           request = "launch",
-          name = "Launch file",
+          name = "Launch Current File",
           program = "${file}",
           cwd = "${workspaceFolder}",
-        },
-        {
-          type = "pwa-node",
-          request = "attach",
-          name = "Attach to Node Process",
-          processId = require("dap.utils").pick_process,
-          cwd = "${workspaceFolder}",
-        },
-        {
-          type = "pwa-node",
-          request = "launch",
-          name = "Launch with npm start",
-          runtimeExecutable = "npm",
-          runtimeArgs = { "start" },
-          cwd = "${workspaceFolder}",
-          console = "integratedTerminal",
-        },
-        {
-          type = "pwa-node",
-          request = "launch",
-          name = "Debug Jest Tests",
-          runtimeExecutable = "node",
-          runtimeArgs = {
-            "./node_modules/.bin/jest",
-            "--runInBand",
-          },
-          rootPath = "${workspaceFolder}",
-          cwd = "${workspaceFolder}",
-          console = "integratedTerminal",
-          internalConsoleOptions = "neverOpen",
-        },
-        {
-          type = "pwa-node",
-          request = "attach",
-          name = "Docker: Attach to Port 9229",
-          address = "localhost",
-          port = 9229,
-          localRoot = "${workspaceFolder}",
-          remoteRoot = "/app",
-          restart = true,
-          sourceMaps = true,
-          skipFiles = { "<node_internals>/**" },
-        },
-        {
-          type = "pwa-node",
-          request = "attach",
-          name = "Docker: Attach (Custom Settings)",
-          address = function()
-            return vim.fn.input("Host (default: localhost): ", "localhost")
-          end,
-          port = function()
-            return tonumber(vim.fn.input("Debug port (default: 9229): ", "9229"))
-          end,
-          localRoot = "${workspaceFolder}",
-          remoteRoot = function()
-            return vim.fn.input("Container path (default: /app): ", "/app")
-          end,
-          restart = true,
-          sourceMaps = true,
-          skipFiles = { "<node_internals>/**" },
-        },
-        {
-          type = "pwa-node",
-          request = "attach",
-          name = "Docker Compose: Attach Service",
-          address = "localhost",
-          port = 9229,
-          localRoot = "${workspaceFolder}",
-          remoteRoot = "/usr/src/app",
-          restart = true,
           sourceMaps = true,
           skipFiles = { "<node_internals>/**", "node_modules/**" },
           resolveSourceMapLocations = {
@@ -2003,10 +1993,151 @@ return {
             "!**/node_modules/**",
           },
         },
+        {
+          type = "node",
+          request = "launch", 
+          name = "Launch File (Simple)",
+          program = "${file}",
+          cwd = "${workspaceFolder}",
+          runtimeArgs = { "--inspect-brk" },
+          port = 9229,
+          sourceMaps = true,
+          skipFiles = { "<node_internals>/**", "node_modules/**" },
+        },
+        {
+          type = "pwa-node",
+          request = "launch",
+          name = "Run Script",
+          runtimeExecutable = function()
+            if vim.fn.filereadable("yarn.lock") == 1 then return "yarn"
+            elseif vim.fn.filereadable("pnpm-lock.yaml") == 1 then return "pnpm"
+            else return "npm" end
+          end,
+          runtimeArgs = function()
+            return vim.split(vim.fn.input("Script: ", "run start"), " ")
+          end,
+          cwd = "${workspaceFolder}",
+          console = "integratedTerminal",
+          sourceMaps = true,
+        },
+        {
+          type = "pwa-node",
+          request = "launch",
+          name = "NPM Debug Script",
+          runtimeExecutable = "npm",
+          runtimeArgs = { "run", "debug" },
+          cwd = "${workspaceFolder}",
+          attachSimplePort = 9229,
+          sourceMaps = true,
+          protocol = "inspector",
+          skipFiles = { "<node_internals>/**", "node_modules/**" },
+        },
+        {
+          type = "pwa-node",
+          request = "attach",
+          name = "Attach to Process",
+          processId = require("dap.utils").pick_process,
+          cwd = "${workspaceFolder}",
+          sourceMaps = true,
+        },
+        {
+          type = "pwa-node",
+          request = "attach",
+          name = "Attach to Port (pwa-node)",
+          port = function()
+            return tonumber(vim.fn.input("Port: ", "9229"))
+          end,
+          address = "localhost",
+          restart = true,
+          sourceMaps = true,
+          protocol = "inspector",
+          cwd = "${workspaceFolder}",
+          resolveSourceMapLocations = {
+            "${workspaceFolder}/**",
+            "!**/node_modules/**",
+          },
+          skipFiles = { "<node_internals>/**", "node_modules/**" },
+          continueOnAttach = true,
+        },
+        {
+          type = "pwa-node",
+          request = "attach",
+          name = "Attach to Remote (Docker)",
+          address = function()
+            return vim.fn.input("Address (localhost for Docker): ", "localhost")
+          end,
+          port = function()
+            return tonumber(vim.fn.input("Port: ", "9229"))
+          end,
+          localRoot = "${workspaceFolder}",
+          remoteRoot = function()
+            local remote = vim.fn.input("Remote root (e.g., /app for Docker, leave empty for local): ", "")
+            if remote == "" then
+              return "${workspaceFolder}"
+            end
+            return remote
+          end,
+          sourceMaps = true,
+          protocol = "inspector",
+          continueOnAttach = true,
+          resolveSourceMapLocations = {
+            "${workspaceFolder}/**",
+            "!**/node_modules/**",
+          },
+          sourceMapPathOverrides = {
+            ["/app/*"] = "${workspaceFolder}/*",
+            ["/usr/src/app/*"] = "${workspaceFolder}/*",
+            ["webpack:///./~/*"] = "${workspaceFolder}/node_modules/*",
+            ["webpack://?:*/*"] = "${workspaceFolder}/*",
+          },
+          skipFiles = { "<node_internals>/**", "node_modules/**" },
+          smartStep = true,
+        },
+        {
+          type = "pwa-node",
+          request = "launch",
+          name = "Test File",
+          program = function()
+            if vim.fn.filereadable("node_modules/.bin/vitest") == 1 then
+              return "${workspaceFolder}/node_modules/.bin/vitest"
+            elseif vim.fn.filereadable("node_modules/.bin/jest") == 1 then
+              return "${workspaceFolder}/node_modules/.bin/jest"
+            else
+              return "${file}"
+            end
+          end,
+          args = { "${file}" },
+          cwd = "${workspaceFolder}",
+          console = "integratedTerminal",
+        },
       }
 
-      -- TypeScript uses the same configurations as JavaScript
-      dap.configurations.typescript = dap.configurations.javascript
+      dap.configurations.javascript = vim.deepcopy(node_configs)
+      dap.configurations.typescript = vim.deepcopy(node_configs)
+      
+      -- TypeScript-specific: Direct execution
+      table.insert(dap.configurations.typescript, 1, {
+        type = "pwa-node",
+        request = "launch",
+        name = "Run TypeScript",
+        runtimeExecutable = function()
+          if vim.fn.executable("tsx") == 1 then return "tsx"
+          elseif vim.fn.executable("ts-node") == 1 then return "ts-node"
+          elseif vim.fn.executable("bun") == 1 then return "bun"
+          else return "node" end
+        end,
+        program = "${file}",
+        cwd = "${workspaceFolder}",
+        sourceMaps = true,
+        resolveSourceMapLocations = {
+          "${workspaceFolder}/**",
+          "!**/node_modules/**",
+        },
+      })
+      
+      -- Apply to React files
+      dap.configurations.javascriptreact = dap.configurations.javascript
+      dap.configurations.typescriptreact = dap.configurations.typescript
 
       -- DAP Dart/Flutter adapters configuration
       dap.adapters.dart = {
@@ -2754,8 +2885,8 @@ return {
     keys = {
       { "<leader>ctn", function() require("neotest").run.run() end, desc = "Run Nearest Test" },
       { "<leader>ctf", function() require("neotest").run.run(vim.fn.expand("%")) end, desc = "Run File Tests" },
-      { "<leader>ctr", function() require("neotest").run.run({ strategy = "overseer" }) end, desc = "Run Test (Overseer)" },
-      { "<leader>ctR", function() require("neotest").run.run({ vim.fn.expand("%"), strategy = "overseer" }) end, desc = "Run File Tests (Overseer)" },
+      { "<leader>ctr", function() require("neotest").run.run({ strategy = "integrated" }) end, desc = "Run Test (Integrated)" },
+      { "<leader>ctR", function() require("neotest").run.run(vim.fn.expand("%")) end, desc = "Run All File Tests" },
       { "<leader>ctd", function() require("neotest").run.run({strategy = "dap"}) end, desc = "Debug Nearest Test" },
       { "<leader>cts", function() require("neotest").run.stop() end, desc = "Stop Test" },
       { "<leader>cta", function() require("neotest").run.attach() end, desc = "Attach to Test" },
@@ -2947,51 +3078,8 @@ return {
         },
       })
       
-      -- Integration with overseer
-      vim.api.nvim_create_user_command("NeotestOverseer", function()
-        require("neotest").run.run({
-          strategy = require("neotest.strategies.overseer"),
-        })
-      end, { desc = "Run tests with overseer strategy" })
-      
-      -- Custom overseer strategy for neotest
-      local overseer = require("overseer")
-      
-      require("neotest.strategies").overseer = function(spec)
-        local task = overseer.new_task({
-          cmd = spec.command,
-          args = spec.args,
-          cwd = spec.cwd,
-          env = spec.env,
-          name = "neotest: " .. (spec.context.id or "test"),
-          components = {
-            "default",
-            { "on_complete_notify", statuses = { "FAILURE" } },
-            { "on_complete_dispose", timeout = 300 },
-          },
-        })
-        
-        task:start()
-        
-        return {
-          is_complete = function()
-            return task:is_complete()
-          end,
-          output = function()
-            local lines = {}
-            for _, line in ipairs(task:get_lines()) do
-              table.insert(lines, line)
-            end
-            return table.concat(lines, "\n")
-          end,
-          stop = function()
-            task:stop()
-          end,
-          attach = function()
-            task:open_tab()
-          end,
-        }
-      end
+      -- Overseer integration is handled by the consumer above
+      -- Use <leader>ctr to run tests with overseer
     end,
   },
 
