@@ -91,11 +91,20 @@ return {
         end
       end
 
+      -- Enable inlay hints globally by default
+      vim.lsp.inlay_hint.enable(true)
+      
       -- LSP attach function
       vim.api.nvim_create_autocmd("LspAttach", {
         group = vim.api.nvim_create_augroup("UserLspConfig", {}),
         callback = function(ev)
           local opts = { buffer = ev.buf }
+          
+          -- Auto-set tab-local directory to LSP root
+          local client = vim.lsp.get_client_by_id(ev.data.client_id)
+          if client and client.root_dir then
+            vim.cmd("silent! tcd " .. client.root_dir)
+          end
           vim.keymap.set("n", "gD", vim.lsp.buf.declaration, opts)
           vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
           vim.keymap.set("n", "K", vim.lsp.buf.hover, opts)
@@ -121,6 +130,11 @@ return {
             vim.cmd('LspRestart')
             vim.notify("LSP servers restarted", vim.log.levels.INFO)
           end, vim.tbl_extend("force", opts, { desc = "Restart LSP" }))
+          
+          -- Toggle inlay hints globally
+          vim.keymap.set("n", "<leader>oh", function()
+            vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled())
+          end, vim.tbl_extend("force", opts, { desc = "Toggle inlay hints" }))
         end,
       })
 

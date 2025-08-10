@@ -23,11 +23,13 @@ return {
         { "<leader>w",  group = "window" },
         { "<leader>b",  group = "buffer" },
         { "<leader>bw", group = "window/tab" },
-        { "<leader>t",  group = "toggle" },
+        { "<leader>t",  group = "tabs/workspaces" },
         { "<leader>v",  group = "view" },
-        { "<leader>o",  group = "open" },
+        { "<leader>o",  group = "open/toggle" },
         { "<leader>op", group = "project" },
         { "<leader>od", group = "database" },
+        { "<leader>ot", group = "terminal" },
+        { "<leader>on", group = "notes" },
         { "<leader>q",  group = "quit" },
         { "<leader>h",  group = "help" },
         { "<leader>r",  group = "run" },
@@ -351,7 +353,7 @@ return {
     end,
   },
 
-  -- LuaSnip for snippets
+  -- LuaSnip for snippets with native vim.snippet integration
   {
     "L3MON4D3/LuaSnip",
     version = "v2.*",
@@ -360,6 +362,8 @@ return {
     opts = {
       history = false,
       update_events = "TextChanged,TextChangedI",
+      enable_autosnippets = true,
+      store_selection_keys = "<Tab>",
     },
     dependencies = {
       "rafamadriz/friendly-snippets",
@@ -369,25 +373,52 @@ return {
 
       -- Load snippets
       require("luasnip.loaders.from_vscode").lazy_load()
+      
+      -- Setup native vim.snippet expansion with LuaSnip
+      vim.snippet.expand = function(input)
+        -- Use LuaSnip for expansion when available
+        if luasnip then
+          local snippet = luasnip.snippet_from_nodes(nil, luasnip.parser.parse_snippet("", input))
+          luasnip.snip_expand(snippet)
+        else
+          -- Fallback to native expansion
+          local ok, parsed = pcall(vim.snippet.parse, input)
+          if ok then
+            vim.snippet.expand(parsed)
+          end
+        end
+      end
 
-      -- Keymaps
+      -- Unified keymaps for both LuaSnip and native snippets
       vim.keymap.set({ "i", "s" }, "<C-k>", function()
+        -- Try LuaSnip first
         if luasnip.expand_or_jumpable() then
           luasnip.expand_or_jump()
+        -- Then try native snippet
+        elseif vim.snippet.active({ direction = 1 }) then
+          vim.snippet.jump(1)
         end
-      end, { desc = "Expand or jump snippet" })
+      end, { desc = "Expand or jump forward in snippet" })
 
       vim.keymap.set({ "i", "s" }, "<C-j>", function()
+        -- Try LuaSnip first
         if luasnip.jumpable(-1) then
           luasnip.jump(-1)
+        -- Then try native snippet
+        elseif vim.snippet.active({ direction = -1 }) then
+          vim.snippet.jump(-1)
         end
       end, { desc = "Jump back in snippet" })
 
       vim.keymap.set({ "i", "s" }, "<C-l>", function()
+        -- Try LuaSnip choices first
         if luasnip.choice_active() then
           luasnip.change_choice(1)
+        -- Then stop native snippet
+        elseif vim.snippet.active() then
+          vim.snippet.stop()
         end
-      end, { desc = "Select choice in snippet" })
+      end, { desc = "Select choice or stop snippet" })
     end,
   },
 
@@ -860,11 +891,12 @@ return {
       { "<leader>hk",  function() require("snacks").picker.keymaps() end,        desc = "Keymaps" },
 
       -- Terminal operations
-      { "<leader>tt",  function() require("snacks").terminal.toggle() end,       desc = "Toggle Terminal" },
-      { "<leader>vt",  function() require("snacks").dim.toggle() end,            desc = "Toggle Dim (Twilight)" },
+      { "<leader>ott", function() require("snacks").terminal.toggle() end,       desc = "Toggle Terminal (All)" },
+      { "<leader>otd", function() require("snacks").terminal.toggle(nil, { cwd = vim.fn.getcwd() }) end, desc = "Toggle Terminal (Current Dir)" },
+      { "<leader>od",  function() require("snacks").dim.toggle() end,            desc = "Toggle Dim (Twilight)" },
       { "<leader>cr",  function() require("snacks").rename() end,                desc = "Rename Symbol" },
       {
-        "<leader>tc",
+        "<leader>otc",
         function()
           local cmd = vim.fn.input("Command: ")
           if cmd ~= "" then
@@ -875,7 +907,7 @@ return {
         desc = "Run Custom Command"
       },
       {
-        "<leader>tr",
+        "<leader>otr",
         function()
           if vim.g.last_terminal_command then
             require("snacks").terminal.open(vim.g.last_terminal_command)
@@ -883,7 +915,7 @@ return {
             vim.notify("No previous command to restart", vim.log.levels.WARN)
           end
         end,
-        desc = "Restart Last Command"
+        desc = "Rerun Last Command"
       },
       { "<leader>gg", "<cmd>Neogit<cr>", desc = "Neogit" },
     },
@@ -1043,7 +1075,7 @@ return {
     keys = {
       { "<leader>ac", "<cmd>CodeCompanionChat<cr>",        desc = "CodeCompanion Chat" },
       { "<leader>ai", "<cmd>CodeCompanionActions<cr>",     desc = "CodeCompanion Actions" },
-      { "<leader>at", "<cmd>CodeCompanionChat Toggle<cr>", desc = "Toggle CodeCompanion Chat" },
+      { "<leader>ao", "<cmd>CodeCompanionChat Toggle<cr>", desc = "Toggle CodeCompanion Chat" },
       { "<leader>ap", "<cmd>CodeCompanionActions<cr>",     mode = "v",                        desc = "CodeCompanion Actions" },
     },
   },
@@ -1124,9 +1156,9 @@ return {
       })
     end,
     keys = {
-      { "<leader>otn", "<cmd>Neorg workspace notes<cr>", desc = "Open Notes" },
-      { "<leader>otw", "<cmd>Neorg workspace work<cr>", desc = "Open Work" },
-      { "<leader>ott", "<cmd>Neorg return<cr>", desc = "Return to Index" },
+      { "<leader>onn", "<cmd>Neorg workspace notes<cr>", desc = "Open Notes" },
+      { "<leader>onw", "<cmd>Neorg workspace work<cr>", desc = "Open Work" },
+      { "<leader>oni", "<cmd>Neorg return<cr>", desc = "Return to Index" },
     },
   },
 
@@ -1156,9 +1188,12 @@ return {
     config = function(_, opts)
       require("overseer").setup(opts)
       
+      -- Simple tab-based task isolation using scope.nvim approach
+      -- Just let each tab have its own working directory
+      -- Tasks naturally isolate per directory
+      
       -- Register overseer task templates after setup
       local overseer = require("overseer")
-      
       
       -- Flutter/Dart task templates
       overseer.register_template({
@@ -1673,7 +1708,7 @@ return {
     end,
     keys = {
       { "<leader>rr", "<cmd>OverseerRun<cr>",         desc = "Run Task" },
-      { "<leader>rt", "<cmd>OverseerToggle<cr>",      desc = "Toggle Overseer" },
+      { "<leader>ro", "<cmd>OverseerToggle<cr>",      desc = "Toggle Overseer" },
       { "<leader>rb", "<cmd>OverseerBuild<cr>",       desc = "Build Task" },
       { "<leader>rq", "<cmd>OverseerQuickAction<cr>", desc = "Quick Action" },
       { "<leader>ra", "<cmd>OverseerTaskAction<cr>",  desc = "Task Action" },
@@ -1793,15 +1828,53 @@ return {
       },
       {
         "miroshQa/debugmaster.nvim",
+        dependencies = { 
+          "mfussenegger/nvim-dap",
+          "jbyuki/one-small-step-for-vimkind"  -- For Lua debugging
+        },
         config = function()
           local dm = require("debugmaster")
+          
+          -- Enable Neovim Lua debugging integration
           dm.plugins.osv_integration.enabled = true
+          
+          -- Auto-enable debug mode when DAP starts
+          local dap = require("dap")
+          
+          -- Track debug mode state
+          local debug_mode_active = false
+          
+          -- Use DAP listeners to auto-toggle debug mode
+          dap.listeners.after.event_initialized["debugmaster"] = function()
+            if not debug_mode_active then
+              dm.mode.toggle()  -- Enter debug mode
+              debug_mode_active = true
+            end
+          end
+          
+          -- Auto-disable debug mode when DAP session ends
+          dap.listeners.after.event_terminated["debugmaster"] = function()
+            if debug_mode_active then
+              dm.mode.toggle()  -- Exit debug mode
+              debug_mode_active = false
+            end
+          end
+          
+          dap.listeners.after.event_exited["debugmaster"] = function()
+            if debug_mode_active then
+              dm.mode.toggle()  -- Exit debug mode
+              debug_mode_active = false
+            end
+          end
+          
+          -- Set debug mode cursor color
+          vim.api.nvim_set_hl(0, "dCursor", { bg = "#FF2C2C" })
         end,
       },
     },
     keys = {
       { "dm",         function() require("debugmaster").mode.toggle() end,                                         desc = "Toggle Debug Mode", nowait = true },
-      { "<leader>dd", "<cmd>DapContinue<cr>",                                                                      desc = "Start Debug" },
+      { "<leader>dd", "<cmd>DapContinue<cr>",                                                                      desc = "Start/Continue Debug" },
       { "<leader>do", "<cmd>DapStepOver<cr>",                                                                      desc = "Step Over" },
       { "<leader>di", "<cmd>DapStepInto<cr>",                                                                      desc = "Step Into" },
       { "<leader>du", "<cmd>DapStepOut<cr>",                                                                       desc = "Step Out" },
@@ -1935,6 +2008,32 @@ return {
       -- TypeScript uses the same configurations as JavaScript
       dap.configurations.typescript = dap.configurations.javascript
 
+      -- DAP Dart/Flutter adapters configuration
+      dap.adapters.dart = {
+        type = 'executable',
+        command = 'dart',
+        args = { 'debug_adapter' },
+        options = { 
+          detached = false,
+        }
+      }
+      
+      dap.adapters.flutter = {
+        type = 'executable',
+        command = 'flutter',
+        args = { 'debug_adapter' },
+        options = { 
+          detached = false,
+        }
+      }
+
+      -- DAP Elixir adapter configuration
+      dap.adapters.mix_task = {
+        type = 'executable',
+        command = 'elixir-ls-debugger',
+        args = {},
+      }
+
       -- DAP Python configuration
       dap.adapters.python = {
         type = "executable",
@@ -2028,6 +2127,24 @@ return {
           cwd = "${workspaceFolder}",
         }
       }
+
+      -- DAP Elixir configuration
+      dap.configurations.elixir = {
+        {
+          type = "mix_task",
+          name = "mix test",
+          task = 'test',
+          taskArgs = {"--trace"},
+          request = "launch",
+          startApps = true, -- for Phoenix projects
+          projectDir = "${workspaceFolder}",
+          requireFiles = {
+            "test/**/test_helper.exs",
+            "test/**/*_test.exs"
+          }
+        },
+      }
+
       -- Configure signs with proper symbols
       vim.fn.sign_define("DapBreakpoint", { text = "●", texthl = "DapBreakpoint" })
       vim.fn.sign_define("DapBreakpointCondition", { text = "◐", texthl = "DapBreakpointCondition" })
@@ -2060,6 +2177,208 @@ return {
     end,
   },
 
+  -- Scope.nvim for tab-based buffer isolation (workspace per tab)
+  {
+    "tiagovla/scope.nvim",
+    event = "VeryLazy",
+    config = function()
+      require("scope").setup({
+        hooks = {
+          pre_tab_enter = nil,
+          post_tab_enter = nil,
+          pre_tab_leave = nil,
+          post_tab_leave = nil,
+          pre_tab_close = nil,
+          post_tab_close = nil,
+        },
+        -- Restore cursor position when switching tabs
+        restore_state = true,
+      })
+      
+      -- Override default buffer keymaps to use scope with snacks.nvim
+      vim.keymap.set("n", "<leader>bb", function()
+        -- Since scope.nvim already filters buffers per tab, just use the regular buffer picker
+        -- It will only show buffers from the current tab thanks to scope
+        Snacks.picker.buffers()
+      end, { desc = "Buffers (current tab)" })
+      
+      vim.keymap.set("n", "<leader>bB", function()
+        -- To show all buffers, we need to temporarily get all buffers across tabs
+        -- This is a workaround since scope filters them by default
+        local all_bufs = {}
+        local current_tab = vim.api.nvim_get_current_tabpage()
+        
+        -- Iterate through all tabs to collect buffers
+        for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+          vim.api.nvim_set_current_tabpage(tab)
+          for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buflisted then
+              all_bufs[buf] = true
+            end
+          end
+        end
+        
+        -- Restore current tab
+        vim.api.nvim_set_current_tabpage(current_tab)
+        
+        -- Show all buffers
+        Snacks.picker.buffers()
+      end, { desc = "Buffers (all tabs)" })
+      
+      -- Tab management keymaps for workspaces
+      vim.keymap.set("n", "<leader>tt", "<cmd>tabnew<cr>", { desc = "New tab/workspace" })
+      vim.keymap.set("n", "<leader>tc", "<cmd>tabclose<cr>", { desc = "Close tab" })
+      vim.keymap.set("n", "<leader>tj", "<cmd>tabnext<cr>", { desc = "Next tab" })
+      vim.keymap.set("n", "<leader>tk", "<cmd>tabprevious<cr>", { desc = "Previous tab" })
+      vim.keymap.set("n", "<leader>t1", "1gt", { desc = "Tab 1" })
+      vim.keymap.set("n", "<leader>t2", "2gt", { desc = "Tab 2" })
+      vim.keymap.set("n", "<leader>t3", "3gt", { desc = "Tab 3" })
+      vim.keymap.set("n", "<leader>t4", "4gt", { desc = "Tab 4" })
+      vim.keymap.set("n", "<leader>t5", "5gt", { desc = "Tab 5" })
+    end,
+  },
+  
+  -- LSP-based project switching
+  {
+    name = "lsp-projects",
+    dir = vim.fn.stdpath("config"),
+    event = "LspAttach",
+    config = function()
+      -- Project switching using LSP roots
+      vim.keymap.set("n", "<leader>op", function()
+        -- Collect unique LSP root directories from all clients
+        local roots = {}
+        local seen = {}
+        for _, client in ipairs(vim.lsp.get_clients()) do
+          if client.root_dir and not seen[client.root_dir] then
+            seen[client.root_dir] = true
+            table.insert(roots, client.root_dir)
+          end
+        end
+        
+        if #roots == 0 then
+          vim.notify("No LSP projects found", vim.log.levels.WARN)
+          return
+        end
+        
+        -- Use snacks picker to select project
+        Snacks.picker.select(roots, {
+          prompt = "LSP Projects",
+          format_item = function(item)
+            return vim.fn.fnamemodify(item, ":~:.")
+          end,
+          confirm = function(item)
+            vim.cmd("tabnew")
+            vim.cmd("tcd " .. item)
+            -- Try to open a file in the project
+            local files = vim.fn.glob(item .. "/*.*", false, true)
+            if #files > 0 then
+              vim.cmd("edit " .. files[1])
+            end
+          end
+        })
+      end, { desc = "Open project (LSP)" })
+      
+      -- Show current project
+      vim.keymap.set("n", "<leader>oP", function()
+        local cwd = vim.fn.getcwd()
+        local project = vim.fn.fnamemodify(cwd, ":t")
+        vim.notify("Current project: " .. project .. "\n" .. cwd, vim.log.levels.INFO)
+      end, { desc = "Show current project" })
+    end,
+  },
+
+  -- Otter.nvim for embedded code support in markdown/quarto
+  {
+    "jmbuhr/otter.nvim",
+    dependencies = {
+      "nvim-treesitter/nvim-treesitter",
+    },
+    ft = { "markdown", "quarto", "rmd", "org", "norg" },
+    config = function()
+      local otter = require("otter")
+      otter.setup({
+        lsp = {
+          diagnostic_update_events = { "BufWritePost", "InsertLeave", "TextChanged" },
+          root_dir = function(_, bufnr)
+            return vim.fs.root(bufnr or 0, {
+              ".git",
+              "_quarto.yml",
+              "package.json",
+            }) or vim.fn.getcwd()
+          end,
+        },
+        buffers = {
+          set_filetype = false,
+          write_to_disk = false,
+        },
+        strip_wrapping_quote_characters = { "'", '"', "`" },
+        handle_leading_whitespace = true,
+      })
+      
+      -- Auto-activate otter for supported files
+      vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost" }, {
+        pattern = { "*.md", "*.qmd", "*.Rmd", "*.org", "*.norg" },
+        callback = function(ev)
+          local bufnr = ev.buf
+          -- Check if file contains code blocks
+          local lines = vim.api.nvim_buf_get_lines(bufnr, 0, math.min(100, vim.api.nvim_buf_line_count(bufnr)), false)
+          local has_code_block = false
+          for _, line in ipairs(lines) do
+            if line:match("^```%w") or line:match("^~~~%w") then
+              has_code_block = true
+              break
+            end
+          end
+          
+          if has_code_block then
+            otter.activate(
+              { "python", "lua", "javascript", "typescript", "r", "rust", "go", "dart", "bash", "sh", "zsh", "elixir" },
+              true,  -- Enable completion
+              true,  -- Enable diagnostics
+              nil    -- Use default for tsquery
+            )
+          end
+        end,
+      })
+    end,
+    keys = {
+      {
+        "<leader>lo",
+        function()
+          require("otter").activate()
+          vim.notify("Otter activated for embedded code", vim.log.levels.INFO)
+        end,
+        desc = "Activate Otter for embedded code",
+        ft = { "markdown", "quarto", "rmd", "org", "norg" },
+      },
+      {
+        "<leader>lO",
+        function()
+          require("otter").deactivate()
+          vim.notify("Otter deactivated", vim.log.levels.INFO)
+        end,
+        desc = "Deactivate Otter",
+        ft = { "markdown", "quarto", "rmd", "org", "norg" },
+      },
+      {
+        "<leader>lk",
+        function()
+          require("otter").ask_hover()
+        end,
+        desc = "Otter hover in code block",
+        ft = { "markdown", "quarto", "rmd", "org", "norg" },
+      },
+      {
+        "<leader>ld",
+        function()
+          require("otter").ask_definition()
+        end,
+        desc = "Otter go to definition",
+        ft = { "markdown", "quarto", "rmd", "org", "norg" },
+      },
+    },
+  },
 
   -- Iron.nvim for REPL support
   {
@@ -2435,6 +2754,8 @@ return {
     keys = {
       { "<leader>ctn", function() require("neotest").run.run() end, desc = "Run Nearest Test" },
       { "<leader>ctf", function() require("neotest").run.run(vim.fn.expand("%")) end, desc = "Run File Tests" },
+      { "<leader>ctr", function() require("neotest").run.run({ strategy = "overseer" }) end, desc = "Run Test (Overseer)" },
+      { "<leader>ctR", function() require("neotest").run.run({ vim.fn.expand("%"), strategy = "overseer" }) end, desc = "Run File Tests (Overseer)" },
       { "<leader>ctd", function() require("neotest").run.run({strategy = "dap"}) end, desc = "Debug Nearest Test" },
       { "<leader>cts", function() require("neotest").run.stop() end, desc = "Stop Test" },
       { "<leader>cta", function() require("neotest").run.attach() end, desc = "Attach to Test" },
@@ -2450,6 +2771,14 @@ return {
       local neotest = require("neotest")
       
       neotest.setup({
+        -- Integrate with Overseer to run tests as tasks
+        consumers = {
+          overseer = require("neotest.consumers.overseer"),
+        },
+        overseer = {
+          enabled = true,
+          force_default = false,  -- Use overseer only when explicitly requested
+        },
         adapters = {
           require("neotest-python")({
             dap = { justMyCode = false },
