@@ -863,6 +863,7 @@ return {
       { "<leader>sl",  function() require("snacks").picker.lines() end,          desc = "Search Lines" },
       { "<leader>sr",  function() require("snacks").picker.lsp_references() end, desc = "Search References" },
       { "<leader>si",  function() require("snacks").picker.lsp_symbols() end,    desc = "Search Symbols" },
+      { "<leader>sI",  function() require("snacks").picker.lsp_workspace_symbols() end, desc = "Search All Symbols (Zed-like)" },
 
       -- Buffer operations
       { "<leader>bb",  function() require("snacks").picker.buffers() end,        desc = "Buffer List" },
@@ -2159,11 +2160,27 @@ return {
       }
 
       -- DAP Elixir adapter configuration
-      dap.adapters.mix_task = {
-        type = 'executable',
-        command = 'elixir-ls-debugger',
-        args = {},
-      }
+      -- Using the same path as ElixirLS LSP server
+      local elixir_debugger_path = vim.fn.expand('~/.tools/elixir-ls/debug_adapter.sh')
+      if vim.fn.filereadable(elixir_debugger_path) == 1 then
+        dap.adapters.mix_task = {
+          type = 'executable',
+          command = elixir_debugger_path,
+          args = {},
+        }
+      else
+        -- Try alternative path
+        elixir_debugger_path = vim.fn.expand('~/.tools/elixir-ls/debugger.sh')
+        if vim.fn.filereadable(elixir_debugger_path) == 1 then
+          dap.adapters.mix_task = {
+            type = 'executable',
+            command = elixir_debugger_path,
+            args = {},
+          }
+        else
+          vim.notify("ElixirLS debugger not found at ~/.tools/elixir-ls/", vim.log.levels.WARN)
+        end
+      end
 
       -- DAP Python configuration
       dap.adapters.python = {
