@@ -17,6 +17,7 @@ return {
         { "<leader>f",  group = "find" },
         { "<leader>s",  group = "search" },
         { "<leader>g",  group = "git" },
+        { "<leader>gw", group = "worktree" },
         { "<leader>d",  group = "debug" },
         { "<leader>c",  group = "code" },
         { "<leader>cr", group = "refactor" },
@@ -573,6 +574,12 @@ return {
       { "<leader>gp", "<cmd>Neogit push<cr>", desc = "Neogit Push" },
       { "<leader>gl", "<cmd>Neogit pull<cr>", desc = "Neogit Pull" },
       { "<leader>gb", "<cmd>Neogit branch<cr>", desc = "Neogit Branch" },
+      -- Worktree commands
+      { "<leader>gww", function() require("neogit").open({ "worktree" }) end, desc = "Git worktree" },
+      { "<leader>gwa", function() require("neogit").open({ "worktree", "create" }) end, desc = "Add worktree" },
+      { "<leader>gws", function() require("neogit").open({ "worktree", "switch" }) end, desc = "Switch worktree" },
+      { "<leader>gwd", function() require("neogit").open({ "worktree", "delete" }) end, desc = "Delete worktree" },
+      { "<leader>gwl", function() require("neogit").open({ "worktree", "list" }) end, desc = "List worktrees" },
     },
     opts = {
       kind = "vsplit", -- Open in vertical split on the right
@@ -587,6 +594,7 @@ return {
       },
       integrations = {
         diffview = true,
+        snacks = true
       },
       -- Use default section configuration
       mappings = {
@@ -756,7 +764,7 @@ return {
       cleanup_delay_ms = 2000,
       lsp_file_methods = {
         timeout_ms = 1000,
-        autosave_changes = false,
+        autosave_changes = true,
       },
       constrain_cursor = "editable",
       experimental_watch_for_changes = false,
