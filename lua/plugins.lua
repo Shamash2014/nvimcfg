@@ -559,7 +559,7 @@ return {
     end,
   },
 
-  -- Neogit for Magit-like git interface
+  -- Neogit for Magit-like git interface (with bare repo support)
   {
     "NeogitOrg/neogit",
     dependencies = {
@@ -850,19 +850,31 @@ return {
       },
     },
     keys = {
-      -- Find operations
-      { "<leader>ff",  function() require("snacks").picker.files() end,          desc = "Find Files" },
+      -- Find operations (with proper root detection for bare repos and worktrees)
+      { "<leader>ff",  function() 
+        local root = vim.g.git_root or vim.fn.getcwd()
+        require("snacks").picker.files({ cwd = root }) 
+      end, desc = "Find Files" },
       { "<leader>fr",  function() require("snacks").picker.recent() end,         desc = "Recent Files" },
-      { "<leader>fg",  function() require("snacks").picker.grep() end,           desc = "Grep Files" },
+      { "<leader>fg",  function() 
+        local root = vim.g.git_root or vim.fn.getcwd()
+        require("snacks").picker.grep({ cwd = root }) 
+      end, desc = "Grep Files" },
       { "<leader>fb",  function() require("snacks").picker.buffers() end,        desc = "Find Buffers" },
       { "<leader>fh",  function() require("snacks").picker.help() end,           desc = "Find Help" },
       { "<leader>fk",  function() require("snacks").picker.keymaps() end,        desc = "Find Keymaps" },
       { "<leader>fc",  function() require("snacks").picker.commands() end,       desc = "Find Commands" },
 
-      -- Project operations
-      { "<leader>opf",  function() require("snacks").picker.files() end,          desc = "Find Files in Project" },
+      -- Project operations (with proper root detection)
+      { "<leader>opf",  function() 
+        local root = vim.g.git_root or vim.fn.getcwd()
+        require("snacks").picker.files({ cwd = root }) 
+      end, desc = "Find Files in Project" },
       { "<leader>opr",  function() require("snacks").picker.recent() end,         desc = "Recent Files in Project" },
-      { "<leader>opg",  function() require("snacks").picker.grep() end,           desc = "Grep in Project" },
+      { "<leader>opg",  function() 
+        local root = vim.g.git_root or vim.fn.getcwd()
+        require("snacks").picker.grep({ cwd = root }) 
+      end, desc = "Grep in Project" },
       { "<leader>ops",  function() require("snacks").picker.lsp_symbols() end,    desc = "Project Symbols" },
 
       -- Search operations
@@ -2437,9 +2449,11 @@ return {
       
       -- Show current project
       vim.keymap.set("n", "<leader>oP", function()
-        local cwd = vim.fn.getcwd()
+        local cwd = vim.g.git_root or vim.fn.getcwd()
         local project = vim.fn.fnamemodify(cwd, ":t")
-        vim.notify("Current project: " .. project .. "\n" .. cwd, vim.log.levels.INFO)
+        local in_worktree = vim.g.in_worktree and " (worktree)" or ""
+        local in_bare = vim.g.bare_repo and " (bare repo)" or ""
+        vim.notify("Current project: " .. project .. in_worktree .. in_bare .. "\n" .. cwd, vim.log.levels.INFO)
       end, { desc = "Show current project" })
     end,
   },

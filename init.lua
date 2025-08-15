@@ -146,3 +146,108 @@ vim.api.nvim_create_autocmd("LspAttach", {
   end,
   desc = "Configure LSP client to prevent sync errors"
 })
+
+-- Bare repository and worktree support with proper root detection
+local function get_git_root()
+  -- First check if we're in a worktree
+  local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", ""):gsub("^%s+", ""):gsub("%s+$", "")
+  
+  if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+    return git_root
+  end
+  
+  -- Check if we're in a bare repository
+  local is_bare = vim.fn.system("git rev-parse --is-bare-repository 2>/dev/null"):gsub("\n", "") == "true"
+  if is_bare then
+    local git_dir = vim.fn.system("git rev-parse --git-dir 2>/dev/null"):gsub("\n", ""):gsub("^%s+", ""):gsub("%s+$", "")
+    return vim.fn.fnamemodify(git_dir, ":h")
+  end
+  
+  return nil
+end
+
+local function setup_bare_repo_support()
+  local git_root = get_git_root()
+  
+  if not git_root then
+    return
+  end
+  
+  -- Check if we're in a bare repo
+  local is_bare = vim.fn.system("git rev-parse --is-bare-repository 2>/dev/null"):gsub("\n", "") == "true"
+  
+  if is_bare then
+    vim.g.bare_repo = true
+    -- For bare repos, we should be in a worktree subdirectory
+    -- Don't print on every directory change
+    if vim.g.bare_repo_notified ~= true then
+      vim.notify("Bare repository detected - use <leader>gw for worktree operations", vim.log.levels.INFO)
+      vim.g.bare_repo_notified = true
+    end
+  else
+    -- Check if we're in a worktree
+    local git_common_dir = vim.fn.system("git rev-parse --git-common-dir 2>/dev/null"):gsub("\n", "")
+    if git_common_dir:match("%.git/worktrees") then
+      vim.g.in_worktree = true
+      -- Set the root to the worktree root
+      vim.fn.chdir(git_root)
+    end
+  end
+  
+  -- Update the root pattern for project detection
+  vim.g.git_root = git_root
+end
+
+-- Run bare repo setup on startup and when changing directories
+vim.api.nvim_create_autocmd({ "VimEnter", "DirChanged", "BufEnter" }, {
+  callback = setup_bare_repo_support,
+  desc = "Setup bare repository support"
+})
+
+-- Override vim.fn.finddir and vim.fn.findfile to respect git worktree roots
+local original_finddir = vim.fn.finddir
+local original_findfile = vim.fn.findfile
+
+vim.fn.finddir = function(name, path, ...)
+  if name == ".git" and vim.g.git_root then
+    return vim.g.git_root .. "/.git"
+  end
+  return original_finddir(name, path, ...)
+end
+
+vim.fn.findfile = function(name, path, ...)
+  if vim.g.git_root and path == nil then
+    path = vim.g.git_root
+  end
+  return original_findfile(name, path, ...)
+end
+
+-- Helper command for bare repository cloning
+vim.api.nvim_create_user_command("BareClone", function(opts)
+  local url = opts.args
+  if url == "" then
+    print("Usage: :BareClone <repository-url> [target-dir]")
+    return
+  end
+  
+  local parts = vim.split(url, " ")
+  local repo_url = parts[1]
+  local target = parts[2]
+  
+  if not target then
+    -- Extract repo name from URL
+    target = repo_url:match("([^/]+)%.git$") or repo_url:match("([^/]+)$")
+    target = target .. ".git"
+  end
+  
+  -- Clone as bare repository
+  local cmd = string.format("git clone --bare %s %s", repo_url, target)
+  local result = vim.fn.system(cmd)
+  
+  if vim.v.shell_error == 0 then
+    print(string.format("Cloned bare repository to: %s", target))
+    print("cd into the directory and use <leader>gwa to create a worktree")
+  else
+    print("Failed to clone repository: " .. result)
+  end
+end, { nargs = "+", desc = "Clone repository as bare" })
