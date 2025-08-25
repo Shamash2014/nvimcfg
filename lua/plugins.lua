@@ -1216,6 +1216,28 @@ return {
       -- Register overseer task templates after setup
       local overseer = require("overseer")
       
+      -- Helper function to detect docker-compose files
+      local function has_docker_compose()
+        -- Check in current directory
+        if vim.fn.filereadable("docker-compose.yml") == 1 or 
+           vim.fn.filereadable("docker-compose.yaml") == 1 or
+           vim.fn.filereadable("compose.yml") == 1 or
+           vim.fn.filereadable("compose.yaml") == 1 then
+          return true
+        end
+        
+        -- Check in git root if in a git repo
+        local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
+        if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+          return vim.fn.filereadable(git_root .. "/docker-compose.yml") == 1 or
+                 vim.fn.filereadable(git_root .. "/docker-compose.yaml") == 1 or
+                 vim.fn.filereadable(git_root .. "/compose.yml") == 1 or
+                 vim.fn.filereadable(git_root .. "/compose.yaml") == 1
+        end
+        
+        return false
+      end
+      
       -- Flutter/Dart task templates
       overseer.register_template({
         name = "flutter run",
@@ -1291,134 +1313,232 @@ return {
 
       -- Docker Compose task templates
       overseer.register_template({
-        name = "docker-compose up",
+        name = "docker compose up",
         builder = function()
+          -- Find compose file location
+          local compose_dir = vim.fn.getcwd()
+          local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
+          
+          if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+            if vim.fn.filereadable(git_root .. "/docker-compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/docker-compose.yaml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yaml") == 1 then
+              compose_dir = git_root
+            end
+          end
+          
           return {
-            cmd = { "docker-compose" },
-            args = { "up", "--watch" },
+            cmd = { "docker" },
+            args = { "compose", "up", "--watch" },
+            cwd = compose_dir,
             components = { "default" },
           }
         end,
         condition = {
-          callback = function()
-            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
-          end,
+          callback = has_docker_compose,
         },
       })
 
       overseer.register_template({
-        name = "docker-compose up -d",
+        name = "docker compose up -d",
         builder = function()
+          -- Find compose file location
+          local compose_dir = vim.fn.getcwd()
+          local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
+          
+          if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+            if vim.fn.filereadable(git_root .. "/docker-compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/docker-compose.yaml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yaml") == 1 then
+              compose_dir = git_root
+            end
+          end
+          
           return {
-            cmd = { "docker-compose" },
-            args = { "up", "-d" },
+            cmd = { "docker" },
+            args = { "compose", "up", "-d" },
+            cwd = compose_dir,
             components = { "default" },
           }
         end,
         condition = {
-          callback = function()
-            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
-          end,
+          callback = has_docker_compose,
         },
       })
 
       overseer.register_template({
-        name = "docker-compose up --force-recreate",
+        name = "docker compose up --force-recreate",
         builder = function()
+          -- Find compose file location
+          local compose_dir = vim.fn.getcwd()
+          local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
+          
+          if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+            if vim.fn.filereadable(git_root .. "/docker-compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/docker-compose.yaml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yaml") == 1 then
+              compose_dir = git_root
+            end
+          end
+          
           return {
-            cmd = { "docker-compose" },
-            args = { "up", "-d", "--force-recreate" },
+            cmd = { "docker" },
+            args = { "compose", "up", "-d", "--force-recreate" },
+            cwd = compose_dir,
             components = { "default" },
           }
         end,
         condition = {
-          callback = function()
-            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
-          end,
+          callback = has_docker_compose,
         },
       })
 
       overseer.register_template({
-        name = "docker-compose down",
+        name = "docker compose down",
         builder = function()
+          -- Find compose file location
+          local compose_dir = vim.fn.getcwd()
+          local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
+          
+          if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+            if vim.fn.filereadable(git_root .. "/docker-compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/docker-compose.yaml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yaml") == 1 then
+              compose_dir = git_root
+            end
+          end
+          
           return {
-            cmd = { "docker-compose" },
-            args = { "down" },
+            cmd = { "docker" },
+            args = { "compose", "down" },
+            cwd = compose_dir,
             components = { "default" },
           }
         end,
         condition = {
-          callback = function()
-            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
-          end,
+          callback = has_docker_compose,
         },
       })
 
       overseer.register_template({
-        name = "docker-compose stop",
+        name = "docker compose stop",
         builder = function()
+          -- Find compose file location
+          local compose_dir = vim.fn.getcwd()
+          local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
+          
+          if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+            if vim.fn.filereadable(git_root .. "/docker-compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/docker-compose.yaml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yaml") == 1 then
+              compose_dir = git_root
+            end
+          end
+          
           return {
-            cmd = { "docker-compose" },
-            args = { "stop" },
+            cmd = { "docker" },
+            args = { "compose", "stop" },
+            cwd = compose_dir,
             components = { "default" },
           }
         end,
         condition = {
-          callback = function()
-            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
-          end,
+          callback = has_docker_compose,
         },
       })
 
       overseer.register_template({
-        name = "docker-compose build",
+        name = "docker compose build",
         builder = function()
+          -- Find compose file location
+          local compose_dir = vim.fn.getcwd()
+          local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
+          
+          if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+            if vim.fn.filereadable(git_root .. "/docker-compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/docker-compose.yaml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yaml") == 1 then
+              compose_dir = git_root
+            end
+          end
+          
           return {
-            cmd = { "docker-compose" },
-            args = { "build", "--no-cache" },
+            cmd = { "docker" },
+            args = { "compose", "build", "--no-cache" },
+            cwd = compose_dir,
             components = { "default" },
           }
         end,
         condition = {
-          callback = function()
-            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
-          end,
+          callback = has_docker_compose,
         },
       })
 
       overseer.register_template({
-        name = "docker-compose exec",
+        name = "docker compose exec",
         builder = function()
           local service = vim.fn.input("Service name: ")
           local command = vim.fn.input("Command: ", "/bin/bash")
+          
+          -- Find compose file location
+          local compose_dir = vim.fn.getcwd()
+          local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
+          
+          if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+            if vim.fn.filereadable(git_root .. "/docker-compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/docker-compose.yaml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yaml") == 1 then
+              compose_dir = git_root
+            end
+          end
+          
           return {
-            cmd = { "docker-compose" },
-            args = { "exec", service, command },
+            cmd = { "docker" },
+            args = { "compose", "exec", service, command },
+            cwd = compose_dir,
             components = { "default" },
           }
         end,
         condition = {
-          callback = function()
-            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
-          end,
+          callback = has_docker_compose,
         },
       })
 
       overseer.register_template({
-        name = "docker-compose run --rm",
+        name = "docker compose run --rm",
         builder = function()
           local service = vim.fn.input("Service name: ")
           local command = vim.fn.input("Command: ", "/bin/bash")
+          
+          -- Find compose file location
+          local compose_dir = vim.fn.getcwd()
+          local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", "")
+          
+          if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
+            if vim.fn.filereadable(git_root .. "/docker-compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/docker-compose.yaml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yml") == 1 or
+               vim.fn.filereadable(git_root .. "/compose.yaml") == 1 then
+              compose_dir = git_root
+            end
+          end
+          
           return {
-            cmd = { "docker-compose" },
-            args = { "run", "--rm", service, command },
+            cmd = { "docker" },
+            args = { "compose", "run", "--rm", service, command },
+            cwd = compose_dir,
             components = { "default" },
           }
         end,
         condition = {
-          callback = function()
-            return vim.fn.filereadable("docker-compose.yml") == 1 or vim.fn.filereadable("docker-compose.yaml") == 1
-          end,
+          callback = has_docker_compose,
         },
       })
 
@@ -2665,8 +2785,81 @@ return {
               format = require("iron.fts.common").bracketed_paste,
             },
             elixir = {
-              command = { "iex" },
+              command = function()
+                -- Check if we're in a Docker environment
+                local docker_compose_file = vim.fn.findfile("docker-compose.yml", ".;")
+                local dockerfile = vim.fn.findfile("Dockerfile", ".;")
+                
+                -- Check for .iex.exs configuration for project-specific IEx settings
+                local iex_config = vim.fn.findfile(".iex.exs", ".;")
+                
+                -- Option 1: Check for docker-compose with Elixir service
+                if docker_compose_file ~= "" then
+                  local compose_content = vim.fn.readfile(docker_compose_file)
+                  local has_elixir_service = false
+                  local service_name = "app"  -- Default service name
+                  
+                  for _, line in ipairs(compose_content) do
+                    if line:match("elixir:") or line:match("phoenix:") then
+                      has_elixir_service = true
+                    end
+                    -- Try to find the service name
+                    if line:match("^%s*(%w+):") and has_elixir_service then
+                      service_name = line:match("^%s*(%w+):")
+                      break
+                    end
+                  end
+                  
+                  if has_elixir_service then
+                    -- Use docker-compose exec to run IEx in the service
+                    return { "docker-compose", "exec", service_name, "iex" }
+                  end
+                end
+                
+                -- Option 2: Check for Mix project and use mix iex
+                if vim.fn.filereadable("mix.exs") == 1 then
+                  -- Check if we should use Docker
+                  if dockerfile ~= "" then
+                    -- Try to detect container name from project
+                    local project_name = vim.fn.fnamemodify(vim.fn.getcwd(), ":t")
+                    -- Check if container is running
+                    local container_running = vim.fn.system("docker ps --format '{{.Names}}' | grep -q " .. project_name)
+                    if vim.v.shell_error == 0 then
+                      return { "docker", "exec", "-it", project_name, "iex", "-S", "mix" }
+                    end
+                  end
+                  
+                  -- Use local mix iex with project configuration
+                  if iex_config ~= "" then
+                    return { "iex", "--dot-iex", iex_config, "-S", "mix" }
+                  else
+                    return { "iex", "-S", "mix" }
+                  end
+                end
+                
+                -- Option 3: Phoenix project special handling
+                if vim.fn.filereadable("mix.exs") == 1 and vim.fn.isdirectory("priv/repo") == 1 then
+                  -- Phoenix project detected
+                  if dockerfile ~= "" then
+                    local project_name = vim.fn.fnamemodify(vim.fn.getcwd(), ":t")
+                    return { "docker", "exec", "-it", project_name, "iex", "-S", "mix", "phx.server" }
+                  else
+                    -- Ask user if they want to start Phoenix server in IEx
+                    vim.notify("Phoenix project detected. Use :IronRepl to start IEx, or run 'iex -S mix phx.server' for Phoenix.", vim.log.levels.INFO)
+                    return { "iex", "-S", "mix" }
+                  end
+                end
+                
+                -- Option 4: Standalone IEx with optional config
+                if iex_config ~= "" then
+                  return { "iex", "--dot-iex", iex_config }
+                else
+                  return { "iex" }
+                end
+              end,
               format = require("iron.fts.common").bracketed_paste,
+              -- Elixir-specific code block dividers for notebooks/livebooks
+              block_dividers = { "# ╔═╡", "# ===", "## Section" }
             },
             racket = {
               command = { "racket" },
@@ -2714,6 +2907,51 @@ return {
       vim.keymap.set("n", "<leader>if", "<cmd>IronFocus<cr>", { desc = "Focus REPL" })
       vim.keymap.set("n", "<leader>ih", "<cmd>IronHide<cr>", { desc = "Hide REPL" })
       
+      -- Command to explicitly choose Docker or local IEx for Elixir projects
+      vim.api.nvim_create_user_command("IExDocker", function(opts)
+        local iron = require("iron.core")
+        local service_name = opts.args ~= "" and opts.args or "app"
+        
+        -- Close existing REPL if any
+        pcall(function() iron.close_repl("elixir") end)
+        
+        -- Override the Elixir command temporarily
+        local original_cmd = iron.config.repl_definition.elixir.command
+        iron.config.repl_definition.elixir.command = { "docker-compose", "exec", service_name, "iex", "-S", "mix" }
+        
+        -- Start the REPL
+        iron.repl_for("elixir")
+        
+        -- Restore original command
+        iron.config.repl_definition.elixir.command = original_cmd
+        
+        vim.notify("Started IEx in Docker service: " .. service_name, vim.log.levels.INFO)
+      end, {
+        nargs = "?",
+        desc = "Start IEx REPL in Docker container (optionally specify service name)"
+      })
+      
+      vim.api.nvim_create_user_command("IExLocal", function()
+        local iron = require("iron.core")
+        
+        -- Close existing REPL if any
+        pcall(function() iron.close_repl("elixir") end)
+        
+        -- Override the Elixir command temporarily
+        local original_cmd = iron.config.repl_definition.elixir.command
+        iron.config.repl_definition.elixir.command = { "iex", "-S", "mix" }
+        
+        -- Start the REPL
+        iron.repl_for("elixir")
+        
+        -- Restore original command
+        iron.config.repl_definition.elixir.command = original_cmd
+        
+        vim.notify("Started local IEx REPL", vim.log.levels.INFO)
+      end, {
+        desc = "Start IEx REPL locally (not in Docker)"
+      })
+      
       -- Additional operator-pending mappings for RDD workflow
       -- Send text object (works with any text object: w, W, }, {, ap, i{, etc.)
       vim.keymap.set("n", "cp", "ctrip", { remap = true, desc = "Send paragraph" })
@@ -2760,6 +2998,9 @@ return {
           vim.fn.search("^##", "W")
         elseif ft == "dart" then
           vim.fn.search("^// ---\\|^//---", "W")
+        elseif ft == "elixir" then
+          -- Elixir module/function navigation and Livebook cells
+          vim.fn.search("^\\s*defmodule\\|^\\s*def \\|^\\s*defp \\|^# ╔═╡\\|^# ===\\|^## Section", "W")
         else
           -- Generic code block pattern
           vim.fn.search("^# %%\\|^#%%\\|^##\\|^// ---", "W")
@@ -2775,11 +3016,86 @@ return {
           vim.fn.search("^##", "bW")
         elseif ft == "dart" then
           vim.fn.search("^// ---\\|^//---", "bW")
+        elseif ft == "elixir" then
+          -- Elixir module/function navigation and Livebook cells
+          vim.fn.search("^\\s*defmodule\\|^\\s*def \\|^\\s*defp \\|^# ╔═╡\\|^# ===\\|^## Section", "bW")
         else
           -- Generic code block pattern
           vim.fn.search("^# %%\\|^#%%\\|^##\\|^// ---", "bW")
         end
       end, { desc = "Previous code block" })
+      
+      -- Elixir-specific REPL commands
+      vim.api.nvim_create_autocmd("FileType", {
+        pattern = "elixir",
+        callback = function()
+          -- Send module to REPL
+          vim.keymap.set("n", "<leader>im", function()
+            -- Find and send the current module
+            vim.cmd("normal! [[")  -- Go to module start
+            vim.cmd("normal! V")    -- Start visual line mode
+            vim.cmd("normal! ][")   -- Go to module end
+            require("iron.core").visual_send()
+            vim.cmd("normal! <Esc>")
+          end, { buffer = true, desc = "Send module to REPL" })
+          
+          -- Send function to REPL
+          vim.keymap.set("n", "<leader>if", function()
+            -- Save cursor position
+            local cursor = vim.api.nvim_win_get_cursor(0)
+            -- Search backward for function definition
+            vim.fn.search("^\\s*def\\(p\\|macro\\|impl\\|protocol\\|module\\)\\?\\s", "bW")
+            vim.cmd("normal! V")    -- Start visual line mode
+            -- Search forward for 'end' at the same indentation level
+            vim.cmd("normal! $%")   -- Go to matching end
+            require("iron.core").visual_send()
+            vim.cmd("normal! <Esc>")
+            -- Restore cursor
+            vim.api.nvim_win_set_cursor(0, cursor)
+          end, { buffer = true, desc = "Send function to REPL" })
+          
+          -- Reload module in IEx
+          vim.keymap.set("n", "<leader>iR", function()
+            -- Get current module name
+            local module_line = vim.fn.search("^\\s*defmodule\\s\\+\\([A-Z][A-Za-z0-9_.]*\\)", "bnW")
+            if module_line > 0 then
+              local line = vim.fn.getline(module_line)
+              local module_name = line:match("defmodule%s+([A-Z][A-Za-z0-9_.]*)")
+              if module_name then
+                -- Send r() command to reload the module
+                local iron = require("iron.core")
+                iron.send(nil, { "r(" .. module_name .. ")" })
+                vim.notify("Reloading module: " .. module_name, vim.log.levels.INFO)
+              end
+            end
+          end, { buffer = true, desc = "Reload module in IEx" })
+          
+          -- Compile and reload current file
+          vim.keymap.set("n", "<leader>ic", function()
+            local filepath = vim.fn.expand("%:p")
+            local iron = require("iron.core")
+            iron.send(nil, { "c(\"" .. filepath .. "\")" })
+            vim.notify("Compiling: " .. filepath, vim.log.levels.INFO)
+          end, { buffer = true, desc = "Compile current file in IEx" })
+          
+          -- Run tests in IEx
+          vim.keymap.set("n", "<leader>it", function()
+            require("iron.core").send(nil, { "ExUnit.run()" })
+          end, { buffer = true, desc = "Run tests in IEx" })
+          
+          -- Inspect variable under cursor
+          vim.keymap.set("n", "<leader>ii", function()
+            local word = vim.fn.expand("<cword>")
+            require("iron.core").send(nil, { "IO.inspect(" .. word .. ", label: \"" .. word .. "\")" })
+          end, { buffer = true, desc = "Inspect variable in IEx" })
+          
+          -- Get documentation for word under cursor
+          vim.keymap.set("n", "<leader>ih", function()
+            local word = vim.fn.expand("<cword>")
+            require("iron.core").send(nil, { "h(" .. word .. ")" })
+          end, { buffer = true, desc = "Get help for word in IEx" })
+        end,
+      })
       
     end,
   },
@@ -2787,113 +3103,85 @@ return {
   -- Database management with vim-dadbod
   {
     "tpope/vim-dadbod",
-    dependencies = {
-      {
-        "kristijanhusak/vim-dadbod-ui",
-        dependencies = {
-          { "kristijanhusak/vim-dadbod-completion", ft = { "sql", "mysql", "plsql" }, lazy = true },
-        },
-        cmd = {
-          "DBUI",
-          "DBUIToggle",
-          "DBUIAddConnection",
-          "DBUIFindBuffer",
-        },
-        init = function()
-          -- Your DBUI configuration
-          vim.g.db_ui_use_nerd_fonts = 1
-          vim.g.db_ui_show_database_icon = 1
-          vim.g.db_ui_force_echo_notifications = 1
-          vim.g.db_ui_win_position = "right"
-          vim.g.db_ui_winwidth = 40
-          vim.g.db_ui_default_query = "SELECT * FROM "
-          vim.g.db_ui_save_location = vim.fn.stdpath("data") .. "/db_ui"
-          vim.g.db_ui_tmp_query_location = vim.fn.stdpath("data") .. "/db_ui/tmp"
-          
-          -- Configure icons
-          vim.g.db_ui_icons = {
-            expanded = {
-              db = "▾ ",
-              buffers = "▾ ",
-              saved_queries = "▾ ",
-              schemas = "▾ ",
-              schema = "▾ ",
-              tables = "▾ ",
-              table = "▾ ",
-            },
-            collapsed = {
-              db = "▸ ",
-              buffers = "▸ ",
-              saved_queries = "▸ ",
-              schemas = "▸ ",
-              schema = "▸ ",
-              tables = "▸ ",
-              table = "▸ ",
-            },
-            saved_query = "",
-            new_query = "󰘶",
-            tables = "󰅩",
-            buffers = "󰯉",
-            add_connection = "",
-            connection_ok = "✓",
-            connection_error = "✗",
-          }
-          
-          -- Auto-completion for SQL
-          vim.api.nvim_create_autocmd("FileType", {
-            pattern = { "sql", "mysql", "plsql" },
-            callback = function()
-              -- Setup buffer-local completion with vim-dadbod-completion
-              vim.b.completion_chains = {
-                {
-                  complete_items = {
-                    'vim-dadbod-completion'
-                  }
-                }
-              }
-              
-              -- Enable SQL-specific settings
-              vim.opt_local.expandtab = true
-              vim.opt_local.shiftwidth = 2
-              vim.opt_local.tabstop = 2
-              vim.opt_local.softtabstop = 2
-            end,
-          })
-        end,
-        keys = {
-          { "<leader>od", "<cmd>DBUIToggle<cr>", desc = "Toggle Database UI" },
-          { "<leader>odf", "<cmd>DBUIFindBuffer<cr>", desc = "Find Database Buffer" },
-          { "<leader>oda", "<cmd>DBUIAddConnection<cr>", desc = "Add Database Connection" },
-          { "<leader>odr", "<cmd>DBUIRenameBuffer<cr>", desc = "Rename Database Buffer" },
-          { "<leader>odq", "<cmd>DBUILastQueryInfo<cr>", desc = "Last Query Info" },
-        },
-      },
-    },
     cmd = {
       "DB",
       "DBCompleteTables",
       "DBCompleteColumns",
     },
+  },
+  
+  {
+    "kristijanhusak/vim-dadbod-ui",
+    dependencies = {
+      "tpope/vim-dadbod",
+      { "kristijanhusak/vim-dadbod-completion", ft = { "sql", "mysql", "plsql" } },
+    },
+    cmd = {
+      "DBUI",
+      "DBUIToggle",
+      "DBUIAddConnection",
+      "DBUIFindBuffer",
+    },
+    keys = {
+      { "<leader>odd", "<cmd>DBUIToggle<cr>", desc = "Toggle Database UI" },
+      { "<leader>odf", "<cmd>DBUIFindBuffer<cr>", desc = "Find Database Buffer" },
+      { "<leader>odr", "<cmd>DBUIRenameBuffer<cr>", desc = "Rename Database Buffer" },
+      { "<leader>odq", "<cmd>DBUILastQueryInfo<cr>", desc = "Last Query Info" },
+    },
     config = function()
-      -- Setup vim-dadbod
-      vim.g.dadbod_manage_dbext = 1
+      -- DBUI configuration
+      vim.g.db_ui_use_nerd_fonts = 1
+      vim.g.db_ui_show_database_icon = 1
+      vim.g.db_ui_force_echo_notifications = 1
+      vim.g.db_ui_win_position = "right"
+      vim.g.db_ui_winwidth = 40
+      vim.g.db_ui_default_query = "SELECT * FROM "
+      vim.g.db_ui_save_location = vim.fn.stdpath("data") .. "/db_ui"
+      vim.g.db_ui_tmp_query_location = vim.fn.stdpath("data") .. "/db_ui/tmp"
       
-      -- Add some common database URLs as examples (you can customize these)
-      -- PostgreSQL: postgresql://user:password@localhost:5432/dbname
-      -- MySQL: mysql://user:password@localhost:3306/dbname
-      -- SQLite: sqlite:///path/to/database.db
+      -- Configure icons
+      vim.g.db_ui_icons = {
+        expanded = {
+          db = "▾ ",
+          buffers = "▾ ",
+          saved_queries = "▾ ",
+          schemas = "▾ ",
+          schema = "▾ ",
+          tables = "▾ ",
+          table = "▾ ",
+        },
+        collapsed = {
+          db = "▸ ",
+          buffers = "▸ ",
+          saved_queries = "▸ ",
+          schemas = "▸ ",
+          schema = "▸ ",
+          tables = "▸ ",
+          table = "▸ ",
+        },
+        saved_query = "",
+        new_query = "󰘶",
+        tables = "󰅩",
+        buffers = "󰯉",
+        add_connection = "",
+        connection_ok = "✓",
+        connection_error = "✗",
+      }
       
-      -- Optional: Set up some default connections
-      -- vim.g.dbs = {
-      --   dev = 'postgresql://user:password@localhost:5432/devdb',
-      --   prod = 'postgresql://user:password@prod-server:5432/proddb',
-      --   local = 'sqlite:' .. vim.fn.expand('~/databases/local.db'),
-      -- }
+      -- Initialize empty connections table if not exists
+      vim.g.dbs = vim.g.dbs or {}
       
       -- SQL specific keymaps
       vim.api.nvim_create_autocmd("FileType", {
         pattern = { "sql", "mysql", "plsql" },
         callback = function()
+          -- Enable SQL-specific settings
+          vim.opt_local.expandtab = true
+          vim.opt_local.shiftwidth = 2
+          vim.opt_local.tabstop = 2
+          vim.opt_local.softtabstop = 2
+          
+          -- Keymaps for SQL buffers
           vim.keymap.set("n", "<leader>ode", "<Plug>(DBUI_ExecuteQuery)", { buffer = true, desc = "Execute Query" })
           vim.keymap.set("v", "<leader>ode", "<Plug>(DBUI_ExecuteQuery)", { buffer = true, desc = "Execute Query" })
           vim.keymap.set("n", "<leader>odw", "<Plug>(DBUI_SaveQuery)", { buffer = true, desc = "Save Query" })
@@ -2901,7 +3189,37 @@ return {
           vim.keymap.set("n", "<leader>ods", "<Plug>(DBUI_ToggleResultLayout)", { buffer = true, desc = "Toggle Result Layout" })
         end,
       })
+      
+      -- Create directories if they don't exist
+      vim.fn.mkdir(vim.g.db_ui_save_location, "p")
+      vim.fn.mkdir(vim.g.db_ui_tmp_query_location, "p")
     end,
+  },
+  
+  -- CSV viewing and editing
+  {
+    "hat0uma/csvview.nvim",
+    ft = { "csv", "tsv", "csv_semicolon", "csv_pipe" },
+    keys = {
+      { "<leader>cvv", "<cmd>CsvViewToggle<cr>", desc = "Toggle CSV View", ft = { "csv", "tsv", "csv_semicolon", "csv_pipe" } },
+    },
+    opts = {
+      parser = {
+        async_chunksize = 50,
+        delimiter = {
+          fallbacks = { ",", "\t", ";", "|" },
+          ft = {
+            tsv = "\t",
+            csv_semicolon = ";",
+            csv_pipe = "|",
+          },
+        },
+        quote_char = '"',
+      },
+      view = {
+        display_mode = "highlight",
+      },
+    },
   },
 
   -- Neotest for testing
