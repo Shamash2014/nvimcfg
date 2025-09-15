@@ -804,7 +804,7 @@ return {
     end,
     dependencies = { "nvim-tree/nvim-web-devicons" },
     keys = {
-      { "<leader>-", "<cmd>Oil<cr>", desc = "Open Oil" },
+      { "<leader>fj", "<cmd>Oil<cr>", desc = "Open Oil" },
     },
   },
 
@@ -852,6 +852,17 @@ return {
     keys = {
       -- Find operations (with proper root detection for bare repos and worktrees)
       { "<leader>ff",  function() 
+        -- Check if current buffer is a terminal
+        if vim.bo.buftype == "terminal" then
+          -- Find the first non-terminal window
+          for _, win in ipairs(vim.api.nvim_list_wins()) do
+            local buf = vim.api.nvim_win_get_buf(win)
+            if vim.api.nvim_buf_get_option(buf, "buftype") ~= "terminal" then
+              vim.api.nvim_set_current_win(win)
+              break
+            end
+          end
+        end
         local root = vim.g.git_root or vim.fn.getcwd()
         require("snacks").picker.files({ cwd = root }) 
       end, desc = "Find Files" },
@@ -886,8 +897,16 @@ return {
       { "<leader>sI",  function() require("snacks").picker.lsp_workspace_symbols() end, desc = "Search All Symbols (Zed-like)" },
 
       -- Buffer operations
-      { "<leader>bb",  function() require("snacks").picker.buffers() end,        desc = "Buffer List" },
+      { "<leader>bb",  function() 
+        require("snacks").picker.buffers({
+          on_select = function(item)
+            -- Open buffer in current window
+            vim.cmd("buffer " .. item.buf)
+          end
+        }) 
+      end, desc = "Buffer List" },
       { "<leader>bd",  "<cmd>bdelete<cr>",                                       desc = "Delete Buffer" },
+      { "<leader>bD",  "<cmd>bdelete!<cr>",                                      desc = "Force Delete Buffer" },
       { "<leader>bwn", "<cmd>tabnew<cr>",                                        desc = "New Tab" },
       { "<leader>bwc", "<cmd>tabclose<cr>",                                      desc = "Close Tab" },
       { "<leader>bwo", "<cmd>tabonly<cr>",                                       desc = "Close Other Tabs" },
@@ -922,10 +941,13 @@ return {
           local cmd = vim.fn.input("Command: ")
           if cmd ~= "" then
             vim.g.last_terminal_command = cmd
-            require("snacks").terminal.open(cmd, { win = { position = "right" } })
+            -- Open terminal as a regular buffer
+            vim.cmd("terminal " .. cmd)
+            -- Enter insert mode in terminal
+            vim.cmd("startinsert")
           end
         end,
-        desc = "Run Custom Command"
+        desc = "Run Custom Command (Buffer)"
       },
       {
         "<leader>otr",
@@ -2487,7 +2509,12 @@ return {
       vim.keymap.set("n", "<leader>bb", function()
         -- Since scope.nvim already filters buffers per tab, just use the regular buffer picker
         -- It will only show buffers from the current tab thanks to scope
-        Snacks.picker.buffers()
+        Snacks.picker.buffers({
+          on_select = function(item)
+            -- Open buffer in current window
+            vim.cmd("buffer " .. item.buf)
+          end
+        })
       end, { desc = "Buffers (current tab)" })
       
       vim.keymap.set("n", "<leader>bB", function()
@@ -2510,7 +2537,12 @@ return {
         vim.api.nvim_set_current_tabpage(current_tab)
         
         -- Show all buffers
-        Snacks.picker.buffers()
+        Snacks.picker.buffers({
+          on_select = function(item)
+            -- Open buffer in current window
+            vim.cmd("buffer " .. item.buf)
+          end
+        })
       end, { desc = "Buffers (all tabs)" })
       
       -- Tab management keymaps for workspaces
@@ -2523,7 +2555,198 @@ return {
       vim.keymap.set("n", "<leader>t3", "3gt", { desc = "Tab 3" })
       vim.keymap.set("n", "<leader>t4", "4gt", { desc = "Tab 4" })
       vim.keymap.set("n", "<leader>t5", "5gt", { desc = "Tab 5" })
+      
+      -- Tab picker using snacks
+      vim.keymap.set("n", "<leader>tp", function()
+        local tabs = {}
+        local current_tab = vim.api.nvim_get_current_tabpage()
+        
+        for i, tab in ipairs(vim.api.nvim_list_tabpages()) do
+          local win = vim.api.nvim_tabpage_get_win(tab)
+          local buf = vim.api.nvim_win_get_buf(win)
+          local name = vim.api.nvim_buf_get_name(buf)
+          
+          -- Get working directory safely
+          local cwd = ""
+          local ok, result = pcall(function()
+            -- Save current tab
+            local saved_tab = vim.api.nvim_get_current_tabpage()
+            -- Switch to target tab to get its cwd
+            vim.api.nvim_set_current_tabpage(tab)
+            cwd = vim.fn.getcwd()
+            -- Switch back
+            vim.api.nvim_set_current_tabpage(saved_tab)
+            return cwd
+          end)
+          
+          if ok then
+            cwd = result
+          else
+            cwd = vim.fn.getcwd()
+          end
+          
+          -- Get a nice display name
+          local display_name = name ~= "" and vim.fn.fnamemodify(name, ":t") or "[No Name]"
+          local dir_name = vim.fn.fnamemodify(cwd, ":t")
+          
+          table.insert(tabs, {
+            tab = tab,
+            index = i,
+            name = string.format("Tab %d: %s (%s)", i, display_name, dir_name),
+            current = tab == current_tab,
+          })
+        end
+        
+        vim.ui.select(tabs, {
+          prompt = "Select Tab",
+          format_item = function(item)
+            return (item.current and "➤ " or "  ") .. item.name
+          end,
+        }, function(choice)
+          if choice then
+            vim.api.nvim_set_current_tabpage(choice.tab)
+          end
+        end)
+      end, { desc = "Tab picker" })
     end,
+  },
+  
+  -- Auto-session for project session management
+  {
+    "rmagatti/auto-session",
+    lazy = false,
+    config = function()
+      require("auto-session").setup({
+        log_level = "error",
+        auto_session_enable_last_session = false,
+        auto_session_root_dir = vim.fn.stdpath("data") .. "/sessions/",
+        auto_session_enabled = true,
+        auto_save_enabled = true,
+        auto_restore_enabled = false, -- Don't auto-restore, let user choose
+        auto_session_suppress_dirs = { "~/", "~/Downloads", "/", "/tmp" },
+        auto_session_use_git_branch = true,
+        
+        -- Save extra info
+        pre_save_cmds = {
+          function()
+            -- Save scope.nvim state if available
+            if pcall(require, "scope") then
+              pcall(vim.cmd, "ScopeSaveState")
+            end
+          end,
+        },
+        
+        post_restore_cmds = {
+          function()
+            -- Restore scope.nvim state if available
+            if pcall(require, "scope") then
+              pcall(vim.cmd, "ScopeLoadState")
+            end
+          end,
+        },
+      })
+      
+      -- Workspace/Project picker using sessions (disabled - using tabs instead)
+      --[[ vim.keymap.set("n", "<leader>pw", function()
+        local sessions_dir = vim.fn.stdpath("data") .. "/sessions/"
+        vim.fn.mkdir(sessions_dir, "p")
+        local sessions = {}
+        
+        -- Get all session files
+        local handle = vim.loop.fs_scandir(sessions_dir)
+        if handle then
+          while true do
+            local name, type = vim.loop.fs_scandir_next(handle)
+            if not name then break end
+            
+            if type == "file" and name:match("%.vim$") then
+              -- Clean up the session name for display
+              local session_name = name:gsub("%.vim$", ""):gsub("%%", "/"):gsub("__", " - ")
+              table.insert(sessions, {
+                name = session_name,
+                file = sessions_dir .. name,
+                path = name:gsub("%.vim$", ""):gsub("%%", "/"),
+              })
+            end
+          end
+        end
+        
+        -- Add current directory as new project option
+        table.insert(sessions, 1, {
+          name = "[New] " .. vim.fn.fnamemodify(vim.fn.getcwd(), ":t"),
+          file = nil,
+          path = vim.fn.getcwd(),
+        })
+        
+        if #sessions == 1 then
+          vim.notify("No saved sessions. Use <leader>ps to save current session", vim.log.levels.INFO)
+          return
+        end
+        
+        -- Use snacks picker to select session
+        Snacks.picker.select(sessions, {
+          prompt = "Select Workspace/Project",
+          format_item = function(item)
+            return {
+              text = item.name,
+              file = item.path,
+            }
+          end,
+        }):map(function(item)
+          if item then
+            if item.file then
+              -- Save current session before switching
+              require("auto-session").SaveSession()
+              -- Load selected session
+              require("auto-session").RestoreSession(item.file)
+              vim.notify("Loaded workspace: " .. item.name, vim.log.levels.INFO)
+            else
+              -- Create new session for current directory
+              require("auto-session").SaveSession()
+              vim.notify("Created new workspace", vim.log.levels.INFO)
+            end
+          end
+        end)
+      end, { desc = "Workspace Picker" }) --]]
+      
+      -- Quick session commands
+      vim.keymap.set("n", "<leader>ps", function()
+        require("auto-session").SaveSession()
+        vim.notify("Session saved", vim.log.levels.INFO)
+      end, { desc = "Save Session" })
+      
+      vim.keymap.set("n", "<leader>pr", function()
+        require("auto-session").RestoreSession()
+      end, { desc = "Restore Session" })
+      
+      vim.keymap.set("n", "<leader>pd", function()
+        require("auto-session").DeleteSession()
+      end, { desc = "Delete Session" })
+      
+      -- Create new project workspace
+      vim.keymap.set("n", "<leader>pn", function()
+        vim.ui.input({ prompt = "Project name: " }, function(name)
+          if name and name ~= "" then
+            local project_dir = vim.fn.input("Project directory: ", vim.fn.getcwd() .. "/", "dir")
+            if project_dir and project_dir ~= "" then
+              -- Change to project directory
+              vim.cmd("cd " .. project_dir)
+              vim.cmd("tcd " .. project_dir)
+              -- Save as new session
+              require("auto-session").SaveSession()
+              vim.notify("Created project: " .. name .. " at " .. project_dir, vim.log.levels.INFO)
+            end
+          end
+        end)
+      end, { desc = "New Project" })
+    end,
+    keys = {
+      { "<leader>p", group = "project" },
+      { "<leader>ps", desc = "Save Session" },
+      { "<leader>pr", desc = "Restore Session" },
+      { "<leader>pd", desc = "Delete Session" },
+      { "<leader>pn", desc = "New Project" },
+    },
   },
   
   -- LSP-based project switching

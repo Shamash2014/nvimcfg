@@ -150,23 +150,70 @@ vim.api.nvim_create_autocmd("LspAttach", {
   desc = "Configure LSP client to prevent sync errors"
 })
 
--- Bare repository and worktree support with proper root detection
-local function get_git_root()
-  -- First check if we're in a worktree
-  local git_root = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", ""):gsub("^%s+", ""):gsub("%s+$", "")
+-- Project root detection with multiple strategies
+local function get_project_root(path)
+  path = path or vim.fn.expand('%:p:h')
+  if path == '' then
+    path = vim.fn.getcwd()
+  end
   
+  -- Strategy 1: Git repository root
+  local git_root = vim.fn.system("cd " .. vim.fn.shellescape(path) .. " && git rev-parse --show-toplevel 2>/dev/null"):gsub("\n", ""):gsub("^%s+", ""):gsub("%s+$", "")
   if git_root ~= "" and vim.fn.isdirectory(git_root) == 1 then
     return git_root
   end
   
-  -- Check if we're in a bare repository
-  local is_bare = vim.fn.system("git rev-parse --is-bare-repository 2>/dev/null"):gsub("\n", "") == "true"
+  -- Strategy 2: Look for project markers
+  local markers = {
+    '.git',
+    '.svn',
+    '.hg',
+    'package.json',
+    'Cargo.toml',
+    'go.mod',
+    'pom.xml',
+    'build.gradle',
+    'CMakeLists.txt',
+    'Makefile',
+    'setup.py',
+    'pyproject.toml',
+    'composer.json',
+    'tsconfig.json',
+    '.project',
+    '.vscode',
+    '.idea',
+  }
+  
+  -- Search upwards for markers
+  local current = path
+  while current ~= '/' do
+    for _, marker in ipairs(markers) do
+      local marker_path = current .. '/' .. marker
+      if vim.fn.isdirectory(marker_path) == 1 or vim.fn.filereadable(marker_path) == 1 then
+        return current
+      end
+    end
+    local parent = vim.fn.fnamemodify(current, ':h')
+    if parent == current then
+      break
+    end
+    current = parent
+  end
+  
+  -- Strategy 3: Check if we're in a bare repository
+  local is_bare = vim.fn.system("cd " .. vim.fn.shellescape(path) .. " && git rev-parse --is-bare-repository 2>/dev/null"):gsub("\n", "") == "true"
   if is_bare then
-    local git_dir = vim.fn.system("git rev-parse --git-dir 2>/dev/null"):gsub("\n", ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local git_dir = vim.fn.system("cd " .. vim.fn.shellescape(path) .. " && git rev-parse --git-dir 2>/dev/null"):gsub("\n", ""):gsub("^%s+", ""):gsub("%s+$", "")
     return vim.fn.fnamemodify(git_dir, ":h")
   end
   
-  return nil
+  -- Fallback to current working directory
+  return vim.fn.getcwd()
+end
+
+-- Wrapper for compatibility
+local function get_git_root()
+  return get_project_root()
 end
 
 local function setup_bare_repo_support()
@@ -201,11 +248,31 @@ local function setup_bare_repo_support()
   vim.g.git_root = git_root
 end
 
--- Run bare repo setup on startup and when changing directories
-vim.api.nvim_create_autocmd({ "VimEnter", "DirChanged", "BufEnter" }, {
-  callback = setup_bare_repo_support,
-  desc = "Setup bare repository support"
+-- Update project root on startup and when changing context
+vim.api.nvim_create_autocmd({ "VimEnter", "DirChanged", "BufEnter", "TabEnter" }, {
+  callback = function()
+    -- Get current file path or cwd
+    local current_path = vim.fn.expand("%:p:h")
+    if current_path == "" then
+      current_path = vim.fn.getcwd()
+    end
+    
+    -- Update project root
+    local project_root = get_project_root(current_path)
+    vim.g.project_root = project_root
+    vim.g.git_root = project_root  -- For backward compatibility
+    
+    -- Run bare repo setup if needed
+    setup_bare_repo_support()
+  end,
+  desc = "Update project root detection"
 })
+
+-- Command to show current project root
+vim.api.nvim_create_user_command("ProjectRoot", function()
+  local root = vim.g.project_root or vim.fn.getcwd()
+  vim.notify("Project root: " .. root, vim.log.levels.INFO)
+end, { desc = "Show current project root" })
 
 -- Override vim.fn.finddir and vim.fn.findfile to respect git worktree roots
 local original_finddir = vim.fn.finddir
