@@ -1,7 +1,5 @@
 return {
-  name = "custom-theme",
-  dir = vim.fn.stdpath("config"),
-  lazy = false,
+  name = "monochrome",
   priority = 1000,
   config = function()
     local colors = {
@@ -19,7 +17,7 @@ return {
       ErrorMsg = { fg = colors.error, bg = colors.bg },
       WarningMsg = { fg = colors.error, bg = colors.bg },
 
-      -- All syntax elements (monotone white)
+      -- All syntax elements (monochrome white)
       Identifier = { fg = colors.fg, bg = colors.bg },
       Statement = { fg = colors.fg, bg = colors.bg },
       PreProc = { fg = colors.fg, bg = colors.bg },
@@ -57,7 +55,6 @@ return {
       StatusLine = { fg = colors.fg, bg = colors.bg },
       StatusLineNC = { fg = colors.comment, bg = colors.bg },
       WinSeparator = { fg = colors.comment, bg = colors.bg },
-      VertSplit = { fg = colors.comment, bg = colors.bg },
       LineNr = { fg = colors.comment, bg = colors.bg },
       CursorLineNr = { fg = colors.fg, bg = colors.bg },
       Visual = { fg = colors.bg, bg = colors.fg },
