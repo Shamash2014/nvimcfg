@@ -43,6 +43,18 @@ if vim.fn.executable("vscode-html-language-server") == 1 and _G.lsp_config then
         javascript = true,
       },
       provideFormatter = true,
+      emmet = {
+        showExpandedAbbreviation = "always",
+        showAbbreviationSuggestions = true,
+        syntaxProfiles = {
+          html = "xhtml",
+        },
+        variables = {
+          lang = "en",
+        },
+        excludeSuggestions = [],
+        preferences = {},
+      },
     },
     single_file_support = true,
   }))

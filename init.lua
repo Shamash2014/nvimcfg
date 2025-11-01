@@ -53,6 +53,7 @@ vim.opt.scrolloff = 8
 vim.opt.foldlevelstart = 99
 vim.opt.foldmethod = "marker"
 vim.opt.spelloptions = "camel"
+vim.opt.laststatus = 3 -- Global statusline for fully collapsible views
 
 -- Native completion settings
 vim.opt.completeopt = { "menu", "menuone", "noselect" }
@@ -224,6 +225,7 @@ require('lazy').setup({
           end, desc = "Grep Word Under Cursor" },
           { '<leader>q',  group = 'Quit' },
           { '<leader>d',  group = 'Debug' }, -- Debug operations
+          { '<leader>a',  group = 'AI' },    -- AI operations (Avante)
           { '<leader>c',  group = 'LSP' },   -- LSP operations
           { '<leader>l',  group = 'Code' },  -- Code actions (format, rename)
         },
@@ -258,6 +260,7 @@ require('lazy').setup({
       -- Fuzzy finder (vscode-style layout)
       picker = {
         enabled = true,
+        ui_select = true, -- Use picker for vim.ui.select
         layout = { preset = 'vscode', preview = false },
         preview = { enabled = false },
         win = {
@@ -300,12 +303,13 @@ require('lazy').setup({
       { '<leader>oc',       function() require('snacks').picker.commands() end,                                                 desc = 'Command Palette' },
 
       -- Terminal
-      { '<C-/>',            function() require('snacks').terminal.toggle() end,                                                 desc = 'Toggle Terminal', mode = { 'n', 't' } },
+      { '<C-/>',            function() require('snacks').terminal.toggle() end,                                                 desc = 'Toggle Terminal',    mode = { 'n', 't' } },
       { '<leader>ot',       function() require('snacks').terminal.toggle() end,                                                 desc = 'Toggle Terminal' },
 
       -- Quick buffer operations
       { '<leader>bt',       show_tab_picker,                                                                                    desc = 'Tab List' },
       { '<leader>bd',       '<cmd>bdelete<cr>',                                                                                 desc = 'Delete Buffer' },
+      { '<leader>bD',       '<cmd>bdelete!<cr>',                                                                                desc = 'Force Delete Buffer' },
 
       -- Quit
       { '<leader>qq',       '<cmd>qa<cr>',                                                                                      desc = 'Quit All' },
@@ -349,7 +353,7 @@ require('lazy').setup({
           "lua", "vim", "vimdoc", "javascript", "typescript", "tsx",
           "python", "go", "rust", "java", "c", "cpp",
           "html", "css", "json", "yaml", "toml", "markdown",
-          "astro", "angular", "scss"
+          "astro", "angular", "scss", "dart"
         },
         auto_install = true,
         highlight = {
@@ -488,9 +492,12 @@ require('lazy').setup({
     end,
   },
 
-  -- Markview - Enhanced mark visualization
+  -- Markview - Enhanced mark visualization with Avante support
   {
     "OXY2DEV/markview.nvim",
+    enabled = true,
+    lazy = false,
+    ft = { "markdown", "norg", "rmd", "org", "vimwiki", "Avante" },
     keys = {
       { "m",  mode = { "n", "v", "o", "s" } }, -- All mark modes
       { "dm", mode = "n" },                    -- Delete mark
@@ -498,6 +505,11 @@ require('lazy').setup({
     },
     config = function()
       require("markview").setup({
+        preview = {
+          filetypes = { "markdown", "norg", "rmd", "org", "vimwiki", "Avante" },
+          ignore_buftypes = {},
+        },
+        max_length = 99999,
         highlight_groups = {
           Markview = { bg = "#b7b3ff", fg = "#000000" },
           MarkviewPrimary = { bg = "#ff79c6", fg = "#000000" },
@@ -505,12 +517,10 @@ require('lazy').setup({
           MarkviewSign = { fg = "#ff79c6" },
         },
         signs = {
-          -- Enable visual sign indicators for marks
           current_mark = true,
           other_marks = true,
         },
         events = {
-          -- Auto-show marks when jumping
           show_on_autocmd = "CursorMoved",
           hide_on_autocmd = "BufLeave",
         },
@@ -593,6 +603,7 @@ require('lazy').setup({
       { '<leader>gh', '<cmd>DiffviewFileHistory %<cr>', desc = 'File History' },
     },
     opts = {
+      kind = 'vsplit',
       integrations = {
         diffview = true,
         snacks = true,
@@ -710,6 +721,123 @@ require('lazy').setup({
       vim.keymap.set("n", "<leader>gcl", "<cmd>GitConflictListQf<cr>", { desc = "List Conflicts" })
       vim.keymap.set("n", "]x", "<cmd>GitConflictNextConflict<cr>", { desc = "Next Conflict" })
       vim.keymap.set("n", "[x", "<cmd>GitConflictPrevConflict<cr>", { desc = "Prev Conflict" })
+    end,
+  },
+
+  -- Avante - AI-powered coding assistant with LM Studio and ACP support
+  {
+    'yetone/avante.nvim',
+    event = 'VeryLazy',
+    build = 'make',
+    dependencies = {
+      'nvim-lua/plenary.nvim',
+      'MunifTanjim/nui.nvim',
+      'stevearc/dressing.nvim',
+      'MeanderingProgrammer/render-markdown.nvim',
+    },
+    keys = {
+      { '<leader>aa', function() require('avante.api').ask() end,     desc = 'Avante Ask',    mode = { 'n', 'v' } },
+      { '<leader>ar', function() require('avante.api').refresh() end, desc = 'Avante Refresh' },
+      { '<leader>ae', function() require('avante.api').edit() end,    desc = 'Avante Edit',   mode = 'v' },
+      { '<leader>at', '<cmd>AvanteToggle<cr>',                        desc = 'Avante Toggle' },
+      {
+        '<leader>ap',
+        function()
+          vim.ui.select({ 'claude-code', 'opencode', 'goose', 'lmstudio' }, {
+            prompt = 'Select Provider:',
+          }, function(choice)
+            if choice then
+              vim.cmd('AvanteSwitchProvider ' .. choice)
+            end
+          end)
+        end,
+        desc = 'Switch Provider'
+      },
+    },
+    opts = {
+      provider = 'goose',
+      auto_suggestions_provider = 'lmstudio',
+      providers = {
+        lmstudio = {
+          __inherited_from = 'openai',
+          endpoint = 'http://localhost:1234/v1',
+          model = 'qwen3-next-80b-a3b-instruct',
+          timeout = 30000,
+          api_key_name = 'LM_API_KEY',
+          extra_request_body = {
+            temperature = 0.7,
+            max_tokens = 24000,
+          },
+        },
+      },
+      acp_providers = {
+        ["claude-code"] = {
+          command = "npx",
+          args = { "@zed-industries/claude-code-acp" },
+          env = {
+            NODE_NO_WARNINGS = "1",
+            ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY"),
+          },
+        },
+        opencode = {
+          command = 'opencode',
+          args = { "acp" },
+          env = {},
+        },
+        goose = {
+          command = 'goose',
+          args = { 'acp' },
+          env = {},
+        },
+      },
+      behaviour = {
+        auto_suggestions = true,
+        auto_set_highlight_group = true,
+        auto_set_keymaps = true,
+        auto_apply_diff_after_generation = false,
+        support_paste_from_clipboard = true,
+      },
+      mappings = {
+        ask = '<leader>aa',
+        edit = '<leader>ae',
+        refresh = '<leader>ar',
+        diff = {
+          ours = 'co',
+          theirs = 'ct',
+          both = 'cb',
+          next = ']x',
+          prev = '[x',
+        },
+        jump = {
+          next = ']]',
+          prev = '[[',
+        },
+        submit = {
+          normal = '<CR>',
+          insert = '<C-s>',
+        },
+      },
+      windows = {
+        wrap = true,
+        width = 30,
+        sidebar_header = {
+          align = 'center',
+          rounded = true,
+        },
+      },
+      highlights = {
+        diff = {
+          current = 'DiffText',
+          incoming = 'DiffAdd',
+        },
+      },
+      diff = {
+        debug = false,
+        autojump = true,
+      },
+    },
+    config = function(_, opts)
+      require('avante').setup(opts)
     end,
   },
 
@@ -939,6 +1067,45 @@ require('lazy').setup({
   install = {
     colorscheme = { 'habamax', 'custom-monochrome' }, -- Fallback + custom monochrome
   },
+})
+
+-- Web development utilities autocmd
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = { "html", "css", "scss", "javascript", "typescript", "jsx", "tsx" },
+  callback = function()
+    vim.keymap.set("n", "<leader>cm", function()
+      vim.ui.select({
+        "Emmet expand",
+        "Open in browser",
+        "Toggle CSS colors",
+        "Format with Emmet"
+      }, {
+        prompt = "Web Development:",
+        format_item = function(item)
+          return item
+        end
+      }, function(choice)
+        if choice == "Emmet expand" then
+          if vim.fn.exists("*emmet#expandAbbr") == 1 then
+            vim.cmd("Emmet")
+          else
+            vim.lsp.buf.completion()
+          end
+        elseif choice == "Open in browser" then
+          local file = vim.api.nvim_buf_get_name(0)
+          local url = "file://" .. file
+          vim.fn.system("open " .. url)
+        elseif choice == "Toggle CSS colors" then
+          vim.g.css_color = not vim.g.css_color
+          vim.notify("CSS colors " .. (vim.g.css_color and "enabled" or "disabled"))
+        elseif choice == "Format with Emmet" then
+          if vim.fn.exists("*emmet#expandAbbr") == 1 then
+            vim.cmd("Emmet")
+          end
+        end
+      end)
+    end, { buffer = true, desc = "Web development menu" })
+  end,
 })
 
 -- Custom project root detection with Git worktree support

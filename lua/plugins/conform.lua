@@ -14,6 +14,16 @@ return {
     },
     config = function()
       require('conform').setup({
+        formatters_by_ft = {
+          dart = { "dart_format" },
+        },
+        formatters = {
+          dart_format = {
+            command = "dart",
+            args = { "format", "--output=write", "$FILENAME" },
+            stdin = false,
+          },
+        },
         format_on_save = function(bufnr)
           if vim.fn.getfsize(vim.api.nvim_buf_get_name(bufnr)) > 100000 then
             return
