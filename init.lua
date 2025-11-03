@@ -124,6 +124,7 @@ vim.loader.enable()
 -- Load LSP configuration before lazy.nvim (needed for ftplugins)
 require('lsp')
 
+
 -- Helper function for tab picker (needs to be defined before lazy.nvim setup)
 local function show_tab_picker()
   local tabs = {}
@@ -242,10 +243,18 @@ require('lazy').setup({
       -- Essential features for minimal IDE
       bigfile = { enabled = true, size = 1.5 * 1024 * 1024 }, -- Performance for large files
       quickfile = { enabled = true },                         -- Faster file opening
-      input = { enabled = true },                             -- Better input UI
-      words = { enabled = true, debounce = 200 },             -- Word completion
-      rename = { enabled = true },                            -- LSP rename
-      quickfix = { enabled = true },                          -- Quickfix enhancement
+      input = {
+        enabled = true,
+        win = {
+          wo = {
+            winblend = 0,
+            winhighlight = 'Normal:SnacksInput,FloatBorder:SnacksInputBorder,FloatTitle:SnacksInputTitle',
+          },
+        },
+      },
+      words = { enabled = true, debounce = 200 }, -- Word completion
+      rename = { enabled = true },                -- LSP rename
+      quickfix = { enabled = true },              -- Quickfix enhancement
 
       -- Terminal management
       terminal = {
@@ -260,8 +269,8 @@ require('lazy').setup({
       -- Fuzzy finder (vscode-style layout)
       picker = {
         enabled = true,
-        ui_select = true, -- Use picker for vim.ui.select
-        layout = { preset = 'vscode', preview = false },
+        ui_select = true, -- Replace vim.ui.select with snacks picker
+        layout = 'vscode',
         preview = { enabled = false },
         win = {
           input = {
@@ -269,9 +278,24 @@ require('lazy').setup({
               ['<C-j>'] = { 'list_down', mode = { 'i', 'n' } },
               ['<C-k>'] = { 'list_up', mode = { 'i', 'n' } },
             },
+            wo = {
+              winblend = 0,
+              winhighlight = 'Normal:SnacksPickerInput,FloatBorder:SnacksInputBorder,FloatTitle:SnacksInputTitle',
+            },
+          },
+          list = {
+            wo = {
+              winblend = 0,
+              winhighlight = 'Normal:SnacksPicker,FloatBorder:SnacksPickerBorder,CursorLine:SnacksPickerSelected',
+            },
           },
         },
         formatters = { file = { filename_first = true } },
+        matcher = {
+          fuzzy = true,     -- Enable fuzzy matching
+          smartcase = true, -- Use smartcase matching
+          ignorecase = true -- Use ignorecase matching
+        },
       },
 
       -- Essential UI features
@@ -284,6 +308,13 @@ require('lazy').setup({
       zen = { enabled = false },
       scratch = { enabled = false },
     },
+    config = function(_, opts)
+      require("snacks").setup(opts)
+      -- Force global replacement of vim.ui.select if not already done
+      if vim.ui.select ~= require("snacks").picker.select then
+        vim.ui.select = require("snacks").picker.select
+      end
+    end,
     keys = {
       -- File finding (using project root)
       { '<leader><leader>', function() require('snacks').picker.files({ cwd = vim.g.project_root or vim.fn.getcwd() }) end,     desc = 'Find Files' },
@@ -313,6 +344,7 @@ require('lazy').setup({
 
       -- Quit
       { '<leader>qq',       '<cmd>qa<cr>',                                                                                      desc = 'Quit All' },
+      { '<leader>qr',       function() vim.cmd('source ' .. vim.fn.stdpath('config') .. '/init.lua') vim.notify('Config reloaded', vim.log.levels.INFO) end, desc = 'Reload Config' },
 
       -- LSP rename
       { '<leader>cr',       function() require('snacks').rename() end,                                                          desc = 'Rename' },
@@ -333,6 +365,84 @@ require('lazy').setup({
         end,
         desc = "Open Command in Terminal"
       }
+    },
+  },
+
+  -- LuaSnip - Snippet engine
+  {
+    'L3MON4D3/LuaSnip',
+    version = 'v2.*',
+    build = 'make install_jsregexp',
+    event = 'InsertEnter',
+    dependencies = {
+      'rafamadriz/friendly-snippets',
+    },
+    config = function()
+      require('snippets')
+    end,
+  },
+
+  -- Blink.cmp - Performant completion plugin
+  {
+    'saghen/blink.cmp',
+    version = '0.*',
+    event = 'InsertEnter',
+    dependencies = {
+      'L3MON4D3/LuaSnip',
+      'rafamadriz/friendly-snippets',
+    },
+    opts = {
+      keymap = {
+        preset = 'default',
+        ['<C-space>'] = { 'show', 'show_documentation', 'hide_documentation' },
+        ['<C-e>'] = { 'hide' },
+        ['<CR>'] = { 'accept', 'fallback' },
+        ['<Tab>'] = { 'select_next', 'snippet_forward', 'fallback' },
+        ['<S-Tab>'] = { 'select_prev', 'snippet_backward', 'fallback' },
+        ['<C-n>'] = { 'select_next', 'fallback' },
+        ['<C-p>'] = { 'select_prev', 'fallback' },
+        ['<C-u>'] = { 'scroll_documentation_up', 'fallback' },
+        ['<C-d>'] = { 'scroll_documentation_down', 'fallback' },
+      },
+      appearance = {
+        use_nvim_cmp_as_default = true,
+        nerd_font_variant = 'mono',
+      },
+      snippets = {
+        preset = 'luasnip',
+      },
+      sources = {
+        default = { 'lsp', 'path', 'snippets', 'buffer' },
+      },
+      completion = {
+        menu = {
+          border = 'single',
+          winblend = 0,
+          draw = {
+            columns = {
+              { 'label', 'label_description', gap = 1 },
+              { 'kind_icon', 'kind' }
+            },
+          },
+        },
+        documentation = {
+          auto_show = true,
+          auto_show_delay_ms = 500,
+          window = {
+            border = 'single',
+            winblend = 0,
+          },
+        },
+        ghost_text = {
+          enabled = true,
+        },
+      },
+      signature = {
+        enabled = true,
+        window = {
+          border = 'single',
+        },
+      },
     },
   },
 
@@ -732,7 +842,6 @@ require('lazy').setup({
     dependencies = {
       'nvim-lua/plenary.nvim',
       'MunifTanjim/nui.nvim',
-      'stevearc/dressing.nvim',
       'MeanderingProgrammer/render-markdown.nvim',
     },
     keys = {
@@ -755,13 +864,13 @@ require('lazy').setup({
       },
     },
     opts = {
-      provider = 'goose',
-      auto_suggestions_provider = 'lmstudio',
+      provider = 'lmstudio',
       providers = {
         lmstudio = {
           __inherited_from = 'openai',
           endpoint = 'http://localhost:1234/v1',
-          model = 'qwen3-next-80b-a3b-instruct',
+          -- model = 'kat-dev-mlx',
+          model = 'qwen/qwen3-vl-30b',
           timeout = 30000,
           api_key_name = 'LM_API_KEY',
           extra_request_body = {
@@ -791,7 +900,7 @@ require('lazy').setup({
         },
       },
       behaviour = {
-        auto_suggestions = true,
+        auto_suggestions = false,
         auto_set_highlight_group = true,
         auto_set_keymaps = true,
         auto_apply_diff_after_generation = false,

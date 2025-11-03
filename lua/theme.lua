@@ -193,6 +193,14 @@ M.groups = {
   SnacksInputBorder = { fg = colors.border },
   SnacksPickerList = { fg = colors.fg, bg = colors.bg },
   SnacksPickerSelected = { fg = colors.bg, bg = colors.selection, bold = true },
+  SnacksPickerCursor = { fg = colors.bg, bg = colors.selection },
+  SnacksPickerMatch = { fg = colors.fg, bold = true },
+  SnacksPickerDir = { fg = colors.fg_alt },
+  SnacksPickerFile = { fg = colors.fg },
+  SnacksPickerIcon = { fg = colors.fg_alt },
+  SnacksPickerPreview = { fg = colors.fg, bg = colors.bg },
+  SnacksPickerPreviewBorder = { fg = colors.border, bg = colors.bg },
+  SnacksPickerPreviewTitle = { fg = colors.fg, bg = colors.bg_alt, bold = true },
 
   -- Which-key
   WhichKeyFloat = { fg = colors.fg, bg = colors.bg_alt },
@@ -205,12 +213,10 @@ M.groups = {
   TreesitterContext = { bg = colors.bg_alt },
   TreesitterContextLineNumber = { fg = colors.comment, bg = colors.bg_alt },
 
-  -- Snacks input & picker
+  -- Snacks input
   SnacksInput = { fg = colors.fg, bg = colors.bg_alt },
-  SnacksInputBorder = { fg = colors.border },
+  SnacksInputIcon = { fg = colors.fg_alt },
   SnacksInputTitle = { fg = colors.fg, bold = true },
-  SnacksPickerTitle = { fg = colors.fg, bold = true },
-  SnacksPickerBorder = { fg = colors.border },
 
   -- Flash
   FlashLabel = { fg = colors.bg, bg = colors.fg, bold = true },
