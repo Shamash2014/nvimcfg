@@ -237,14 +237,33 @@ M.groups = {
 
   -- Completion
   PmenuThumb = { bg = colors.border },
+
+  -- Terminal colors
+  SnacksTerminal = { fg = colors.fg_alt, bg = colors.bg },
+  SnacksTerminalNormal = { fg = colors.fg_alt, bg = colors.bg },
+  SnacksTerminalBorder = { fg = colors.border, bg = colors.bg },
+  TerminalNormal = { fg = colors.fg_alt, bg = colors.bg },
+  TerminalBorder = { fg = colors.border, bg = colors.bg },
 }
 
--- Terminal colors
+-- Terminal colors (16 colors: 0-7 normal, 8-15 bright)
 M.term_colors = {
-  colors.bg, colors.red, colors.fg, colors.fg_alt,
-  colors.fg, colors.fg_alt, colors.fg_alt, colors.fg_alt,
-  colors.comment, colors.red, colors.fg, colors.fg_alt,
-  colors.fg, colors.fg_alt, colors.fg_alt, colors.fg_alt
+  colors.bg,       -- 0: black
+  colors.red,      -- 1: red
+  colors.comment,  -- 2: green (muted)
+  colors.warning,  -- 3: yellow (warning orange)
+  colors.fg_alt,   -- 4: blue (off-white)
+  colors.fg,       -- 5: magenta (white)
+  colors.comment,  -- 6: cyan (muted)
+  colors.fg_alt,   -- 7: white (off-white)
+  colors.comment,  -- 8: bright black (gray)
+  colors.red,      -- 9: bright red
+  colors.fg_alt,   -- 10: bright green (off-white)
+  colors.fg,       -- 11: bright yellow (white)
+  colors.fg,       -- 12: bright blue (white)
+  colors.fg,       -- 13: bright magenta (white)
+  colors.fg_alt,   -- 14: bright cyan (off-white)
+  colors.fg        -- 15: bright white
 }
 
 -- Setup function
@@ -264,6 +283,27 @@ function M.setup()
 
   -- Set color scheme name
   vim.g.colors_name = 'custom-monochrome'
+
+  -- Apply terminal colors to new terminal buffers
+  vim.api.nvim_create_autocmd({"TermOpen", "BufEnter"}, {
+    pattern = "term://*",
+    callback = function()
+      -- Set terminal-specific colors
+      for i, color in ipairs(M.term_colors) do
+        vim.cmd(string.format("let b:terminal_color_%d = '%s'", i - 1, color))
+      end
+      -- Ensure proper background for terminal
+      vim.cmd("setlocal winhighlight=Normal:SnacksTerminalNormal,NormalFloat:SnacksTerminalNormal")
+    end,
+  })
+
+  -- Apply colors to snacks_terminal filetype
+  vim.api.nvim_create_autocmd("FileType", {
+    pattern = "snacks_terminal",
+    callback = function()
+      vim.cmd("setlocal winhighlight=Normal:SnacksTerminalNormal,NormalFloat:SnacksTerminalNormal,FloatBorder:SnacksTerminalBorder")
+    end,
+  })
 end
 
 return M

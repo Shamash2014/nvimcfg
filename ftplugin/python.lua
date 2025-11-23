@@ -27,8 +27,21 @@ if vim.fn.executable("python") == 1 then
     }
   end
 
+  -- Helper function to detect Docker setup
+  local has_docker_compose = function()
+    return vim.fn.filereadable("docker-compose.yml") == 1 or
+           vim.fn.filereadable("docker-compose.yaml") == 1 or
+           vim.fn.filereadable("compose.yml") == 1 or
+           vim.fn.filereadable("compose.yaml") == 1
+  end
+
+  local has_dockerfile = function()
+    return vim.fn.filereadable("Dockerfile") == 1 or
+           vim.fn.filereadable("Dockerfile.dev") == 1
+  end
+
   if not dap.configurations.python then
-    dap.configurations.python = {
+    local configs = {
       {
         type = 'python',
         request = 'launch',
@@ -42,7 +55,89 @@ if vim.fn.executable("python") == 1 then
           return 'python'
         end,
       },
+      {
+        type = 'python',
+        request = 'attach',
+        name = 'Attach to process',
+        processId = require('dap.utils').pick_process,
+        pythonPath = function()
+          local venv = os.getenv('VIRTUAL_ENV')
+          if venv then
+            return venv .. '/bin/python'
+          end
+          return 'python'
+        end,
+      },
     }
+
+    -- Add Docker configurations if Docker setup is detected
+    if has_docker_compose() then
+      table.insert(configs, {
+        type = 'python',
+        request = 'launch',
+        name = 'Debug in Docker (Compose)',
+        program = '${file}',
+        console = 'integratedTerminal',
+        env = {
+          PYTHONPATH = "/app",
+        },
+        preLaunchTask = {
+          type = "shell",
+          command = "docker",
+          args = { "compose", "up", "-d", "--build" },
+          presentation = {
+            reveal = "always",
+            panel = "new"
+          }
+        },
+        postDebugTask = {
+          type = "shell",
+          command = "docker",
+          args = { "compose", "down" }
+        }
+      })
+
+      table.insert(configs, {
+        type = 'python',
+        request = 'attach',
+        name = 'Attach to Docker Container',
+        host = 'localhost',
+        port = 5678,
+        pathMappings = {
+          {
+            localRoot = '${workspaceFolder}',
+            remoteRoot = '/app'
+          }
+        },
+        preLaunchTask = {
+          type = "shell",
+          command = "docker",
+          args = { "compose", "exec", "-d", "app", "python", "-m", "debugpy", "--listen", "0.0.0.0:5678", "--wait-for-client", "${file}" }
+        }
+      })
+    elseif has_dockerfile() then
+      table.insert(configs, {
+        type = 'python',
+        request = 'launch',
+        name = 'Debug in Docker',
+        program = '${file}',
+        console = 'integratedTerminal',
+        env = {
+          PYTHONPATH = "/app",
+        },
+        preLaunchTask = {
+          type = "shell",
+          command = "docker",
+          args = { "build", "-t", "python-debug", "." },
+          presentation = {
+            reveal = "always",
+            panel = "new"
+          }
+        }
+      })
+    end
+
+    dap.configurations.python = configs
   end
 end
 

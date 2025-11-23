@@ -53,8 +53,21 @@ if vim.fn.executable("node") == 1 then
     }
   end
 
+  -- Helper function to detect Docker setup
+  local has_docker_compose = function()
+    return vim.fn.filereadable("docker-compose.yml") == 1 or
+           vim.fn.filereadable("docker-compose.yaml") == 1 or
+           vim.fn.filereadable("compose.yml") == 1 or
+           vim.fn.filereadable("compose.yaml") == 1
+  end
+
+  local has_dockerfile = function()
+    return vim.fn.filereadable("Dockerfile") == 1 or
+           vim.fn.filereadable("Dockerfile.dev") == 1
+  end
+
   if not dap.configurations.typescript then
-    dap.configurations.typescript = {
+    local configs = {
       {
         type = 'node2',
         request = 'launch',
@@ -73,6 +86,78 @@ if vim.fn.executable("node") == 1 then
         cwd = vim.fn.getcwd(),
       },
     }
+
+    -- Add Docker configurations if Docker setup is detected
+    if has_docker_compose() then
+      table.insert(configs, {
+        type = 'node2',
+        request = 'launch',
+        name = 'Debug in Docker (Compose)',
+        program = '${file}',
+        cwd = '/app',
+        sourceMaps = true,
+        protocol = 'inspector',
+        console = 'integratedTerminal',
+        env = {
+          NODE_ENV = 'development',
+        },
+        preLaunchTask = {
+          type = "shell",
+          command = "docker",
+          args = { "compose", "up", "-d", "--build" },
+          presentation = {
+            reveal = "always",
+            panel = "new"
+          }
+        },
+        postDebugTask = {
+          type = "shell",
+          command = "docker",
+          args = { "compose", "down" }
+        }
+      })
+
+      table.insert(configs, {
+        type = 'node2',
+        request = 'attach',
+        name = 'Attach to Docker Container',
+        address = 'localhost',
+        port = 9229,
+        localRoot = '${workspaceFolder}',
+        remoteRoot = '/app',
+        sourceMaps = true,
+        preLaunchTask = {
+          type = "shell",
+          command = "docker",
+          args = { "compose", "exec", "-d", "app", "node", "--inspect=0.0.0.0:9229", "${file}" }
+        }
+      })
+    elseif has_dockerfile() then
+      table.insert(configs, {
+        type = 'node2',
+        request = 'launch',
+        name = 'Debug in Docker',
+        program = '${file}',
+        cwd = '/app',
+        sourceMaps = true,
+        protocol = 'inspector',
+        console = 'integratedTerminal',
+        env = {
+          NODE_ENV = 'development',
+        },
+        preLaunchTask = {
+          type = "shell",
+          command = "docker",
+          args = { "build", "-t", "ts-debug", "." },
+          presentation = {
+            reveal = "always",
+            panel = "new"
+          }
+        }
+      })
+    end
+
+    dap.configurations.typescript = configs
   end
 end
 

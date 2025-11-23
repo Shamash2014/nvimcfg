@@ -30,8 +30,21 @@ if vim.fn.executable("dlv") == 1 then
     }
   end
 
+  -- Helper function to detect Docker setup
+  local has_docker_compose = function()
+    return vim.fn.filereadable("docker-compose.yml") == 1 or
+           vim.fn.filereadable("docker-compose.yaml") == 1 or
+           vim.fn.filereadable("compose.yml") == 1 or
+           vim.fn.filereadable("compose.yaml") == 1
+  end
+
+  local has_dockerfile = function()
+    return vim.fn.filereadable("Dockerfile") == 1 or
+           vim.fn.filereadable("Dockerfile.dev") == 1
+  end
+
   if not dap.configurations.go then
-    dap.configurations.go = {
+    local configs = {
       {
         type = 'delve',
         name = 'Debug',
@@ -52,6 +65,70 @@ if vim.fn.executable("dlv") == 1 then
         program = '${fileDirname}',
       },
     }
+
+    -- Add Docker configurations if Docker setup is detected
+    if has_docker_compose() then
+      table.insert(configs, {
+        type = 'delve',
+        name = 'Debug in Docker (Compose)',
+        request = 'launch',
+        program = '${file}',
+        env = {
+          CGO_ENABLED = "0",
+        },
+        preLaunchTask = {
+          type = "shell",
+          command = "docker",
+          args = { "compose", "up", "-d", "--build" },
+          presentation = {
+            reveal = "always",
+            panel = "new"
+          }
+        },
+        postDebugTask = {
+          type = "shell",
+          command = "docker",
+          args = { "compose", "down" }
+        }
+      })
+
+      table.insert(configs, {
+        type = 'delve',
+        name = 'Attach to Docker Container',
+        request = 'attach',
+        mode = 'remote',
+        remotePath = '/app',
+        port = 40000,
+        host = '127.0.0.1',
+        showLog = true,
+        preLaunchTask = {
+          type = "shell",
+          command = "docker",
+          args = { "compose", "exec", "-d", "app", "dlv", "debug", "--headless", "--listen=:40000", "--api-version=2", "." }
+        }
+      })
+    elseif has_dockerfile() then
+      table.insert(configs, {
+        type = 'delve',
+        name = 'Debug in Docker',
+        request = 'launch',
+        program = '${file}',
+        env = {
+          CGO_ENABLED = "0",
+        },
+        preLaunchTask = {
+          type = "shell",
+          command = "docker",
+          args = { "build", "-t", "go-debug", "." },
+          presentation = {
+            reveal = "always",
+            panel = "new"
+          }
+        }
+      })
+    end
+
+    dap.configurations.go = configs
   end
 end
 
