@@ -4,8 +4,27 @@ local M = {}
 -- Configuration
 local config = {
   terminal_split = 'horizontal',  -- 'horizontal' or 'vertical'
-  terminal_size = 0.3,  -- 30% of window
+  terminal_size = 0.3,  -- 30% of window (capped at this value unless overridden)
+  vertical_terminal_size = 0.2,  -- 20% width for vertical splits
 }
+
+-- Validate terminal size to ensure it doesn't exceed limits unless explicitly allowed
+local function validate_terminal_size(size, allow_override, is_vertical)
+  if type(size) == 'number' and size > 0 and size <= 1 then
+    local max_size = is_vertical and 0.5 or 0.3  -- Allow up to 50% for vertical, 30% for horizontal
+    if not allow_override and size > max_size then
+      return max_size
+    end
+    return size
+  end
+  -- Default fallback based on split type
+  return is_vertical and 0.2 or 0.3
+end
+
+-- Get appropriate terminal size based on split type
+local function get_terminal_size(is_vertical)
+  return is_vertical and config.vertical_terminal_size or config.terminal_size
+end
 
 -- Command history (max 200 entries)
 local command_history = {}
@@ -104,6 +123,92 @@ local function save_history()
   local cache_file = vim.fn.stdpath('data') .. '/task_history.json'
   local content = vim.json.encode(command_history)
   vim.fn.writefile({ content }, cache_file)
+end
+
+-- Parse errors from lines using error patterns
+function M.parse_errors_from_lines(lines, root)
+  -- Enhanced error patterns (similar to Emacs compilation-error-regexp-alist)
+  local error_patterns = {
+    -- Standard: file:line:col: message
+    { pattern = "([^:]+):(%d+):(%d+):%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
+    -- Standard: file:line: message
+    { pattern = "([^:]+):(%d+):%s*(.+)", file = 1, lnum = 2, text = 3, type = 'E' },
+    -- Go: file:line:col: message
+    { pattern = "([^:]+%.go):(%d+):(%d+):%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
+    -- Rust: --> file:line:col
+    { pattern = "%-%->%s+([^:]+):(%d+):(%d+)", file = 1, lnum = 2, col = 3, text = "Rust error", type = 'E' },
+    -- Python: File "file", line N
+    { pattern = 'File "([^"]+)", line (%d+)', file = 1, lnum = 2, text = "Python error", type = 'E' },
+    -- TypeScript/ESLint: file(line,col): message
+    { pattern = "([^%(]+)%((%d+),(%d+)%):%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
+    -- Maven/Gradle: [ERROR] file:[line,col] message
+    { pattern = "%[ERROR%]%s+([^:]+):(%d+):(%d+)%s+(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
+    -- GCC/Clang: file:line:col: error: message
+    { pattern = "([^:]+):(%d+):(%d+):%s*error:%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
+    -- GCC/Clang warnings
+    { pattern = "([^:]+):(%d+):(%d+):%s*warning:%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'W' },
+    -- Jest/Testing: at file:line:col
+    { pattern = "at%s+([^:]+):(%d+):(%d+)", file = 1, lnum = 2, col = 3, text = "Test failure", type = 'E' },
+    -- Make errors: make: *** [target] Error N
+    { pattern = "make:%s*%*%*%*%s*%[([^%]]+)%]%s*Error%s*(%d+)", file = 1, text = "Make error", type = 'E' },
+  }
+
+  local qflist = {}
+  root = root or M.get_project_root()
+
+  for _, line in ipairs(lines) do
+    for _, pattern_info in ipairs(error_patterns) do
+      local matches = { line:match(pattern_info.pattern) }
+      if #matches > 0 then
+        local filename = matches[pattern_info.file] or ""
+
+        -- Skip if filename is empty or looks like a flag
+        if filename ~= "" and not filename:match("^%-") then
+          -- Resolve file path to absolute path relative to project root
+          local absolute_path = filename
+          if not vim.startswith(filename, '/') then
+            -- If relative path, make it relative to project root
+            absolute_path = root .. '/' .. filename
+          end
+
+          -- Normalize path (remove ./ and resolve ../)
+          absolute_path = vim.fs.normalize(absolute_path)
+
+          -- Check if file exists, if not try current working directory
+          if vim.fn.filereadable(absolute_path) == 0 then
+            local cwd_path = vim.fn.getcwd() .. '/' .. filename
+            cwd_path = vim.fs.normalize(cwd_path)
+            if vim.fn.filereadable(cwd_path) == 1 then
+              absolute_path = cwd_path
+            end
+          end
+
+          local entry = {
+            filename = absolute_path,
+            lnum = tonumber(matches[pattern_info.lnum]) or 1,
+            col = pattern_info.col and tonumber(matches[pattern_info.col]) or 1,
+            text = matches[pattern_info.text] or line,
+            type = pattern_info.type or 'E',
+          }
+
+          table.insert(qflist, entry)
+        end
+        break -- Found a match, don't try other patterns
+      end
+    end
+  end
+
+  -- Limit to last 20 errors
+  if #qflist > 20 then
+    local start_idx = #qflist - 19
+    local limited_qflist = {}
+    for i = start_idx, #qflist do
+      table.insert(limited_qflist, qflist[i])
+    end
+    qflist = limited_qflist
+  end
+
+  return qflist
 end
 
 -- Add command to history
@@ -233,114 +338,93 @@ function M.run_command(cmd)
   local root = M.get_project_root()
   local final_cmd = 'cd ' .. vim.fn.shellescape(root) .. ' && ' .. cmd
 
-  -- Configure window options based on split type
+  -- Configure window options based on split type with size validation
+  local is_vertical = config.terminal_split == 'vertical'
+  local size = get_terminal_size(is_vertical)
+  local validated_size = validate_terminal_size(size, false, is_vertical)
   local win_opts = {}
-  if config.terminal_split == 'vertical' then
+  if is_vertical then
     win_opts = {
       style = 'split',
       position = 'right',
-      width = config.terminal_size,
+      width = validated_size,
     }
   else
     win_opts = {
       style = 'split',
       position = 'bottom',
-      height = config.terminal_size,
+      height = validated_size,
     }
   end
 
-  -- Use Snacks terminal to execute the command directly
-  local terminal = require('snacks').terminal
+  -- Use Snacks terminal for command execution
+  local ok, snacks = pcall(require, 'snacks')
+  if not ok then
+    vim.notify('Snacks not available', vim.log.levels.ERROR)
+    return
+  end
 
-  -- Get current environment with mise PATH
-  local full_env = vim.fn.environ()
+  -- Build Snacks terminal options
+  local snacks_opts = {
+    cwd = root,
+    win = {
+      position = is_vertical and 'right' or 'bottom',
+      width = is_vertical and validated_size or nil,
+      height = is_vertical and nil or validated_size,
+    },
+  }
 
-  local term = terminal.open(final_cmd, {
-    cwd = root,  -- Tab-aware project root
-    env = full_env,  -- Pass full environment including mise PATH
-    win = win_opts,
-    interactive = true,  -- Keep terminal open after command
-    auto_close = false,  -- Don't auto-close on exit
-    on_exit = function(term_obj, exit_code)
-      -- Parse errors immediately when command completes
-      if term_obj and term_obj.buf and vim.api.nvim_buf_is_valid(term_obj.buf) then
-        local lines = vim.api.nvim_buf_get_lines(term_obj.buf, 0, -1, false)
-        local qflist = {}
+  -- Create terminal using new module
+  local term = snacks.terminal.open(final_cmd, snacks_opts)
 
-        -- Enhanced error patterns (similar to Emacs compilation-error-regexp-alist)
-        local error_patterns = {
-          -- Standard: file:line:col: message
-          { pattern = "([^:]+):(%d+):(%d+):%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
-          -- Standard: file:line: message
-          { pattern = "([^:]+):(%d+):%s*(.+)", file = 1, lnum = 2, text = 3, type = 'E' },
-          -- Go: file:line:col: message
-          { pattern = "([^:]+%.go):(%d+):(%d+):%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
-          -- Rust: --> file:line:col
-          { pattern = "%-%->%s+([^:]+):(%d+):(%d+)", file = 1, lnum = 2, col = 3, text = "Rust error", type = 'E' },
-          -- Python: File "file", line N
-          { pattern = 'File "([^"]+)", line (%d+)', file = 1, lnum = 2, text = "Python error", type = 'E' },
-          -- TypeScript/ESLint: file(line,col): message
-          { pattern = "([^%(]+)%((%d+),(%d+)%):%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
-          -- Maven/Gradle: [ERROR] file:[line,col] message
-          { pattern = "%[ERROR%]%s+([^:]+):(%d+):(%d+)%s+(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
-          -- GCC/Clang: file:line:col: error: message
-          { pattern = "([^:]+):(%d+):(%d+):%s*error:%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
-          -- GCC/Clang warnings
-          { pattern = "([^:]+):(%d+):(%d+):%s*warning:%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'W' },
-          -- Jest/Testing: at file:line:col
-          { pattern = "at%s+([^:]+):(%d+):(%d+)", file = 1, lnum = 2, col = 3, text = "Test failure", type = 'E' },
-          -- Make errors: make: *** [target] Error N
-          { pattern = "make:%s*%*%*%*%s*%[([^%]]+)%]%s*Error%s*(%d+)", file = 1, text = "Make error", type = 'E' },
-        }
+  -- Return focus to original window
+  if current_win and vim.api.nvim_win_is_valid(current_win) then
+    vim.api.nvim_set_current_win(current_win)
+  end
+end
 
-        for _, line in ipairs(lines) do
-          for _, pattern_info in ipairs(error_patterns) do
-            local matches = { line:match(pattern_info.pattern) }
-            if #matches > 0 then
-              local entry = {
-                filename = matches[pattern_info.file] or "",
-                lnum = tonumber(matches[pattern_info.lnum]) or 1,
-                col = pattern_info.col and tonumber(matches[pattern_info.col]) or 1,
-                text = matches[pattern_info.text] or line,
-                type = pattern_info.type or 'E',
-                bufnr = 0,
-              }
+-- Run command in background terminal
+function M.run_command_background(cmd)
+  if not cmd or cmd == '' then
+    return
+  end
 
-              -- Skip if filename is empty or looks like a flag
-              if entry.filename ~= "" and not entry.filename:match("^%-") then
-                table.insert(qflist, entry)
-              end
-              break -- Found a match, don't try other patterns
-            end
-          end
-        end
+  -- Add to history
+  add_to_history(cmd)
 
-        -- Limit to last 20 errors
-        if #qflist > 20 then
-          local start_idx = #qflist - 19
-          local limited_qflist = {}
-          for i = start_idx, #qflist do
-            table.insert(limited_qflist, qflist[i])
-          end
-          qflist = limited_qflist
-        end
+  -- Get tab-aware project root
+  local root = M.get_project_root()
+  local final_cmd = 'cd ' .. vim.fn.shellescape(root) .. ' && ' .. cmd
 
-        if #qflist > 0 then
-          vim.fn.setqflist(qflist, 'r')
-          -- Auto-open quickfix like Emacs compilation mode
-          vim.cmd('copen')
-          vim.notify(string.format("Found %d errors/warnings (showing last 20)", #qflist), vim.log.levels.WARN)
+  -- Run in background with notification
+  vim.notify("Running in background: " .. cmd, vim.log.levels.INFO)
 
-          -- Jump to first error (like Emacs next-error)
-          vim.cmd('cfirst')
-        elseif exit_code == 0 then
-          vim.notify("Command completed successfully", vim.log.levels.INFO)
-        else
-          vim.notify(string.format("Command exited with code %d", exit_code), vim.log.levels.WARN)
-        end
-      end
-    end,
-  })
+  -- Store current buffer to return focus
+  local current_buf = vim.api.nvim_get_current_buf()
+  local current_win = vim.api.nvim_get_current_win()
+
+  -- Use Snacks terminal for background execution
+  local ok, snacks = pcall(require, 'snacks')
+  if not ok then
+    vim.notify('Snacks not available', vim.log.levels.ERROR)
+    return
+  end
+
+  local snacks_opts = {
+    cwd = root,
+    win = {
+      position = 'bottom',
+      height = 0.2,
+    },
+  }
+
+  -- Create terminal using new module
+  local term = snacks.terminal.open(final_cmd, snacks_opts)
+
+  -- Return focus to original window
+  if current_win and vim.api.nvim_win_is_valid(current_win) then
+    vim.api.nvim_set_current_win(current_win)
+  end
 end
 
 -- Show task picker
@@ -429,6 +513,92 @@ function M.show_task_picker()
   end)
 end
 
+-- Show background task picker
+function M.show_background_task_picker()
+  load_history()
+
+  local items = {}
+
+  -- ALWAYS add custom command option FIRST
+  table.insert(items, {
+    text = "Enter custom command...",
+    cmd = "custom",
+    type = "custom",
+    icon = "✎",
+  })
+
+  -- Add detected project tasks
+  local project_tasks = detect_project_tasks()
+  if #project_tasks > 0 then
+    -- Add separator before project tasks
+    table.insert(items, {
+      text = "─────── Project Tasks ────────",
+      cmd = nil,
+      type = "separator",
+      icon = "",
+    })
+
+    for _, task in ipairs(project_tasks) do
+      table.insert(items, {
+        text = task.name .. " (background)",
+        cmd = task.cmd,
+        type = task.type,
+        icon = "⚡",
+      })
+    end
+  end
+
+  -- Add recent commands if any exist
+  if #command_history > 0 then
+    -- Add separator before history
+    table.insert(items, {
+      text = "─────── Recent Commands ──────",
+      cmd = nil,
+      type = "separator",
+      icon = "",
+    })
+
+    for i, cmd in ipairs(command_history) do
+      if i <= 10 then -- Show only last 10
+        table.insert(items, {
+          text = cmd .. " (background)",
+          cmd = cmd,
+          type = "history",
+          icon = "⚡",
+        })
+      end
+    end
+  end
+
+  -- Show picker using correct API
+  vim.ui.select(items, {
+    prompt = "Select task to run in background:",
+    format_item = function(item)
+      if item.type == "separator" then
+        return item.text
+      end
+      return string.format("%s %s", item.icon or "", item.text)
+    end,
+  }, function(item)
+    if not item or not item.cmd then
+      return
+    end
+
+    if item.cmd == "custom" then
+      -- Prompt for custom command
+      vim.ui.input({
+        prompt = "Background command: ",
+      }, function(cmd)
+        if cmd and cmd ~= "" then
+          M.run_command_background(cmd)
+        end
+      end)
+    else
+      M.run_command_background(item.cmd)
+    end
+  end)
+end
+
 -- Run last command
 function M.run_last_command()
   if last_command then
@@ -443,31 +613,124 @@ function M.run_last_command()
   end
 end
 
+-- Restart command in current terminal buffer if it's a Snacks terminal
+function M.restart_terminal_command()
+  local buf = vim.api.nvim_get_current_buf()
+  local buftype = vim.api.nvim_buf_get_option(buf, 'buftype')
+
+  if buftype ~= 'terminal' then
+    vim.notify("Not in a terminal buffer", vim.log.levels.WARN)
+    return
+  end
+
+  -- Check if it's a Snacks terminal
+  local terminal_info = vim.b[buf].snacks_terminal
+  if not terminal_info or not terminal_info.cmd then
+    vim.notify("No command to restart in this terminal", vim.log.levels.WARN)
+    return
+  end
+
+  local cmd = terminal_info.cmd
+  if type(cmd) == "table" then
+    cmd = table.concat(cmd, " ")
+  end
+
+  -- Send Ctrl+C to interrupt current process
+  vim.api.nvim_feedkeys("\x03", "n", false)
+
+  -- Wait for process to terminate, then clear and restart
+  vim.defer_fn(function()
+    vim.api.nvim_feedkeys("clear\n", "n", false)
+
+    vim.defer_fn(function()
+      vim.api.nvim_feedkeys(cmd .. "\n", "n", false)
+      vim.notify("Restarted: " .. cmd, vim.log.levels.INFO)
+    end, 100)
+  end, 200)
+end
+
+-- Check if a terminal job is still running
+local function is_terminal_job_running(bufnr)
+  local ok, job_id = pcall(vim.api.nvim_buf_get_var, bufnr, 'terminal_job_id')
+  if not ok or not job_id then
+    return false
+  end
+
+  -- Use jobwait with timeout 0 to check if job is still running
+  -- Returns 0 if job is still running, job_id if it has exited
+  local result = vim.fn.jobwait({job_id}, 0)
+  return result[1] == -1 -- -1 means job is still running
+end
+
+-- Parse errors from terminal buffer and populate quickfix
+function M.parse_terminal_errors(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  -- Check if buffer is valid and is a terminal
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    vim.notify("Invalid buffer", vim.log.levels.ERROR)
+    return
+  end
+
+  local buftype = vim.api.nvim_buf_get_option(bufnr, 'buftype')
+  if buftype ~= 'terminal' then
+    vim.notify("Not a terminal buffer", vim.log.levels.WARN)
+    return
+  end
+
+  -- Get buffer lines and parse errors
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local qflist = M.parse_errors_from_lines(lines)
+
+  if #qflist > 0 then
+    vim.fn.setqflist(qflist, 'r')
+    vim.cmd('copen')
+    vim.notify(string.format("Found %d errors/warnings in terminal buffer", #qflist), vim.log.levels.INFO)
+    vim.cmd('cfirst')
+  else
+    vim.notify("No errors found in terminal buffer", vim.log.levels.INFO)
+  end
+end
+
 -- Show terminal buffers picker
 function M.show_terminal_buffers()
   local term_bufs = {}
 
-  -- Find all terminal buffers
+  -- Find all active terminal buffers
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_valid(buf) then
       local buftype = vim.api.nvim_buf_get_option(buf, 'buftype')
       if buftype == 'terminal' then
-        local name = vim.api.nvim_buf_get_name(buf)
-        if name == "" then
-          name = "[Terminal " .. buf .. "]"
-        else
-          name = vim.fn.fnamemodify(name, ":t")
+        -- Only include running terminals (filter out exited ones)
+        local is_running = is_terminal_job_running(buf)
+        if is_running then
+          local name = vim.api.nvim_buf_get_name(buf)
+          if name == "" then
+            name = "[Terminal " .. buf .. "]"
+          else
+            name = vim.fn.fnamemodify(name, ":t")
+          end
+
+          -- Add pin indicator if available
+          local pin_indicator = ""
+          if _G.buffer_pin and _G.buffer_pin.get_pin_indicator then
+            pin_indicator = _G.buffer_pin.get_pin_indicator(buf)
+          end
+
+          -- Add running status indicator
+          local status_indicator = "🟢 "
+
+          table.insert(term_bufs, {
+            text = pin_indicator .. status_indicator .. name,
+            bufnr = buf,
+          })
         end
-        table.insert(term_bufs, {
-          text = name,
-          bufnr = buf,
-        })
       end
     end
   end
 
   if #term_bufs == 0 then
-    vim.notify("No terminal buffers", vim.log.levels.INFO)
+    vim.notify("No active terminal buffers", vim.log.levels.INFO)
     return
   end
 
@@ -479,6 +742,20 @@ function M.show_terminal_buffers()
     end,
   }, function(item)
     if item then
+      -- Create new split based on terminal configuration
+      local is_vertical = config.terminal_split == 'vertical'
+      local size = get_terminal_size(is_vertical)
+      local validated_size = validate_terminal_size(size, false, is_vertical)
+
+      if is_vertical then
+        vim.cmd('vsplit')
+        vim.api.nvim_win_set_width(0, math.floor(vim.o.columns * validated_size))
+      else
+        vim.cmd('split')
+        vim.api.nvim_win_set_height(0, math.floor(vim.o.lines * validated_size))
+      end
+
+      -- Set the terminal buffer in the new split
       vim.api.nvim_set_current_buf(item.bufnr)
     end
   end)
@@ -491,11 +768,29 @@ function M.set_terminal_split(split_type)
   end
 end
 
--- Set terminal size
-function M.set_terminal_size(size)
+-- Set terminal size with appropriate caps unless explicitly overridden
+function M.set_terminal_size(size, allow_override, split_type)
+  split_type = split_type or config.terminal_split
   if type(size) == 'number' and size > 0 and size <= 1 then
-    config.terminal_size = size
+    local is_vertical = split_type == 'vertical'
+    local max_size = is_vertical and 0.5 or 0.3  -- 50% for vertical, 30% for horizontal
+
+    if not allow_override and size > max_size then
+      vim.notify(string.format("Terminal size capped at %d%%. Use allow_override=true to bypass.", max_size * 100), vim.log.levels.WARN)
+      size = max_size
+    end
+
+    if is_vertical then
+      config.vertical_terminal_size = size
+    else
+      config.terminal_size = size
+    end
   end
+end
+
+-- Set vertical terminal size specifically
+function M.set_vertical_terminal_size(size, allow_override)
+  M.set_terminal_size(size, allow_override, 'vertical')
 end
 
 -- Get current configuration

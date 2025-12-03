@@ -1,19 +1,60 @@
-if vim.fn.executable("gopls") == 1 and _G.lsp_config then
-  vim.lsp.start(vim.tbl_extend("force", _G.lsp_config, {
-    name = "gopls",
-    cmd = { "gopls" },
-    root_dir = vim.fs.root(0, { "go.mod", "go.work", ".git" }),
-    settings = {
-      gopls = {
-        analyses = {
-          unusedparams = true,
-        },
-        staticcheck = true,
-        gofumpt = true,
-      },
-    },
-  }))
-end
+-- Go LSP now configured centrally in lua/lsp.lua
+
+-- Contextual commands for command palette
+vim.api.nvim_buf_create_user_command(0, 'GoTest',
+  function()
+    if vim.fn.executable("go") == 0 then
+      vim.notify("Go executable not found", vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd('terminal go test ./...')
+  end, { desc = 'Run Go tests' })
+
+vim.api.nvim_buf_create_user_command(0, 'GoBuild',
+  function()
+    if vim.fn.executable("go") == 0 then
+      vim.notify("Go executable not found", vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd('terminal go build')
+  end, { desc = 'Build Go project' })
+
+vim.api.nvim_buf_create_user_command(0, 'GoRun',
+  function()
+    if vim.fn.executable("go") == 0 then
+      vim.notify("Go executable not found", vim.log.levels.ERROR)
+      return
+    end
+    local file = vim.fn.expand('%')
+    vim.cmd('terminal go run ' .. file)
+  end, { desc = 'Run current Go file' })
+
+vim.api.nvim_buf_create_user_command(0, 'GoMod',
+  function()
+    if vim.fn.executable("go") == 0 then
+      vim.notify("Go executable not found", vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd('terminal go mod tidy')
+  end, { desc = 'Run go mod tidy' })
+
+vim.api.nvim_buf_create_user_command(0, 'GoFmt',
+  function()
+    if vim.fn.executable("go") == 0 then
+      vim.notify("Go executable not found", vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd('terminal gofmt -w %')
+  end, { desc = 'Format Go file' })
+
+vim.api.nvim_buf_create_user_command(0, 'GoVet',
+  function()
+    if vim.fn.executable("go") == 0 then
+      vim.notify("Go executable not found", vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd('terminal go vet ./...')
+  end, { desc = 'Run go vet' })
 
 if vim.fn.executable("dlv") == 1 then
   local ok, dap = pcall(require, 'dap')

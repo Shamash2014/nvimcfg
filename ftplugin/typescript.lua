@@ -1,10 +1,11 @@
+-- TypeScript LSP now configured centrally in lua/lsp.lua
+-- Angular projects still get special handling here for ngserver
+
 -- Check if this is an Angular project
 local is_angular_project = vim.fn.filereadable(vim.fn.getcwd() .. "/angular.json") == 1
 
--- Start Angular Language Server for Angular projects
+-- Start Angular Language Server for Angular projects (in addition to centralized vtsls)
 if is_angular_project and vim.fn.executable("ngserver") == 1 and _G.lsp_config then
-  -- Get the TypeScript lib path from node_modules
-  local ts_lib_path = vim.fn.getcwd() .. "/node_modules/typescript/lib"
   local ng_probe_locations = { vim.fn.getcwd() .. "/node_modules/@angular/language-service" }
 
   vim.lsp.start(vim.tbl_extend("force", _G.lsp_config, {
@@ -18,7 +19,7 @@ if is_angular_project and vim.fn.executable("ngserver") == 1 and _G.lsp_config t
       table.concat(ng_probe_locations, ","),
     },
     root_dir = vim.fs.root(0, { "angular.json", "project.json", ".git" }),
-    filetypes = { "typescript", "html", "typescriptreact", "typescript.tsx" },
+    filetypes = { "html", "typescript" }, -- Limit to HTML templates and TS files
     on_new_config = function(new_config, new_root_dir)
       new_config.cmd = {
         "ngserver",
@@ -30,15 +31,54 @@ if is_angular_project and vim.fn.executable("ngserver") == 1 and _G.lsp_config t
       }
     end,
   }))
-else
-  -- Use vtsls for non-Angular TypeScript projects
-  if vim.fn.executable("vtsls") == 1 and _G.lsp_config then
-    vim.lsp.start(vim.tbl_extend("force", _G.lsp_config, {
-      name = "vtsls",
-      cmd = { "vtsls", "--stdio" },
-      root_dir = vim.fs.root(0, { "package.json", "tsconfig.json", "jsconfig.json", ".git" }),
-    }))
-  end
+end
+
+-- Contextual commands for command palette
+vim.api.nvim_buf_create_user_command(0, 'TSCompile',
+  function()
+    if vim.fn.executable("tsc") == 0 then
+      vim.notify("TypeScript compiler not found", vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd('terminal tsc')
+  end, { desc = 'Compile TypeScript' })
+
+vim.api.nvim_buf_create_user_command(0, 'TSWatch',
+  function()
+    if vim.fn.executable("tsc") == 0 then
+      vim.notify("TypeScript compiler not found", vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd('terminal tsc --watch')
+  end, { desc = 'Watch and compile TypeScript' })
+
+if is_angular_project then
+  vim.api.nvim_buf_create_user_command(0, 'NgServe',
+    function()
+      if vim.fn.executable("ng") == 0 then
+        vim.notify("Angular CLI not found", vim.log.levels.ERROR)
+        return
+      end
+      vim.cmd('terminal ng serve')
+    end, { desc = 'Serve Angular app' })
+
+  vim.api.nvim_buf_create_user_command(0, 'NgBuild',
+    function()
+      if vim.fn.executable("ng") == 0 then
+        vim.notify("Angular CLI not found", vim.log.levels.ERROR)
+        return
+      end
+      vim.cmd('terminal ng build')
+    end, { desc = 'Build Angular app' })
+
+  vim.api.nvim_buf_create_user_command(0, 'NgTest',
+    function()
+      if vim.fn.executable("ng") == 0 then
+        vim.notify("Angular CLI not found", vim.log.levels.ERROR)
+        return
+      end
+      vim.cmd('terminal ng test')
+    end, { desc = 'Run Angular tests' })
 end
 
 if vim.fn.executable("node") == 1 then
@@ -169,4 +209,60 @@ end
 local ok_conform, conform = pcall(require, 'conform')
 if ok_conform and vim.fn.executable("prettier") == 1 then
   conform.formatters_by_ft.typescript = { "prettier" }
+end
+
+-- Contextual commands for command palette
+local function get_project_root()
+  return require('tasks').get_project_root() or vim.fn.getcwd()
+end
+
+vim.api.nvim_buf_create_user_command(0, 'TypeScriptRunTests',
+  function()
+    local root = get_project_root()
+    require('tasks').run_command('cd ' .. vim.fn.shellescape(root) .. ' && npm test')
+  end, { desc = 'Run TypeScript Tests' })
+
+vim.api.nvim_buf_create_user_command(0, 'TypeScriptBuild',
+  function()
+    local root = get_project_root()
+    require('tasks').run_command('cd ' .. vim.fn.shellescape(root) .. ' && npm run build')
+  end, { desc = 'Build TypeScript Project' })
+
+vim.api.nvim_buf_create_user_command(0, 'TypeScriptTypeCheck',
+  function()
+    local root = get_project_root()
+    require('tasks').run_command('cd ' .. vim.fn.shellescape(root) .. ' && npx tsc --noEmit')
+  end, { desc = 'Run TypeScript Type Check' })
+
+vim.api.nvim_buf_create_user_command(0, 'TypeScriptLint',
+  function()
+    local root = get_project_root()
+    require('tasks').run_command('cd ' .. vim.fn.shellescape(root) .. ' && npm run lint')
+  end, { desc = 'Lint TypeScript Project' })
+
+vim.api.nvim_buf_create_user_command(0, 'TypeScriptDev',
+  function()
+    local root = get_project_root()
+    require('tasks').run_command('cd ' .. vim.fn.shellescape(root) .. ' && npm run dev')
+  end, { desc = 'Start Development Server' })
+
+-- Angular-specific commands if it's an Angular project
+if is_angular_project then
+  vim.api.nvim_buf_create_user_command(0, 'AngularServe',
+    function()
+      local root = get_project_root()
+      require('tasks').run_command('cd ' .. vim.fn.shellescape(root) .. ' && ng serve')
+    end, { desc = 'Start Angular Development Server' })
+
+  vim.api.nvim_buf_create_user_command(0, 'AngularBuild',
+    function()
+      local root = get_project_root()
+      require('tasks').run_command('cd ' .. vim.fn.shellescape(root) .. ' && ng build')
+    end, { desc = 'Build Angular Project' })
+
+  vim.api.nvim_buf_create_user_command(0, 'AngularTest',
+    function()
+      local root = get_project_root()
+      require('tasks').run_command('cd ' .. vim.fn.shellescape(root) .. ' && ng test')
+    end, { desc = 'Run Angular Tests' })
 end

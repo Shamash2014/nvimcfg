@@ -1,27 +1,35 @@
-if vim.fn.executable("lua-language-server") == 1 and _G.lsp_config then
-  vim.lsp.start(vim.tbl_extend("force", _G.lsp_config, {
-    name = "lua_ls",
-    cmd = { "lua-language-server" },
-    root_dir = vim.fs.root(0, { ".luarc.json", ".luarc.jsonc", ".luacheckrc", ".stylua.toml", "stylua.toml", "selene.toml", "selene.yml", ".git" }),
-    settings = {
-      Lua = {
-        runtime = {
-          version = "LuaJIT",
-        },
-        diagnostics = {
-          globals = { "vim" },
-        },
-        workspace = {
-          library = vim.api.nvim_get_runtime_file("", true),
-          checkThirdParty = false,
-        },
-        telemetry = {
-          enable = false,
-        },
-      },
-    },
-  }))
-end
+-- Lua LSP now configured centrally in lua/lsp.lua
+
+-- Contextual commands for command palette
+vim.api.nvim_buf_create_user_command(0, 'LuaRun',
+  function()
+    if vim.fn.executable("lua") == 0 then
+      vim.notify("Lua executable not found", vim.log.levels.ERROR)
+      return
+    end
+    local file = vim.fn.expand('%')
+    vim.cmd('terminal lua ' .. file)
+  end, { desc = 'Run current Lua file' })
+
+vim.api.nvim_buf_create_user_command(0, 'LuaCheck',
+  function()
+    if vim.fn.executable("luacheck") == 1 then
+      vim.cmd('terminal luacheck %')
+    elseif vim.fn.executable("selene") == 1 then
+      vim.cmd('terminal selene %')
+    else
+      vim.notify("No Lua linter found (luacheck or selene)", vim.log.levels.WARN)
+    end
+  end, { desc = 'Check Lua file' })
+
+vim.api.nvim_buf_create_user_command(0, 'LuaFormat',
+  function()
+    if vim.fn.executable("stylua") == 1 then
+      vim.cmd('terminal stylua %')
+    else
+      vim.notify("StyLua formatter not found", vim.log.levels.WARN)
+    end
+  end, { desc = 'Format Lua file' })
 
 local ok, lint = pcall(require, 'lint')
 if ok then

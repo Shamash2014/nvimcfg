@@ -17,15 +17,28 @@ if vim.fn.executable("astro-ls") == 1 and _G.lsp_config then
   }))
 end
 
--- Also start TypeScript LSP for TypeScript/JavaScript inside Astro files
-if vim.fn.executable("vtsls") == 1 and _G.lsp_config then
-  vim.lsp.start(vim.tbl_extend("force", _G.lsp_config, {
-    name = "vtsls-astro",
-    cmd = { "vtsls", "--stdio" },
-    root_dir = vim.fs.root(0, { "package.json", "tsconfig.json", "jsconfig.json", ".git" }),
-    filetypes = { "astro" },
-  }))
-end
+-- TypeScript support is handled by astro-ls itself
+
+-- Contextual commands for command palette
+vim.api.nvim_buf_create_user_command(0, 'AstroBuild',
+  function()
+    vim.cmd('terminal npm run build')
+  end, { desc = 'Build Astro project' })
+
+vim.api.nvim_buf_create_user_command(0, 'AstroDev',
+  function()
+    vim.cmd('terminal npm run dev')
+  end, { desc = 'Start Astro dev server' })
+
+vim.api.nvim_buf_create_user_command(0, 'AstroPreview',
+  function()
+    vim.cmd('terminal npm run preview')
+  end, { desc = 'Preview Astro build' })
+
+vim.api.nvim_buf_create_user_command(0, 'AstroCheck',
+  function()
+    vim.cmd('terminal npx astro check')
+  end, { desc = 'Check Astro project' })
 
 -- Linting with ESLint if available
 local ok, lint = pcall(require, 'lint')

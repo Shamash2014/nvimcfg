@@ -21,3 +21,28 @@ local ok_conform, conform = pcall(require, 'conform')
 if ok_conform and vim.fn.executable("prettier") == 1 then
   conform.formatters_by_ft.markdown = { "prettier" }
 end
+
+-- Markdown rendering toggle available via command palette only (no keybinding)
+
+-- Contextual commands for command palette
+vim.api.nvim_buf_create_user_command(0, 'MarkdownToggleRender',
+  'RenderMarkdown toggle', { desc = 'Toggle Markdown Rendering' })
+
+vim.api.nvim_buf_create_user_command(0, 'MarkdownPreview',
+  '!open -a "Marked 2" %', { desc = 'Preview in Marked 2' })
+
+vim.api.nvim_buf_create_user_command(0, 'MarkdownWordCount',
+  function()
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    local text = table.concat(lines, ' ')
+    local words = 0
+    for _ in text:gmatch('%S+') do words = words + 1 end
+    vim.notify('Word count: ' .. words, vim.log.levels.INFO)
+  end, { desc = 'Count Words in Document' })
+
+vim.api.nvim_buf_create_user_command(0, 'MarkdownTOC',
+  function()
+    vim.cmd('normal! gg')
+    vim.cmd('global/^#\\+/put =submatch(0)')
+    vim.notify('TOC generated at top of file', vim.log.levels.INFO)
+  end, { desc = 'Generate Table of Contents' })

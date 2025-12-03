@@ -1,11 +1,35 @@
-if vim.fn.executable("sourcekit-lsp") == 1 and _G.lsp_config then
-  vim.lsp.start(vim.tbl_extend("force", _G.lsp_config, {
-    name = "sourcekit",
-    cmd = { "sourcekit-lsp" },
-    root_dir = vim.fs.root(0, { "Package.swift", ".git" }),
-    settings = {},
-  }))
-end
+-- Swift LSP now configured centrally in lua/lsp.lua
+
+-- Contextual commands for command palette
+vim.api.nvim_buf_create_user_command(0, 'SwiftBuild',
+  function()
+    vim.cmd('terminal swift build')
+  end, { desc = 'Build Swift package' })
+
+vim.api.nvim_buf_create_user_command(0, 'SwiftTest',
+  function()
+    vim.cmd('terminal swift test')
+  end, { desc = 'Run Swift tests' })
+
+vim.api.nvim_buf_create_user_command(0, 'SwiftRun',
+  function()
+    vim.cmd('terminal swift run')
+  end, { desc = 'Run Swift package' })
+
+vim.api.nvim_buf_create_user_command(0, 'SwiftFormat',
+  function()
+    vim.cmd('terminal swift-format --in-place %')
+  end, { desc = 'Format Swift file' })
+
+vim.api.nvim_buf_create_user_command(0, 'SwiftClean',
+  function()
+    vim.cmd('terminal swift package clean')
+  end, { desc = 'Clean Swift build artifacts' })
+
+vim.api.nvim_buf_create_user_command(0, 'SwiftResolve',
+  function()
+    vim.cmd('terminal swift package resolve')
+  end, { desc = 'Resolve Swift package dependencies' })
 
 if vim.fn.executable("lldb-vscode") == 1 or vim.fn.executable("codelldb") == 1 then
   local ok, dap = pcall(require, 'dap')

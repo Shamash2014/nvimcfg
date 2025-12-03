@@ -1,10 +1,4 @@
-if vim.fn.executable("vscode-json-language-server") == 1 and _G.lsp_config then
-  vim.lsp.start(vim.tbl_extend("force", _G.lsp_config, {
-    name = "jsonls",
-    cmd = { "vscode-json-language-server", "--stdio" },
-    root_dir = vim.fs.root(0, { ".git" }),
-  }))
-end
+-- JSON LSP now configured centrally in lua/lsp.lua
 
 local ok, lint = pcall(require, 'lint')
 if ok and vim.fn.executable("jsonlint") == 1 then

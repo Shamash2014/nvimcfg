@@ -1,10 +1,38 @@
-if vim.fn.executable("vtsls") == 1 and _G.lsp_config then
-  vim.lsp.start(vim.tbl_extend("force", _G.lsp_config, {
-    name = "vtsls",
-    cmd = { "vtsls", "--stdio" },
-    root_dir = vim.fs.root(0, { "package.json", "tsconfig.json", "jsconfig.json", ".git" }),
-  }))
-end
+-- TypeScript React LSP now configured centrally in lua/lsp.lua
+
+-- Same contextual commands as JSX but with TypeScript awareness
+vim.api.nvim_buf_create_user_command(0, 'ReactStart',
+  function()
+    if vim.fn.executable("npm") == 1 then
+      vim.cmd('terminal npm start')
+    elseif vim.fn.executable("yarn") == 1 then
+      vim.cmd('terminal yarn start')
+    else
+      vim.notify("No package manager found (npm or yarn)", vim.log.levels.ERROR)
+    end
+  end, { desc = 'Start React development server' })
+
+vim.api.nvim_buf_create_user_command(0, 'ReactBuild',
+  function()
+    if vim.fn.executable("npm") == 1 then
+      vim.cmd('terminal npm run build')
+    elseif vim.fn.executable("yarn") == 1 then
+      vim.cmd('terminal yarn build')
+    else
+      vim.notify("No package manager found (npm or yarn)", vim.log.levels.ERROR)
+    end
+  end, { desc = 'Build React app' })
+
+vim.api.nvim_buf_create_user_command(0, 'ReactTest',
+  function()
+    if vim.fn.executable("npm") == 1 then
+      vim.cmd('terminal npm test')
+    elseif vim.fn.executable("yarn") == 1 then
+      vim.cmd('terminal yarn test')
+    else
+      vim.notify("No package manager found (npm or yarn)", vim.log.levels.ERROR)
+    end
+  end, { desc = 'Run React tests' })
 
 if vim.fn.executable("node") == 1 then
   local ok, dap = pcall(require, 'dap')

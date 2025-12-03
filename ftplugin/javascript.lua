@@ -1,10 +1,42 @@
-if vim.fn.executable("vtsls") == 1 and _G.lsp_config then
-  vim.lsp.start(vim.tbl_extend("force", _G.lsp_config, {
-    name = "vtsls",
-    cmd = { "vtsls", "--stdio" },
-    root_dir = vim.fs.root(0, { "package.json", "tsconfig.json", "jsconfig.json", ".git" }),
-  }))
-end
+-- JavaScript LSP now configured centrally in lua/lsp.lua
+
+-- Contextual commands for command palette
+vim.api.nvim_buf_create_user_command(0, 'NodeRun',
+  function()
+    if vim.fn.executable("node") == 0 then
+      vim.notify("Node.js executable not found", vim.log.levels.ERROR)
+      return
+    end
+    local file = vim.fn.expand('%')
+    vim.cmd('terminal node ' .. file)
+  end, { desc = 'Run current JS file with Node.js' })
+
+vim.api.nvim_buf_create_user_command(0, 'NpmTest',
+  function()
+    if vim.fn.executable("npm") == 0 then
+      vim.notify("npm executable not found", vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd('terminal npm test')
+  end, { desc = 'Run npm tests' })
+
+vim.api.nvim_buf_create_user_command(0, 'NpmStart',
+  function()
+    if vim.fn.executable("npm") == 0 then
+      vim.notify("npm executable not found", vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd('terminal npm start')
+  end, { desc = 'Start npm development server' })
+
+vim.api.nvim_buf_create_user_command(0, 'NpmBuild',
+  function()
+    if vim.fn.executable("npm") == 0 then
+      vim.notify("npm executable not found", vim.log.levels.ERROR)
+      return
+    end
+    vim.cmd('terminal npm run build')
+  end, { desc = 'Build npm project' })
 
 if vim.fn.executable("node") == 1 then
   local ok, dap = pcall(require, 'dap')

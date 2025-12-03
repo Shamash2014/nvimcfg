@@ -1,16 +1,11 @@
--- Elixir Expert Configuration
-local expert_ls_found = false
-
--- Expert LSP support
+-- Expert LSP Configuration (restored)
 local expert_cmd = vim.fn.expand("~/.tools/expert/expert")
 if vim.fn.executable(expert_cmd) == 1 and _G.lsp_config then
-  expert_ls_found = true
   vim.lsp.start(vim.tbl_extend("force", _G.lsp_config, {
     name = "expert",
     cmd = { expert_cmd },
     root_dir = vim.fs.root(0, { "mix.exs", ".git" }),
     filetypes = { "elixir", "eelixir", "heex", "surface" },
-    root_markers = { "mix.exs", ".git" },
     settings = {
       expert = {
         dialyzerEnabled = true,
@@ -25,46 +20,74 @@ if vim.fn.executable(expert_cmd) == 1 and _G.lsp_config then
       },
     },
   }))
+else
+  vim.notify("Expert LSP not found at " .. expert_cmd .. ". Install expert for full LSP support.", vim.log.levels.WARN)
+end
 
-  if not expert_ls_found then
-    vim.notify("expert-ls not found at " .. expert_cmd, ". Install with: mix escript.install expert_ls", vim.log.levels.WARN)
+-- Linting with credo
+local ok, lint = pcall(require, 'lint')
+if ok then
+  local linters = {}
+
+  if vim.fn.executable("credo") == 1 then
+    table.insert(linters, "credo")
+  end
+
+  if #linters > 0 then
+    lint.linters_by_ft.elixir = linters
   end
 end
 
--- Mix task runner with completion
-if vim.fn.executable("mix") == 1 then
-  vim.api.nvim_create_user_command("Mix", function(opts)
-    local f = opts.fargs and opts.fargs[1] or ""
-    if f == "" then
-      local tasks = {
-        "compile", "test", "run", "deps.compile", "deps.get", "format", "credo", "ecto.install",
-        "ecto.clean", "phx.digest", "phx.server", "phx.gen.cert", "release", "audit",
-        "escript.build", "inch.report", "xref", "coveralls.html", "docs"
-      }
-      if #tasks > 0 then
-        vim.ui.select(tasks, {
-          prompt = "Mix tasks:",
-          format_item = function(item) return "• " .. item end,
-        }, function(choice)
-          if choice then
-            vim.cmd("silent! mix " .. choice)
-          end
-        end)
-      else
-        vim.notify("No mix tasks found", vim.log.levels.WARN)
-      end
-    else
-      vim.cmd("silent! mix " .. table.concat(opts.fargs, " "))
-    end
-  end, {
-    nargs = "*",
-    complete = function()
-      return vim.fn.system(
-      "mix help --commands 2>/dev/null | grep -E '^[[:space:]]+(.+)' | sed 's/^[[:space:]]*//' | sort"):gmatch(
-      "[^\r\n]+")
-    end,
-    desc = "Run Mix task",
-  })
+-- Contextual commands for command palette
+vim.api.nvim_buf_create_user_command(0, 'ElixirRunTests',
+  function()
+    vim.cmd('terminal mix test')
+  end, { desc = 'Run Elixir tests' })
+
+vim.api.nvim_buf_create_user_command(0, 'ElixirCompile',
+  function()
+    vim.cmd('terminal mix compile')
+  end, { desc = 'Compile Elixir project' })
+
+vim.api.nvim_buf_create_user_command(0, 'ElixirDeps',
+  function()
+    vim.cmd('terminal mix deps.get')
+  end, { desc = 'Get Elixir dependencies' })
+
+vim.api.nvim_buf_create_user_command(0, 'ElixirIEx',
+  function()
+    vim.cmd('terminal iex -S mix')
+  end, { desc = 'Start IEx with project' })
+
+vim.api.nvim_buf_create_user_command(0, 'ElixirFormat',
+  function()
+    vim.cmd('terminal mix format')
+  end, { desc = 'Format Elixir code' })
+
+local project_root = vim.fs.root(0, {"mix.exs"})
+if project_root then
+  local phoenix_file = project_root .. "/lib/**/*_web.ex"
+  if vim.fn.glob(phoenix_file) ~= "" then
+    vim.api.nvim_buf_create_user_command(0, 'PhoenixServer',
+      function()
+        vim.cmd('terminal mix phx.server')
+      end, { desc = 'Start Phoenix server' })
+
+    vim.api.nvim_buf_create_user_command(0, 'PhoenixRoutes',
+      function()
+        vim.cmd('terminal mix phx.routes')
+      end, { desc = 'Show Phoenix routes' })
+
+    vim.api.nvim_buf_create_user_command(0, 'PhoenixMigrate',
+      function()
+        vim.cmd('terminal mix ecto.migrate')
+      end, { desc = 'Run database migrations' })
+
+    vim.api.nvim_buf_create_user_command(0, 'PhoenixReset',
+      function()
+        vim.cmd('terminal mix ecto.reset')
+      end, { desc = 'Reset database' })
+  end
 end
 -- Formatting with conform
 local ok_conform, conform = pcall(require, 'conform')
@@ -72,11 +95,3 @@ if ok_conform and vim.fn.executable("mix") == 1 then
   conform.formatters_by_ft.elixir = { "mix" }
 end
 
--- Essential keymaps
-vim.api.nvim_create_autocmd("FileType", {
-  group = vim.api.nvim_create_augroup("ElixirExpert", {}),
-  pattern = "*.ex,*.exs,*.heex",
-  callback = function()
-    vim.keymap.set("n", "<leader>ec", "<cmd>lua vim.cmd('Mix compile')<CR>", { buffer = true, desc = "Compile Elixir" })
-  end,
-})
