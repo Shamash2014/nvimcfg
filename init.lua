@@ -69,6 +69,9 @@ vim.opt.foldcolumn = "1"
 vim.opt.spelloptions = "camel"
 vim.opt.laststatus = 3 -- Global statusline
 
+-- Session management options
+vim.opt.sessionoptions = "buffers,curdir,folds,help,tabpages,winsize,winpos,terminal,localoptions"
+
 -- Native completion settings
 vim.opt.completeopt = { "menu", "menuone", "noselect" }
 vim.opt.pumheight = 15
@@ -564,6 +567,8 @@ require('lazy').setup({
       { '<leader>rl',  function() require('tasks').run_last_command() end,      desc = 'Run Last Command' },
       { '<leader>rR',  function() require('tasks').restart_terminal_command() end, desc = 'Restart Terminal Command' },
       { '<leader>re',  function() require('tasks').parse_terminal_errors() end, desc = 'Parse Terminal Errors' },
+      { '<leader>rb',  function() require('tasks').parse_buffer_errors() end, desc = 'Parse Buffer Errors' },
+      { '<leader>rm',  function() require('tasks').toggle_error_monitoring() end, desc = 'Toggle Error Monitoring', mode = { 'n', 't' } },
       {
         '<leader>rv',
         function()
@@ -746,17 +751,17 @@ require('lazy').setup({
     'syntaxpresso/bufstate.nvim',
     lazy = false,
     opts = {
-      filter_by_tab = true,         -- Perfect for tab-local workflow
-      autoload_last_session = true, -- Auto-restore on startup
+      filter_by_tab = false,
+      autoload_last_session = true,
       autosave = {
         enabled = true,
         on_exit = true,
-        interval = 300000,          -- Save every 5 minutes (300000ms)
+        interval = 300000,
       },
     },
     keys = {
-      { '<leader>ps', '<cmd>BufstateSave<cr>', desc = 'Save Workspace' },
-      { '<leader>pr', '<cmd>BufstateLoad<cr>', desc = 'Load Workspace' },
+      { '<leader>ps', '<cmd>BufstateSave<cr>', desc = 'Save Session' },
+      { '<leader>pl', '<cmd>BufstateLoad<cr>', desc = 'Load Session' },
     },
   },
 
@@ -789,6 +794,7 @@ require('lazy').setup({
           { '<leader>pr', '<cmd>ProjectRoot<cr>', desc = 'Show Project Root' },
           { '<leader>pR', '<cmd>ProjectSetRoot<cr>', desc = 'Set Tab Root' },
           { '<leader>r',  group = 'Run' },
+          { '<leader>rb',  desc = 'Parse Buffer Errors' },
           { '<leader>q',  group = 'Quit' },
           { '<leader>d',  group = 'Debug' },
           { '<leader>c',  group = 'LSP' },
@@ -1705,6 +1711,11 @@ vim.api.nvim_create_autocmd("User", {
 -- Enhanced cleanup for all jobs and terminals on exit
 vim.api.nvim_create_autocmd("VimLeavePre", {
   callback = function()
+    -- Save session first
+    pcall(function()
+      require('bufstate').save()
+    end)
+
     -- Kill all running jobs
     local jobs = vim.fn.jobwait({}, 0) -- Get all job IDs with 0 timeout (non-blocking)
     if jobs and type(jobs) == 'table' then
@@ -1715,23 +1726,43 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
       end
     end
 
-    -- Force close all terminal buffers and their processes
+    -- Send interrupt signal to all terminal processes first
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
       if vim.api.nvim_buf_is_valid(buf) then
-        local buftype = vim.api.nvim_buf_get_option(buf, 'buftype')
+        local buftype = pcall(vim.api.nvim_buf_get_option, buf, 'buftype')
         if buftype == 'terminal' then
-          -- Get the terminal job ID and stop it
-          local term_job_id = vim.api.nvim_buf_get_var(buf, 'terminal_job_id')
-          if term_job_id then
-            vim.fn.jobstop(term_job_id)
+          local ok, term_job_id = pcall(vim.api.nvim_buf_get_var, buf, 'terminal_job_id')
+          if ok and term_job_id then
+            -- Send Ctrl+C to interrupt running processes
+            vim.fn.chansend(term_job_id, "\x03")
           end
-          -- Force delete the buffer
-          vim.api.nvim_buf_delete(buf, { force = true })
         end
       end
     end
 
-    -- Clean up any remaining background processes started by tasks
+    -- Wait a moment for graceful shutdown
+    vim.wait(500, function() return false end)
+
+    -- Force kill all terminal processes
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(buf) then
+        local buftype = pcall(vim.api.nvim_buf_get_option, buf, 'buftype')
+        if buftype == 'terminal' then
+          local ok, term_job_id = pcall(vim.api.nvim_buf_get_var, buf, 'terminal_job_id')
+          if ok and term_job_id then
+            vim.fn.jobstop(term_job_id)
+          end
+        end
+      end
+    end
+
+    -- Kill any background tasks started by tasks module
+    local tasks_ok, tasks = pcall(require, 'tasks')
+    if tasks_ok and tasks.kill_all_background_jobs then
+      tasks.kill_all_background_jobs()
+    end
+
+    -- Clean up any remaining background processes started by Neovim
     vim.cmd('silent! !pkill -P ' .. vim.fn.getpid())
   end,
 })

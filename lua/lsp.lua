@@ -55,8 +55,28 @@ local on_attach = function(client, bufnr)
           return
         end
 
-        vim.lsp.buf.clear_references()
-        vim.lsp.buf.document_highlight()
+        -- Ensure client is still valid and supports document highlights
+        if not client or not client.server_capabilities or not client.server_capabilities.documentHighlightProvider then
+          return
+        end
+
+        -- Check if client is still attached to this buffer
+        local attached_clients = vim.lsp.get_clients({ bufnr = bufnr })
+        local client_attached = false
+        for _, attached_client in ipairs(attached_clients) do
+          if attached_client.id == client.id then
+            client_attached = true
+            break
+          end
+        end
+
+        if not client_attached then
+          return
+        end
+
+        -- Safely clear and set highlights with error handling
+        pcall(vim.lsp.buf.clear_references)
+        pcall(vim.lsp.buf.document_highlight)
       end,
     })
   end

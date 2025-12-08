@@ -125,32 +125,96 @@ local function save_history()
   vim.fn.writefile({ content }, cache_file)
 end
 
--- Parse errors from lines using error patterns
+-- Helper functions for enhanced error classification
+local function get_turbo_level(level)
+  local levels = {
+    ["0"] = 'E', ["1"] = 'E', ["2"] = 'W', ["3"] = 'I'
+  }
+  return levels[level] or 'E'
+end
+
+local function get_eslint_severity(severity)
+  local severities = {
+    ["error"] = 'E', ["warn"] = 'W', ["warning"] = 'W', ["info"] = 'I'
+  }
+  return severities[severity] or 'E'
+end
+
+-- Parse errors from lines using enhanced error patterns
 function M.parse_errors_from_lines(lines, root)
-  -- Enhanced error patterns (similar to Emacs compilation-error-regexp-alist)
+  -- Enhanced error patterns (Emacs compilation-error-regexp-alist inspired)
   local error_patterns = {
     -- Standard: file:line:col: message
     { pattern = "([^:]+):(%d+):(%d+):%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
     -- Standard: file:line: message
     { pattern = "([^:]+):(%d+):%s*(.+)", file = 1, lnum = 2, text = 3, type = 'E' },
-    -- Go: file:line:col: message
+
+    -- Go patterns
     { pattern = "([^:]+%.go):(%d+):(%d+):%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
-    -- Rust: --> file:line:col
+    { pattern = "([^:]+)%.go:(%d+):%s*(.+)", file = 1, lnum = 2, text = 3, type = 'E' },
+    { pattern = "%[FAIL%]%s+([^:]+)%.go%s*%-%s*.+%s*(%d+)%.", file = 1, lnum = 2, text = "Go test failure", type = 'E' },
+
+    -- Rust patterns
     { pattern = "%-%->%s+([^:]+):(%d+):(%d+)", file = 1, lnum = 2, col = 3, text = "Rust error", type = 'E' },
-    -- Python: File "file", line N
+    { pattern = "error%[%?E%]%?%[([^:]+):(%d+):(%d+)%]%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
+    { pattern = "warning%[%?W%]%?%[([^:]+):(%d+):(%d+)%]%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'W' },
+    { pattern = "help%:%s+consider%[^%n]+%[(%d+):(%d+)%]", file = 1, lnum = 2, col = 3, text = "Rust suggestion", type = 'I' },
+
+    -- Python patterns
     { pattern = 'File "([^"]+)", line (%d+)', file = 1, lnum = 2, text = "Python error", type = 'E' },
-    -- TypeScript/ESLint: file(line,col): message
+    { pattern = 'Traceback %(most recent call last%):', file = 0, lnum = 0, text = "Python traceback", type = 'E' },
+    { pattern = '%s+File "([^"]+)", line (%d+), in ([^%n]+)', file = 1, lnum = 2, text = 3, type = 'E' },
+    { pattern = 'AssertionError:%s*([^%n]+)', file = 0, lnum = 0, text = "Python assertion", type = 'E' },
+
+    -- TypeScript/JavaScript patterns
     { pattern = "([^%(]+)%((%d+),(%d+)%):%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
-    -- Maven/Gradle: [ERROR] file:[line,col] message
+    { pattern = "([^%(]+)%((%d+)%):%s*(.+)", file = 1, lnum = 2, text = 3, type = 'E' },
+    { pattern = "error%:%s+TS(%d+):%s*([^%n]+)%s*%(([^)]+)%)", file = 0, lnum = 0, text = "TypeScript TS" .. "%1: %2", type = 'E' },
+    { pattern = "Cannot find name '([^']+)'.%s*%(([^)]+)%)", file = 0, lnum = 0, text = "Undefined: '%1'", type = 'E' },
+    { pattern = "Property '([^']+)' does not exist on type '([^']+)'", file = 0, lnum = 0, text = "Type error: '%1' not on '%2'", type = 'E' },
+
+    -- Modern build tools: Vite/Next.js
+    { pattern = "%[vite%]%s*ERROR%s*%[(%d+)%]%s*([^%n]+)", file = 0, lnum = 0, text = "Vite [%1]: %2", type = 'E' },
+    { pattern = "×%s+Build%s+failed%ssomelater%s*%[(%d+)%]", file = 0, lnum = 0, text = "Next.js build failed [%1]", type = 'E' },
+    { pattern = "Error:%s+Failed%sto%s*compile", file = 0, lnum = 0, text = "Next.js compile error", type = 'E' },
+    { pattern = "Module not found:%s*Can't resolve '([^']+)'", file = 0, lnum = 0, text = "Module not found: '%1'", type = 'E' },
+
+    -- Turbo/Nx monorepo patterns
+    { pattern = "%[%d+%]%s*([^%s]+)%s+%-%s*([^%n]+)%s*%[(%d+)%s*ms%]", file = 0, lnum = 0, text = "[%1] %2 [%3ms]", type = get_turbo_level("%1") },
+    { pattern = "Tasks:%s*(%d+)%s*%-%s*([^%n]+)", file = 0, lnum = 0, text = "Task: %1 - %2", type = get_turbo_level("%1") },
+    { pattern = "%-%->%s*([^%s]+)%s*%[(%d+)%.%d+s%]", file = 0, lnum = 0, text = "Turbo: %1 [%2s]", type = 'I' },
+
+    -- Docker build patterns
+    { pattern = "ERROR%:%s+(%S+)%s+%(([^)]+)%)", file = 0, lnum = 0, text = "Docker %1: %2", type = 'E' },
+    { pattern = "failed%sto%ssolve:%s*([^%n]+)", file = 0, lnum = 0, text = "Docker resolve: %1", type = 'E' },
+    { pattern = "no%smatching%smManifest%sfor[^%n]+", file = 0, lnum = 0, text = "Docker: no matching manifest", type = 'E' },
+
+    -- Webpack/Rollup patterns
+    { pattern = "%[webpack%.compile%.error%]%s*([^%n]+)", file = 0, lnum = 0, text = "Webpack: %1", type = 'E' },
+    { pattern = "rollup%sserror:%s*([^%n]+)%s+in%s+([^%n]+)", file = 0, lnum = 0, text = "Rollup: %1 in %2", type = 'E' },
+    { pattern = "%[!%]%s*(%d+)%s*error%s*found", file = 0, lnum = 0, text = "Webpack: %1 errors found", type = 'E' },
+
+    -- ESLint/Prettier patterns
+    { pattern = "([^:]+):(%d+):(%d+)%s*error%s*([^%n]+)%s*%[(%w+)%]", file = 1, lnum = 2, col = 3, text = "ESLint %1: %4 [%5]", type = 'E' },
+    { pattern = "([^:]+):(%d+):(%d+)%s*warning%s*([^%n]+)%s*%[(%w+)%]", file = 1, lnum = 2, col = 3, text = "ESLint %1: %4 [%5]", type = 'W' },
+    { pattern = "([^%[]+)%[(%w+)%]%s*([^%n]+)", file = 1, lnum = 0, text = "ESLint [%2]: %3", type = get_eslint_severity("%2") },
+
+    -- Jest/Vitest testing patterns
+    { pattern = "FAIL%s*([^%s]+)%s*%(([^)]+)%)", file = 0, lnum = 0, text = "Test failed: %1 %2", type = 'E' },
+    { pattern = "at%s+([^:]+):(%d+):(%d+)", file = 1, lnum = 2, col = 3, text = "Test failure at %1:%2:%3", type = 'E' },
+    { pattern = "×%s*(%d+)%s+test%s+failed", file = 0, lnum = 0, text = "Test suite: %1 failed", type = 'E' },
+    { pattern = "✓%s*(%d+)%s+test%s+passed", file = 0, lnum = 0, text = "Test suite: %1 passed", type = 'I' },
+
+    -- Traditional compiler patterns
     { pattern = "%[ERROR%]%s+([^:]+):(%d+):(%d+)%s+(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
-    -- GCC/Clang: file:line:col: error: message
+    { pattern = "%[WARNING%]%s+([^:]+):(%d+):(%d+)%s+(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'W' },
     { pattern = "([^:]+):(%d+):(%d+):%s*error:%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'E' },
-    -- GCC/Clang warnings
     { pattern = "([^:]+):(%d+):(%d+):%s*warning:%s*(.+)", file = 1, lnum = 2, col = 3, text = 4, type = 'W' },
-    -- Jest/Testing: at file:line:col
-    { pattern = "at%s+([^:]+):(%d+):(%d+)", file = 1, lnum = 2, col = 3, text = "Test failure", type = 'E' },
-    -- Make errors: make: *** [target] Error N
-    { pattern = "make:%s*%*%*%*%s*%[([^%]]+)%]%s*Error%s*(%d+)", file = 1, text = "Make error", type = 'E' },
+
+    -- Make/Ninja patterns
+    { pattern = "make:%s*%*%*%*%s*%[([^%]]+)%]%s*Error%s*(%d+)", file = 1, text = "Make error: %1", type = 'E' },
+    { pattern = "ninja:%s*build%sstopped:%s*([^%n]+)", file = 0, lnum = 0, text = "Ninja build stopped: %1", type = 'E' },
+    { pattern = "%[(%d+)/(%d+)%]%s*([^:]+):(%d+):%s*(.+)", file = 1, lnum = 2, text = 3, type = 'E' },
   }
 
   local qflist = {}
@@ -189,6 +253,9 @@ function M.parse_errors_from_lines(lines, root)
             col = pattern_info.col and tonumber(matches[pattern_info.col]) or 1,
             text = matches[pattern_info.text] or line,
             type = pattern_info.type or 'E',
+            -- Enhanced context for Emacs-style navigation
+            valid = true,
+            module = "ErrorParser",
           }
 
           table.insert(qflist, entry)
@@ -377,6 +444,19 @@ function M.run_command(cmd)
   -- Create terminal using new module
   local term = snacks.terminal.open(final_cmd, snacks_opts)
 
+  -- Start error monitoring for new terminal (automatic like Emacs)
+  vim.defer_fn(function()
+    if term and term.buf and vim.api.nvim_buf_is_valid(term.buf) then
+      M.start_error_monitoring(term.buf)
+
+      -- Also setup automatic error detection for this buffer type
+      local buftype = vim.api.nvim_buf_get_option(term.buf, 'buftype')
+      if buftype == 'terminal' then
+        vim.notify('Error monitoring auto-enabled for terminal', vim.log.levels.INFO)
+      end
+    end
+  end, 100) -- Small delay to ensure terminal is ready
+
   -- Return focus to original window
   if current_win and vim.api.nvim_win_is_valid(current_win) then
     vim.api.nvim_set_current_win(current_win)
@@ -420,6 +500,19 @@ function M.run_command_background(cmd)
 
   -- Create terminal using new module
   local term = snacks.terminal.open(final_cmd, snacks_opts)
+
+  -- Start error monitoring for new terminal (automatic like Emacs)
+  vim.defer_fn(function()
+    if term and term.buf and vim.api.nvim_buf_is_valid(term.buf) then
+      M.start_error_monitoring(term.buf)
+
+      -- Also setup automatic error detection for this buffer type
+      local buftype = vim.api.nvim_buf_get_option(term.buf, 'buftype')
+      if buftype == 'terminal' then
+        vim.notify('Error monitoring auto-enabled for terminal', vim.log.levels.INFO)
+      end
+    end
+  end, 100) -- Small delay to ensure terminal is ready
 
   -- Return focus to original window
   if current_win and vim.api.nvim_win_is_valid(current_win) then
@@ -689,6 +782,96 @@ function M.parse_terminal_errors(bufnr)
     vim.cmd('cfirst')
   else
     vim.notify("No errors found in terminal buffer", vim.log.levels.INFO)
+  end
+end
+
+-- Enhanced error parsing for any buffer (not just terminals)
+function M.parse_buffer_errors(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  -- Check if buffer is valid
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    vim.notify("Invalid buffer", vim.log.levels.ERROR)
+    return
+  end
+
+  -- Get buffer lines and parse errors
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local qflist = M.parse_errors_from_lines(lines)
+
+  if #qflist > 0 then
+    vim.fn.setqflist(qflist, 'r')
+    vim.cmd('copen')
+    vim.notify(string.format("Found %d errors/warnings in buffer", #qflist), vim.log.levels.INFO)
+    vim.cmd('cfirst')
+  else
+    vim.notify("No errors found in buffer", vim.log.levels.INFO)
+  end
+end
+
+-- Real-time error monitoring for active terminals
+local error_monitoring = {}
+local monitoring_autocmds = {}
+
+function M.start_error_monitoring(bufnr)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  -- Don't duplicate monitoring
+  if error_monitoring[bufnr] then
+    return
+  end
+
+  error_monitoring[bufnr] = true
+
+  local group = vim.api.nvim_create_augroup("ErrorMonitor_" .. bufnr, { clear = true })
+
+  -- Monitor lines as they're added (for real-time output)
+  table.insert(monitoring_autocmds, vim.api.nvim_create_autocmd("BufWritePost", {
+    group = group,
+    buffer = bufnr,
+    callback = function()
+      local lines = vim.api.nvim_buf_get_lines(bufnr, -50, -1, false)  -- Check last 50 lines
+      local qflist = M.parse_errors_from_lines(lines)
+
+      if #qflist > 0 then
+        vim.fn.setqflist(qflist, 'r')
+        -- Don't auto-open to avoid interrupting user, but update status
+        vim.diagnostic.set(0, bufnr, qflist, { source = "ErrorParser" })
+      end
+    end,
+  }))
+
+  -- Clean up when buffer is deleted
+  table.insert(monitoring_autocmds, vim.api.nvim_create_autocmd("BufDelete", {
+    group = group,
+    buffer = bufnr,
+    callback = function()
+      M.stop_error_monitoring(bufnr)
+    end,
+  }))
+end
+
+function M.stop_error_monitoring(bufnr)
+  if error_monitoring[bufnr] then
+    error_monitoring[bufnr] = nil
+    local group_name = "ErrorMonitor_" .. bufnr
+    if vim.fn.exists("##" .. group_name) == 1 then
+      vim.api.nvim_del_augroup_by_name(group_name)
+    end
+  end
+end
+
+function M.toggle_error_monitoring(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  if error_monitoring[bufnr] then
+    M.stop_error_monitoring(bufnr)
+    vim.notify("Error monitoring disabled", vim.log.levels.INFO)
+  else
+    M.start_error_monitoring(bufnr)
+    vim.notify("Error monitoring enabled", vim.log.levels.INFO)
   end
 end
 
