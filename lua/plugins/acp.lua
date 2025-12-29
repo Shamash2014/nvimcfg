@@ -1,6 +1,7 @@
 return {
   dir = "/Users/shamash/temp/agent/author/nvim-acp",
-  name = "nvim-acp", -- Optional, but good for display
+  name = "nvim-acp",
+  enabled = false,
   config = function()
     -- Put any specific configuration here if needed
     require("acp").setup({
