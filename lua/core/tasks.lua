@@ -6,6 +6,36 @@ M.running_tasks = {}
 -- Track unique terminal instances for toggle
 M.terminals = {}
 
+-- Command history
+M.command_history = {}
+M.max_history = 50
+
+-- Add command to history
+local function add_to_history(task)
+  local entry = {
+    name = task.name,
+    cmd = task.cmd,
+    desc = task.desc,
+    timestamp = os.time(),
+  }
+
+  -- Remove duplicate if exists (same cmd)
+  for i = #M.command_history, 1, -1 do
+    if M.command_history[i].cmd == task.cmd then
+      table.remove(M.command_history, i)
+      break
+    end
+  end
+
+  -- Add to front of history
+  table.insert(M.command_history, 1, entry)
+
+  -- Trim to max size
+  while #M.command_history > M.max_history do
+    table.remove(M.command_history)
+  end
+end
+
 -- Define common tasks for different project types
 local tasks = {
   javascript = {
@@ -252,6 +282,9 @@ function M.run_task(task, opts)
   end
 
   opts = opts or {}
+
+  -- Record to history
+  add_to_history(task)
 
   -- Replace % with current file
   local cmd = task.cmd:gsub("%%", vim.fn.expand("%"))
@@ -529,15 +562,41 @@ function M.pick_task()
     }
   }
 
-  -- Add npm tasks first (already included in available_tasks from get_tasks)
+  -- Add last 3 commands from history
+  for i = 1, math.min(3, #M.command_history) do
+    local entry = M.command_history[i]
+    local time_ago = os.difftime(os.time(), entry.timestamp)
+    local time_str
+    if time_ago < 60 then
+      time_str = "just now"
+    elseif time_ago < 3600 then
+      time_str = math.floor(time_ago / 60) .. "m ago"
+    else
+      time_str = math.floor(time_ago / 3600) .. "h ago"
+    end
+    table.insert(items, {
+      text = "[" .. i .. "] " .. entry.name,
+      desc = time_str .. " - " .. entry.cmd,
+      task = { name = entry.name, cmd = entry.cmd, desc = entry.desc },
+      is_history = true
+    })
+  end
+
+  -- Add separator if we have history
+  if #M.command_history > 0 then
+    table.insert(items, {
+      text = "──────────────",
+      desc = "",
+      task = nil
+    })
+  end
+
   -- Add all other tasks from configuration files
   for _, task in ipairs(available_tasks) do
-    -- Format npm tasks specially
     if task.type == "npm" then
-      -- Show npm tasks with cleaner formatting
       local name = task.name:gsub("^npm: ", "")
       table.insert(items, {
-        text = "📦 " .. name,
+        text = name,
         desc = task.desc,
         task = task
       })
@@ -572,6 +631,11 @@ function M.pick_task()
       M.last_task = item.task
     end
   end)
+end
+
+-- Get command history
+function M.get_history()
+  return M.command_history
 end
 
 -- Show running tasks
