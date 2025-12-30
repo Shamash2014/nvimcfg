@@ -20,16 +20,6 @@ return {
     end,
     extensions = {
       quickfix = {},
-      flutter_device = {
-        save = function()
-          return { device_id = vim.g.flutter_device_id }
-        end,
-        load = function(data)
-          if data.device_id then
-            vim.g.flutter_device_id = data.device_id
-          end
-        end,
-      },
     },
   },
   config = function(_, opts)

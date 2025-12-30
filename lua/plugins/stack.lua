@@ -50,7 +50,7 @@ return {
 
       Hydra({
         name = "Stack",
-        hint = hint,
+        hint = hint(),
         config = {
           invoke_on_body = true,
           hint = {
