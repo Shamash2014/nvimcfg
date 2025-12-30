@@ -14,13 +14,26 @@ return {
 
       local function hint()
         local current = git.current_branch() or "(detached)"
+        local parent = git.get_parent(current)
+        local children = git.get_children(current)
+        local trunk = config.get_trunk() or "main"
+
+        local status = current
+        if parent then
+          status = status .. " ← " .. parent
+        end
+        if #children > 0 then
+          status = status .. " → " .. table.concat(children, ", ")
+        end
+
         local lines = {
-          " " .. current,
+          " " .. status,
+          " trunk: " .. trunk,
           "",
           " _u_ up    _d_ down   _t_ top    _b_ bottom",
           " _C_ commit _m_ amend _e_ edit   _q_ squash",
           " _c_ create _l_ list  _L_ log",
-          " _s_ sync   _r_ restack _S_ submit",
+          " _s_ sync   _r_ restack _p_ push _S_ submit",
           " _a_ adopt  _o_ orphan  _D_ delete",
         }
         return table.concat(lines, "\n")
@@ -37,7 +50,7 @@ return {
 
       Hydra({
         name = "Stack",
-        hint = hint(),
+        hint = hint,
         config = {
           invoke_on_body = true,
           hint = {
@@ -65,6 +78,7 @@ return {
           { "L", function() stack.log() end, { exit = true, desc = "log" } },
           { "s", function() stack.sync() end, { exit = true, desc = "sync" } },
           { "r", function() stack.restack() end, { exit = true, desc = "restack" } },
+          { "p", function() stack.push() end, { exit = true, desc = "push" } },
           { "S", function() stack.submit() end, { exit = true, desc = "submit" } },
           { "a", function() stack.adopt() end, { exit = true, desc = "adopt" } },
           { "o", function() stack.orphan() end, { desc = "orphan" } },

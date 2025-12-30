@@ -509,6 +509,25 @@ function M.commit()
   return ok
 end
 
+function M.push()
+  local chain = config.get_stack_chain()
+  if #chain == 0 then
+    notify_error("Not in a stack")
+    return false
+  end
+
+  notify("Pushing " .. #chain .. " branch(es)...")
+  for _, branch in ipairs(chain) do
+    local ok = git.push(branch, true)
+    if ok then
+      notify("Pushed " .. branch)
+    else
+      notify_error("Failed to push " .. branch)
+    end
+  end
+  return true
+end
+
 function M.submit()
   local chain = config.get_stack_chain()
   if #chain == 0 then
@@ -526,6 +545,7 @@ function M.submit()
     local pr_num = git.pr_exists(branch)
 
     if pr_num then
+      git.push(branch, true)
       local ok = git.update_pr_base(pr_num, base)
       if ok then
         notify("Updated " .. mr_term .. " #" .. pr_num .. " for " .. branch)
@@ -583,6 +603,7 @@ function M.popup()
     { key = "", label = "", action = nil },
     { key = "s", label = "sync (rebase onto trunk)", action = M.sync, enabled = parent ~= nil },
     { key = "r", label = "restack (after amend)", action = M.restack, enabled = #children > 0 },
+    { key = "p", label = "push stack", action = M.push, enabled = parent ~= nil },
     { key = "S", label = "submit PRs", action = M.submit, enabled = parent ~= nil },
     { key = "", label = "", action = nil },
     { key = "a", label = "adopt branch", action = M.adopt, enabled = true },
@@ -656,7 +677,7 @@ function M.setup()
   end, {
     nargs = "?",
     complete = function()
-      return { "up", "down", "top", "bottom", "commit", "modify", "edit", "squash", "create", "list", "log", "sync", "restack", "submit", "adopt", "orphan", "delete", "popup" }
+      return { "up", "down", "top", "bottom", "commit", "modify", "edit", "squash", "create", "list", "log", "sync", "restack", "push", "submit", "adopt", "orphan", "delete", "popup" }
     end,
   })
 

@@ -19,28 +19,28 @@ function M.current_branch()
 end
 
 function M.branch_exists(name)
-  local ok = run("git show-ref --verify --quiet refs/heads/" .. name)
+  local ok = run("git show-ref --verify --quiet refs/heads/" .. vim.fn.shellescape(name))
   return ok
 end
 
 function M.checkout(branch)
-  return run("git checkout " .. branch)
+  return run("git checkout " .. vim.fn.shellescape(branch))
 end
 
 function M.create_branch(name, base)
   base = base or "HEAD"
-  return run("git checkout -b " .. name .. " " .. base)
+  return run("git checkout -b " .. vim.fn.shellescape(name) .. " " .. vim.fn.shellescape(base))
 end
 
 function M.delete_branch(name, force)
   local flag = force and "-D" or "-d"
-  return run("git branch " .. flag .. " " .. name)
+  return run("git branch " .. flag .. " " .. vim.fn.shellescape(name))
 end
 
 function M.get_parent(branch)
   branch = branch or M.current_branch()
   if not branch then return nil end
-  local ok, parent = run("git config --get branch." .. branch .. ".stackParent", { trim = true })
+  local ok, parent = run("git config --get branch." .. vim.fn.shellescape(branch) .. ".stackParent", { trim = true })
   if ok and parent ~= "" then
     return parent
   end
@@ -48,11 +48,11 @@ function M.get_parent(branch)
 end
 
 function M.set_parent(branch, parent)
-  return run("git config branch." .. branch .. ".stackParent " .. parent)
+  return run("git config branch." .. vim.fn.shellescape(branch) .. ".stackParent " .. vim.fn.shellescape(parent))
 end
 
 function M.unset_parent(branch)
-  return run("git config --unset branch." .. branch .. ".stackParent")
+  return run("git config --unset branch." .. vim.fn.shellescape(branch) .. ".stackParent")
 end
 
 function M.get_children(branch)
@@ -73,7 +73,7 @@ function M.get_children(branch)
 end
 
 function M.commits_between(base, head)
-  local ok, commits = run("git log --oneline " .. base .. ".." .. head)
+  local ok, commits = run("git log --oneline " .. vim.fn.shellescape(base) .. ".." .. vim.fn.shellescape(head))
   if not ok then return {} end
 
   local result = {}
@@ -87,7 +87,7 @@ function M.commits_between(base, head)
 end
 
 function M.rebase_update_refs(onto)
-  return run("git rebase --update-refs " .. onto)
+  return run("git rebase --update-refs " .. vim.fn.shellescape(onto))
 end
 
 function M.is_rebasing()
@@ -108,9 +108,9 @@ end
 function M.fetch(remote, branch)
   remote = remote or "origin"
   if branch then
-    return run("git fetch " .. remote .. " " .. branch .. ":" .. branch)
+    return run("git fetch " .. vim.fn.shellescape(remote) .. " " .. vim.fn.shellescape(branch) .. ":" .. vim.fn.shellescape(branch))
   end
-  return run("git fetch " .. remote)
+  return run("git fetch " .. vim.fn.shellescape(remote))
 end
 
 local function get_forge()
@@ -135,8 +135,15 @@ function M.get_mr_term()
   return forge == "gitlab" and "MR" or "PR"
 end
 
+function M.push(branch, force)
+  branch = branch or M.current_branch()
+  if not branch then return false end
+  local flag = force and "--force-with-lease" or ""
+  return run(string.format("git push -u origin %s %s", branch, flag))
+end
+
 function M.pr_exists(branch)
-  local cmd = string.format("gcli pulls --from %s 2>/dev/null | head -1 | awk '{print $1}'", branch)
+  local cmd = string.format("gcli pulls --from %s 2>/dev/null | head -1 | awk '{print $1}'", vim.fn.shellescape(branch))
   local ok, result = run(cmd, { trim = true })
   if ok and result and result ~= "" and result:match("^%d+$") then
     return tonumber(result)
@@ -145,20 +152,23 @@ function M.pr_exists(branch)
 end
 
 function M.create_pr(branch, base, title, body)
+  M.push(branch)
   local cmd = string.format(
-    "gcli pulls create -y --from %s --to %s %q",
-    branch, base, title
+    "gcli pulls create -y --from %s --to %s %s",
+    vim.fn.shellescape(branch),
+    vim.fn.shellescape(base),
+    vim.fn.shellescape(title)
   )
   return run(cmd)
 end
 
 function M.update_pr_base(pr_number, base)
-  local cmd = string.format("gcli pulls edit %s --base %s", pr_number, base)
+  local cmd = string.format("gcli pulls edit %s --base %s", pr_number, vim.fn.shellescape(base))
   return run(cmd)
 end
 
 function M.get_pr_url(branch)
-  local cmd = string.format("gcli pulls --from %s 2>/dev/null | head -1 | awk '{print $NF}'", branch)
+  local cmd = string.format("gcli pulls --from %s 2>/dev/null | head -1 | awk '{print $NF}'", vim.fn.shellescape(branch))
   local ok, url = run(cmd, { trim = true })
   if ok and url and url:match("^http") then
     return url
@@ -186,7 +196,7 @@ function M.squash(message)
     return false, "No parent branch"
   end
 
-  local ok = run("git reset --soft " .. parent)
+  local ok = run("git reset --soft " .. vim.fn.shellescape(parent))
   if not ok then
     return false, "Reset failed"
   end

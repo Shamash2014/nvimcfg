@@ -51,12 +51,13 @@ local function build_tree(branch, depth, is_last, prefix_parts)
       table.insert(new_prefix, is_last and "    " or "│   ")
     end
 
+    local offset = #lines
     local child_lines, child_refs = build_tree(child, depth + 1, child_is_last, new_prefix)
     for _, line in ipairs(child_lines) do
       table.insert(lines, line)
     end
     for _, ref in ipairs(child_refs) do
-      ref.line = ref.line + #lines - #child_lines
+      ref.line = ref.line + offset
       table.insert(branch_refs, ref)
     end
   end
