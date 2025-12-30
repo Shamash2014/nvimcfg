@@ -154,9 +154,10 @@ end
 function M.create_pr(branch, base, title, body)
   M.push(branch)
   local cmd = string.format(
-    "gcli pulls create -y --from %s --to %s %s",
+    "gcli pulls create -y --from %s --to %s --body %s %s",
     vim.fn.shellescape(branch),
     vim.fn.shellescape(base),
+    vim.fn.shellescape(body or ""),
     vim.fn.shellescape(title)
   )
   return run(cmd)
