@@ -12,565 +12,708 @@ local function notify_error(msg)
 end
 
 function M.up()
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
-
-  local parent = git.get_parent(current)
-  if not parent then
-    notify_error("No parent branch (at stack root or not in a stack)")
-    return false
-  end
-
-  local ok = git.checkout(parent)
-  if ok then
-    notify("Moved up to: " .. parent)
-  else
-    notify_error("Failed to checkout: " .. parent)
-  end
-  return ok
-end
-
-function M.down()
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
-
-  local children = git.get_children(current)
-  if #children == 0 then
-    notify_error("No child branches")
-    return false
-  end
-
-  local target = children[1]
-  if #children > 1 then
-    vim.ui.select(children, {
-      prompt = "Select child branch:",
-    }, function(choice)
-      if choice then
-        local ok = git.checkout(choice)
-        if ok then
-          notify("Moved down to: " .. choice)
-        else
-          notify_error("Failed to checkout: " .. choice)
-        end
-      end
-    end)
-    return true
-  end
-
-  local ok = git.checkout(target)
-  if ok then
-    notify("Moved down to: " .. target)
-  else
-    notify_error("Failed to checkout: " .. target)
-  end
-  return ok
-end
-
-function M.top()
-  local trunk = config.get_trunk()
-  if not trunk then
-    notify_error("Could not determine trunk branch")
-    return false
-  end
-
-  local ok = git.checkout(trunk)
-  if ok then
-    notify("Moved to trunk: " .. trunk)
-  else
-    notify_error("Failed to checkout: " .. trunk)
-  end
-  return ok
-end
-
-function M.bottom()
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
-
-  local function find_leaf(branch)
-    local children = git.get_children(branch)
-    if #children == 0 then
-      return branch
-    end
-    return find_leaf(children[1])
-  end
-
-  local leaf = find_leaf(current)
-  if leaf == current then
-    notify("Already at bottom of stack")
-    return true
-  end
-
-  local ok = git.checkout(leaf)
-  if ok then
-    notify("Moved to bottom: " .. leaf)
-  else
-    notify_error("Failed to checkout: " .. leaf)
-  end
-  return ok
-end
-
-function M.create(name)
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
-
-  local function do_create(branch_name)
-    if not branch_name or branch_name == "" then
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
       return
     end
 
-    local ok = git.create_branch(branch_name)
-    if not ok then
-      notify_error("Failed to create branch: " .. branch_name)
-      return false
+    git.get_parent(current, function(parent)
+      if not parent then
+        notify_error("No parent branch (at stack root or not in a stack)")
+        return
+      end
+
+      git.checkout(parent, function(ok)
+        if ok then
+          notify("Moved up to: " .. parent)
+        else
+          notify_error("Failed to checkout: " .. parent)
+        end
+      end)
+    end)
+  end)
+end
+
+function M.down()
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
+      return
     end
 
-    ok = git.set_parent(branch_name, current)
-    if not ok then
-      notify_error("Failed to set parent for: " .. branch_name)
-      return false
+    git.get_children(current, function(children)
+      if #children == 0 then
+        notify_error("No child branches")
+        return
+      end
+
+      if #children > 1 then
+        vim.ui.select(children, {
+          prompt = "Select child branch:",
+        }, function(choice)
+          if choice then
+            git.checkout(choice, function(ok)
+              if ok then
+                notify("Moved down to: " .. choice)
+              else
+                notify_error("Failed to checkout: " .. choice)
+              end
+            end)
+          end
+        end)
+        return
+      end
+
+      local target = children[1]
+      git.checkout(target, function(ok)
+        if ok then
+          notify("Moved down to: " .. target)
+        else
+          notify_error("Failed to checkout: " .. target)
+        end
+      end)
+    end)
+  end)
+end
+
+function M.top()
+  config.get_trunk(function(trunk)
+    if not trunk then
+      notify_error("Could not determine trunk branch")
+      return
     end
 
-    notify("Created stack branch: " .. branch_name .. " (parent: " .. current .. ")")
-    return true
-  end
+    git.checkout(trunk, function(ok)
+      if ok then
+        notify("Moved to trunk: " .. trunk)
+      else
+        notify_error("Failed to checkout: " .. trunk)
+      end
+    end)
+  end)
+end
 
-  if name then
-    return do_create(name)
-  end
+function M.bottom()
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
+      return
+    end
 
-  vim.ui.input({ prompt = "New branch name: " }, function(input)
-    do_create(input)
+    local function find_leaf(branch, cb)
+      git.get_children(branch, function(children)
+        if #children == 0 then
+          cb(branch)
+        else
+          find_leaf(children[1], cb)
+        end
+      end)
+    end
+
+    find_leaf(current, function(leaf)
+      if leaf == current then
+        notify("Already at bottom of stack")
+        return
+      end
+
+      git.checkout(leaf, function(ok)
+        if ok then
+          notify("Moved to bottom: " .. leaf)
+        else
+          notify_error("Failed to checkout: " .. leaf)
+        end
+      end)
+    end)
+  end)
+end
+
+function M.create(name)
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
+      return
+    end
+
+    local function do_create(branch_name)
+      if not branch_name or branch_name == "" then
+        return
+      end
+
+      git.create_branch(branch_name, nil, function(ok)
+        if not ok then
+          notify_error("Failed to create branch: " .. branch_name)
+          return
+        end
+
+        git.set_parent(branch_name, current, function(parent_ok)
+          if not parent_ok then
+            notify_error("Failed to set parent for: " .. branch_name)
+            return
+          end
+
+          notify("Created stack branch: " .. branch_name .. " (parent: " .. current .. ")")
+        end)
+      end)
+    end
+
+    if name then
+      do_create(name)
+      return
+    end
+
+    vim.ui.input({ prompt = "New branch name: " }, function(input)
+      do_create(input)
+    end)
   end)
 end
 
 function M.list()
-  local current = git.current_branch()
-  local chain = config.get_stack_chain(current)
-  local trunk = config.get_trunk()
+  git.current_branch(function(current)
+    config.get_stack_chain(current, function(chain)
+      config.get_trunk(function(trunk)
+        if #chain == 0 then
+          notify("Not in a stack")
+          return
+        end
 
-  if #chain == 0 then
-    notify("Not in a stack")
-    return {}
-  end
+        local lines = { "Stack (" .. #chain .. " branches):", "" }
+        if trunk then
+          table.insert(lines, "  " .. trunk .. " (trunk)")
+        end
 
-  local lines = { "Stack (" .. #chain .. " branches):", "" }
-  if trunk then
-    table.insert(lines, "  " .. trunk .. " (trunk)")
-  end
+        local pending = #chain
+        local branch_info = {}
 
-  for i, branch in ipairs(chain) do
-    local prefix = i == #chain and "  └── " or "  ├── "
-    local marker = branch == current and " <- HEAD" or ""
-    local commits = git.commits_between(git.get_parent(branch) or trunk or "HEAD~10", branch)
-    local commit_info = #commits > 0 and " [" .. #commits .. " commit" .. (#commits > 1 and "s" or "") .. "]" or ""
-    table.insert(lines, prefix .. branch .. commit_info .. marker)
-  end
+        for i, branch in ipairs(chain) do
+          branch_info[i] = { branch = branch, commits = {} }
+          git.get_parent(branch, function(parent)
+            local base = parent or trunk or "HEAD~10"
+            git.commits_between(base, branch, function(commits)
+              branch_info[i].commits = commits
+              pending = pending - 1
 
-  notify(table.concat(lines, "\n"))
-  return chain
+              if pending == 0 then
+                for j, info in ipairs(branch_info) do
+                  local prefix = j == #chain and "  └── " or "  ├── "
+                  local marker = info.branch == current and " <- HEAD" or ""
+                  local commit_info = #info.commits > 0
+                      and " [" .. #info.commits .. " commit" .. (#info.commits > 1 and "s" or "") .. "]"
+                      or ""
+                  table.insert(lines, prefix .. info.branch .. commit_info .. marker)
+                end
+                notify(table.concat(lines, "\n"))
+              end
+            end)
+          end)
+        end
+      end)
+    end)
+  end)
 end
 
 function M.adopt(branch)
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
-
-  local function do_adopt(target)
-    if not target or target == "" then
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
       return
     end
 
-    if not git.branch_exists(target) then
-      notify_error("Branch does not exist: " .. target)
-      return false
+    local function do_adopt(target)
+      if not target or target == "" then
+        return
+      end
+
+      git.branch_exists(target, function(exists)
+        if not exists then
+          notify_error("Branch does not exist: " .. target)
+          return
+        end
+
+        git.set_parent(target, current, function(ok)
+          if ok then
+            notify("Adopted " .. target .. " as child of " .. current)
+          else
+            notify_error("Failed to adopt: " .. target)
+          end
+        end)
+      end)
     end
 
-    local ok = git.set_parent(target, current)
-    if ok then
-      notify("Adopted " .. target .. " as child of " .. current)
-    else
-      notify_error("Failed to adopt: " .. target)
+    if branch then
+      do_adopt(branch)
+      return
     end
-    return ok
-  end
 
-  if branch then
-    return do_adopt(branch)
-  end
-
-  vim.ui.input({ prompt = "Branch to adopt: " }, function(input)
-    do_adopt(input)
+    vim.ui.input({ prompt = "Branch to adopt: " }, function(input)
+      do_adopt(input)
+    end)
   end)
 end
 
 function M.orphan()
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
+      return
+    end
 
-  local parent = git.get_parent(current)
-  if not parent then
-    notify_error("Branch is not in a stack")
-    return false
-  end
+    git.get_parent(current, function(parent)
+      if not parent then
+        notify_error("Branch is not in a stack")
+        return
+      end
 
-  local children = git.get_children(current)
-  for _, child in ipairs(children) do
-    git.set_parent(child, parent)
-  end
+      git.get_children(current, function(children)
+        local pending = #children
+        local done = function()
+          git.unset_parent(current, function(ok)
+            if ok then
+              notify("Removed " .. current .. " from stack (re-parented " .. #children .. " children to " .. parent .. ")")
+            else
+              notify_error("Failed to orphan branch")
+            end
+          end)
+        end
 
-  local ok = git.unset_parent(current)
-  if ok then
-    notify("Removed " .. current .. " from stack (re-parented " .. #children .. " children to " .. parent .. ")")
-  else
-    notify_error("Failed to orphan branch")
-  end
-  return ok
+        if pending == 0 then
+          done()
+          return
+        end
+
+        for _, child in ipairs(children) do
+          git.set_parent(child, parent, function()
+            pending = pending - 1
+            if pending == 0 then
+              done()
+            end
+          end)
+        end
+      end)
+    end)
+  end)
 end
 
 function M.delete(branch)
-  branch = branch or git.current_branch()
-  if not branch then
-    notify_error("No branch specified")
-    return false
-  end
-
-  local parent = git.get_parent(branch)
-  local children = git.get_children(branch)
-
-  for _, child in ipairs(children) do
-    if parent then
-      git.set_parent(child, parent)
-    else
-      git.unset_parent(child)
+  git.current_branch(function(current)
+    local target = branch or current
+    if not target then
+      notify_error("No branch specified")
+      return
     end
-  end
 
-  git.unset_parent(branch)
+    git.get_parent(target, function(parent)
+      git.get_children(target, function(children)
+        local pending = #children
+        local do_delete = function()
+          git.unset_parent(target, function()
+            local finish = function()
+              git.delete_branch(target, true, function(ok)
+                if ok then
+                  notify("Deleted " .. target .. " from stack")
+                else
+                  notify_error("Failed to delete: " .. target)
+                end
+              end)
+            end
 
-  if branch == git.current_branch() and parent then
-    git.checkout(parent)
-  end
+            if target == current and parent then
+              git.checkout(parent, function()
+                finish()
+              end)
+            else
+              finish()
+            end
+          end)
+        end
 
-  local ok = git.delete_branch(branch, true)
-  if ok then
-    notify("Deleted " .. branch .. " from stack")
-  else
-    notify_error("Failed to delete: " .. branch)
-  end
-  return ok
+        if pending == 0 then
+          do_delete()
+          return
+        end
+
+        for _, child in ipairs(children) do
+          local set_or_unset = function(cb)
+            if parent then
+              git.set_parent(child, parent, cb)
+            else
+              git.unset_parent(child, cb)
+            end
+          end
+
+          set_or_unset(function()
+            pending = pending - 1
+            if pending == 0 then
+              do_delete()
+            end
+          end)
+        end
+      end)
+    end)
+  end)
 end
 
 function M.sync()
-  local trunk = config.get_trunk()
-  if not trunk then
-    notify_error("Could not determine trunk branch")
-    return false
-  end
-
-  local ok, err = config.validate_git_version()
-  if not ok then
-    notify_error(err)
-    return false
-  end
-
-  local root = config.get_stack_root()
-  if not root then
-    notify_error("Not in a stack")
-    return false
-  end
-
-  notify("Fetching " .. trunk .. "...")
-  git.fetch("origin", trunk)
-
-  local current = git.current_branch()
-  git.checkout(root)
-
-  notify("Rebasing stack onto " .. trunk .. "...")
-  ok = git.rebase_update_refs(trunk)
-
-  if not ok then
-    if git.is_rebasing() then
-      notify_error("Rebase conflict. Resolve and run :StackContinue, or :StackAbort")
-      return false
+  config.get_trunk(function(trunk)
+    if not trunk then
+      notify_error("Could not determine trunk branch")
+      return
     end
-    notify_error("Rebase failed")
-    return false
-  end
 
-  if current and git.branch_exists(current) then
-    git.checkout(current)
-  end
+    config.validate_git_version(function(ok, err)
+      if not ok then
+        notify_error(err)
+        return
+      end
 
-  notify("Stack synced to latest " .. trunk)
-  return true
+      config.get_stack_root(function(root)
+        if not root then
+          notify_error("Not in a stack")
+          return
+        end
+
+        notify("Fetching " .. trunk .. "...")
+        git.fetch("origin", trunk, function()
+          git.current_branch(function(current)
+            git.checkout(root, function()
+              notify("Rebasing stack onto " .. trunk .. "...")
+              git.rebase_update_refs(trunk, function(rebase_ok)
+                if not rebase_ok then
+                  git.is_rebasing(function(rebasing)
+                    if rebasing then
+                      notify_error("Rebase conflict. Resolve and run :StackContinue, or :StackAbort")
+                    else
+                      notify_error("Rebase failed")
+                    end
+                  end)
+                  return
+                end
+
+                if current then
+                  git.branch_exists(current, function(exists)
+                    if exists then
+                      git.checkout(current, function()
+                        notify("Stack synced to latest " .. trunk)
+                      end)
+                    else
+                      notify("Stack synced to latest " .. trunk)
+                    end
+                  end)
+                else
+                  notify("Stack synced to latest " .. trunk)
+                end
+              end)
+            end)
+          end)
+        end)
+      end)
+    end)
+  end)
 end
 
 function M.restack()
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
-
-  local children = git.get_children(current)
-  if #children == 0 then
-    notify("No children to restack")
-    return true
-  end
-
-  local ok, err = config.validate_git_version()
-  if not ok then
-    notify_error(err)
-    return false
-  end
-
-  notify("Restacking " .. #children .. " child branch(es)...")
-
-  ok = git.rebase_update_refs(current)
-  if not ok then
-    if git.is_rebasing() then
-      notify_error("Rebase conflict. Resolve and run :StackContinue, or :StackAbort")
-      return false
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
+      return
     end
-    notify_error("Restack failed")
-    return false
-  end
 
-  git.checkout(current)
-  notify("Restacked children of " .. current)
-  return true
+    git.get_children(current, function(children)
+      if #children == 0 then
+        notify("No children to restack")
+        return
+      end
+
+      config.validate_git_version(function(ok, err)
+        if not ok then
+          notify_error(err)
+          return
+        end
+
+        notify("Restacking " .. #children .. " child branch(es)...")
+
+        git.rebase_update_refs(current, function(rebase_ok)
+          if not rebase_ok then
+            git.is_rebasing(function(rebasing)
+              if rebasing then
+                notify_error("Rebase conflict. Resolve and run :StackContinue, or :StackAbort")
+              else
+                notify_error("Restack failed")
+              end
+            end)
+            return
+          end
+
+          git.checkout(current, function()
+            notify("Restacked children of " .. current)
+          end)
+        end)
+      end)
+    end)
+  end)
 end
 
 function M.rebase_continue()
-  if not git.is_rebasing() then
-    notify("No rebase in progress")
-    return true
-  end
-  local ok = git.rebase_continue()
-  if ok then
-    notify("Rebase continued")
-  else
-    notify_error("Continue failed - resolve remaining conflicts")
-  end
-  return ok
+  git.is_rebasing(function(rebasing)
+    if not rebasing then
+      notify("No rebase in progress")
+      return
+    end
+    git.rebase_continue(function(ok)
+      if ok then
+        notify("Rebase continued")
+      else
+        notify_error("Continue failed - resolve remaining conflicts")
+      end
+    end)
+  end)
 end
 
 function M.rebase_abort()
-  if not git.is_rebasing() then
-    notify("No rebase in progress")
-    return true
-  end
-  local ok = git.rebase_abort()
-  if ok then
-    notify("Rebase aborted")
-  else
-    notify_error("Abort failed")
-  end
-  return ok
+  git.is_rebasing(function(rebasing)
+    if not rebasing then
+      notify("No rebase in progress")
+      return
+    end
+    git.rebase_abort(function(ok)
+      if ok then
+        notify("Rebase aborted")
+      else
+        notify_error("Abort failed")
+      end
+    end)
+  end)
 end
 
 function M.modify()
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
+      return
+    end
 
-  if not git.has_staged_changes() and not git.has_unstaged_changes() then
-    notify("No changes to amend")
-    return false
-  end
+    git.has_staged_changes(function(staged)
+      git.has_unstaged_changes(function(unstaged)
+        if not staged and not unstaged then
+          notify("No changes to amend")
+          return
+        end
 
-  local ok = git.amend()
-  if not ok then
-    notify_error("Amend failed")
-    return false
-  end
+        git.amend(function(ok)
+          if not ok then
+            notify_error("Amend failed")
+            return
+          end
 
-  notify("Amended commit")
+          notify("Amended commit")
 
-  local children = git.get_children(current)
-  if #children > 0 then
-    M.restack()
-  end
-
-  return true
+          git.get_children(current, function(children)
+            if #children > 0 then
+              M.restack()
+            end
+          end)
+        end)
+      end)
+    end)
+  end)
 end
 
 function M.edit()
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
+      return
+    end
 
-  local ok = git.amend_edit()
-  if not ok then
-    notify_error("Amend failed")
-    return false
-  end
+    git.amend_edit(function(ok)
+      if not ok then
+        notify_error("Amend failed")
+        return
+      end
 
-  notify("Amended commit")
+      notify("Amended commit")
 
-  local children = git.get_children(current)
-  if #children > 0 then
-    M.restack()
-  end
-
-  return true
+      git.get_children(current, function(children)
+        if #children > 0 then
+          M.restack()
+        end
+      end)
+    end)
+  end)
 end
 
 function M.squash()
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
-
-  local parent = git.get_parent(current)
-  if not parent then
-    notify_error("Not in a stack")
-    return false
-  end
-
-  vim.ui.input({ prompt = "Squash commit message: " }, function(message)
-    if not message or message == "" then
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
       return
     end
 
-    local ok, err = git.squash(message)
-    if not ok then
-      notify_error(err or "Squash failed")
-      return
-    end
+    git.get_parent(current, function(parent)
+      if not parent then
+        notify_error("Not in a stack")
+        return
+      end
 
-    notify("Squashed to single commit")
+      vim.ui.input({ prompt = "Squash commit message: " }, function(message)
+        if not message or message == "" then
+          return
+        end
 
-    local children = git.get_children(current)
-    if #children > 0 then
-      M.restack()
-    end
+        git.squash(message, function(ok, err)
+          if not ok then
+            notify_error(err or "Squash failed")
+            return
+          end
+
+          notify("Squashed to single commit")
+
+          git.get_children(current, function(children)
+            if #children > 0 then
+              M.restack()
+            end
+          end)
+        end)
+      end)
+    end)
   end)
 end
 
 function M.commit()
-  local current = git.current_branch()
-  if not current then
-    notify_error("Not on a branch")
-    return false
-  end
-
-  local parent = git.get_parent(current)
-  if not parent then
-    notify_error("Not in a stack")
-    return false
-  end
-
-  local commits = git.commits_between(parent, current)
-  local is_first = #commits == 0
-
-  local ok
-  if is_first then
-    ok = git.commit()
-    if ok then
-      notify("Created commit")
+  git.current_branch(function(current)
+    if not current then
+      notify_error("Not on a branch")
+      return
     end
-  else
-    ok = git.amend()
-    if ok then
-      notify("Amended commit")
-      local children = git.get_children(current)
-      if #children > 0 then
-        M.restack()
+
+    git.get_parent(current, function(parent)
+      if not parent then
+        notify_error("Not in a stack")
+        return
       end
-    end
-  end
 
-  if not ok then
-    notify_error("Commit failed")
-  end
-  return ok
+      git.commits_between(parent, current, function(commits)
+        local is_first = #commits == 0
+
+        if is_first then
+          git.commit(function(ok)
+            if ok then
+              notify("Created commit")
+            else
+              notify_error("Commit failed")
+            end
+          end)
+        else
+          git.amend(function(ok)
+            if ok then
+              notify("Amended commit")
+              git.get_children(current, function(children)
+                if #children > 0 then
+                  M.restack()
+                end
+              end)
+            else
+              notify_error("Commit failed")
+            end
+          end)
+        end
+      end)
+    end)
+  end)
 end
 
 function M.push()
-  local chain = config.get_stack_chain()
-  if #chain == 0 then
-    notify_error("Not in a stack")
-    return false
-  end
-
-  notify("Pushing " .. #chain .. " branch(es)...")
-  for _, branch in ipairs(chain) do
-    local ok = git.push(branch, true)
-    if ok then
-      notify("Pushed " .. branch)
-    else
-      notify_error("Failed to push " .. branch)
+  config.get_stack_chain(nil, function(chain)
+    if #chain == 0 then
+      notify_error("Not in a stack")
+      return
     end
-  end
-  return true
+
+    notify("Pushing " .. #chain .. " branch(es)...")
+
+    local i = 1
+    local function push_next()
+      if i > #chain then
+        return
+      end
+      local branch = chain[i]
+      git.push(branch, true, function(ok)
+        if ok then
+          notify("Pushed " .. branch)
+        else
+          notify_error("Failed to push " .. branch)
+        end
+        i = i + 1
+        push_next()
+      end)
+    end
+    push_next()
+  end)
 end
 
 function M.submit()
-  local chain = config.get_stack_chain()
-  if #chain == 0 then
-    notify_error("Not in a stack")
-    return false
-  end
-
-  local trunk = config.get_trunk()
-  local mr_term = git.get_mr_term()
-  local forge = git.get_forge()
-  notify("Submitting " .. #chain .. " branch(es) as " .. mr_term .. "s to " .. forge .. "...")
-
-  for i, branch in ipairs(chain) do
-    local base = i == 1 and trunk or chain[i - 1]
-    local pr_num = git.pr_exists(branch)
-
-    if pr_num then
-      git.push(branch, true)
-      local ok = git.update_pr_base(pr_num, base)
-      if ok then
-        notify("Updated " .. mr_term .. " #" .. pr_num .. " for " .. branch)
-      else
-        notify_error("Failed to update " .. mr_term .. " for " .. branch)
-      end
-    else
-      local commits = git.commits_between(base, branch)
-      local title = #commits > 0 and commits[#commits].message or branch
-      local body = "Part of stack:\n"
-      for j, b in ipairs(chain) do
-        body = body .. (j == i and "- **" .. b .. "** (this " .. mr_term .. ")\n" or "- " .. b .. "\n")
-      end
-
-      local ok = git.create_pr(branch, base, title, body)
-      if ok then
-        local url = git.get_pr_url(branch)
-        notify("Created " .. mr_term .. " for " .. branch .. (url and ": " .. url or ""))
-      else
-        notify_error("Failed to create " .. mr_term .. " for " .. branch)
-      end
+  config.get_stack_chain(nil, function(chain)
+    if #chain == 0 then
+      notify_error("Not in a stack")
+      return
     end
-  end
 
-  return true
+    config.get_trunk(function(trunk)
+      git.get_mr_term(function(mr_term)
+        git.get_forge(function(forge)
+          notify("Submitting " .. #chain .. " branch(es) as " .. mr_term .. "s to " .. forge .. "...")
+
+          local i = 1
+          local function submit_next()
+            if i > #chain then
+              return
+            end
+            local branch = chain[i]
+            local base = i == 1 and trunk or chain[i - 1]
+
+            git.pr_exists(branch, function(pr_num)
+              if pr_num then
+                git.push(branch, true, function()
+                  git.update_pr_base(pr_num, base, function(ok)
+                    if ok then
+                      notify("Updated " .. mr_term .. " #" .. pr_num .. " for " .. branch)
+                    else
+                      notify_error("Failed to update " .. mr_term .. " for " .. branch)
+                    end
+                    i = i + 1
+                    submit_next()
+                  end)
+                end)
+              else
+                git.commits_between(base, branch, function(commits)
+                  local title = #commits > 0 and commits[#commits].message or branch
+                  local body = "Part of stack:\n"
+                  for j, b in ipairs(chain) do
+                    body = body .. (j == i and "- **" .. b .. "** (this " .. mr_term .. ")\n" or "- " .. b .. "\n")
+                  end
+
+                  git.create_pr(branch, base, title, body, function(ok)
+                    if ok then
+                      git.get_pr_url(branch, function(url)
+                        notify("Created " .. mr_term .. " for " .. branch .. (url and ": " .. url or ""))
+                        i = i + 1
+                        submit_next()
+                      end)
+                    else
+                      notify_error("Failed to create " .. mr_term .. " for " .. branch)
+                      i = i + 1
+                      submit_next()
+                    end
+                  end)
+                end)
+              end
+            end)
+          end
+          submit_next()
+        end)
+      end)
+    end)
+  end)
 end
 
 function M.log()
@@ -579,89 +722,50 @@ function M.log()
 end
 
 function M.popup()
-  local current = git.current_branch() or "(detached)"
-  local parent = git.get_parent(current)
-  local children = git.get_children(current)
-  local trunk = config.get_trunk()
+  git.current_branch(function(current)
+    current = current or "(detached)"
+    git.get_parent(current, function(parent)
+      git.get_children(current, function(children)
+        config.get_trunk(function(trunk)
+          git.has_staged_changes(function(staged)
+            git.has_unstaged_changes(function(unstaged)
+              local has_changes = staged or unstaged
 
-  local has_changes = git.has_staged_changes() or git.has_unstaged_changes()
+              local popup = require("core.stack.popup")
 
-  local items = {
-    { key = "u", label = "up (parent)", action = M.up, enabled = parent ~= nil },
-    { key = "d", label = "down (child)", action = M.down, enabled = #children > 0 },
-    { key = "t", label = "top (trunk)", action = M.top, enabled = trunk ~= nil },
-    { key = "b", label = "bottom (leaf)", action = M.bottom, enabled = #children > 0 },
-    { key = "", label = "", action = nil },
-    { key = "C", label = "commit (auto-amend)", action = M.commit, enabled = parent ~= nil },
-    { key = "m", label = "modify (amend + restack)", action = M.modify, enabled = has_changes },
-    { key = "e", label = "edit (amend with editor)", action = M.edit, enabled = true },
-    { key = "q", label = "squash to 1 commit", action = M.squash, enabled = parent ~= nil },
-    { key = "", label = "", action = nil },
-    { key = "c", label = "create child", action = M.create, enabled = true },
-    { key = "l", label = "list stack", action = M.list, enabled = true },
-    { key = "L", label = "log (graph)", action = M.log, enabled = true },
-    { key = "", label = "", action = nil },
-    { key = "s", label = "sync (rebase onto trunk)", action = M.sync, enabled = parent ~= nil },
-    { key = "r", label = "restack (after amend)", action = M.restack, enabled = #children > 0 },
-    { key = "p", label = "push stack", action = M.push, enabled = parent ~= nil },
-    { key = "S", label = "submit PRs", action = M.submit, enabled = parent ~= nil },
-    { key = "", label = "", action = nil },
-    { key = "a", label = "adopt branch", action = M.adopt, enabled = true },
-    { key = "o", label = "orphan (leave stack)", action = M.orphan, enabled = parent ~= nil },
-    { key = "D", label = "delete from stack", action = M.delete, enabled = parent ~= nil },
-  }
-
-  local lines = { "Stack: " .. current, string.rep("─", 30) }
-  local key_map = {}
-
-  for _, item in ipairs(items) do
-    if item.key == "" then
-      table.insert(lines, "")
-    else
-      local prefix = item.enabled and " " or " "
-      local style = item.enabled and "" or " (disabled)"
-      table.insert(lines, prefix .. item.key .. "  " .. item.label .. style)
-      if item.enabled then
-        key_map[item.key] = item.action
-      end
-    end
-  end
-
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-
-  local width = 35
-  local height = #lines
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    col = (vim.o.columns - width) / 2,
-    row = (vim.o.lines - height) / 2,
-    style = "minimal",
-    border = "rounded",
-    title = " Stack ",
-    title_pos = "center",
-  })
-
-  local function close()
-    if vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_win_close(win, true)
-    end
-  end
-
-  vim.keymap.set("n", "q", close, { buffer = buf })
-  vim.keymap.set("n", "<Esc>", close, { buffer = buf })
-
-  for key, action in pairs(key_map) do
-    vim.keymap.set("n", key, function()
-      close()
-      vim.schedule(action)
-    end, { buffer = buf })
-  end
+              popup.builder()
+                :name("Stack: " .. current)
+                :group_heading("Navigate")
+                :action("u", "up (parent)", M.up, { enabled = parent ~= nil })
+                :action("d", "down (child)", M.down, { enabled = #children > 0 })
+                :action("t", "top (trunk)", M.top, { enabled = trunk ~= nil })
+                :action("b", "bottom (leaf)", M.bottom, { enabled = #children > 0 })
+                :group_heading("Commit")
+                :action("C", "commit (auto-amend)", M.commit, { enabled = parent ~= nil })
+                :action("m", "modify (amend + restack)", M.modify, { enabled = has_changes })
+                :action("e", "edit (amend with editor)", M.edit)
+                :action("Q", "squash to 1 commit", M.squash, { enabled = parent ~= nil })
+                :group_heading("Branch")
+                :action("c", "create child", M.create)
+                :action("l", "list stack", M.list)
+                :action("L", "log (graph)", M.log)
+                :group_heading("Sync")
+                :action("s", "sync (rebase onto trunk)", M.sync, { enabled = parent ~= nil })
+                :action("r", "restack (after amend)", M.restack, { enabled = #children > 0 })
+                :action("p", "push stack", M.push, { enabled = parent ~= nil })
+                :action("S", "submit PRs", M.submit, { enabled = parent ~= nil })
+                :group_heading("Manage")
+                :action("a", "adopt branch", M.adopt)
+                :action("o", "orphan (leave stack)", M.orphan, { enabled = parent ~= nil })
+                :action("D", "delete from stack", M.delete, { enabled = parent ~= nil })
+                :build()
+                :show()
+            end)
+          end)
+        end)
+      end)
+    end)
+  end)
 end
 
 function M.setup()
