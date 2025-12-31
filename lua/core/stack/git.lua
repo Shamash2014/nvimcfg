@@ -145,7 +145,7 @@ end
 function M.pr_exists(branch)
   local cmd = string.format("gcli pulls --from %s 2>/dev/null | head -1 | awk '{print $1}'", vim.fn.shellescape(branch))
   local ok, result = run(cmd, { trim = true })
-  if ok and result and result ~= "" and result:match("^%d+$") then
+  if ok and type(result) == "string" and result ~= "" and result:match("^%d+$") then
     return tonumber(result)
   end
   return nil
