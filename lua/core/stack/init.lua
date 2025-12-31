@@ -583,85 +583,37 @@ function M.popup()
   local parent = git.get_parent(current)
   local children = git.get_children(current)
   local trunk = config.get_trunk()
-
   local has_changes = git.has_staged_changes() or git.has_unstaged_changes()
 
-  local items = {
-    { key = "u", label = "up (parent)", action = M.up, enabled = parent ~= nil },
-    { key = "d", label = "down (child)", action = M.down, enabled = #children > 0 },
-    { key = "t", label = "top (trunk)", action = M.top, enabled = trunk ~= nil },
-    { key = "b", label = "bottom (leaf)", action = M.bottom, enabled = #children > 0 },
-    { key = "", label = "", action = nil },
-    { key = "C", label = "commit (auto-amend)", action = M.commit, enabled = parent ~= nil },
-    { key = "m", label = "modify (amend + restack)", action = M.modify, enabled = has_changes },
-    { key = "e", label = "edit (amend with editor)", action = M.edit, enabled = true },
-    { key = "q", label = "squash to 1 commit", action = M.squash, enabled = parent ~= nil },
-    { key = "", label = "", action = nil },
-    { key = "c", label = "create child", action = M.create, enabled = true },
-    { key = "l", label = "list stack", action = M.list, enabled = true },
-    { key = "L", label = "log (graph)", action = M.log, enabled = true },
-    { key = "", label = "", action = nil },
-    { key = "s", label = "sync (rebase onto trunk)", action = M.sync, enabled = parent ~= nil },
-    { key = "r", label = "restack (after amend)", action = M.restack, enabled = #children > 0 },
-    { key = "p", label = "push stack", action = M.push, enabled = parent ~= nil },
-    { key = "S", label = "submit PRs", action = M.submit, enabled = parent ~= nil },
-    { key = "", label = "", action = nil },
-    { key = "a", label = "adopt branch", action = M.adopt, enabled = true },
-    { key = "o", label = "orphan (leave stack)", action = M.orphan, enabled = parent ~= nil },
-    { key = "D", label = "delete from stack", action = M.delete, enabled = parent ~= nil },
-  }
+  local popup = require("core.stack.popup")
 
-  local lines = { "Stack: " .. current, string.rep("─", 30) }
-  local key_map = {}
-
-  for _, item in ipairs(items) do
-    if item.key == "" then
-      table.insert(lines, "")
-    else
-      local prefix = item.enabled and " " or " "
-      local style = item.enabled and "" or " (disabled)"
-      table.insert(lines, prefix .. item.key .. "  " .. item.label .. style)
-      if item.enabled then
-        key_map[item.key] = item.action
-      end
-    end
-  end
-
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-
-  local width = 35
-  local height = #lines
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    col = (vim.o.columns - width) / 2,
-    row = (vim.o.lines - height) / 2,
-    style = "minimal",
-    border = "rounded",
-    title = " Stack ",
-    title_pos = "center",
-  })
-
-  local function close()
-    if vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_win_close(win, true)
-    end
-  end
-
-  vim.keymap.set("n", "q", close, { buffer = buf })
-  vim.keymap.set("n", "<Esc>", close, { buffer = buf })
-
-  for key, action in pairs(key_map) do
-    vim.keymap.set("n", key, function()
-      close()
-      vim.schedule(action)
-    end, { buffer = buf })
-  end
+  popup.builder()
+    :name("Stack: " .. current)
+    :group_heading("Navigate")
+    :action("u", "up (parent)", M.up, { enabled = parent ~= nil })
+    :action("d", "down (child)", M.down, { enabled = #children > 0 })
+    :action("t", "top (trunk)", M.top, { enabled = trunk ~= nil })
+    :action("b", "bottom (leaf)", M.bottom, { enabled = #children > 0 })
+    :group_heading("Commit")
+    :action("C", "commit (auto-amend)", M.commit, { enabled = parent ~= nil })
+    :action("m", "modify (amend + restack)", M.modify, { enabled = has_changes })
+    :action("e", "edit (amend with editor)", M.edit)
+    :action("Q", "squash to 1 commit", M.squash, { enabled = parent ~= nil })
+    :group_heading("Branch")
+    :action("c", "create child", M.create)
+    :action("l", "list stack", M.list)
+    :action("L", "log (graph)", M.log)
+    :group_heading("Sync")
+    :action("s", "sync (rebase onto trunk)", M.sync, { enabled = parent ~= nil })
+    :action("r", "restack (after amend)", M.restack, { enabled = #children > 0 })
+    :action("p", "push stack", M.push, { enabled = parent ~= nil })
+    :action("S", "submit PRs", M.submit, { enabled = parent ~= nil })
+    :group_heading("Manage")
+    :action("a", "adopt branch", M.adopt)
+    :action("o", "orphan (leave stack)", M.orphan, { enabled = parent ~= nil })
+    :action("D", "delete from stack", M.delete, { enabled = parent ~= nil })
+    :build()
+    :show()
 end
 
 function M.setup()

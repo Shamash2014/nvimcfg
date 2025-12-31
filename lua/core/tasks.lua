@@ -19,7 +19,6 @@ local function add_to_history(task)
     timestamp = os.time(),
   }
 
-  -- Remove duplicate if exists (same cmd)
   for i = #M.command_history, 1, -1 do
     if M.command_history[i].cmd == task.cmd then
       table.remove(M.command_history, i)
@@ -27,13 +26,72 @@ local function add_to_history(task)
     end
   end
 
-  -- Add to front of history
   table.insert(M.command_history, 1, entry)
 
-  -- Trim to max size
   while #M.command_history > M.max_history do
     table.remove(M.command_history)
   end
+end
+
+-- Folders to skip when scanning for nested projects
+local skip_folders = {
+  node_modules = true,
+  [".git"] = true,
+  _build = true,
+  deps = true,
+  build = true,
+  dist = true,
+  target = true,
+  vendor = true,
+  [".elixir_ls"] = true,
+  [".next"] = true,
+}
+
+-- Find nested project folders
+local function find_project_folders(root, max_depth)
+  max_depth = max_depth or 3
+  local projects = {}
+  local seen = {}
+
+  local patterns = {
+    "package.json",
+    "mix.exs",
+    "Cargo.toml",
+    "go.mod",
+    "pyproject.toml",
+    "Justfile",
+    "justfile",
+    "Makefile",
+    "makefile",
+  }
+
+  local function scan_dir(dir, depth)
+    if depth > max_depth then return end
+    if seen[dir] then return end
+    seen[dir] = true
+
+    local handle = vim.loop.fs_scandir(dir)
+    if not handle then return end
+
+    while true do
+      local name, type = vim.loop.fs_scandir_next(handle)
+      if not name then break end
+
+      if type == "directory" and not skip_folders[name] then
+        scan_dir(dir .. "/" .. name, depth + 1)
+      elseif type == "file" then
+        for _, pattern in ipairs(patterns) do
+          if name == pattern and dir ~= root then
+            table.insert(projects, { path = dir, file = name })
+            break
+          end
+        end
+      end
+    end
+  end
+
+  scan_dir(root, 0)
+  return projects
 end
 
 -- Define common tasks for different project types
@@ -151,9 +209,10 @@ function M.load_vscode_tasks()
 end
 
 -- Parse npm scripts from package.json
-local function load_npm_tasks()
-  local tasks = {}
-  local package_json = vim.fn.getcwd() .. "/package.json"
+local function load_npm_tasks(cwd)
+  cwd = cwd or vim.fn.getcwd()
+  local result = {}
+  local package_json = cwd .. "/package.json"
 
   if vim.fn.filereadable(package_json) == 1 then
     local ok, content = pcall(vim.fn.readfile, package_json)
@@ -166,105 +225,193 @@ local function load_npm_tasks()
     end
 
     for name, command in pairs(package.scripts) do
-      table.insert(tasks, {
+      table.insert(result, {
         name = "npm: " .. name,
         cmd = "npm run " .. name,
-        desc = command:sub(1, 50),  -- Show first 50 chars of command
-        type = "npm"
+        desc = command:sub(1, 50),
+        type = "npm",
+        cwd = cwd,
       })
     end
   end
 
-  return tasks
+  return result
 end
 
 -- Parse Justfile for recipes
-local function load_justfile_tasks()
-  local tasks = {}
-  local justfile_path = vim.fn.getcwd() .. "/justfile"
+local function load_justfile_tasks(cwd)
+  cwd = cwd or vim.fn.getcwd()
+  local result = {}
+  local justfile_path = cwd .. "/justfile"
 
-  -- Also check for Justfile with capital J
   if vim.fn.filereadable(justfile_path) == 0 then
-    justfile_path = vim.fn.getcwd() .. "/Justfile"
+    justfile_path = cwd .. "/Justfile"
   end
 
   if vim.fn.filereadable(justfile_path) == 1 then
     local lines = vim.fn.readfile(justfile_path)
     for _, line in ipairs(lines) do
-      -- Match recipe definitions (lines that start with a recipe name followed by optional parameters and colon)
-      -- Skip lines that start with @ or whitespace (commands) or # (comments)
       local recipe = line:match("^([%w%-_]+)[^:]*:")
       if recipe then
-        table.insert(tasks, {
+        table.insert(result, {
           name = "just: " .. recipe,
           cmd = "just " .. recipe,
           type = "justfile",
+          cwd = cwd,
         })
       end
     end
   end
 
-  return tasks
+  return result
 end
 
 -- Parse Makefile for targets
-local function load_makefile_tasks()
-  local tasks = {}
-  local makefile_path = vim.fn.getcwd() .. "/Makefile"
+local function load_makefile_tasks(cwd)
+  cwd = cwd or vim.fn.getcwd()
+  local result = {}
+  local makefile_path = cwd .. "/Makefile"
 
-  -- Also check for makefile with lowercase m
   if vim.fn.filereadable(makefile_path) == 0 then
-    makefile_path = vim.fn.getcwd() .. "/makefile"
+    makefile_path = cwd .. "/makefile"
   end
 
   if vim.fn.filereadable(makefile_path) == 1 then
     local lines = vim.fn.readfile(makefile_path)
     for _, line in ipairs(lines) do
-      -- Match target definitions (lines that start with a target name followed by colon)
-      -- Skip special targets that start with . and PHONY declarations
       local target = line:match("^([%w%-_]+):")
       if target and not target:match("^%.") then
-        table.insert(tasks, {
+        table.insert(result, {
           name = "make: " .. target,
           cmd = "make " .. target,
           type = "makefile",
+          cwd = cwd,
         })
       end
     end
   end
 
-  return tasks
+  return result
+end
+
+-- Parse mix.exs for aliases and provide common mix tasks
+local function load_mix_tasks(cwd)
+  cwd = cwd or vim.fn.getcwd()
+  local result = {}
+  local mix_exs_path = cwd .. "/mix.exs"
+
+  if vim.fn.filereadable(mix_exs_path) == 0 then
+    return {}
+  end
+
+  local content = table.concat(vim.fn.readfile(mix_exs_path), "\n")
+  local is_phoenix = content:match(":phoenix") ~= nil
+
+  local aliases_block = content:match("defp?%s+aliases[^d].-do%s*%[(.-)%]")
+  if aliases_block then
+    for alias_name in aliases_block:gmatch('%s*([%w_%.]+)%s*:') do
+      if not alias_name:match("^#") then
+        table.insert(result, {
+          name = "mix: " .. alias_name,
+          cmd = "mix " .. alias_name,
+          type = "mix",
+          cwd = cwd,
+        })
+      end
+    end
+  end
+
+  local common_tasks = {
+    { name = "test", cmd = "mix test", desc = "Run tests" },
+    { name = "test.watch", cmd = "mix test.watch", desc = "Run tests in watch mode" },
+    { name = "compile", cmd = "mix compile", desc = "Compile project" },
+    { name = "deps.get", cmd = "mix deps.get", desc = "Get dependencies" },
+    { name = "deps.compile", cmd = "mix deps.compile", desc = "Compile dependencies" },
+    { name = "format", cmd = "mix format", desc = "Format code" },
+    { name = "credo", cmd = "mix credo", desc = "Run Credo linter" },
+    { name = "dialyzer", cmd = "mix dialyzer", desc = "Run Dialyzer" },
+  }
+
+  if is_phoenix then
+    table.insert(common_tasks, { name = "phx.server", cmd = "mix phx.server", desc = "Start Phoenix server" })
+    table.insert(common_tasks, { name = "phx.routes", cmd = "mix phx.routes", desc = "Show routes" })
+    table.insert(common_tasks, { name = "ecto.migrate", cmd = "mix ecto.migrate", desc = "Run migrations" })
+    table.insert(common_tasks, { name = "ecto.rollback", cmd = "mix ecto.rollback", desc = "Rollback migration" })
+    table.insert(common_tasks, { name = "ecto.reset", cmd = "mix ecto.reset", desc = "Reset database" })
+    table.insert(common_tasks, { name = "ecto.setup", cmd = "mix ecto.setup", desc = "Setup database" })
+  end
+
+  for _, task in ipairs(common_tasks) do
+    local exists = false
+    for _, t in ipairs(result) do
+      if t.cmd == task.cmd then
+        exists = true
+        break
+      end
+    end
+    if not exists then
+      table.insert(result, {
+        name = "mix: " .. task.name,
+        cmd = task.cmd,
+        desc = task.desc,
+        type = "mix",
+        cwd = cwd,
+      })
+    end
+  end
+
+  return result
+end
+
+-- Load tasks from a specific folder based on detected file
+local function load_tasks_for_folder(folder, file)
+  if file == "package.json" then
+    return load_npm_tasks(folder)
+  elseif file == "mix.exs" then
+    return load_mix_tasks(folder)
+  elseif file == "Justfile" or file == "justfile" then
+    return load_justfile_tasks(folder)
+  elseif file == "Makefile" or file == "makefile" then
+    return load_makefile_tasks(folder)
+  end
+  return {}
 end
 
 -- Get available tasks for current project
 function M.get_tasks()
   local project_tasks = {}
+  local root = vim.fn.getcwd()
 
-  -- First, load npm scripts if package.json exists
-  local npm_tasks = load_npm_tasks()
-  for _, task in ipairs(npm_tasks) do
+  -- Load root-level tasks
+  for _, task in ipairs(load_npm_tasks()) do
+    table.insert(project_tasks, task)
+  end
+  for _, task in ipairs(M.load_vscode_tasks()) do
+    table.insert(project_tasks, task)
+  end
+  for _, task in ipairs(load_justfile_tasks()) do
+    table.insert(project_tasks, task)
+  end
+  for _, task in ipairs(load_makefile_tasks()) do
+    table.insert(project_tasks, task)
+  end
+  for _, task in ipairs(load_mix_tasks()) do
     table.insert(project_tasks, task)
   end
 
-  -- Load VSCode tasks if they exist
-  local vscode_tasks = M.load_vscode_tasks()
-  for _, task in ipairs(vscode_tasks) do
-    table.insert(project_tasks, task)
+  -- Scan for nested projects (monorepo support)
+  local nested = find_project_folders(root, 3)
+  for _, project in ipairs(nested) do
+    local rel_path = project.path:gsub("^" .. root .. "/", "")
+    local folder_tasks = load_tasks_for_folder(project.path, project.file)
+
+    for _, task in ipairs(folder_tasks) do
+      task.name = rel_path .. ": " .. task.name
+      table.insert(project_tasks, task)
+    end
   end
 
-  -- Load Justfile recipes
-  local justfile_tasks = load_justfile_tasks()
-  for _, task in ipairs(justfile_tasks) do
-    table.insert(project_tasks, task)
-  end
-
-  -- Load Makefile targets
-  local makefile_tasks = load_makefile_tasks()
-  for _, task in ipairs(makefile_tasks) do
-    table.insert(project_tasks, task)
-  end
-
-  -- Then add tasks based on detected project type
+  -- Add tasks based on detected project type
   local project_type = detect_project_type()
   if project_type and tasks[project_type] then
     for _, task in ipairs(tasks[project_type]) do
@@ -288,7 +435,7 @@ function M.run_task(task, opts)
 
   -- Replace % with current file
   local cmd = task.cmd:gsub("%%", vim.fn.expand("%"))
-  local cwd = vim.fs.root(0, { ".git" }) or vim.fn.getcwd()
+  local cwd = task.cwd or vim.fs.root(0, { ".git" }) or vim.fn.getcwd()
 
   -- Default to splits (smaller vertical for custom commands, horizontal for others)
   -- Check if this is a custom command (starts with "custom:")
