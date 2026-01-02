@@ -138,6 +138,10 @@ end
 
 function Process:kill()
   if self.job_id then
+    local pid = vim.fn.jobpid(self.job_id)
+    if pid and pid > 0 then
+      pcall(vim.uv.kill, -pid, "sigterm")
+    end
     pcall(vim.fn.jobstop, self.job_id)
     self.job_id = nil
   end

@@ -504,55 +504,40 @@ local function handle_permission_request(proc, msg_id, params)
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
     end
 
-    local choices = {
-      { label = "Allow", id = first_allow_id or "allow_once", msg = "[+] Allowed" },
-      { label = "Always Allow", id = allow_always_id or "allow_always", msg = "[+] Always allowed" },
-      { label = "Deny", id = first_deny_id or "reject_once", msg = "[x] Denied" },
-      { label = "Cancel", id = nil, msg = "[x] Cancelled" },
-    }
+    render.append_content(buf, { "  [y] Allow  [a] Always  [n] Deny  [c] Cancel" })
 
-    local ok, snacks = pcall(require, "snacks")
-    if ok and snacks.picker then
-      snacks.picker.pick({
-        source = "select",
-        items = vim.tbl_map(function(c) return { text = c.label, choice = c } end, choices),
-        prompt = display,
-        layout = { preset = "select" },
-        format = function(item) return { { item.text } } end,
-        confirm = function(picker, item)
-          picker:close()
-          if item and item.choice then
-            render.append_content(buf, { item.choice.msg })
-            if item.choice.id then
-              send_selected(item.choice.id)
-            else
-              send_cancelled()
-            end
-          else
-            render.append_content(buf, { "[x] Cancelled" })
-            send_cancelled()
-          end
-        end,
-        on_close = function()
-        end,
-      })
-    else
-      local labels = vim.tbl_map(function(c) return c.label end, choices)
-      vim.ui.select(labels, { prompt = display }, function(choice, idx)
-        if not choice or not idx then
-          render.append_content(buf, { "[x] Cancelled" })
-          send_cancelled()
-          return
-        end
-        local c = choices[idx]
-        render.append_content(buf, { c.msg })
-        if c.id then
-          send_selected(c.id)
-        else
-          send_cancelled()
-        end
-      end)
+    local answered = false
+    local function cleanup_keymaps()
+      for _, key in ipairs({ "y", "a", "n", "c" }) do
+        pcall(vim.keymap.del, "n", key, { buffer = buf })
+      end
     end
+
+    local function handle_choice(choice)
+      if answered then return end
+      answered = true
+      cleanup_keymaps()
+
+      if choice == "y" then
+        render.append_content(buf, { "[+] Allowed" })
+        send_selected(first_allow_id or "allow_once")
+      elseif choice == "a" then
+        render.append_content(buf, { "[+] Always allowed" })
+        send_selected(allow_always_id or "allow_always")
+      elseif choice == "n" then
+        render.append_content(buf, { "[x] Denied" })
+        send_selected(first_deny_id or "reject_once")
+      else
+        render.append_content(buf, { "[x] Cancelled" })
+        send_cancelled()
+      end
+    end
+
+    local opts = { buffer = buf, nowait = true }
+    vim.keymap.set("n", "y", function() handle_choice("y") end, opts)
+    vim.keymap.set("n", "a", function() handle_choice("a") end, opts)
+    vim.keymap.set("n", "n", function() handle_choice("n") end, opts)
+    vim.keymap.set("n", "c", function() handle_choice("c") end, opts)
   end)
 end
 
