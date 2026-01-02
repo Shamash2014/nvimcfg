@@ -24,20 +24,29 @@ end
 
 function M.apply_to_buffer(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+
   vim.bo[buf].filetype = "markdown"
   vim.bo[buf].omnifunc = ""
-  pcall(function()
-    vim.treesitter.start(buf, "markdown")
-  end)
+
   vim.schedule(function()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+
+    pcall(function()
+      vim.treesitter.stop(buf)
+      vim.treesitter.start(buf, "markdown")
+    end)
+
     local render_ok, render_md = pcall(require, "render-markdown")
     if render_ok then
-      if render_md.attach then
-        pcall(render_md.attach, buf)
-      elseif render_md.enable then
-        pcall(render_md.enable)
-      end
+      pcall(function()
+        if render_md.attach then
+          render_md.attach(buf)
+        elseif render_md.enable then
+          render_md.enable()
+        end
+      end)
     end
+
     local blink_ok, blink = pcall(require, "blink.cmp")
     if blink_ok and blink.attach then
       pcall(blink.attach, buf)

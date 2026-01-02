@@ -64,7 +64,10 @@ local function update_statusline()
   if not ui.win or not vim.api.nvim_win_is_valid(ui.win) then return end
   local agent_name = simplify_agent_name(proc and proc.state.agent_info and proc.state.agent_info.name)
   local mode = proc and proc.state.mode or "plan"
-  vim.wo[ui.win].statusline = " " .. agent_name .. " [" .. mode .. "]"
+  local queue_count = proc and #proc.data.prompt_queue or 0
+  local queue_str = queue_count > 0 and (" Q:" .. queue_count) or ""
+  local busy_str = proc and proc.state.busy and " *" or ""
+  vim.wo[ui.win].statusline = " " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str
 end
 
 local function setup_window_options(win)
@@ -164,9 +167,6 @@ local function handle_session_update(proc, params)
 
     if u.status == "completed" or u.status == "failed" then
       render.stop_animation()
-      if tool.title ~= "AskUserQuestion" then
-        render.render_tool(buf, tool)
-      end
 
       if u.status == "completed" and (tool.kind == "edit" or tool.kind == "write" or tool.title == "Edit" or tool.title == "Write") then
         local file_path, old_text, new_text
@@ -191,6 +191,10 @@ local function handle_session_update(proc, params)
         if file_path and (old_text or new_text) then
           render.render_diff(buf, file_path, old_text or "", new_text or "")
         end
+      end
+
+      if tool.title ~= "AskUserQuestion" then
+        render.render_tool(buf, tool)
       end
 
       if tool.title == "ExitPlanMode" and u.status == "completed" then
@@ -239,10 +243,15 @@ local function handle_session_update(proc, params)
       cancelled = "[x] Cancelled"
     }
     local mode_str = proc.state.mode and (" [" .. proc.state.mode .. "]") or ""
-    render.append_content(buf, { "", (reason_msgs[reason] or "---") .. mode_str, "" })
+    local queue_count = #proc.data.prompt_queue
+    local queue_info = queue_count > 0 and (" [" .. queue_count .. " queued]") or ""
+    render.append_content(buf, { "", (reason_msgs[reason] or "---") .. mode_str .. queue_info, "" })
+
+    update_statusline()
 
     vim.defer_fn(function()
       proc:process_queued_prompts()
+      update_statusline()
     end, 200)
 
   elseif update_type == "modes" then
@@ -300,23 +309,38 @@ local function handle_permission_request(proc, msg_id, params)
 
     render.append_content(buf, { "", "[?] Permission: " .. title .. loc_str })
 
-    local choices = { "Allow", "Allow Always", "Deny" }
-    vim.ui.select(choices, { prompt = "Permission for " .. title .. "?" }, function(choice)
-      local outcome_id
-      if choice == "Allow" then
-        outcome_id = first_allow_id or "allow"
-      elseif choice == "Allow Always" then
-        outcome_id = allow_always_id or first_allow_id or "allow_always"
-      else
-        outcome_id = first_deny_id or "deny"
-      end
-
+    local function send_selected(option_id)
       local response = {
         jsonrpc = "2.0",
         id = msg_id,
-        result = { outcome = { outcome = "selected", optionId = outcome_id } }
+        result = { outcome = { outcome = "selected", optionId = option_id } }
       }
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
+    end
+
+    local function send_cancelled()
+      local response = {
+        jsonrpc = "2.0",
+        id = msg_id,
+        result = { outcome = { outcome = "cancelled" } }
+      }
+      vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
+    end
+
+    local choices = { "Allow", "Allow Always", "Deny", "Cancel" }
+    vim.ui.select(choices, { prompt = "Permission for " .. title .. "?" }, function(choice)
+      if choice == "Allow" then
+        send_selected(first_allow_id or "allow_once")
+      elseif choice == "Allow Always" then
+        send_selected(allow_always_id or "allow_always")
+      elseif choice == "Deny" then
+        send_selected(first_deny_id or "reject_once")
+      elseif choice == "Cancel" then
+        render.append_content(buf, { "[x] Cancelled" })
+        send_cancelled()
+      else
+        send_cancelled()
+      end
     end)
   end)
 end
@@ -627,9 +651,6 @@ function M.send_prompt(content, opts)
   if type(content) == "string" then
     prompt = { { type = "text", text = content } }
     user_message_text = content
-    if not opts.silent then
-      render.append_content(proc.data.buf, { "", "> " .. content })
-    end
   elseif type(content) == "table" then
     prompt = content
     local preview = ""
@@ -643,11 +664,19 @@ function M.send_prompt(content, opts)
       end
     end
     user_message_text = preview
-    if not opts.silent then
-      render.append_content(proc.data.buf, { "", "> " .. preview:sub(1, 100), "" })
-    end
   else
     return
+  end
+
+  local is_queued = proc.state.busy
+
+  if not opts.silent then
+    if is_queued then
+      local queue_pos = #proc.data.prompt_queue + 1
+      render.append_content(proc.data.buf, { "", "> " .. user_message_text:sub(1, 100) .. " [queued #" .. queue_pos .. "]" })
+    else
+      render.append_content(proc.data.buf, { "", "> " .. user_message_text:sub(1, 100) })
+    end
   end
 
   if not opts.silent and user_message_text ~= "" then
@@ -655,6 +684,7 @@ function M.send_prompt(content, opts)
   end
 
   proc:send_prompt(prompt)
+  update_statusline()
 end
 
 function M.set_mode(mode_id)
@@ -1117,19 +1147,29 @@ function M.add_selection_to_prompt()
   local proc = registry.active()
   if not proc or not proc.data.buf then return end
 
-  local start_pos = vim.fn.getpos("'<")
-  local end_pos = vim.fn.getpos("'>")
-  local lines = vim.fn.getline(start_pos[2], end_pos[2])
-  if #lines == 0 then return end
-
-  if #lines == 1 then
-    lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
-  else
-    lines[1] = lines[1]:sub(start_pos[3])
-    lines[#lines] = lines[#lines]:sub(1, end_pos[3])
+  local mode = vim.fn.mode()
+  if mode:match("[vV\22]") then
+    vim.cmd('normal! "vy')
   end
 
-  local text = table.concat(lines, "\n")
+  local text = vim.fn.getreg("v")
+  if not text or text == "" then
+    local start_pos = vim.fn.getpos("'<")
+    local end_pos = vim.fn.getpos("'>")
+    local lines = vim.fn.getline(start_pos[2], end_pos[2])
+    if #lines == 0 then return end
+
+    if #lines == 1 then
+      lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
+    else
+      lines[1] = lines[1]:sub(start_pos[3])
+      lines[#lines] = lines[#lines]:sub(1, end_pos[3])
+    end
+    text = table.concat(lines, "\n")
+  end
+
+  if not text or text == "" then return end
+
   local current = render.get_prompt_input(proc.data.buf)
   render.set_prompt_input(proc.data.buf, current .. "\n```\n" .. text .. "\n```\n")
 
@@ -1144,19 +1184,28 @@ function M.add_selection_to_prompt()
 end
 
 function M.send_selection()
-  local start_pos = vim.fn.getpos("'<")
-  local end_pos = vim.fn.getpos("'>")
-  local lines = vim.fn.getline(start_pos[2], end_pos[2])
-  if #lines == 0 then return end
-
-  if #lines == 1 then
-    lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
-  else
-    lines[1] = lines[1]:sub(start_pos[3])
-    lines[#lines] = lines[#lines]:sub(1, end_pos[3])
+  local mode = vim.fn.mode()
+  if mode:match("[vV\22]") then
+    vim.cmd('normal! "vy')
   end
 
-  local text = table.concat(lines, "\n")
+  local text = vim.fn.getreg("v")
+  if not text or text == "" then
+    local start_pos = vim.fn.getpos("'<")
+    local end_pos = vim.fn.getpos("'>")
+    local lines = vim.fn.getline(start_pos[2], end_pos[2])
+    if #lines == 0 then return end
+
+    if #lines == 1 then
+      lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
+    else
+      lines[1] = lines[1]:sub(start_pos[3])
+      lines[#lines] = lines[#lines]:sub(1, end_pos[3])
+    end
+    text = table.concat(lines, "\n")
+  end
+
+  if not text or text == "" then return end
 
   if not ui.active then
     M.open()
