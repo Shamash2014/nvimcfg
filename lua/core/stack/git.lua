@@ -20,7 +20,6 @@ local function run_async(cmd, opts, callback)
     end,
   }):start()
 end
-
 function M.current_branch(callback)
   run_async("git branch --show-current", { trim = true }, function(ok, branch)
     if ok and branch ~= "" then

@@ -131,12 +131,14 @@ function M.update_streaming(buf, text, process_ui)
     if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
     vim.bo[buf].modifiable = true
 
+    local prompt_ln = M.get_prompt_line(buf)
+    local line_count = vim.api.nvim_buf_line_count(buf)
+    local user_input = vim.api.nvim_buf_get_lines(buf, prompt_ln - 1, line_count, false)
+
     local lines = {}
     for line in process_ui.streaming_response:gmatch("[^\r\n]*") do
       table.insert(lines, line)
     end
-
-    local prompt_ln = M.get_prompt_line(buf)
 
     if not process_ui.streaming_start_line then
       local prev_line = ""
@@ -152,6 +154,10 @@ function M.update_streaming(buf, text, process_ui)
     end
 
     table.insert(lines, "")
+    for _, input_line in ipairs(user_input) do
+      table.insert(lines, input_line)
+    end
+
     vim.api.nvim_buf_set_lines(buf, process_ui.streaming_start_line, -1, false, lines)
     M.render_prompt(buf)
   end)

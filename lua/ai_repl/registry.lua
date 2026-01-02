@@ -250,10 +250,12 @@ end
 
 vim.api.nvim_create_autocmd("VimLeavePre", {
   callback = function()
+    M.stop_autosave()
     M.save_to_disk()
     for sid, proc in pairs(processes) do
       M.save_messages(sid, proc.data.messages)
     end
+    M.kill_all()
   end
 })
 

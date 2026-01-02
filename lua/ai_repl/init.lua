@@ -173,34 +173,62 @@ local function handle_session_update(proc, params)
     local tool = proc.ui.active_tools[u.toolCallId] or {}
     tool.status = u.status or tool.status
     tool.title = u.title or tool.title
+    tool.kind = u.kind or tool.kind
     tool.locations = u.locations or tool.locations
-    tool.content = u.content or tool.content
     tool.rawOutput = u.rawOutput or tool.rawOutput
+    tool.rawInput = tool.rawInput or u.rawInput
+
+    if u.content and type(u.content) == "table" then
+      for _, block in ipairs(u.content) do
+        if block.type == "diff" then
+          tool.diff = {
+            path = block.path,
+            oldText = block.oldText,
+            newText = block.newText,
+          }
+          break
+        end
+      end
+      tool.content = u.content
+    end
+
     proc.ui.active_tools[u.toolCallId] = tool
 
     if u.status == "completed" or u.status == "failed" then
       render.stop_animation()
 
-      if u.status == "completed" and (tool.kind == "edit" or tool.kind == "write" or tool.title == "Edit" or tool.title == "Write") then
+      local is_edit_tool = tool.kind == "edit" or tool.kind == "write"
+        or tool.title == "Edit" or tool.title == "Write"
+
+      if u.status == "completed" and is_edit_tool then
         local file_path, old_text, new_text
-        if tool.content and type(tool.content) == "table" then
-          for _, block in ipairs(tool.content) do
-            if block.type == "diff" then
-              file_path = block.path
-              old_text = block.oldText
-              new_text = block.newText
-              break
-            end
+
+        if tool.diff then
+          file_path = tool.diff.path
+          old_text = tool.diff.oldText
+          new_text = tool.diff.newText
+        end
+
+        if not file_path and tool.locations and #tool.locations > 0 then
+          local loc = tool.locations[1]
+          file_path = loc.path or loc.uri
+          if file_path then
+            file_path = file_path:gsub("^file://", "")
           end
         end
+
         if not file_path and tool.rawInput then
           file_path = tool.rawInput.file_path or tool.rawInput.path
-          old_text = tool.rawInput.old_string
-          new_text = tool.rawInput.new_string
         end
-        if not file_path and tool.locations and #tool.locations > 0 then
-          file_path = tool.locations[1].path or tool.locations[1].uri
+
+        if not old_text and tool.rawInput then
+          old_text = tool.rawInput.old_string or tool.rawInput.oldString
         end
+
+        if not new_text and tool.rawInput then
+          new_text = tool.rawInput.new_string or tool.rawInput.newString or tool.rawInput.content
+        end
+
         if file_path and (old_text or new_text) then
           render.render_diff(buf, file_path, old_text or "", new_text or "")
         end
@@ -351,10 +379,39 @@ local function handle_permission_request(proc, msg_id, params)
 
   vim.schedule(function()
     local tool = params.toolCall or {}
-    local raw_title = tool.title or tool.kind or "tool"
+    local tool_id = tool.toolCallId or tool.id
+
+    if config.debug then
+      render.append_content(buf, { "[debug] permission params: " .. vim.inspect(params):sub(1, 500) })
+    end
+
+    local stored_tool = tool_id and proc.ui.active_tools[tool_id] or {}
+
+    local raw_input = tool.rawInput
+      or tool.input
+      or params.rawInput
+      or params.input
+      or stored_tool.rawInput
+      or stored_tool.input
+    if type(raw_input) == "string" then
+      local ok, parsed = pcall(vim.json.decode, raw_input)
+      raw_input = ok and parsed or {}
+    end
+    local input = raw_input or {}
+    if vim.tbl_isempty(input) and tool.parameters then
+      input = tool.parameters
+    end
+
+    local tool_kind = tool.kind or stored_tool.kind or ""
+    local title_str = tool.title or stored_tool.title or ""
+    local raw_title = title_str:match("^`?(%w+)") or tool_kind or "tool"
     local friendly_name = TOOL_NAMES[raw_title] or raw_title
-    local input = tool.rawInput or {}
-    local locations = tool.locations or {}
+    local locations = tool.locations or stored_tool.locations or {}
+
+    if config.debug then
+      render.append_content(buf, { "[debug] raw_title=" .. raw_title .. " kind=" .. tool_kind })
+      render.append_content(buf, { "[debug] input: " .. vim.inspect(input):sub(1, 800) })
+    end
 
     local desc = get_tool_description(raw_title, input, locations)
 
@@ -386,28 +443,48 @@ local function handle_permission_request(proc, msg_id, params)
       return
     end
 
-    local display = friendly_name
-    if desc ~= "" then
-      display = display .. ": " .. desc
-    end
-    render.append_content(buf, { "", "[?] " .. display })
-
     local file_path = input.file_path or input.filePath or input.path
     local old_str = input.old_string or input.oldString or input.oldText
     local new_str = input.new_string or input.newString or input.newText
 
-    if raw_title == "Edit" and (old_str or new_str) then
-      render.render_diff(buf, file_path or "file", old_str or "", new_str or "")
-    elseif raw_title == "Write" and input.content and file_path then
+    local tool_content = tool.content or stored_tool.content
+    if tool_content and type(tool_content) == "table" then
+      for _, block in ipairs(tool_content) do
+        if block.type == "diff" then
+          file_path = file_path or block.path
+          old_str = old_str or block.oldText
+          new_str = new_str or block.newText
+          break
+        end
+      end
+    end
+
+    if not file_path and locations and #locations > 0 then
+      local loc = locations[1]
+      file_path = loc.path or loc.uri
+      if file_path then
+        file_path = file_path:gsub("^file://", "")
+      end
+    end
+
+    local is_edit = raw_title == "Edit" or raw_title == "Write" or tool_kind == "edit"
+    if is_edit and old_str and new_str then
+      render.render_diff(buf, file_path or "file", old_str, new_str)
+    elseif is_edit and input.content and file_path then
       local old_content = ""
       if vim.fn.filereadable(file_path) == 1 then
-        local lines = vim.fn.readfile(file_path)
-        old_content = table.concat(lines, "\n")
+        old_content = table.concat(vim.fn.readfile(file_path), "\n")
       end
       render.render_diff(buf, file_path, old_content, input.content)
     elseif raw_title == "Bash" and input.command then
       render.append_content(buf, { "$ " .. input.command })
     end
+
+    local display = friendly_name
+    if desc ~= "" then
+      display = display .. ": " .. desc
+    end
+    render.append_content(buf, { "", "[?] " .. display })
 
     local function send_selected(option_id)
       local response = {
@@ -427,21 +504,55 @@ local function handle_permission_request(proc, msg_id, params)
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
     end
 
-    local choices = { "Allow", "Allow Always", "Deny", "Cancel" }
-    vim.ui.select(choices, { prompt = display .. "?" }, function(choice)
-      if choice == "Allow" then
-        send_selected(first_allow_id or "allow_once")
-      elseif choice == "Allow Always" then
-        send_selected(allow_always_id or "allow_always")
-      elseif choice == "Deny" then
-        send_selected(first_deny_id or "reject_once")
-      elseif choice == "Cancel" then
-        render.append_content(buf, { "[x] Cancelled" })
-        send_cancelled()
-      else
-        send_cancelled()
-      end
-    end)
+    local choices = {
+      { label = "Allow", id = first_allow_id or "allow_once", msg = "[+] Allowed" },
+      { label = "Always Allow", id = allow_always_id or "allow_always", msg = "[+] Always allowed" },
+      { label = "Deny", id = first_deny_id or "reject_once", msg = "[x] Denied" },
+      { label = "Cancel", id = nil, msg = "[x] Cancelled" },
+    }
+
+    local ok, snacks = pcall(require, "snacks")
+    if ok and snacks.picker then
+      snacks.picker.pick({
+        source = "select",
+        items = vim.tbl_map(function(c) return { text = c.label, choice = c } end, choices),
+        prompt = display,
+        layout = { preset = "select" },
+        format = function(item) return { { item.text } } end,
+        confirm = function(picker, item)
+          picker:close()
+          if item and item.choice then
+            render.append_content(buf, { item.choice.msg })
+            if item.choice.id then
+              send_selected(item.choice.id)
+            else
+              send_cancelled()
+            end
+          else
+            render.append_content(buf, { "[x] Cancelled" })
+            send_cancelled()
+          end
+        end,
+        on_close = function()
+        end,
+      })
+    else
+      local labels = vim.tbl_map(function(c) return c.label end, choices)
+      vim.ui.select(labels, { prompt = display }, function(choice, idx)
+        if not choice or not idx then
+          render.append_content(buf, { "[x] Cancelled" })
+          send_cancelled()
+          return
+        end
+        local c = choices[idx]
+        render.append_content(buf, { c.msg })
+        if c.id then
+          send_selected(c.id)
+        else
+          send_cancelled()
+        end
+      end)
+    end
   end)
 end
 
@@ -593,6 +704,43 @@ local function create_buffer(proc, name)
   return buf
 end
 
+local IMAGE_EXTENSIONS = {
+  png = "image/png",
+  jpg = "image/jpeg",
+  jpeg = "image/jpeg",
+  gif = "image/gif",
+  webp = "image/webp",
+  svg = "image/svg+xml",
+}
+
+local function get_mime_type(file_path)
+  local ext = file_path:match("%.([^%.]+)$")
+  if ext then
+    ext = ext:lower()
+    if IMAGE_EXTENSIONS[ext] then
+      return IMAGE_EXTENSIONS[ext], true
+    end
+  end
+  return "text/plain", false
+end
+
+local function read_file_content(file_path, is_image)
+  if is_image then
+    local f = io.open(file_path, "rb")
+    if not f then return nil end
+    local data = f:read("*a")
+    f:close()
+    local ok, encoded = pcall(function()
+      return vim.base64.encode(data)
+    end)
+    if ok then return encoded end
+    return nil
+  else
+    local lines = vim.fn.readfile(file_path)
+    return table.concat(lines, "\n")
+  end
+end
+
 local function parse_file_references(text)
   local prompt = {}
   local files = {}
@@ -607,10 +755,22 @@ local function parse_file_references(text)
   end
 
   for _, file_path in ipairs(files) do
-    table.insert(prompt, {
-      type = "resource_link",
-      resourceLink = { uri = "file://" .. file_path, name = vim.fn.fnamemodify(file_path, ":t") }
-    })
+    local mime_type, is_image = get_mime_type(file_path)
+    local content = read_file_content(file_path, is_image)
+
+    if content then
+      local resource = {
+        uri = "file://" .. file_path,
+        name = vim.fn.fnamemodify(file_path, ":t"),
+        mimeType = mime_type,
+      }
+      if is_image then
+        resource.blob = content
+      else
+        resource.text = content
+      end
+      table.insert(prompt, { type = "resource", resource = resource })
+    end
   end
 
   remaining_text = remaining_text:gsub("^%s*(.-)%s*$", "%1")
@@ -639,10 +799,21 @@ local function setup_buffer_keymaps(buf)
 
       if proc and #proc.data.context_files > 0 then
         for _, file_path in ipairs(proc.data.context_files) do
-          table.insert(prompt, 1, {
-            type = "resource_link",
-            resourceLink = { uri = "file://" .. file_path, name = vim.fn.fnamemodify(file_path, ":t") }
-          })
+          local mime_type, is_image = get_mime_type(file_path)
+          local file_content = read_file_content(file_path, is_image)
+          if file_content then
+            local resource = {
+              uri = "file://" .. file_path,
+              name = vim.fn.fnamemodify(file_path, ":t"),
+              mimeType = mime_type,
+            }
+            if is_image then
+              resource.blob = file_content
+            else
+              resource.text = file_content
+            end
+            table.insert(prompt, 1, { type = "resource", resource = resource })
+          end
         end
         proc.data.context_files = {}
       end
@@ -676,6 +847,46 @@ local function setup_buffer_keymaps(buf)
   vim.keymap.set("n", "G", function()
     local win = vim.fn.bufwinid(buf)
     if win ~= -1 then render.goto_prompt(buf, win) end
+  end, opts)
+
+  vim.keymap.set("i", "@", function()
+    local ok, snacks = pcall(require, "snacks")
+    if ok and snacks.picker then
+      local root = get_current_project_root()
+      local target_buf = buf
+      local target_win = vim.api.nvim_get_current_win()
+      snacks.picker.files({
+        layout = { preset = "vscode" },
+        cwd = root,
+        confirm = function(picker, item)
+          picker:close()
+          if item then
+            local file_path = item.file or item[1]
+            if file_path then
+              local rel_path = vim.fn.fnamemodify(file_path, ":.")
+              vim.schedule(function()
+                if vim.api.nvim_buf_is_valid(target_buf) and vim.api.nvim_win_is_valid(target_win) then
+                  vim.api.nvim_set_current_win(target_win)
+                  vim.api.nvim_win_set_buf(target_win, target_buf)
+                  vim.cmd("startinsert")
+                  vim.api.nvim_put({ "@" .. rel_path .. " " }, "c", false, true)
+                end
+              end)
+            end
+          end
+        end,
+        on_close = function()
+          vim.schedule(function()
+            if vim.api.nvim_buf_is_valid(target_buf) and vim.api.nvim_win_is_valid(target_win) then
+              vim.api.nvim_set_current_win(target_win)
+              vim.cmd("startinsert")
+            end
+          end)
+        end,
+      })
+    else
+      vim.api.nvim_put({ "@" }, "c", false, true)
+    end
   end, opts)
 
   vim.api.nvim_create_autocmd("BufEnter", {
@@ -1221,15 +1432,23 @@ function M.add_file_as_link(file, message)
   if not proc then return end
 
   local abs_path = vim.fn.fnamemodify(file, ":p")
-  local prompt = {
-    {
-      type = "resource_link",
-      resourceLink = {
-        uri = "file://" .. abs_path,
-        name = vim.fn.fnamemodify(file, ":t")
-      }
-    }
+  local mime_type, is_image = get_mime_type(abs_path)
+  local content = read_file_content(abs_path, is_image)
+
+  if not content then return end
+
+  local resource = {
+    uri = "file://" .. abs_path,
+    name = vim.fn.fnamemodify(file, ":t"),
+    mimeType = mime_type,
   }
+  if is_image then
+    resource.blob = content
+  else
+    resource.text = content
+  end
+
+  local prompt = { { type = "resource", resource = resource } }
 
   if message then
     table.insert(prompt, { type = "text", text = message })
