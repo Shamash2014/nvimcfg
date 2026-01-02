@@ -11,7 +11,7 @@ return {
         'html', 'css', 'markdown', 'vim', 'yaml', 'toml'
       },
       callback = function()
-        vim.treesitter.start()
+        pcall(vim.treesitter.start)
       end,
     })
 

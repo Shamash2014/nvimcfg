@@ -1010,6 +1010,7 @@ function M.handle_command(cmd)
       "  /sessions - List sessions",
       "  /cm - Agent slash commands",
       "  /mode <mode> - Set mode",
+      "  /cwd [path] - Show/change working directory",
       "  /clear - Clear buffer",
       "  /cancel - Cancel current",
       "  /quit - Close REPL",
@@ -1019,8 +1020,29 @@ function M.handle_command(cmd)
     M.new_session()
   elseif command == "sessions" then
     M.open_session_picker()
-  elseif command == "mode" and args[1] then
-    M.set_mode(args[1])
+  elseif command == "mode" then
+    if args[1] then
+      M.set_mode(args[1])
+    else
+      M.show_mode_picker()
+    end
+  elseif command == "cwd" then
+    if args[1] then
+      local new_cwd = vim.fn.expand(args[1])
+      if vim.fn.isdirectory(new_cwd) == 1 then
+        new_cwd = vim.fn.fnamemodify(new_cwd, ":p"):gsub("/$", "")
+        if proc then
+          proc.data.cwd = new_cwd
+          ui.project_root = new_cwd
+          render.append_content(buf, { "Working directory: " .. new_cwd })
+        end
+      else
+        render.append_content(buf, { "[!] Not a directory: " .. new_cwd })
+      end
+    else
+      local cwd = proc and proc.data.cwd or ui.project_root or vim.fn.getcwd()
+      render.append_content(buf, { "Working directory: " .. cwd })
+    end
   elseif command == "clear" then
     if buf then
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
