@@ -245,6 +245,13 @@ local function simplify_agent_name(name)
   return friendly_names[simplified] or simplified
 end
 
+local function update_statusline()
+  if not state.win or not vim.api.nvim_win_is_valid(state.win) then return end
+  local agent_name = simplify_agent_name(state.agent_info and state.agent_info.name)
+  local mode = state.current_mode or "default"
+  vim.wo[state.win].statusline = " " .. agent_name .. " [" .. mode .. "]"
+end
+
 local function format_session_name(cwd, timestamp)
   local project = get_project_name(cwd)
   local date = os.date("%Y-%m-%d %H:%M", timestamp)
@@ -288,6 +295,53 @@ local function get_sessions_for_project(cwd)
     end
   end
   return result
+end
+
+local function get_messages_dir()
+  local dir = vim.fn.stdpath("data") .. "/ai_repl_messages"
+  if vim.fn.isdirectory(dir) == 0 then
+    vim.fn.mkdir(dir, "p")
+  end
+  return dir
+end
+
+local function get_session_messages_file(session_id)
+  return get_messages_dir() .. "/" .. session_id .. ".json"
+end
+
+local function load_session_messages(session_id)
+  local file = get_session_messages_file(session_id)
+  local f = io.open(file, "r")
+  if not f then return {} end
+  local content = f:read("*a")
+  f:close()
+  local data = json_decode(content)
+  return data and data.messages or {}
+end
+
+local function save_session_messages(session_id, messages)
+  local file = get_session_messages_file(session_id)
+  local f = io.open(file, "w")
+  if not f then return end
+  f:write(json_encode({ messages = messages }))
+  f:close()
+end
+
+local function append_message_to_session(session_id, role, content)
+  if not session_id or not content or content == "" then return end
+  local messages = load_session_messages(session_id)
+  table.insert(messages, {
+    role = role,
+    content = content,
+    timestamp = os.time()
+  })
+  if #messages > config.history_size then
+    local to_remove = #messages - config.history_size
+    for _ = 1, to_remove do
+      table.remove(messages, 1)
+    end
+  end
+  save_session_messages(session_id, messages)
 end
 
 local function append_to_buffer(lines)
@@ -599,6 +653,9 @@ local function handle_session_update(params)
       pcall(vim.fn.timer_stop, state.busy_timer)
       state.busy_timer = nil
     end
+    if state.streaming_response and state.streaming_response ~= "" then
+      append_message_to_session(state.session_id, "assistant", state.streaming_response)
+    end
     state.current_plan = {}
     state.active_tools = {}
     state.streaming_response = ""
@@ -624,6 +681,7 @@ local function handle_session_update(params)
   elseif update_type == "modes" then
     state.modes = u.modes or {}
     state.current_mode = u.currentModeId
+    update_statusline()
   elseif update_type == "agent_thought_chunk" then
     start_animation("thinking")
     local content = u.content
@@ -1057,8 +1115,15 @@ local function get_mime_type(path)
     h = "text/x-c", hpp = "text/x-c++", yaml = "text/yaml", yml = "text/yaml",
     toml = "text/toml", xml = "text/xml", sql = "text/x-sql",
     ex = "text/x-elixir", exs = "text/x-elixir", erl = "text/x-erlang",
+    png = "image/png", jpg = "image/jpeg", jpeg = "image/jpeg",
+    gif = "image/gif", webp = "image/webp", svg = "image/svg+xml",
   }
   return mime_types[ext] or "text/plain"
+end
+
+local function is_image_file(path)
+  local mime = get_mime_type(path)
+  return mime:match("^image/") ~= nil
 end
 
 local function create_resource_content(path, text, annotations)
@@ -1090,10 +1155,55 @@ local function create_text_content(text)
   return { type = "text", text = text }
 end
 
+local function create_image_resource_content(path)
+  local abs_path = vim.fn.fnamemodify(path, ":p")
+  local f = io.open(abs_path, "rb")
+  if not f then return nil end
+  local data = f:read("*a")
+  f:close()
+  local b64 = vim.base64.encode(data)
+  return {
+    type = "resource",
+    resource = {
+      uri = "file://" .. abs_path,
+      blob = b64,
+      mimeType = get_mime_type(path)
+    }
+  }
+end
+
+local function extract_clipboard_image()
+  local temp_path = os.tmpname() .. ".png"
+  local os_name = vim.loop.os_uname().sysname
+  local cmd
+
+  if os_name == "Darwin" then
+    cmd = string.format("pngpaste %s 2>/dev/null", vim.fn.shellescape(temp_path))
+  elseif os_name == "Linux" then
+    if os.getenv("WAYLAND_DISPLAY") then
+      cmd = string.format("wl-paste --type image/png > %s 2>/dev/null", vim.fn.shellescape(temp_path))
+    else
+      cmd = string.format("xclip -selection clipboard -t image/png -o > %s 2>/dev/null", vim.fn.shellescape(temp_path))
+    end
+  end
+
+  if cmd then
+    vim.fn.system(cmd)
+    if vim.v.shell_error == 0 and vim.fn.filereadable(temp_path) == 1 then
+      local size = vim.fn.getfsize(temp_path)
+      if size > 0 then
+        return temp_path
+      end
+    end
+    pcall(os.remove, temp_path)
+  end
+  return nil
+end
+
 local function initialize()
   if not state.process then return end
   state.client_capabilities = {
-    prompt = { text = true, embeddedContext = true, image = false, audio = false }
+    prompt = { text = true, embeddedContext = true, image = true, audio = false }
   }
   local id = send_jsonrpc("initialize", {
     protocolVersion = 1,
@@ -1122,6 +1232,7 @@ local function initialize()
       if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
         pcall(vim.api.nvim_buf_set_name, state.buf, agent_name)
       end
+      update_statusline()
       append_to_buffer({ "Connected: " .. agent_name .. caps_str })
       create_session()
     end
@@ -1145,6 +1256,7 @@ create_session = function()
       if result.modes then
         state.modes = result.modes.availableModes or {}
         state.current_mode = result.modes.currentModeId
+        update_statusline()
       end
       if state.is_first_open then
         state.is_first_open = false
@@ -1200,29 +1312,35 @@ function M.send_prompt(content, opts)
     end)
   end)
   local prompt
+  local user_message_text = ""
   if type(content) == "string" then
     prompt = { create_text_content(content) }
+    user_message_text = content
     if not opts.silent then
       append_to_buffer({ "", "> " .. content, "" })
     end
   elseif type(content) == "table" then
     prompt = content
-    if not opts.silent then
-      local preview = ""
-      for _, block in ipairs(content) do
-        if block.type == "text" then
-          preview = preview .. block.text
-        elseif block.type == "resource" then
-          preview = preview .. "[" .. (block.resource.uri or "resource") .. "] "
-        elseif block.type == "resource_link" then
-          preview = preview .. "[@" .. (block.name or "file") .. "] "
-        end
+    local preview = ""
+    for _, block in ipairs(content) do
+      if block.type == "text" then
+        preview = preview .. block.text
+      elseif block.type == "resource" then
+        preview = preview .. "[" .. (block.resource.uri or "resource") .. "] "
+      elseif block.type == "resource_link" then
+        preview = preview .. "[@" .. (block.name or "file") .. "] "
       end
+    end
+    user_message_text = preview
+    if not opts.silent then
       append_to_buffer({ "", "> " .. preview:sub(1, 100), "" })
     end
   else
     state.busy = false
     return
+  end
+  if not opts.silent and user_message_text ~= "" then
+    append_message_to_session(state.session_id, "user", user_message_text)
   end
   send_jsonrpc("session/prompt", {
     sessionId = state.session_id,
@@ -1237,6 +1355,7 @@ function M.set_mode(mode_id)
     modeId = mode_id
   })
   state.current_mode = mode_id
+  update_statusline()
   append_to_buffer({ "Mode set to: " .. mode_id })
 end
 
@@ -1294,6 +1413,7 @@ local function create_ui()
   vim.wo[state.win].number = false
   vim.wo[state.win].relativenumber = false
   vim.wo[state.win].signcolumn = "no"
+  update_statusline()
   require("ai_repl.syntax").apply_to_buffer(state.buf)
 
   vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
@@ -1321,11 +1441,18 @@ local function create_ui()
       if #state.context_files > 0 then
         local prompt = {}
         for _, file_path in ipairs(state.context_files) do
-          local f = io.open(file_path, "r")
-          if f then
-            local content = f:read("*a")
-            f:close()
-            table.insert(prompt, create_resource_content(file_path, content))
+          if is_image_file(file_path) then
+            local img_content = create_image_resource_content(file_path)
+            if img_content then
+              table.insert(prompt, img_content)
+            end
+          else
+            local f = io.open(file_path, "r")
+            if f then
+              local content = f:read("*a")
+              f:close()
+              table.insert(prompt, create_resource_content(file_path, content))
+            end
           end
         end
         table.insert(prompt, create_text_content(text))
@@ -1411,6 +1538,7 @@ function M.handle_command(cmd)
       " /new       New session",
       " /files     List context files",
       " /rm        Remove file (picker)",
+      " /paste     Paste image from clipboard",
       " /status    Show state",
       " /quit      Close",
       "",
@@ -1495,14 +1623,23 @@ function M.handle_command(cmd)
     else
       append_to_buffer({ "Context files:" })
       for i, f in ipairs(state.context_files) do
-        append_to_buffer({ "  " .. i .. ". " .. vim.fn.fnamemodify(f, ":t") })
+        local prefix = is_image_file(f) and "[img] " or ""
+        append_to_buffer({ "  " .. i .. ". " .. prefix .. vim.fn.fnamemodify(f, ":t") })
       end
-      append_to_buffer({ "", "Use /clear-files to remove all" })
+      append_to_buffer({ "", "Use /clear-files to remove all, /paste to add image" })
     end
   elseif command == "clear-files" then
     local count = #state.context_files
     state.context_files = {}
     append_to_buffer({ "Cleared " .. count .. " files from context" })
+  elseif command == "paste" or command == "paste-image" then
+    local img_path = extract_clipboard_image()
+    if img_path then
+      table.insert(state.context_files, img_path)
+      append_to_buffer({ "Pasted image: " .. vim.fn.fnamemodify(img_path, ":t") })
+    else
+      append_to_buffer({ "No image in clipboard (requires pngpaste on macOS)" })
+    end
   elseif command == "rm" or command == "remove" then
     if #state.context_files == 0 then
       append_to_buffer({ "No files in context" })
@@ -1596,6 +1733,7 @@ function M.show()
   vim.wo[state.win].number = false
   vim.wo[state.win].relativenumber = false
   vim.wo[state.win].signcolumn = "no"
+  update_statusline()
   local prompt_ln = get_prompt_line()
   if prompt_ln then
     local line = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, prompt_ln, false)[1] or ""
@@ -1858,17 +1996,15 @@ function M.load_session(session_id)
         if result.modes then
           state.modes = result.modes.availableModes or {}
           state.current_mode = result.modes.currentModeId
+          update_statusline()
         end
       end
-      local adapter = get_adapter()
-      if adapter and adapter.read_session_messages then
-        local messages = adapter.read_session_messages(root, session_id)
-        if messages and #messages > 0 then
-          render_session_history(messages)
-          return
-        end
+      local messages = load_session_messages(session_id)
+      if messages and #messages > 0 then
+        render_session_history(messages)
+      else
+        append_to_buffer({ "[+] Session loaded: " .. session_id:sub(1, 8) .. "...", "" })
       end
-      append_to_buffer({ "[+] Session loaded: " .. session_id:sub(1, 8) .. "...", "" })
     end
   }
 end
@@ -1912,12 +2048,39 @@ function M.open_session_picker()
     if not idx then return end
     local item = items[idx]
     if item.action == "new" then
-      M.new_session()
+      if not state.active then
+        M.open()
+      elseif not state.win or not vim.api.nvim_win_is_valid(state.win) then
+        M.show()
+      end
+      vim.defer_fn(function() M.new_session() end, 100)
     elseif item.action == "load" then
-      M.load_session(item.id)
+      if not state.active then
+        M.open()
+        local attempts = 0
+        local function try_load()
+          attempts = attempts + 1
+          if state.initialized and state.process then
+            M.load_session(item.id)
+          elseif attempts < 50 then
+            vim.defer_fn(try_load, 100)
+          end
+        end
+        vim.defer_fn(try_load, 100)
+      else
+        if not state.win or not vim.api.nvim_win_is_valid(state.win) then
+          M.show()
+        end
+        M.load_session(item.id)
+      end
     elseif item.action == "current" then
-      append_to_buffer({ "Already on this session" })
+      if not state.win or not vim.api.nvim_win_is_valid(state.win) then
+        M.show()
+      end
     elseif item.action == "view" then
+      if not state.win or not vim.api.nvim_win_is_valid(state.win) then
+        M.show()
+      end
       append_to_buffer({ "Session " .. item.id .. " (no resume support)" })
     end
   end)
