@@ -14,7 +14,7 @@ return {
         env = {}
       },
       history_size = 1000,
-      permission_mode = "default",  -- "default" | "acceptEdits" | "plan" | "dontAsk" | "bypassPermissions"
+      permission_mode = "plan",  -- "default" | "acceptEdits" | "plan" | "dontAsk" | "bypassPermissions"
       show_tool_calls = true
     })
   end,
