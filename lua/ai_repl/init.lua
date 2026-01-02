@@ -1,5 +1,9 @@
 local M = {}
 
+local Process = require("ai_repl.process")
+local registry = require("ai_repl.registry")
+local render = require("ai_repl.render")
+
 local config = {
   window = {
     width = 0.45,
@@ -13,7 +17,7 @@ local config = {
   },
   adapter = "claude",
   history_size = 1000,
-  approvals = "ask",  -- "ask" = show when requested, "always" = always prompt, "never" = auto-approve
+  permission_mode = "default",
   show_tool_calls = true,
   debug = false,
   reconnect = true,
@@ -22,168 +26,12 @@ local config = {
   max_sessions_per_project = 20
 }
 
-local adapters = {}
-local function get_adapter()
-  if not config.adapter then return nil end
-  if not adapters[config.adapter] then
-    local ok, adapter = pcall(require, "ai_repl.adapters." .. config.adapter)
-    if ok then adapters[config.adapter] = adapter end
-  end
-  return adapters[config.adapter]
-end
-
-local PROMPT_MARKER = "$> "
-
-local prompt = {
-  extmark_id = nil,
-  line = nil
-}
-
-local state = {
-  active = false,
-  buf = nil,
+local ui = {
   win = nil,
-  process = nil,
-  session_id = nil,
-  pending_requests = {},
-  message_id = 1,
-  current_mode = "plan",
-  modes = {},
-  sessions = {},
-  current_session_id = nil,
-  streaming_response = "",
-  streaming_start_line = nil,
-  agent_info = nil,
-  initialized = false,
-  slash_commands = {},
-  current_plan = {},
-  active_tools = {},
-  terminals = {},
-  sessions_list = {},
-  supports_load_session = false,
-  project_root = nil,
-  source_buf = nil,
-  agent_capabilities = {},
-  client_capabilities = {},
-  reconnect_count = 0,
-  pending_files = nil,
-  context_files = {},
-  busy = false,
-  prompt_queue = {}
-}
-
-local SPINNERS = {
-  generating = { "|", "/", "-", "\\" },
-  thinking = { ".", "..", "..." },
-  executing = { "[=  ]", "[ = ]", "[  =]", "[ = ]" }
-}
-local SPIN_TIMING = { generating = 100, thinking = 400, executing = 150 }
-local NS_ANIM = vim.api.nvim_create_namespace("ai_repl_anim")
-local NS_DIFF = vim.api.nvim_create_namespace("ai_repl_diff")
-local NS_PROMPT = vim.api.nvim_create_namespace("ai_repl_prompt")
-
-local animation = {
   active = false,
-  anim_state = nil,
-  timer = nil,
-  frame = 1,
-  extmark_id = nil,
-  idle_timer = nil
+  source_buf = nil,
+  project_root = nil,
 }
-
-local function stop_animation()
-  animation.active = false
-  animation.anim_state = nil
-  if animation.timer then
-    pcall(vim.fn.timer_stop, animation.timer)
-    animation.timer = nil
-  end
-  if animation.idle_timer then
-    pcall(vim.fn.timer_stop, animation.idle_timer)
-    animation.idle_timer = nil
-  end
-  if animation.extmark_id and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
-    pcall(vim.api.nvim_buf_del_extmark, state.buf, NS_ANIM, animation.extmark_id)
-    animation.extmark_id = nil
-  end
-end
-
-local function render_anim_frame()
-  if not animation.active or not animation.anim_state then return end
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
-    stop_animation()
-    return
-  end
-  local chars = SPINNERS[animation.anim_state] or SPINNERS.generating
-  local char = chars[animation.frame] or chars[1]
-  animation.frame = (animation.frame % #chars) + 1
-  local line_count = vim.api.nvim_buf_line_count(state.buf)
-  local display = " " .. char .. " " .. animation.anim_state .. " "
-  animation.extmark_id = vim.api.nvim_buf_set_extmark(state.buf, NS_ANIM, math.max(0, line_count - 2), 0, {
-    id = animation.extmark_id,
-    virt_lines = { { { display, "Comment" } } },
-    virt_lines_above = false
-  })
-  local delay = SPIN_TIMING[animation.anim_state] or 100
-  animation.timer = vim.fn.timer_start(delay, function()
-    vim.schedule(render_anim_frame)
-  end)
-end
-
-local function reset_idle_timer()
-  if animation.idle_timer then
-    pcall(vim.fn.timer_stop, animation.idle_timer)
-  end
-  animation.idle_timer = vim.fn.timer_start(1500, function()
-    vim.schedule(stop_animation)
-  end)
-end
-
-local function start_animation(anim_state)
-  if animation.active and animation.anim_state == anim_state then
-    reset_idle_timer()
-    return
-  end
-  stop_animation()
-  animation.active = true
-  animation.anim_state = anim_state
-  reset_idle_timer()
-  animation.frame = 1
-  vim.schedule(render_anim_frame)
-end
-
-local function render_prompt()
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-  local line_count = vim.api.nvim_buf_line_count(state.buf)
-  prompt.line = line_count
-  prompt.extmark_id = vim.api.nvim_buf_set_extmark(state.buf, NS_PROMPT, line_count - 1, 0, {
-    id = prompt.extmark_id,
-    virt_text = { { PROMPT_MARKER, "AIReplPrompt" } },
-    virt_text_pos = "inline",
-    right_gravity = false
-  })
-end
-
-local function get_prompt_line()
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return nil end
-  if prompt.extmark_id then
-    local ok, pos = pcall(vim.api.nvim_buf_get_extmark_by_id, state.buf, NS_PROMPT, prompt.extmark_id, {})
-    if ok and pos and #pos >= 1 then
-      return pos[1] + 1
-    end
-  end
-  return prompt.line or vim.api.nvim_buf_line_count(state.buf)
-end
-
-local function json_encode(obj)
-  return vim.json.encode(obj)
-end
-
-local function json_decode(str)
-  local ok, result = pcall(vim.json.decode, str)
-  if ok then return result end
-  return nil
-end
 
 local function get_project_root(buf)
   local file = buf and vim.api.nvim_buf_get_name(buf) or vim.api.nvim_buf_get_name(0)
@@ -196,44 +44,10 @@ local function get_project_root(buf)
 end
 
 local function get_current_project_root()
-  if state.project_root then
-    return state.project_root
+  if ui.project_root then
+    return ui.project_root
   end
-  return get_project_root(state.source_buf)
-end
-
-local function get_system_context()
-  local root = get_current_project_root()
-  local git_root = vim.fn.systemlist("git -C " .. vim.fn.shellescape(root) .. " rev-parse --show-toplevel 2>/dev/null")[1]
-  local is_git = vim.v.shell_error == 0
-  return {
-    os = vim.loop.os_uname().sysname,
-    shell = vim.env.SHELL or "unknown",
-    date = os.date("%Y-%m-%d"),
-    cwd = root,
-    git_root = is_git and git_root or nil,
-    nvim_version = vim.version().major .. "." .. vim.version().minor
-  }
-end
-
-local function load_sessions_from_disk()
-  local f = io.open(config.sessions_file, "r")
-  if not f then return {} end
-  local content = f:read("*a")
-  f:close()
-  local data = json_decode(content)
-  return data and data.sessions or {}
-end
-
-local function save_sessions_to_disk(sessions)
-  local f = io.open(config.sessions_file, "w")
-  if not f then return end
-  f:write(json_encode({ sessions = sessions }))
-  f:close()
-end
-
-local function get_project_name(cwd)
-  return vim.fn.fnamemodify(cwd, ":t")
+  return get_project_root(ui.source_buf)
 end
 
 local function simplify_agent_name(name)
@@ -246,309 +60,73 @@ local function simplify_agent_name(name)
 end
 
 local function update_statusline()
-  if not state.win or not vim.api.nvim_win_is_valid(state.win) then return end
-  local agent_name = simplify_agent_name(state.agent_info and state.agent_info.name)
-  local mode = state.current_mode or "default"
-  vim.wo[state.win].statusline = " " .. agent_name .. " [" .. mode .. "]"
+  local proc = registry.active()
+  if not ui.win or not vim.api.nvim_win_is_valid(ui.win) then return end
+  local agent_name = simplify_agent_name(proc and proc.state.agent_info and proc.state.agent_info.name)
+  local mode = proc and proc.state.mode or "plan"
+  vim.wo[ui.win].statusline = " " .. agent_name .. " [" .. mode .. "]"
 end
 
-local function format_session_name(cwd, timestamp)
-  local project = get_project_name(cwd)
-  local date = os.date("%Y-%m-%d %H:%M", timestamp)
-  return project .. " @ " .. date
+local function setup_window_options(win)
+  vim.wo[win].wrap = true
+  vim.wo[win].cursorline = true
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+  vim.wo[win].signcolumn = "no"
 end
 
-local function add_session_to_disk(session_id, cwd)
-  local sessions = load_sessions_from_disk()
-  local now = os.time()
-  for _, s in ipairs(sessions) do
-    if s.id == session_id then
-      s.last_used = now
-      save_sessions_to_disk(sessions)
-      return
-    end
-  end
-  table.insert(sessions, 1, {
-    id = session_id,
-    cwd = cwd,
-    name = format_session_name(cwd, now),
-    created_at = now,
-    last_used = now
-  })
-  local by_project = {}
-  local kept = {}
-  for _, s in ipairs(sessions) do
-    by_project[s.cwd] = (by_project[s.cwd] or 0) + 1
-    if by_project[s.cwd] <= config.max_sessions_per_project then
-      table.insert(kept, s)
-    end
-  end
-  save_sessions_to_disk(kept)
-end
-
-local function get_sessions_for_project(cwd)
-  local sessions = load_sessions_from_disk()
-  local result = {}
-  for _, s in ipairs(sessions) do
-    if s.cwd == cwd then
-      table.insert(result, s)
-    end
-  end
-  return result
-end
-
-local function get_messages_dir()
-  local dir = vim.fn.stdpath("data") .. "/ai_repl_messages"
-  if vim.fn.isdirectory(dir) == 0 then
-    vim.fn.mkdir(dir, "p")
-  end
-  return dir
-end
-
-local function get_session_messages_file(session_id)
-  return get_messages_dir() .. "/" .. session_id .. ".json"
-end
-
-local function load_session_messages(session_id)
-  local file = get_session_messages_file(session_id)
-  local f = io.open(file, "r")
-  if not f then return {} end
-  local content = f:read("*a")
-  f:close()
-  local data = json_decode(content)
-  return data and data.messages or {}
-end
-
-local function save_session_messages(session_id, messages)
-  local file = get_session_messages_file(session_id)
-  local f = io.open(file, "w")
-  if not f then return end
-  f:write(json_encode({ messages = messages }))
-  f:close()
-end
-
-local function append_message_to_session(session_id, role, content)
-  if not session_id or not content or content == "" then return end
-  local messages = load_session_messages(session_id)
-  table.insert(messages, {
-    role = role,
-    content = content,
-    timestamp = os.time()
-  })
-  if #messages > config.history_size then
-    local to_remove = #messages - config.history_size
-    for _ = 1, to_remove do
-      table.remove(messages, 1)
-    end
-  end
-  save_session_messages(session_id, messages)
-end
-
-local function append_to_buffer(lines)
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-  vim.schedule(function()
-    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-    vim.bo[state.buf].modifiable = true
-    local to_append = {}
-    if type(lines) == "string" then
-      for line in lines:gmatch("[^\r\n]*") do
-        table.insert(to_append, line)
-      end
-    elseif type(lines) == "table" then
-      for _, l in ipairs(lines) do
-        if type(l) == "string" then
-          for line in l:gmatch("[^\r\n]*") do
-            table.insert(to_append, line)
-          end
-        end
-      end
-    end
-    if #to_append > 0 then
-      local prompt_ln = get_prompt_line()
-      local insert_at = prompt_ln and (prompt_ln - 1) or vim.api.nvim_buf_line_count(state.buf)
-      vim.api.nvim_buf_set_lines(state.buf, insert_at, insert_at, false, to_append)
-      render_prompt()
-    end
-  end)
-end
-
-local function clear_buffer()
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-  vim.schedule(function()
-    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-    vim.bo[state.buf].modifiable = true
-    vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, { "" })
-    render_prompt()
-  end)
-end
-
-local function render_session_history(messages)
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-  if not messages or #messages == 0 then return end
-  vim.schedule(function()
-    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-    vim.bo[state.buf].modifiable = true
-    local lines = {}
-    for _, msg in ipairs(messages) do
-      if msg.role == "user" then
-        table.insert(lines, "> " .. msg.content)
-        table.insert(lines, "")
-      else
-        for line in msg.content:gmatch("[^\n]+") do
-          table.insert(lines, line)
-        end
-        table.insert(lines, "")
-        table.insert(lines, "---")
-        table.insert(lines, "")
-      end
-    end
-    table.insert(lines, "")
-    vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
-    render_prompt()
-    local line_count = vim.api.nvim_buf_line_count(state.buf)
-    if state.win and vim.api.nvim_win_is_valid(state.win) then
-      vim.api.nvim_win_set_cursor(state.win, { line_count, 0 })
-    end
-  end)
-end
-
-local function send_jsonrpc(method, params, is_notification)
-  if not state.process then return nil end
-  local msg = {
-    jsonrpc = "2.0",
-    method = method,
-    params = params or {}
-  }
-  if not is_notification then
-    msg.id = state.message_id
-    state.message_id = state.message_id + 1
-  end
-  local encoded = json_encode(msg) .. "\n"
-  vim.fn.chansend(state.process, encoded)
-  return msg.id
-end
-
-local function render_plan()
-  if #state.current_plan == 0 then return end
-  local lines = { "", "Plan:" }
-  for _, item in ipairs(state.current_plan) do
-    local icons = { pending = "[ ]", in_progress = "[>]", completed = "[x]" }
-    local icon = icons[item.status] or "[ ]"
-    local pri = item.priority == "high" and "!" or ""
-    local text = item.content or item.text or item.activeForm or item.description or tostring(item)
-    table.insert(lines, pri .. icon .. " " .. text)
-  end
-  table.insert(lines, "")
-  append_to_buffer(lines)
-end
-
-local pending_tool_render = nil
-
-local function flush_pending_tools()
-  if not pending_tool_render then return end
-  local tools = {}
-  for _, tool in pairs(state.active_tools) do
-    if tool.status == "pending" or tool.status == "in_progress" then
-      table.insert(tools, tool)
-    end
-  end
-  if #tools > 0 then
-    local names = {}
-    for _, t in ipairs(tools) do
-      table.insert(names, t.title or t.kind or "tool")
-    end
-    append_to_buffer({ "... " .. table.concat(names, ", ") })
-  end
-  pending_tool_render = nil
-end
-
-local function render_tool(tool, immediate)
-  local icons = { pending = "[~]", in_progress = "[>]", completed = "[+]", failed = "[!]" }
-  local kind_short = { read = "R", edit = "E", delete = "D", search = "S", execute = "X", think = "T", fetch = "F" }
-  if tool.status == "pending" or tool.status == "in_progress" then
-    if not immediate then
-      if pending_tool_render then
-        vim.fn.timer_stop(pending_tool_render)
-      end
-      pending_tool_render = vim.fn.timer_start(100, function()
-        vim.schedule(flush_pending_tools)
-      end)
-    end
-    return
-  end
-  local s = icons[tool.status] or "[?]"
-  local k = kind_short[tool.kind] or "-"
-  local title = tool.title or tool.kind or "tool"
-  local loc = ""
-  if tool.locations and #tool.locations > 0 then
-    local l = tool.locations[1]
-    loc = " -> " .. (l.path or l.uri or "")
-    if l.line then loc = loc .. ":" .. l.line end
-  end
-  append_to_buffer({ s .. " " .. k .. " " .. title .. loc })
-end
-
-local function update_streaming_response(text)
-  state.streaming_response = state.streaming_response .. text
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-  vim.schedule(function()
-    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-    vim.bo[state.buf].modifiable = true
-    local lines = {}
-    for line in state.streaming_response:gmatch("[^\r\n]*") do
-      table.insert(lines, line)
-    end
-    local prompt_ln = get_prompt_line()
-    if not state.streaming_start_line then
-      if prompt_ln then
-        local prev_line = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 2, prompt_ln - 1, false)[1] or ""
-        if prev_line == "" then
-          state.streaming_start_line = prompt_ln - 1
-        else
-          vim.api.nvim_buf_set_lines(state.buf, prompt_ln - 1, prompt_ln - 1, false, { "" })
-          state.streaming_start_line = prompt_ln
-        end
-      else
-        state.streaming_start_line = vim.api.nvim_buf_line_count(state.buf)
-      end
-    end
-    table.insert(lines, "")
-    vim.api.nvim_buf_set_lines(state.buf, state.streaming_start_line, -1, false, lines)
-    render_prompt()
-  end)
-end
-
-local function handle_session_update(params)
+local function handle_session_update(proc, params)
   local u = params.update
   if not u then return end
+
+  local buf = proc.data.buf
   local update_type = u.sessionUpdate
+
   if config.debug and update_type ~= "agent_message_chunk" then
-    append_to_buffer({ "[debug] " .. (update_type or "unknown") })
+    render.append_content(buf, { "[debug] " .. (update_type or "unknown") })
   end
+
   if update_type == "agent_message_chunk" then
-    start_animation("generating")
+    render.start_animation(buf, "generating")
     local content = u.content
     if content and content.text then
-      update_streaming_response(content.text)
+      render.update_streaming(buf, content.text, proc.ui)
     end
+
+  elseif update_type == "current_mode_update" then
+    proc.state.mode = u.modeId or u.currentModeId
+    update_statusline()
+
   elseif update_type == "tool_call" then
-    local tool = { id = u.toolCallId, title = u.title, kind = u.kind, status = u.status or "pending", locations = u.locations, rawInput = u.rawInput, content = u.content }
-    state.active_tools[u.toolCallId] = tool
+    local tool = {
+      id = u.toolCallId,
+      title = u.title,
+      kind = u.kind,
+      status = u.status or "pending",
+      locations = u.locations,
+      rawInput = u.rawInput,
+      content = u.content
+    }
+    proc.ui.active_tools[u.toolCallId] = tool
+    table.insert(proc.ui.pending_tool_calls, {
+      id = u.toolCallId, title = u.title, kind = u.kind, input = u.rawInput
+    })
+
     if u.title == "TodoWrite" and u.rawInput and u.rawInput.todos then
-      state.current_plan = u.rawInput.todos
-      render_plan()
+      proc.ui.current_plan = u.rawInput.todos
+      render.render_plan(buf, proc.ui.current_plan)
       return
     elseif u.title == "ExitPlanMode" then
-      append_to_buffer({ "[>] Exiting plan mode..." })
+      render.append_content(buf, { "[>] Exiting plan mode..." })
       return
     elseif u.title == "AskUserQuestion" or (u.rawInput and u.rawInput.questions) then
-      stop_animation()
+      render.stop_animation()
       local questions = u.rawInput and u.rawInput.questions or {}
       for _, q in ipairs(questions) do
-        append_to_buffer({ "", "[?] " .. (q.question or "Question") })
+        render.append_content(buf, { "", "[?] " .. (q.question or "Question") })
         if q.options then
           for i, opt in ipairs(q.options) do
-            append_to_buffer({ "  " .. i .. ". " .. (opt.label or opt) })
+            render.append_content(buf, { "  " .. i .. ". " .. (opt.label or opt) })
           end
         end
       end
@@ -561,50 +139,37 @@ local function handle_session_update(params)
               table.insert(labels, opt.label or opt)
             end
             vim.ui.select(labels, { prompt = q.question or "Select:" }, function(choice)
-              if choice then
-                M.send_prompt(choice)
-              end
+              if choice then M.send_prompt(choice) end
             end)
           else
             vim.ui.input({ prompt = (q.question or "Answer") .. ": " }, function(input)
-              if input and input ~= "" then
-                M.send_prompt(input)
-              end
+              if input and input ~= "" then M.send_prompt(input) end
             end)
           end
         end)
       end
-    elseif u.rawInput and u.rawInput.question then
-      stop_animation()
-      append_to_buffer({ "", "[?] " .. u.rawInput.question })
-      vim.schedule(function()
-        vim.ui.input({ prompt = u.rawInput.question .. ": " }, function(input)
-          if input and input ~= "" then
-            M.send_prompt(input)
-          end
-        end)
-      end)
     else
-      start_animation("executing")
-      render_tool(tool)
+      render.start_animation(buf, "executing")
+      render.render_tool(buf, tool)
     end
+
   elseif update_type == "tool_call_update" then
-    local tool = state.active_tools[u.toolCallId] or {}
+    local tool = proc.ui.active_tools[u.toolCallId] or {}
     tool.status = u.status or tool.status
     tool.title = u.title or tool.title
     tool.locations = u.locations or tool.locations
     tool.content = u.content or tool.content
     tool.rawOutput = u.rawOutput or tool.rawOutput
-    state.active_tools[u.toolCallId] = tool
+    proc.ui.active_tools[u.toolCallId] = tool
+
     if u.status == "completed" or u.status == "failed" then
-      stop_animation()
+      render.stop_animation()
       if tool.title ~= "AskUserQuestion" then
-        render_tool(tool)
+        render.render_tool(buf, tool)
       end
+
       if u.status == "completed" and (tool.kind == "edit" or tool.kind == "write" or tool.title == "Edit" or tool.title == "Write") then
-        local file_path = nil
-        local old_text = nil
-        local new_text = nil
+        local file_path, old_text, new_text
         if tool.content and type(tool.content) == "table" then
           for _, block in ipairs(tool.content) do
             if block.type == "diff" then
@@ -624,42 +189,47 @@ local function handle_session_update(params)
           file_path = tool.locations[1].path or tool.locations[1].uri
         end
         if file_path and (old_text or new_text) then
-          render_inline_diff(file_path, old_text or "", new_text or "")
+          render.render_diff(buf, file_path, old_text or "", new_text or "")
         end
       end
+
       if tool.title == "ExitPlanMode" and u.status == "completed" then
-        append_to_buffer({ "[>] Starting execution..." })
+        render.append_content(buf, { "[>] Starting execution..." })
         vim.defer_fn(function()
           M.send_prompt("proceed with the plan", { silent = true })
         end, 200)
       end
-      state.active_tools[u.toolCallId] = nil
+
+      proc.ui.active_tools[u.toolCallId] = nil
     end
+
   elseif update_type == "plan" then
-    state.current_plan = u.entries or u.plan or {}
-    if type(state.current_plan) == "table" and state.current_plan.entries then
-      state.current_plan = state.current_plan.entries
+    proc.ui.current_plan = u.entries or u.plan or {}
+    if type(proc.ui.current_plan) == "table" and proc.ui.current_plan.entries then
+      proc.ui.current_plan = proc.ui.current_plan.entries
     end
-    if #state.current_plan == 0 then
-      append_to_buffer({ "[plan update received but empty]" })
-    end
-    render_plan()
+    render.render_plan(buf, proc.ui.current_plan)
+
   elseif update_type == "available_commands_update" then
-    state.slash_commands = u.availableCommands or {}
+    proc.data.slash_commands = u.availableCommands or {}
+
   elseif update_type == "stop" then
-    stop_animation()
-    state.busy = false
-    if state.busy_timer then
-      pcall(vim.fn.timer_stop, state.busy_timer)
-      state.busy_timer = nil
+    render.stop_animation()
+    proc.state.busy = false
+
+    if proc.ui.streaming_response and proc.ui.streaming_response ~= "" then
+      local tool_calls_to_save = nil
+      if #proc.ui.pending_tool_calls > 0 then
+        tool_calls_to_save = vim.deepcopy(proc.ui.pending_tool_calls)
+      end
+      registry.append_message(proc.session_id, "assistant", proc.ui.streaming_response, tool_calls_to_save)
     end
-    if state.streaming_response and state.streaming_response ~= "" then
-      append_message_to_session(state.session_id, "assistant", state.streaming_response)
-    end
-    state.current_plan = {}
-    state.active_tools = {}
-    state.streaming_response = ""
-    state.streaming_start_line = nil
+
+    proc.ui.current_plan = {}
+    proc.ui.active_tools = {}
+    proc.ui.pending_tool_calls = {}
+    render.finish_streaming(buf, proc.ui)
+
     local reason = u.stopReason or "end_turn"
     local reason_msgs = {
       end_turn = "---",
@@ -668,105 +238,30 @@ local function handle_session_update(params)
       refusal = "[!] Agent refused",
       cancelled = "[x] Cancelled"
     }
-    local mode_str = state.current_mode and (" [" .. state.current_mode .. "]") or ""
-    append_to_buffer({ "", (reason_msgs[reason] or "---") .. mode_str, "" })
+    local mode_str = proc.state.mode and (" [" .. proc.state.mode .. "]") or ""
+    render.append_content(buf, { "", (reason_msgs[reason] or "---") .. mode_str, "" })
+
     vim.defer_fn(function()
-      if #state.prompt_queue > 0 and not state.busy then
-        local next_item = table.remove(state.prompt_queue, 1)
-        if next_item then
-          M.send_prompt(next_item.content, next_item.opts)
-        end
-      end
+      proc:process_queued_prompts()
     end, 200)
+
   elseif update_type == "modes" then
-    state.modes = u.modes or {}
-    state.current_mode = u.currentModeId
+    proc.state.modes = u.modes or {}
+    proc.state.mode = u.currentModeId
     update_statusline()
+
   elseif update_type == "agent_thought_chunk" then
-    start_animation("thinking")
-    local content = u.content
-    if content and content.text then
-      append_to_buffer({ "[...] " .. content.text:sub(1, 100) })
-    end
-  else
-    if config.debug and update_type then
-      append_to_buffer({ "[debug] unknown update: " .. update_type })
-    end
+    render.start_animation(buf, "thinking")
   end
 end
 
-local function compute_inline_diff(old_text, new_text)
-  if type(old_text) ~= "string" then old_text = "" end
-  if type(new_text) ~= "string" then new_text = "" end
-  local old_lines = vim.split(old_text, "\n", { plain = true })
-  local new_lines = vim.split(new_text, "\n", { plain = true })
-  local result = {}
-  local on = vim.diff(old_text or "", new_text or "", { result_type = "indices" })
-  local old_idx, new_idx = 1, 1
-  for _, hunk in ipairs(on or {}) do
-    local old_start, old_count, new_start, new_count = hunk[1], hunk[2], hunk[3], hunk[4]
-    while old_idx < old_start do
-      table.insert(result, { text = "  " .. (old_lines[old_idx] or ""), hl = nil })
-      old_idx = old_idx + 1
-      new_idx = new_idx + 1
-    end
-    for i = old_start, old_start + old_count - 1 do
-      if old_lines[i] then
-        table.insert(result, { text = "- " .. old_lines[i], hl = "DiffDelete" })
-      end
-    end
-    old_idx = old_start + old_count
-    for i = new_start, new_start + new_count - 1 do
-      if new_lines[i] then
-        table.insert(result, { text = "+ " .. new_lines[i], hl = "DiffAdd" })
-      end
-    end
-    new_idx = new_start + new_count
-  end
-  while old_idx <= #old_lines do
-    table.insert(result, { text = "  " .. (old_lines[old_idx] or ""), hl = nil })
-    old_idx = old_idx + 1
-  end
-  return result
-end
+local function handle_permission_request(proc, msg_id, params)
+  render.stop_animation()
+  local buf = proc.data.buf
 
-render_inline_diff = function(file_path, old_content, new_content)
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-  local diff_data = compute_inline_diff(old_content, new_content)
-  local lines = { "", "--- " .. vim.fn.fnamemodify(file_path, ":t") .. " ---" }
-  for _, d in ipairs(diff_data) do
-    table.insert(lines, d.text)
-  end
-  table.insert(lines, "---")
-  table.insert(lines, "")
-
-  vim.schedule(function()
-    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-    vim.bo[state.buf].modifiable = true
-    local prompt_ln = get_prompt_line()
-    local insert_at = prompt_ln and (prompt_ln - 1) or vim.api.nvim_buf_line_count(state.buf)
-
-    vim.api.nvim_buf_set_lines(state.buf, insert_at, insert_at, false, lines)
-    render_prompt()
-
-    local diff_start = insert_at + 2
-    for i, d in ipairs(diff_data) do
-      if d.hl then
-        pcall(vim.api.nvim_buf_set_extmark, state.buf, NS_DIFF, diff_start + i - 1, 0, {
-          end_col = #d.text,
-          hl_group = d.hl
-        })
-      end
-    end
-  end)
-end
-
-local function handle_permission_request(id, params)
-  stop_animation()
   vim.schedule(function()
     local tool = params.toolCall or {}
-    local title = tool.title or tool.kind or "Unknown tool"
-    local kind = tool.kind or ""
+    local title = tool.title or tool.kind or "tool"
     local locations = tool.locations or {}
     local loc_str = ""
     if #locations > 0 then
@@ -774,550 +269,366 @@ local function handle_permission_request(id, params)
       loc_str = " -> " .. (l.path or l.uri or "")
       if l.line then loc_str = loc_str .. ":" .. l.line end
     end
-    local raw_input = tool.rawInput or {}
 
     local agent_options = params.options or {}
-    local first_allow_id = nil
+    local first_allow_id, first_deny_id, allow_always_id
     for _, opt in ipairs(agent_options) do
       local oid = opt.optionId or opt.id
       local okind = opt.kind or ""
-      if oid and (okind:match("allow") or oid:match("allow") or oid:match("yes") or oid:match("approve")) then
-        first_allow_id = oid
-        break
+      if oid then
+        if oid:match("allow_always") or oid:match("allowAlways") then
+          allow_always_id = allow_always_id or oid
+        elseif okind:match("allow") or oid:match("allow") or oid:match("yes") or oid:match("approve") then
+          first_allow_id = first_allow_id or oid
+        end
+        if okind:match("deny") or oid:match("deny") or oid:match("no") or oid:match("reject") then
+          first_deny_id = first_deny_id or oid
+        end
       end
-    end
-    if not first_allow_id and #agent_options > 0 then
-      first_allow_id = agent_options[1].optionId or agent_options[1].id
     end
 
-    if config.approvals == "never" then
-      local opt_id = first_allow_id or "allow_always"
-      local response = { jsonrpc = "2.0", id = id, result = { outcome = { outcome = "selected", optionId = opt_id } } }
-      if config.show_tool_calls then
-        append_to_buffer({ "[+] Auto-approved: " .. title .. loc_str })
-      end
-      vim.fn.chansend(state.process, json_encode(response) .. "\n")
+    local mode = config.permission_mode
+    if mode == "bypassPermissions" or mode == "dontAsk" then
+      local response = {
+        jsonrpc = "2.0",
+        id = msg_id,
+        result = { outcome = { outcome = "selected", optionId = first_allow_id or "allow_always" } }
+      }
+      vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
       return
     end
 
-    if config.show_tool_calls then
-      local prompt_lines = { "[*] " .. title .. loc_str }
-      if kind == "edit" or kind == "write" then
-        local file_path = raw_input.file_path or raw_input.path or (locations[1] and locations[1].path)
-        if file_path and raw_input.new_string then
-          table.insert(prompt_lines, "  Old: " .. (raw_input.old_string or ""):sub(1, 50))
-          table.insert(prompt_lines, "  New: " .. (raw_input.new_string or ""):sub(1, 50))
-        end
-      elseif kind == "execute" or kind == "bash" then
-        if raw_input.command then
-          table.insert(prompt_lines, "  $ " .. raw_input.command:sub(1, 80))
-        end
+    render.append_content(buf, { "", "[?] Permission: " .. title .. loc_str })
+
+    local choices = { "Allow", "Allow Always", "Deny" }
+    vim.ui.select(choices, { prompt = "Permission for " .. title .. "?" }, function(choice)
+      local outcome_id
+      if choice == "Allow" then
+        outcome_id = first_allow_id or "allow"
+      elseif choice == "Allow Always" then
+        outcome_id = allow_always_id or first_allow_id or "allow_always"
+      else
+        outcome_id = first_deny_id or "deny"
       end
-      for _, line in ipairs(prompt_lines) do
-        append_to_buffer({ line })
-      end
-    end
 
-    local options = {}
-    local option_ids = {}
-    for i, opt in ipairs(agent_options) do
-      options[i] = opt.name or opt.label or opt.optionId or opt.id
-      option_ids[i] = opt.optionId or opt.id
-    end
-    if #options == 0 then
-      options = { "Allow once", "Allow always", "Reject" }
-      option_ids = { "allow_once", "allow_always", "reject" }
-    end
-
-    local file_path = raw_input.file_path or raw_input.path or (locations[1] and locations[1].path)
-    local can_show_diff = (kind == "edit" or kind == "write") and file_path and raw_input.new_string
-    if can_show_diff then
-      table.insert(options, 1, "View diff")
-      table.insert(option_ids, 1, "__view_diff__")
-    end
-
-    local function show_picker()
-      vim.ui.select(options, {
-        prompt = title,
-      }, function(choice, idx)
-        if choice == nil then
-          local response = { jsonrpc = "2.0", id = id, result = { outcome = { outcome = "cancelled" } } }
-          append_to_buffer({ "[x] Cancelled" })
-          vim.fn.chansend(state.process, json_encode(response) .. "\n")
-          return
-        end
-        local opt_id = option_ids[idx] or "allow_once"
-        if opt_id == "__view_diff__" then
-          local old_content = raw_input.old_string or ""
-          local new_content = raw_input.new_string or ""
-          if raw_input.old_string and raw_input.new_string then
-            if vim.fn.filereadable(file_path) == 1 then
-              local f = io.open(file_path, "r")
-              if f then
-                local full_content = f:read("*a")
-                f:close()
-                old_content = full_content
-                new_content = full_content:gsub(vim.pesc(raw_input.old_string), raw_input.new_string, 1)
-              end
-            else
-              old_content = raw_input.old_string
-              new_content = raw_input.new_string
-            end
-          end
-          render_inline_diff(file_path, old_content, new_content)
-          vim.schedule(show_picker)
-          return
-        end
-        local response = { jsonrpc = "2.0", id = id, result = { outcome = { outcome = "selected", optionId = opt_id } } }
-        vim.fn.chansend(state.process, json_encode(response) .. "\n")
-      end)
-    end
-
-    show_picker()
+      local response = {
+        jsonrpc = "2.0",
+        id = msg_id,
+        result = { outcome = { outcome = "selected", optionId = outcome_id } }
+      }
+      vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
+    end)
   end)
 end
 
-local function handle_terminal_create(id, params)
-  local cmd = params.command
-  local args = params.args or {}
-  local cwd = params.cwd or get_current_project_root()
-  if not cmd or type(cmd) ~= "string" or cmd == "" then
-    local response = { jsonrpc = "2.0", id = id, error = { code = -32602, message = "Invalid command" } }
-    vim.fn.chansend(state.process, json_encode(response) .. "\n")
-    return
-  end
-  local env = nil
-  if params.env and type(params.env) == "table" and #params.env > 0 then
-    env = {}
-    for _, e in ipairs(params.env) do
-      if type(e) == "table" and e.name and e.value then
-        env[e.name] = e.value
-      end
-    end
-  end
-  local term_id = "term_" .. os.time() .. math.random(1000, 9999)
-  local full_cmd = { cmd }
-  if type(args) == "table" then
-    for _, arg in ipairs(args) do
-      if type(arg) == "string" then
-        table.insert(full_cmd, arg)
-      end
-    end
-  end
-  local output = {}
-  local job_opts = {
-    cwd = cwd,
-    on_stdout = function(_, data)
-      for _, line in ipairs(data or {}) do
-        if line ~= "" then table.insert(output, line) end
-      end
-    end,
-    on_stderr = function(_, data)
-      for _, line in ipairs(data or {}) do
-        if line ~= "" then table.insert(output, line) end
-      end
-    end,
-    on_exit = function(_, code)
-      if state.terminals[term_id] then
-        state.terminals[term_id].exit_code = code
-      end
-    end
-  }
-  if env and next(env) then
-    job_opts.env = env
-  end
-  local ok, job_id = pcall(vim.fn.jobstart, full_cmd, job_opts)
-  if not ok or job_id <= 0 then
-    local response = { jsonrpc = "2.0", id = id, error = { code = -32000, message = "Failed to start: " .. cmd } }
-    vim.fn.chansend(state.process, json_encode(response) .. "\n")
-    return
-  end
-  state.terminals[term_id] = { job_id = job_id, output = output, exit_code = nil }
-  local response = { jsonrpc = "2.0", id = id, result = { terminalId = term_id } }
-  vim.fn.chansend(state.process, json_encode(response) .. "\n")
-end
+local function handle_method(proc, method, params, msg_id)
+  local buf = proc.data.buf
+  local is_active = proc.session_id == registry.active_session_id()
 
-local function handle_terminal_output(id, params)
-  local term = state.terminals[params.terminalId]
-  local response = { jsonrpc = "2.0", id = id }
-  if term then
-    response.result = {
-      output = table.concat(term.output, "\n"),
-      truncated = false,
-      exitStatus = term.exit_code and { exitCode = term.exit_code } or vim.NIL
-    }
-  else
-    response.error = { code = -32000, message = "Terminal not found" }
-  end
-  vim.fn.chansend(state.process, json_encode(response) .. "\n")
-end
-
-local function handle_terminal_wait(id, params)
-  local term = state.terminals[params.terminalId]
-  if not term then
-    local response = { jsonrpc = "2.0", id = id, error = { code = -32000, message = "Terminal not found" } }
-    vim.fn.chansend(state.process, json_encode(response) .. "\n")
-    return
-  end
-  local function check()
-    if term.exit_code ~= nil then
-      local response = { jsonrpc = "2.0", id = id, result = { exitCode = term.exit_code } }
-      vim.fn.chansend(state.process, json_encode(response) .. "\n")
+  if method == "session/update" then
+    if is_active then
+      handle_session_update(proc, params)
     else
-      vim.defer_fn(check, 100)
+      table.insert(proc.ui.pending_updates, params)
     end
-  end
-  check()
-end
 
-local function handle_terminal_kill(id, params)
-  local term = state.terminals[params.terminalId]
-  local response = { jsonrpc = "2.0", id = id }
-  if term and term.job_id then
-    vim.fn.jobstop(term.job_id)
-    response.result = vim.NIL
-  else
-    response.error = { code = -32000, message = "Terminal not found" }
-  end
-  vim.fn.chansend(state.process, json_encode(response) .. "\n")
-end
+  elseif method == "session/request_permission" then
+    if is_active then
+      handle_permission_request(proc, msg_id, params)
+    else
+      local response = {
+        jsonrpc = "2.0",
+        id = msg_id,
+        result = { outcome = { outcome = "selected", optionId = "allow_always" } }
+      }
+      vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
+      render.append_content(buf, { "[+] Auto-approved (background): " .. (params.toolCall and params.toolCall.title or "tool") })
+    end
 
-local function handle_terminal_release(id, params)
-  local term = state.terminals[params.terminalId]
-  local response = { jsonrpc = "2.0", id = id }
-  if term then
-    if term.job_id then pcall(vim.fn.jobstop, term.job_id) end
-    state.terminals[params.terminalId] = nil
-    response.result = vim.NIL
-  else
-    response.error = { code = -32000, message = "Terminal not found" }
-  end
-  vim.fn.chansend(state.process, json_encode(response) .. "\n")
-end
-
-local function handle_message(line)
-  local msg = json_decode(line)
-  if not msg then return end
-  if config.debug and msg.method then
-    local method_short = msg.method:gsub("session/", "")
-    if method_short ~= "update" or (msg.params and msg.params.update and msg.params.update.sessionUpdate ~= "agent_message_chunk") then
-      append_to_buffer({ "[debug] method: " .. method_short })
+  elseif method:match("^terminal/") then
+    local response = {
+      jsonrpc = "2.0",
+      id = msg_id,
+      result = {}
+    }
+    if method == "terminal/create" then
+      local term_id = "term_" .. os.time() .. "_" .. math.random(1000, 9999)
+      proc.data.terminals[term_id] = { id = term_id, buf = nil }
+      response.result = { terminalId = term_id }
     end
-  end
-  if msg.method then
-    if msg.method == "session/update" then
-      handle_session_update(msg.params)
-    elseif msg.method == "session/request_permission" then
-      handle_permission_request(msg.id, msg.params)
-    elseif msg.method == "terminal/create" then
-      handle_terminal_create(msg.id, msg.params)
-    elseif msg.method == "terminal/output" then
-      handle_terminal_output(msg.id, msg.params)
-    elseif msg.method == "terminal/wait_for_exit" then
-      handle_terminal_wait(msg.id, msg.params)
-    elseif msg.method == "terminal/kill" then
-      handle_terminal_kill(msg.id, msg.params)
-    elseif msg.method == "terminal/release" then
-      handle_terminal_release(msg.id, msg.params)
-    end
-  elseif msg.id then
-    local pending = state.pending_requests[msg.id]
-    if pending and pending.callback and msg.result then
-      local ok, err = pcall(pending.callback, msg.result)
-      if not ok then
-        append_to_buffer({ "Callback error: " .. tostring(err) })
-      end
-    end
-    state.pending_requests[msg.id] = nil
-    if msg.result then
-      if msg.result.sessionId then
-        state.session_id = msg.result.sessionId
-      end
-    end
-    if msg.error then
-      stop_animation()
-      append_to_buffer({ "Error: " .. (msg.error.message or "Unknown error") })
-    end
+    vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
   end
 end
 
-local function start_process()
-  local cmd = config.provider.cmd
-  local args = vim.deepcopy(config.provider.args)
-  state.process = vim.fn.jobstart({ cmd, unpack(args) }, {
-    on_stdout = function(_, data)
-      for _, line in ipairs(data or {}) do
-        if line and line ~= "" then
-          handle_message(line)
-        end
+local function create_process(session_id, opts)
+  opts = opts or {}
+
+  local proc = Process.new(session_id, {
+    cmd = config.provider.cmd,
+    args = config.provider.args,
+    env = vim.tbl_extend("force", config.provider.env, opts.env or {}),
+    cwd = opts.cwd or get_current_project_root(),
+    debug = config.debug,
+    load_session_id = opts.load_session_id,
+  })
+  proc._created_at = os.time()
+
+  proc:set_handlers({
+    on_method = function(self, method, params, msg_id)
+      handle_method(self, method, params, msg_id)
+    end,
+    on_debug = function(self, line)
+      if self.data.buf then
+        render.append_content(self.data.buf, { "[debug] " .. line })
       end
     end,
-    on_stderr = function(_, data)
-      if not config.debug then return end
-      for _, line in ipairs(data or {}) do
-        if line and line ~= "" then
-          if not line:match("^%s*$") and not line:match("Session not found") then
-            append_to_buffer({ "[debug] " .. line })
-          end
-        end
-      end
-    end,
-    on_exit = function(_, code)
-      stop_animation()
-      state.process = nil
-      state.initialized = false
-      state.session_id = nil
-      if code ~= 0 then
-        append_to_buffer({ "Process exited with code: " .. code })
-        if config.reconnect and state.active and state.reconnect_count < config.max_reconnect_attempts then
-          state.reconnect_count = state.reconnect_count + 1
-          append_to_buffer({ "Reconnecting... (" .. state.reconnect_count .. "/" .. config.max_reconnect_attempts .. ")" })
+    on_exit = function(self, code, was_alive)
+      render.stop_animation()
+      if code ~= 0 and self.data.buf and was_alive then
+        render.append_content(self.data.buf, { "Process exited with code: " .. code })
+        if config.reconnect and ui.active and self.state.reconnect_count < config.max_reconnect_attempts then
+          self.state.reconnect_count = self.state.reconnect_count + 1
+          render.append_content(self.data.buf, { "Reconnecting... (" .. self.state.reconnect_count .. "/" .. config.max_reconnect_attempts .. ")" })
           vim.defer_fn(function()
-            if state.active and start_process() then
-              vim.defer_fn(initialize, 100)
+            if ui.active and self.session_id == registry.active_session_id() then
+              self:restart()
             end
           end, 1000)
         end
       else
-        state.reconnect_count = 0
+        self.state.reconnect_count = 0
       end
     end,
-    stdin = "pipe"
-  })
-  if state.process <= 0 then
-    state.process = nil
-    return false
-  end
-  return true
-end
-
-local function stop_process()
-  if state.process then
-    vim.fn.jobstop(state.process)
-    state.process = nil
-  end
-  state.initialized = false
-  state.session_id = nil
-end
-
-local create_session
-local render_inline_diff
-
-local function get_mime_type(path)
-  local ext = vim.fn.fnamemodify(path, ":e"):lower()
-  local mime_types = {
-    lua = "text/x-lua", py = "text/x-python", js = "text/javascript",
-    ts = "text/typescript", tsx = "text/typescript", jsx = "text/javascript",
-    json = "application/json", md = "text/markdown", txt = "text/plain",
-    html = "text/html", css = "text/css", sh = "text/x-shellscript",
-    rs = "text/x-rust", go = "text/x-go", rb = "text/x-ruby",
-    java = "text/x-java", c = "text/x-c", cpp = "text/x-c++",
-    h = "text/x-c", hpp = "text/x-c++", yaml = "text/yaml", yml = "text/yaml",
-    toml = "text/toml", xml = "text/xml", sql = "text/x-sql",
-    ex = "text/x-elixir", exs = "text/x-elixir", erl = "text/x-erlang",
-    png = "image/png", jpg = "image/jpeg", jpeg = "image/jpeg",
-    gif = "image/gif", webp = "image/webp", svg = "image/svg+xml",
-  }
-  return mime_types[ext] or "text/plain"
-end
-
-local function is_image_file(path)
-  local mime = get_mime_type(path)
-  return mime:match("^image/") ~= nil
-end
-
-local function create_resource_content(path, text, annotations)
-  local abs_path = vim.fn.fnamemodify(path, ":p")
-  return {
-    type = "resource",
-    resource = {
-      uri = "file://" .. abs_path,
-      text = text,
-      mimeType = get_mime_type(path)
-    },
-    annotations = annotations
-  }
-end
-
-local function create_resource_link(path, annotations)
-  local abs_path = vim.fn.fnamemodify(path, ":p")
-  local name = vim.fn.fnamemodify(path, ":t")
-  return {
-    type = "resource_link",
-    uri = "file://" .. abs_path,
-    name = name,
-    mimeType = get_mime_type(path),
-    annotations = annotations
-  }
-end
-
-local function create_text_content(text)
-  return { type = "text", text = text }
-end
-
-local function create_image_resource_content(path)
-  local abs_path = vim.fn.fnamemodify(path, ":p")
-  local f = io.open(abs_path, "rb")
-  if not f then return nil end
-  local data = f:read("*a")
-  f:close()
-  local b64 = vim.base64.encode(data)
-  return {
-    type = "resource",
-    resource = {
-      uri = "file://" .. abs_path,
-      blob = b64,
-      mimeType = get_mime_type(path)
-    }
-  }
-end
-
-local function extract_clipboard_image()
-  local temp_path = os.tmpname() .. ".png"
-  local os_name = vim.loop.os_uname().sysname
-  local cmd
-
-  if os_name == "Darwin" then
-    cmd = string.format("pngpaste %s 2>/dev/null", vim.fn.shellescape(temp_path))
-  elseif os_name == "Linux" then
-    if os.getenv("WAYLAND_DISPLAY") then
-      cmd = string.format("wl-paste --type image/png > %s 2>/dev/null", vim.fn.shellescape(temp_path))
-    else
-      cmd = string.format("xclip -selection clipboard -t image/png -o > %s 2>/dev/null", vim.fn.shellescape(temp_path))
-    end
-  end
-
-  if cmd then
-    vim.fn.system(cmd)
-    if vim.v.shell_error == 0 and vim.fn.filereadable(temp_path) == 1 then
-      local size = vim.fn.getfsize(temp_path)
-      if size > 0 then
-        return temp_path
-      end
-    end
-    pcall(os.remove, temp_path)
-  end
-  return nil
-end
-
-local function initialize()
-  if not state.process then return end
-  state.client_capabilities = {
-    prompt = { text = true, embeddedContext = true, image = true, audio = false }
-  }
-  local id = send_jsonrpc("initialize", {
-    protocolVersion = 1,
-    clientInfo = {
-      name = "ai_repl.nvim",
-      title = "AI REPL for Neovim",
-      version = "1.0.0"
-    },
-    clientCapabilities = state.client_capabilities
-  })
-  state.pending_requests[id] = {
-    method = "initialize",
-    callback = function(result)
-      state.agent_info = result.agentInfo
-      state.agent_capabilities = result.agentCapabilities or {}
-      state.initialized = true
-      if state.agent_capabilities.loadSession then
-        state.supports_load_session = true
-      end
-      local caps = {}
-      if state.agent_capabilities.loadSession then table.insert(caps, "sessions") end
-      if state.agent_capabilities.modes then table.insert(caps, "modes") end
-      if state.agent_capabilities.plans then table.insert(caps, "plans") end
-      local agent_name = simplify_agent_name(result.agentInfo and result.agentInfo.name)
-      local caps_str = #caps > 0 and " [" .. table.concat(caps, ", ") .. "]" or ""
-      if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
-        pcall(vim.api.nvim_buf_set_name, state.buf, agent_name)
-      end
+    on_ready = function(self)
       update_statusline()
-      append_to_buffer({ "Connected: " .. agent_name .. caps_str })
-      create_session()
-    end
-  }
-end
+    end,
+    on_status = function(self, status, data)
+      local buf = self.data.buf
+      if not buf then return end
 
-create_session = function()
-  if not state.process or not state.initialized then return end
-  local root = get_current_project_root()
-  local id = send_jsonrpc("session/new", {
-    cwd = root,
-    mcpServers = {}
-  })
-  append_to_buffer({ "Project: " .. root })
-  state.pending_requests[id] = {
-    method = "session/new",
-    callback = function(result)
-      state.session_id = result.sessionId
-      add_session_to_disk(result.sessionId, root)
-      append_to_buffer({ "Session: " .. result.sessionId:sub(1, 8) .. "..." })
-      if result.modes then
-        state.modes = result.modes.availableModes or {}
-        state.current_mode = result.modes.currentModeId
+      if status == "initialized" then
+        local caps = {}
+        if self.state.agent_capabilities.loadSession then table.insert(caps, "sessions") end
+        if self.state.agent_capabilities.modes then table.insert(caps, "modes") end
+        if self.state.agent_capabilities.plans then table.insert(caps, "plans") end
+        local agent_name = self:get_agent_name()
+        local caps_str = #caps > 0 and " [" .. table.concat(caps, ", ") .. "]" or ""
+
+        if vim.api.nvim_buf_is_valid(buf) then
+          pcall(vim.api.nvim_buf_set_name, buf, agent_name)
+        end
+        render.append_content(buf, { "Connected: " .. agent_name .. caps_str })
+
+      elseif status == "session_created" then
+        render.append_content(buf, { "Project: " .. self.data.cwd, "[+] Session ready", "" })
         update_statusline()
+
+      elseif status == "session_loaded" then
+        local messages = registry.load_messages(self.session_id)
+        if messages and #messages > 0 then
+          render.render_history(buf, messages)
+        else
+          render.append_content(buf, { "[+] Session loaded: " .. self.session_id:sub(1, 8) .. "...", "" })
+        end
+        update_statusline()
+
+      elseif status == "session_load_failed" then
+        render.append_content(buf, { "[!] Session load failed, creating new..." })
+
+      elseif status == "init_failed" or status == "session_failed" then
+        render.append_content(buf, { "[!] Error: " .. tostring(data) })
       end
-      if state.is_first_open then
-        state.is_first_open = false
-        vim.defer_fn(function()
-          M.set_mode("plan")
-        end, 100)
-      else
-        append_to_buffer({ "Mode: " .. (state.current_mode or "default") })
-      end
+    end,
+  })
+
+  proc._on_session_id_changed = function(self, old_id, new_id)
+    local was_active = registry.active_session_id() == old_id
+    registry.unregister(old_id)
+    registry.set(new_id, self)
+    if was_active then
+      registry.set_active(new_id)
     end
-  }
+  end
+
+  return proc
 end
 
-local function process_prompt_queue()
-  if #state.prompt_queue == 0 then return end
-  if state.busy then return end
-  local next_item = table.remove(state.prompt_queue, 1)
-  if next_item then
-    M.send_prompt(next_item.content, next_item.opts)
+local function create_buffer(proc, name)
+  local buf = vim.api.nvim_create_buf(true, false)
+  local buf_name = "AI: " .. (name or "Session") .. " [" .. proc.session_id:sub(1, 8) .. "]"
+  pcall(vim.api.nvim_buf_set_name, buf, buf_name)
+
+  render.init_buffer(buf)
+  proc.data.buf = buf
+
+  return buf
+end
+
+local function parse_file_references(text)
+  local prompt = {}
+  local files = {}
+  local remaining_text = text
+
+  for file_ref in text:gmatch("@([^%s]+)") do
+    local abs_path = vim.fn.fnamemodify(file_ref, ":p")
+    if vim.fn.filereadable(abs_path) == 1 then
+      table.insert(files, abs_path)
+      remaining_text = remaining_text:gsub("@" .. vim.pesc(file_ref), "", 1)
+    end
   end
+
+  for _, file_path in ipairs(files) do
+    table.insert(prompt, {
+      type = "resource_link",
+      resourceLink = { uri = "file://" .. file_path, name = vim.fn.fnamemodify(file_path, ":t") }
+    })
+  end
+
+  remaining_text = remaining_text:gsub("^%s*(.-)%s*$", "%1")
+  if remaining_text ~= "" then
+    table.insert(prompt, { type = "text", text = remaining_text })
+  end
+
+  return prompt, #files > 0
+end
+
+local function setup_buffer_keymaps(buf)
+  local function submit()
+    local raw_text = render.get_prompt_input(buf)
+    local text = raw_text:gsub("^%s*(.-)%s*$", "%1")
+    if text == "" then
+      vim.notify("AI REPL: Empty prompt", vim.log.levels.DEBUG)
+      return
+    end
+    render.clear_prompt_input(buf)
+
+    if text:sub(1, 1) == "/" then
+      M.handle_command(text:sub(2))
+    else
+      local proc = registry.active()
+      local prompt, has_files = parse_file_references(text)
+
+      if proc and #proc.data.context_files > 0 then
+        for _, file_path in ipairs(proc.data.context_files) do
+          table.insert(prompt, 1, {
+            type = "resource_link",
+            resourceLink = { uri = "file://" .. file_path, name = vim.fn.fnamemodify(file_path, ":t") }
+          })
+        end
+        proc.data.context_files = {}
+      end
+
+      if has_files or #prompt > 1 then
+        M.send_prompt(prompt)
+      else
+        M.send_prompt(text)
+      end
+    end
+  end
+
+  render.setup_cursor_lock(buf)
+
+  local opts = { buffer = buf, silent = true }
+  vim.keymap.set("i", "<CR>", submit, opts)
+  vim.keymap.set("n", "<CR>", submit, opts)
+  vim.keymap.set("n", "q", M.hide, opts)
+  vim.keymap.set("n", "<Esc>", M.hide, opts)
+  vim.keymap.set("n", "<C-c>", M.cancel, opts)
+  vim.keymap.set("i", "<C-c>", M.cancel, opts)
+  vim.keymap.set({ "n", "i" }, "<S-Tab>", function() M.show_mode_picker() end, opts)
+  vim.keymap.set("n", "i", function()
+    local win = vim.fn.bufwinid(buf)
+    if win ~= -1 then render.goto_prompt(buf, win) end
+  end, opts)
+  vim.keymap.set("n", "a", function()
+    local win = vim.fn.bufwinid(buf)
+    if win ~= -1 then render.goto_prompt(buf, win) end
+  end, opts)
+  vim.keymap.set("n", "G", function()
+    local win = vim.fn.bufwinid(buf)
+    if win ~= -1 then render.goto_prompt(buf, win) end
+  end, opts)
+
+  vim.api.nvim_create_autocmd("BufEnter", {
+    buffer = buf,
+    callback = function()
+      local p, sid = registry.get_by_buffer(buf)
+      if p and sid and sid ~= registry.active_session_id() then
+        registry.set_active(sid)
+        update_statusline()
+
+        if #p.ui.pending_updates > 0 then
+          vim.defer_fn(function()
+            local pending = p.ui.pending_updates
+            p.ui.pending_updates = {}
+            for _, params in ipairs(pending) do
+              handle_session_update(p, params)
+            end
+          end, 50)
+        end
+      end
+    end
+  })
+
+  vim.api.nvim_create_autocmd("BufDelete", {
+    buffer = buf,
+    callback = function()
+      render.cleanup_buffer(buf)
+    end
+  })
+end
+
+local function create_ui()
+  local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
+
+  vim.cmd("botright vsplit")
+  ui.win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_width(ui.win, width)
+  setup_window_options(ui.win)
+
+  local temp_id = "temp_" .. os.time() .. "_" .. math.random(1000, 9999)
+  local proc = create_process(temp_id, { cwd = ui.project_root })
+  local buf = create_buffer(proc, "New Session")
+
+  registry.set(temp_id, proc)
+  registry.set_active(temp_id)
+
+  vim.api.nvim_win_set_buf(ui.win, buf)
+  setup_buffer_keymaps(buf)
+
+  render.append_content(buf, { "AI REPL | /help for commands", "" })
+
+  proc:start()
+
+  render.goto_prompt(buf, ui.win)
 end
 
 function M.send_prompt(content, opts)
   opts = opts or {}
-  if not state.process then
-    append_to_buffer({ "Error: Agent not running" })
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active AI session", vim.log.levels.ERROR)
     return
   end
-  if not state.session_id then
-    append_to_buffer({ "Error: No active session" })
+
+  if not proc:is_alive() then
+    render.append_content(proc.data.buf, { "Error: Agent not running" })
     return
   end
-  if state.busy and not opts.force then
-    table.insert(state.prompt_queue, { content = content, opts = opts })
-    local queue_size = #state.prompt_queue
-    append_to_buffer({ "[queued: " .. queue_size .. " pending]" })
+
+  if not proc:is_ready() then
+    render.append_content(proc.data.buf, { "Error: Session not ready yet, please wait..." })
     return
   end
-  state.busy = true
-  state.streaming_response = ""
-  state.streaming_start_line = nil
-  if state.busy_timer then
-    pcall(vim.fn.timer_stop, state.busy_timer)
-  end
-  state.busy_timer = vim.fn.timer_start(5000, function()
-    vim.schedule(function()
-      if state.busy then
-        state.busy = false
-        if config.debug then
-          append_to_buffer({ "[debug] busy timeout - reset" })
-        end
-      end
-    end)
-  end)
+
   local prompt
   local user_message_text = ""
+
   if type(content) == "string" then
-    prompt = { create_text_content(content) }
+    prompt = { { type = "text", text = content } }
     user_message_text = content
     if not opts.silent then
-      append_to_buffer({ "", "> " .. content, "" })
+      render.append_content(proc.data.buf, { "", "> " .. content })
     end
   elseif type(content) == "table" then
     prompt = content
@@ -1328,775 +639,559 @@ function M.send_prompt(content, opts)
       elseif block.type == "resource" then
         preview = preview .. "[" .. (block.resource.uri or "resource") .. "] "
       elseif block.type == "resource_link" then
-        preview = preview .. "[@" .. (block.name or "file") .. "] "
+        preview = preview .. "[@" .. (block.resourceLink and block.resourceLink.name or "file") .. "] "
       end
     end
     user_message_text = preview
     if not opts.silent then
-      append_to_buffer({ "", "> " .. preview:sub(1, 100), "" })
+      render.append_content(proc.data.buf, { "", "> " .. preview:sub(1, 100), "" })
     end
   else
-    state.busy = false
     return
   end
+
   if not opts.silent and user_message_text ~= "" then
-    append_message_to_session(state.session_id, "user", user_message_text)
+    registry.append_message(proc.session_id, "user", user_message_text)
   end
-  send_jsonrpc("session/prompt", {
-    sessionId = state.session_id,
-    prompt = prompt
-  })
+
+  proc:send_prompt(prompt)
 end
 
 function M.set_mode(mode_id)
-  if not state.process or not state.session_id then return end
-  send_jsonrpc("session/set_mode", {
-    sessionId = state.session_id,
-    modeId = mode_id
-  })
-  state.current_mode = mode_id
+  local proc = registry.active()
+  if not proc or not proc:is_ready() then return end
+  proc:set_mode(mode_id)
   update_statusline()
-  append_to_buffer({ "Mode set to: " .. mode_id })
+  render.append_content(proc.data.buf, { "Mode set to: " .. mode_id })
 end
 
 function M.cancel()
-  if not state.process or not state.session_id then return end
-  send_jsonrpc("session/cancel", { sessionId = state.session_id }, true)
-  state.busy = false
-  state.prompt_queue = {}
-  stop_animation()
-  append_to_buffer({ "Cancelled" })
-end
-
-local function ensure_prompt()
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-  render_prompt()
-end
-
-local function find_prompt_line()
-  return get_prompt_line()
-end
-
-local function get_prompt_input()
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return "" end
-  local prompt_ln = get_prompt_line()
-  if not prompt_ln then return "" end
-  local line_count = vim.api.nvim_buf_line_count(state.buf)
-  local lines = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, line_count, false)
-  if #lines == 0 then return "" end
-  return table.concat(lines, "\n")
-end
-
-local function clear_prompt_input()
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-  local prompt_ln = get_prompt_line()
-  if not prompt_ln then return end
-  vim.bo[state.buf].modifiable = true
-  vim.api.nvim_buf_set_lines(state.buf, prompt_ln - 1, -1, false, { "" })
-  render_prompt()
-end
-
-local function create_ui()
-  local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
-  vim.cmd("botright vsplit")
-  state.win = vim.api.nvim_get_current_win()
-  state.buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_win_set_buf(state.win, state.buf)
-  vim.api.nvim_win_set_width(state.win, width)
-  vim.api.nvim_buf_set_name(state.buf, "AI REPL")
-  vim.bo[state.buf].buftype = "nofile"
-  vim.bo[state.buf].bufhidden = "hide"
-  vim.bo[state.buf].modifiable = true
-  vim.bo[state.buf].swapfile = false
-  vim.wo[state.win].wrap = true
-  vim.wo[state.win].cursorline = true
-  vim.wo[state.win].number = false
-  vim.wo[state.win].relativenumber = false
-  vim.wo[state.win].signcolumn = "no"
-  update_statusline()
-  require("ai_repl.syntax").apply_to_buffer(state.buf)
-
-  vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
-    buffer = state.buf,
-    callback = function()
-      local prompt_ln = get_prompt_line()
-      if not prompt_ln then return end
-      local cursor = vim.api.nvim_win_get_cursor(state.win)
-      local row = cursor[1]
-      if row < prompt_ln then
-        vim.bo[state.buf].modifiable = false
-      else
-        vim.bo[state.buf].modifiable = true
-      end
-    end
-  })
-
-  local function submit()
-    local text = get_prompt_input():gsub("^%s*(.-)%s*$", "%1")
-    if text == "" then return end
-    clear_prompt_input()
-    if text:sub(1, 1) == "/" then
-      M.handle_command(text:sub(2))
-    else
-      if #state.context_files > 0 then
-        local prompt = {}
-        for _, file_path in ipairs(state.context_files) do
-          if is_image_file(file_path) then
-            local img_content = create_image_resource_content(file_path)
-            if img_content then
-              table.insert(prompt, img_content)
-            end
-          else
-            local f = io.open(file_path, "r")
-            if f then
-              local content = f:read("*a")
-              f:close()
-              table.insert(prompt, create_resource_content(file_path, content))
-            end
-          end
-        end
-        table.insert(prompt, create_text_content(text))
-        M.send_prompt(prompt)
-      else
-        M.send_prompt(text)
-      end
-    end
-  end
-
-  local function goto_prompt()
-    if state.win and vim.api.nvim_win_is_valid(state.win) then
-      local prompt_ln = get_prompt_line()
-      if prompt_ln then
-        local line = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, prompt_ln, false)[1] or ""
-        vim.api.nvim_win_set_cursor(state.win, { prompt_ln, #line })
-      end
-      vim.cmd("startinsert!")
-    end
-  end
-
-  local opts = { buffer = state.buf, silent = true }
-  vim.keymap.set("i", "<CR>", submit, opts)
-  vim.keymap.set("n", "<CR>", submit, opts)
-  vim.keymap.set("n", "q", M.hide, opts)
-  vim.keymap.set("n", "<Esc>", M.hide, opts)
-  vim.keymap.set("n", "<C-c>", M.cancel, opts)
-  vim.keymap.set("i", "<C-c>", M.cancel, opts)
-  vim.keymap.set({ "n", "i" }, "<S-Tab>", function() M.show_mode_picker() end, opts)
-  vim.keymap.set("n", "i", goto_prompt, opts)
-  vim.keymap.set("n", "a", goto_prompt, opts)
-  vim.keymap.set("n", "G", goto_prompt, opts)
-  vim.keymap.set("i", "@", function()
-    local ok, snacks = pcall(require, "snacks")
-    if not ok then
-      vim.api.nvim_feedkeys("@", "n", false)
-      return
-    end
-    snacks.picker.files({
-      cwd = get_current_project_root(),
-      confirm = function(picker, item)
-        picker:close()
-        if item and item.file then
-          local file_path = vim.fn.fnamemodify(item.file, ":p")
-          local file_name = vim.fn.fnamemodify(item.file, ":t")
-          for _, f in ipairs(state.context_files) do
-            if f == file_path then
-              vim.cmd("startinsert!")
-              return
-            end
-          end
-          table.insert(state.context_files, file_path)
-          local prompt_ln = get_prompt_line()
-          if prompt_ln then
-            local line = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, prompt_ln, false)[1] or ""
-            local new_line = line .. "@" .. file_name .. " "
-            vim.api.nvim_buf_set_lines(state.buf, prompt_ln - 1, prompt_ln, false, { new_line })
-            vim.api.nvim_win_set_cursor(state.win, { prompt_ln, #new_line })
-          end
-          vim.cmd("startinsert!")
-        end
-      end
-    })
-  end, opts)
+  local proc = registry.active()
+  if not proc then return end
+  proc:cancel()
+  render.stop_animation()
+  render.append_content(proc.data.buf, { "Cancelled" })
 end
 
 function M.handle_command(cmd)
+  local proc = registry.active()
+  local buf = proc and proc.data.buf
+
   local parts = vim.split(cmd, "%s+", { trimempty = true })
-  local command = parts[1]
-  if command == "help" then
-    append_to_buffer({
-      "",
-      "----------------------------------------",
-      "Commands",
-      "----------------------------------------",
-      " /help      This help",
-      " /clear     Clear buffer",
-      " /mode      Switch mode",
-      " /modes     List modes",
-      " /commands  Agent commands",
-      " /plan      Current plan",
-      " /sessions  Session picker",
-      " /new       New session",
-      " /files     List context files",
-      " /rm        Remove file (picker)",
-      " /paste     Paste image from clipboard",
-      " /status    Show state",
-      " /quit      Close",
-      "",
-      "----------------------------------------",
-      "Keys",
-      "----------------------------------------",
-      " q          Close",
-      " C-c        Cancel operation",
-      " S-Tab      Mode picker",
-      "----------------------------------------",
+  local command = parts[1] or ""
+  local args = { unpack(parts, 2) }
+
+  if command == "help" or command == "h" then
+    render.append_content(buf, {
+      "", "Commands:",
+      "  /help - Show this help",
+      "  /new - New session",
+      "  /sessions - List sessions",
+      "  /cm - Agent slash commands",
+      "  /mode <mode> - Set mode",
+      "  /clear - Clear buffer",
+      "  /cancel - Cancel current",
+      "  /quit - Close REPL",
+      ""
     })
-  elseif command == "clear" then
-    clear_buffer()
-  elseif command == "quit" or command == "q" then
-    M.close()
-  elseif command == "cancel" then
-    M.cancel()
-  elseif command == "mode" then
-    local mode = parts[2]
-    if mode then
-      M.set_mode(mode)
-    else
-      append_to_buffer({ "Current mode: " .. (state.current_mode or "default") })
-    end
-  elseif command == "modes" then
-    if #state.modes == 0 then
-      append_to_buffer({ "Modes: default, plan" })
-    else
-      append_to_buffer({ "Available modes:" })
-      for _, m in ipairs(state.modes) do
-        local current = m.id == state.current_mode and " (current)" or ""
-        append_to_buffer({ "  " .. m.id .. ": " .. (m.description or "") .. current })
-      end
-    end
-  elseif command == "commands" or command == "cmds" then
-    if #state.slash_commands == 0 then
-      append_to_buffer({ "No slash commands available yet" })
-    else
-      append_to_buffer({ "Slash commands:" })
-      for _, c in ipairs(state.slash_commands) do
-        append_to_buffer({ "  /" .. c.name .. " - " .. (c.description or "") })
-      end
-    end
-  elseif command == "plan" then
-    if #state.current_plan == 0 then
-      append_to_buffer({ "No active plan" })
-    else
-      render_plan()
-    end
-  elseif command == "sessions" then
-    M.open_session_picker()
   elseif command == "new" then
     M.new_session()
-  elseif command == "root" or command == "cwd" then
-    append_to_buffer({ "Project root: " .. get_current_project_root() })
+  elseif command == "sessions" then
+    M.open_session_picker()
+  elseif command == "mode" and args[1] then
+    M.set_mode(args[1])
+  elseif command == "clear" then
+    if buf then
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
+      render.init_buffer(buf)
+    end
+  elseif command == "cancel" then
+    M.cancel()
+  elseif command == "quit" or command == "q" then
+    M.close()
   elseif command == "debug" then
     config.debug = not config.debug
-    append_to_buffer({ "Debug: " .. (config.debug and "on" or "off") })
-  elseif command == "status" then
-    append_to_buffer({
-      "busy: " .. tostring(state.busy),
-      "queue: " .. #state.prompt_queue,
-      "files: " .. #state.context_files,
-      "session: " .. (state.session_id and state.session_id:sub(1, 8) or "none"),
-      "mode: " .. (state.current_mode or "default")
-    })
-  elseif command == "flush" then
-    state.busy = false
-    local count = #state.prompt_queue
-    if count > 0 then
-      append_to_buffer({ "Processing " .. count .. " queued messages..." })
-      local next_item = table.remove(state.prompt_queue, 1)
-      if next_item then
-        M.send_prompt(next_item.content, next_item.opts)
-      end
-    else
-      append_to_buffer({ "Queue is empty" })
+    if proc then
+      proc.config.debug = config.debug
     end
-  elseif command == "files" or command == "context" then
-    if #state.context_files == 0 then
-      append_to_buffer({ "No files in context. Use @ to add files." })
-    else
-      append_to_buffer({ "Context files:" })
-      for i, f in ipairs(state.context_files) do
-        local prefix = is_image_file(f) and "[img] " or ""
-        append_to_buffer({ "  " .. i .. ". " .. prefix .. vim.fn.fnamemodify(f, ":t") })
-      end
-      append_to_buffer({ "", "Use /clear-files to remove all, /paste to add image" })
-    end
-  elseif command == "clear-files" then
-    local count = #state.context_files
-    state.context_files = {}
-    append_to_buffer({ "Cleared " .. count .. " files from context" })
-  elseif command == "paste" or command == "paste-image" then
-    local img_path = extract_clipboard_image()
-    if img_path then
-      table.insert(state.context_files, img_path)
-      append_to_buffer({ "Pasted image: " .. vim.fn.fnamemodify(img_path, ":t") })
-    else
-      append_to_buffer({ "No image in clipboard (requires pngpaste on macOS)" })
-    end
-  elseif command == "rm" or command == "remove" then
-    if #state.context_files == 0 then
-      append_to_buffer({ "No files in context" })
+    render.append_content(buf, { "Debug: " .. tostring(config.debug) })
+  elseif command == "cm" or command == "commands" then
+    if not proc or not proc.data.slash_commands or #proc.data.slash_commands == 0 then
+      render.append_content(buf, { "[!] No agent commands available" })
       return
     end
-    local items = {}
-    for i, f in ipairs(state.context_files) do
-      table.insert(items, i .. ". " .. vim.fn.fnamemodify(f, ":t"))
-    end
-    vim.ui.select(items, { prompt = "Remove file:" }, function(_, idx)
-      if idx then
-        local removed = table.remove(state.context_files, idx)
-        append_to_buffer({ "Removed: " .. vim.fn.fnamemodify(removed, ":t") })
+    local ok, snacks = pcall(require, "snacks")
+    if ok and snacks.picker then
+      local items = {}
+      for _, sc in ipairs(proc.data.slash_commands) do
+        table.insert(items, {
+          text = sc.name .. (sc.description and (" - " .. sc.description) or ""),
+          name = sc.name,
+        })
       end
-    end)
+      snacks.picker.pick({
+        source = "select",
+        items = items,
+        prompt = "Slash Commands",
+        format = function(item) return { { item.text } } end,
+        confirm = function(picker, item)
+          picker:close()
+          if item then
+            vim.schedule(function()
+              proc:notify("session/slash_command", {
+                sessionId = proc.session_id,
+                commandName = item.name,
+                args = ""
+              })
+            end)
+          end
+        end,
+      })
+    else
+      local lines = { "", "Agent Commands:" }
+      for _, sc in ipairs(proc.data.slash_commands) do
+        table.insert(lines, "  " .. sc.name .. (sc.description and (" - " .. sc.description) or ""))
+      end
+      table.insert(lines, "")
+      render.append_content(buf, lines)
+    end
   else
-    M.send_prompt("/" .. cmd)
+    if proc and proc.data.slash_commands then
+      for _, sc in ipairs(proc.data.slash_commands) do
+        if sc.name == command or sc.name == "/" .. command then
+          proc:notify("session/slash_command", {
+            sessionId = proc.session_id,
+            commandName = sc.name,
+            args = table.concat(args, " ")
+          })
+          return
+        end
+      end
+    end
+    render.append_content(buf, { "[!] Unknown command: " .. command })
   end
 end
 
 function M.show_mode_picker()
-  local modes = state.modes
-  if #modes == 0 then
-    modes = {
-      { id = "default", name = "Default", description = "Standard mode" },
-      { id = "plan", name = "Plan", description = "Plan before executing" }
-    }
+  local proc = registry.active()
+  if not proc or not proc.state.modes or #proc.state.modes == 0 then
+    vim.notify("No modes available", vim.log.levels.INFO)
+    return
   end
-  local items = {}
-  for _, m in ipairs(modes) do
-    local prefix = m.id == state.current_mode and "[x] " or "[ ] "
-    table.insert(items, prefix .. m.name .. ": " .. (m.description or ""))
+
+  local labels = {}
+  for _, m in ipairs(proc.state.modes) do
+    local prefix = m.id == proc.state.mode and "[*] " or "[ ] "
+    table.insert(labels, prefix .. m.name)
   end
-  vim.ui.select(items, { prompt = "Select mode:" }, function(_, idx)
-    if idx then
-      M.set_mode(modes[idx].id)
+
+  vim.ui.select(labels, { prompt = "Select mode:" }, function(choice, idx)
+    if not choice or not idx then return end
+    local mode = proc.state.modes[idx]
+    if mode then
+      M.set_mode(mode.id)
     end
   end)
 end
 
 function M.open()
-  if state.active then return end
-  state.source_buf = vim.api.nvim_get_current_buf()
-  state.project_root = get_project_root(state.source_buf)
-  state.active = true
-  state.is_first_open = true
-  create_ui()
-  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, { "AI REPL | /help for commands", "", "" })
-  render_prompt()
-  local line_count = vim.api.nvim_buf_line_count(state.buf)
-  vim.api.nvim_win_set_cursor(state.win, { line_count, 0 })
-  vim.cmd("startinsert!")
-  if start_process() then
-    vim.defer_fn(initialize, 100)
-  else
-    append_to_buffer({ "Failed to start " .. config.provider.cmd })
+  if ui.active then
+    M.show()
+    return
   end
+  ui.active = true
+  ui.source_buf = vim.api.nvim_get_current_buf()
+  ui.project_root = get_project_root(ui.source_buf)
+  create_ui()
 end
 
 function M.close()
-  state.active = false
-  stop_process()
-  if state.win and vim.api.nvim_win_is_valid(state.win) then
-    vim.api.nvim_win_close(state.win, true)
+  if ui.win and vim.api.nvim_win_is_valid(ui.win) then
+    vim.api.nvim_win_close(ui.win, true)
   end
-  state.win = nil
-  state.buf = nil
-  prompt.extmark_id = nil
-  prompt.line = nil
+  ui.win = nil
+  ui.active = false
 end
 
 function M.hide()
-  if state.win and vim.api.nvim_win_is_valid(state.win) then
-    vim.api.nvim_win_close(state.win, false)
+  if ui.win and vim.api.nvim_win_is_valid(ui.win) then
+    vim.api.nvim_win_hide(ui.win)
   end
-  state.win = nil
 end
 
 function M.show()
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
+  local proc = registry.active()
+  if not proc or not proc.data.buf then
     M.open()
     return
   end
-  local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
-  vim.cmd("botright vsplit")
-  state.win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(state.win, state.buf)
-  vim.api.nvim_win_set_width(state.win, width)
-  vim.wo[state.win].wrap = true
-  vim.wo[state.win].cursorline = true
-  vim.wo[state.win].number = false
-  vim.wo[state.win].relativenumber = false
-  vim.wo[state.win].signcolumn = "no"
-  update_statusline()
-  local prompt_ln = get_prompt_line()
-  if prompt_ln then
-    local line = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, prompt_ln, false)[1] or ""
-    vim.api.nvim_win_set_cursor(state.win, { prompt_ln, #line })
+
+  if not ui.win or not vim.api.nvim_win_is_valid(ui.win) then
+    local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
+    vim.cmd("botright vsplit")
+    ui.win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_width(ui.win, width)
+    setup_window_options(ui.win)
   end
-  vim.cmd("startinsert!")
+
+  vim.api.nvim_win_set_buf(ui.win, proc.data.buf)
+  update_statusline()
+  vim.api.nvim_set_current_win(ui.win)
 end
 
 function M.toggle()
-  if state.win and vim.api.nvim_win_is_valid(state.win) then
-    M.hide()
-  elseif state.buf and vim.api.nvim_buf_is_valid(state.buf) then
-    M.show()
-  else
-    M.open()
-  end
-end
-
-function M.add_file_as_resource(file, text, message)
-  if not file or file == "" then
-    vim.notify("No file specified", vim.log.levels.WARN)
-    return
-  end
-  local content = text or table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
-  local resource = create_resource_content(file, content)
-  local prompt = { resource }
-  if message then
-    table.insert(prompt, 1, create_text_content(message))
-  end
-  local function try_send()
-    if state.session_id and state.process then
-      M.send_prompt(prompt)
-    elseif state.active then
-      vim.defer_fn(try_send, 200)
-    end
-  end
-  if not state.active then
-    M.open()
-  end
-  try_send()
-end
-
-function M.add_file_as_link(file, message)
-  if not file or file == "" then
-    vim.notify("No file specified", vim.log.levels.WARN)
-    return
-  end
-  local link = create_resource_link(file)
-  local prompt = { link }
-  if message then
-    table.insert(prompt, 1, create_text_content(message))
-  end
-  local function try_send()
-    if state.session_id and state.process then
-      M.send_prompt(prompt)
-    elseif state.active then
-      vim.defer_fn(try_send, 200)
-    end
-  end
-  if not state.active then
-    M.open()
-  end
-  try_send()
-end
-
-function M.add_current_file_to_context()
-  local file = vim.api.nvim_buf_get_name(0)
-  if file == "" then
-    vim.notify("No file open", vim.log.levels.WARN)
-    return
-  end
-  local content = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
-  M.add_file_as_resource(file, content)
-end
-
-function M.add_selection_to_context()
-  local mode = vim.fn.mode()
-  local start_pos, end_pos
-  if mode == "v" or mode == "V" or mode == "\22" then
-    start_pos = vim.fn.getpos("v")
-    end_pos = vim.fn.getpos(".")
-    if start_pos[2] > end_pos[2] or (start_pos[2] == end_pos[2] and start_pos[3] > end_pos[3]) then
-      start_pos, end_pos = end_pos, start_pos
-    end
-    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
-  else
-    start_pos = vim.fn.getpos("'<")
-    end_pos = vim.fn.getpos("'>")
-  end
-  local buf = vim.api.nvim_get_current_buf()
-  local lines = vim.api.nvim_buf_get_lines(buf, start_pos[2] - 1, end_pos[2], false)
-  if #lines == 0 then return end
-  if #lines == 1 then
-    lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
-  else
-    lines[1] = lines[1]:sub(start_pos[3])
-    lines[#lines] = lines[#lines]:sub(1, end_pos[3])
-  end
-  local content = table.concat(lines, "\n")
-  local file = vim.api.nvim_buf_get_name(buf)
-  local annotation = { range = { start_pos[2], end_pos[2] } }
-  local resource = create_resource_content(file ~= "" and file or "selection", content, annotation)
-  local prompt = { resource }
-  local function try_send()
-    if state.session_id and state.process then
-      M.send_prompt(prompt)
-    elseif state.active then
-      vim.defer_fn(try_send, 200)
-    end
-  end
-  if not state.active then
-    M.open()
-  end
-  try_send()
-end
-
-function M.send_selection()
-  local mode = vim.fn.mode()
-  local start_pos, end_pos
-  if mode == "v" or mode == "V" or mode == "\22" then
-    start_pos = vim.fn.getpos("v")
-    end_pos = vim.fn.getpos(".")
-    if start_pos[2] > end_pos[2] or (start_pos[2] == end_pos[2] and start_pos[3] > end_pos[3]) then
-      start_pos, end_pos = end_pos, start_pos
-    end
-    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
-  else
-    start_pos = vim.fn.getpos("'<")
-    end_pos = vim.fn.getpos("'>")
-  end
-  local buf = vim.api.nvim_get_current_buf()
-  local lines = vim.api.nvim_buf_get_lines(buf, start_pos[2] - 1, end_pos[2], false)
-  if #lines == 0 then return end
-  if #lines == 1 then
-    lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
-  else
-    lines[1] = lines[1]:sub(start_pos[3])
-    lines[#lines] = lines[#lines]:sub(1, end_pos[3])
-  end
-  local content = table.concat(lines, "\n")
-  if content == "" then return end
-  if not state.active then
-    M.open()
-  end
-  local attempts = 0
-  local function try_send()
-    attempts = attempts + 1
-    if state.session_id and state.process then
-      M.send_prompt(content)
-    elseif attempts < 50 then
-      vim.defer_fn(try_send, 100)
-    end
-  end
-  vim.defer_fn(try_send, 50)
-end
-
-function M.add_file_or_selection_to_context()
-  local mode = vim.fn.mode()
-  if mode == "v" or mode == "V" or mode == "\22" then
-    M.add_selection_to_context()
-  else
-    M.add_current_file_to_context()
-  end
-end
-
-function M.add_selection_to_prompt()
-  local mode = vim.fn.mode()
-  local start_pos, end_pos
-  if mode == "v" or mode == "V" or mode == "\22" then
-    start_pos = vim.fn.getpos("v")
-    end_pos = vim.fn.getpos(".")
-    if start_pos[2] > end_pos[2] or (start_pos[2] == end_pos[2] and start_pos[3] > end_pos[3]) then
-      start_pos, end_pos = end_pos, start_pos
-    end
-    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
-  else
-    start_pos = vim.fn.getpos("'<")
-    end_pos = vim.fn.getpos("'>")
-  end
-  local buf = vim.api.nvim_get_current_buf()
-  local lines = vim.api.nvim_buf_get_lines(buf, start_pos[2] - 1, end_pos[2], false)
-  if #lines == 0 then return end
-  if #lines == 1 then
-    lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
-  else
-    lines[1] = lines[1]:sub(start_pos[3])
-    lines[#lines] = lines[#lines]:sub(1, end_pos[3])
-  end
-  local content = table.concat(lines, "\n")
-  if content == "" then return end
-  if not state.active then
-    M.open()
-  end
-  vim.schedule(function()
-    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-    local prompt_ln = get_prompt_line()
-    if not prompt_ln then return end
-    vim.bo[state.buf].modifiable = true
-    local line_count = vim.api.nvim_buf_line_count(state.buf)
-    local existing = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, line_count, false)
-    local new_lines = vim.split(content, "\n", { plain = true })
-    if #existing > 0 then
-      existing[#existing] = existing[#existing] .. new_lines[1]
-      for i = 2, #new_lines do
-        table.insert(existing, new_lines[i])
-      end
+  if ui.win and vim.api.nvim_win_is_valid(ui.win) then
+    if vim.api.nvim_get_current_win() == ui.win then
+      M.hide()
     else
-      existing = new_lines
+      vim.api.nvim_set_current_win(ui.win)
     end
-    vim.api.nvim_buf_set_lines(state.buf, prompt_ln - 1, line_count, false, existing)
-    render_prompt()
-    if state.win and vim.api.nvim_win_is_valid(state.win) then
-      local new_count = vim.api.nvim_buf_line_count(state.buf)
-      local last = vim.api.nvim_buf_get_lines(state.buf, new_count - 1, new_count, false)[1] or ""
-      vim.api.nvim_win_set_cursor(state.win, { new_count, #last })
-      vim.api.nvim_set_current_win(state.win)
-      vim.cmd("startinsert!")
-    end
-  end)
-end
-
-local function save_current_session()
-  if state.session_id then
-    local exists = false
-    for _, s in ipairs(state.sessions_list) do
-      if s.id == state.session_id then exists = true break end
-    end
-    if not exists then
-      table.insert(state.sessions_list, { id = state.session_id, name = "Session " .. (#state.sessions_list + 1), cwd = state.project_root })
-    end
+  else
+    M.open()
   end
-end
-
-function M.load_session(session_id)
-  if not state.process or not state.initialized then
-    append_to_buffer({ "Error: Not connected" })
-    return
-  end
-  if not state.supports_load_session then
-    append_to_buffer({ "Error: Agent doesn't support loading sessions" })
-    return
-  end
-  save_current_session()
-  state.current_plan = {}
-  state.active_tools = {}
-  state.streaming_response = ""
-  state.streaming_start_line = nil
-  local root = get_current_project_root()
-  append_to_buffer({ "Loading session " .. session_id:sub(1, 8) .. "..." })
-  local id = send_jsonrpc("session/load", {
-    sessionId = session_id,
-    cwd = root,
-    mcpServers = {}
-  })
-  state.pending_requests[id] = {
-    method = "session/load",
-    callback = function(result)
-      state.session_id = session_id
-      if result then
-        if result.modes then
-          state.modes = result.modes.availableModes or {}
-          state.current_mode = result.modes.currentModeId
-          update_statusline()
-        end
-      end
-      local messages = load_session_messages(session_id)
-      if messages and #messages > 0 then
-        render_session_history(messages)
-      else
-        append_to_buffer({ "[+] Session loaded: " .. session_id:sub(1, 8) .. "...", "" })
-      end
-    end
-  }
 end
 
 function M.new_session(opts)
   opts = opts or {}
-  if not state.process or not state.initialized then
-    append_to_buffer({ "Error: Not connected" })
+
+  local cur_buf = vim.api.nvim_get_current_buf()
+  local proc = registry.active()
+  if not (proc and proc.data.buf and cur_buf == proc.data.buf) then
+    ui.source_buf = cur_buf
+  end
+  ui.project_root = opts.cwd or get_project_root(ui.source_buf or cur_buf)
+
+  if not ui.active then
+    ui.active = true
+    create_ui()
     return
   end
-  save_current_session()
-  if opts.cwd then
-    state.project_root = opts.cwd
+
+  local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
+  if not ui.win or not vim.api.nvim_win_is_valid(ui.win) then
+    vim.cmd("botright vsplit")
+    ui.win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_width(ui.win, width)
   end
-  state.session_id = nil
-  state.current_plan = {}
-  state.active_tools = {}
-  state.streaming_response = ""
-  state.streaming_start_line = nil
-  clear_buffer()
-  append_to_buffer({ "Creating new session..." })
-  create_session()
+  setup_window_options(ui.win)
+
+  local temp_id = "temp_" .. os.time() .. "_" .. math.random(1000, 9999)
+  local new_proc = create_process(temp_id, { cwd = ui.project_root })
+  local buf = create_buffer(new_proc, "New Session")
+
+  registry.set(temp_id, new_proc)
+  registry.set_active(temp_id)
+
+  vim.api.nvim_win_set_buf(ui.win, buf)
+  setup_buffer_keymaps(buf)
+
+  render.append_content(buf, { "Creating new session..." })
+
+  new_proc:start()
+
+  render.goto_prompt(buf, ui.win)
+end
+
+function M.load_session(session_id, opts)
+  opts = opts or {}
+
+  local existing = registry.get(session_id)
+  if existing and existing:is_ready() then
+    registry.set_active(session_id)
+    if ui.win and vim.api.nvim_win_is_valid(ui.win) then
+      vim.api.nvim_win_set_buf(ui.win, existing.data.buf)
+    end
+    update_statusline()
+    render.append_content(existing.data.buf, { "[+] Switched to session: " .. session_id:sub(1, 8) .. "...", "" })
+    return
+  end
+
+  local sessions = registry.load_from_disk()
+  local session_info = sessions[session_id]
+
+  local proc = create_process(session_id, {
+    cwd = session_info and session_info.cwd or get_current_project_root(),
+    env = session_info and session_info.env or {},
+    load_session_id = session_id,
+  })
+
+  local buf = create_buffer(proc, session_info and session_info.name or nil)
+
+  registry.set(session_id, proc)
+  registry.set_active(session_id)
+
+  if ui.win and vim.api.nvim_win_is_valid(ui.win) then
+    vim.api.nvim_win_set_buf(ui.win, buf)
+    setup_window_options(ui.win)
+  end
+
+  setup_buffer_keymaps(buf)
+  render.append_content(buf, { "Loading session " .. session_id:sub(1, 8) .. "..." })
+
+  proc:start()
+
+  local win = ui.win
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    win = vim.fn.bufwinid(buf)
+  end
+  if win ~= -1 and vim.api.nvim_win_is_valid(win) then
+    render.goto_prompt(buf, win)
+  end
 end
 
 function M.open_session_picker()
   local root = get_current_project_root()
-  local disk_sessions = get_sessions_for_project(root)
+  local disk_sessions = registry.get_sessions_for_project(root)
   local items = {}
+
   table.insert(items, { label = "+ New Session", action = "new" })
+
   for _, s in ipairs(disk_sessions) do
-    local is_current = s.id == state.session_id
-    local prefix = is_current and "[x] " or "[ ] "
-    local action = is_current and "current" or (state.supports_load_session and "load" or "view")
-    table.insert(items, { label = prefix .. s.name, action = action, id = s.id })
+    local prefix
+    if s.is_active then
+      prefix = "[*] "
+    elseif s.has_process then
+      prefix = "[~] "
+    else
+      prefix = "[ ] "
+    end
+    table.insert(items, {
+      label = prefix .. (s.name or s.session_id:sub(1, 8)),
+      action = s.is_active and "current" or "load",
+      id = s.session_id
+    })
   end
+
   local labels = {}
   for _, item in ipairs(items) do
     table.insert(labels, item.label)
   end
-  vim.ui.select(labels, { prompt = "Sessions:" }, function(_, idx)
-    if not idx then return end
+
+  vim.ui.select(labels, { prompt = "Select session:" }, function(choice, idx)
+    if not choice or not idx then return end
     local item = items[idx]
     if item.action == "new" then
-      if not state.active then
-        M.open()
-      elseif not state.win or not vim.api.nvim_win_is_valid(state.win) then
-        M.show()
-      end
-      vim.defer_fn(function() M.new_session() end, 100)
+      M.new_session()
     elseif item.action == "load" then
-      if not state.active then
-        M.open()
-        local attempts = 0
-        local function try_load()
-          attempts = attempts + 1
-          if state.initialized and state.process then
-            M.load_session(item.id)
-          elseif attempts < 50 then
-            vim.defer_fn(try_load, 100)
-          end
-        end
-        vim.defer_fn(try_load, 100)
-      else
-        if not state.win or not vim.api.nvim_win_is_valid(state.win) then
-          M.show()
-        end
-        M.load_session(item.id)
-      end
-    elseif item.action == "current" then
-      if not state.win or not vim.api.nvim_win_is_valid(state.win) then
-        M.show()
-      end
-    elseif item.action == "view" then
-      if not state.win or not vim.api.nvim_win_is_valid(state.win) then
-        M.show()
-      end
-      append_to_buffer({ "Session " .. item.id .. " (no resume support)" })
+      M.load_session(item.id)
     end
   end)
 end
 
+function M.pick_process()
+  local running = registry.list_running()
+  if #running == 0 then
+    vim.notify("No active processes", vim.log.levels.INFO)
+    return
+  end
+
+  local items = {}
+  for _, r in ipairs(running) do
+    local is_current = r.session_id == registry.active_session_id()
+    local name = r.process.state.agent_info and r.process.state.agent_info.name or r.session_id:sub(1, 8)
+    local status = is_current and "[*]" or "[~]"
+    table.insert(items, {
+      label = status .. " " .. name,
+      session_id = r.session_id,
+      is_current = is_current
+    })
+  end
+
+  local labels = {}
+  for _, item in ipairs(items) do
+    table.insert(labels, item.label)
+  end
+
+  vim.ui.select(labels, { prompt = "Select process:" }, function(choice, idx)
+    if not choice or not idx then return end
+    local item = items[idx]
+    if not item.is_current then
+      M.load_session(item.session_id)
+    end
+  end)
+end
+
+function M.switch_to_buffer()
+  local all = registry.all()
+  local items = {}
+
+  for sid, proc in pairs(all) do
+    if proc.data.buf and vim.api.nvim_buf_is_valid(proc.data.buf) then
+      local is_current = sid == registry.active_session_id()
+      local has_process = proc:is_alive()
+      local name = proc.state.agent_info and proc.state.agent_info.name or sid:sub(1, 8)
+      local status = is_current and "[*]" or (has_process and "[~]" or "[ ]")
+
+      table.insert(items, {
+        label = status .. " " .. name,
+        session_id = sid,
+        buf = proc.data.buf,
+        is_current = is_current
+      })
+    end
+  end
+
+  if #items == 0 then
+    M.open()
+    return
+  end
+
+  table.sort(items, function(a, b)
+    if a.is_current then return true end
+    if b.is_current then return false end
+    return a.label < b.label
+  end)
+
+  local labels = {}
+  for _, item in ipairs(items) do
+    table.insert(labels, item.label)
+  end
+
+  vim.ui.select(labels, { prompt = "Switch to buffer:" }, function(choice, idx)
+    if not choice or not idx then return end
+    local item = items[idx]
+    if item.is_current then
+      if ui.win and vim.api.nvim_win_is_valid(ui.win) then
+        vim.api.nvim_set_current_win(ui.win)
+      end
+    else
+      registry.set_active(item.session_id)
+      if ui.win and vim.api.nvim_win_is_valid(ui.win) then
+        vim.api.nvim_win_set_buf(ui.win, item.buf)
+      end
+      update_statusline()
+    end
+  end)
+end
+
+function M.kill_current_session()
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active session", vim.log.levels.WARN)
+    return
+  end
+
+  local session_id = proc.session_id
+  local buf = proc.data.buf
+
+  registry.save_messages(session_id, proc.data.messages)
+  registry.delete_session(session_id)
+
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end
+
+  local remaining = registry.list_running()
+  if #remaining > 0 then
+    M.load_session(remaining[1].session_id)
+  else
+    M.close()
+  end
+
+  vim.notify("Session killed", vim.log.levels.INFO)
+end
+
+function M.add_file_as_link(file, message)
+  local proc = registry.active()
+  if not proc then return end
+
+  local abs_path = vim.fn.fnamemodify(file, ":p")
+  local prompt = {
+    {
+      type = "resource_link",
+      resourceLink = {
+        uri = "file://" .. abs_path,
+        name = vim.fn.fnamemodify(file, ":t")
+      }
+    }
+  }
+
+  if message then
+    table.insert(prompt, { type = "text", text = message })
+  end
+
+  M.send_prompt(prompt)
+end
+
+function M.add_selection_to_prompt()
+  local proc = registry.active()
+  if not proc or not proc.data.buf then return end
+
+  local start_pos = vim.fn.getpos("'<")
+  local end_pos = vim.fn.getpos("'>")
+  local lines = vim.fn.getline(start_pos[2], end_pos[2])
+  if #lines == 0 then return end
+
+  if #lines == 1 then
+    lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
+  else
+    lines[1] = lines[1]:sub(start_pos[3])
+    lines[#lines] = lines[#lines]:sub(1, end_pos[3])
+  end
+
+  local text = table.concat(lines, "\n")
+  local current = render.get_prompt_input(proc.data.buf)
+  render.set_prompt_input(proc.data.buf, current .. "\n```\n" .. text .. "\n```\n")
+
+  local win = ui.win
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    win = vim.fn.bufwinid(proc.data.buf)
+  end
+  if win ~= -1 and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_set_current_win(win)
+    render.goto_prompt(proc.data.buf, win)
+  end
+end
+
+function M.send_selection()
+  local start_pos = vim.fn.getpos("'<")
+  local end_pos = vim.fn.getpos("'>")
+  local lines = vim.fn.getline(start_pos[2], end_pos[2])
+  if #lines == 0 then return end
+
+  if #lines == 1 then
+    lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
+  else
+    lines[1] = lines[1]:sub(start_pos[3])
+    lines[#lines] = lines[#lines]:sub(1, end_pos[3])
+  end
+
+  local text = table.concat(lines, "\n")
+
+  if not ui.active then
+    M.open()
+    vim.defer_fn(function()
+      M.send_prompt("```\n" .. text .. "\n```")
+    end, 500)
+  else
+    M.send_prompt("```\n" .. text .. "\n```")
+  end
+end
+
 function M.get_slash_commands()
-  return state.slash_commands
+  local proc = registry.active()
+  return proc and proc.data.slash_commands or {}
 end
 
 function M.setup(opts)
   config = vim.tbl_deep_extend("force", config, opts or {})
-  local syntax = require("ai_repl.syntax")
-  syntax.setup()
-  vim.api.nvim_create_user_command("AIRepl", M.toggle, { desc = "Toggle AI REPL" })
-  vim.api.nvim_create_user_command("AIReplOpen", M.open, { desc = "Open AI REPL" })
-  vim.api.nvim_create_user_command("AIReplClose", M.close, { desc = "Close AI REPL" })
+
+  registry.setup({
+    sessions_file = config.sessions_file,
+    save_interval = 30000,
+    max_sessions_per_project = config.max_sessions_per_project,
+  })
+
+  registry.start_autosave()
+
+  vim.api.nvim_create_user_command("AIRepl", function() M.toggle() end, {})
+  vim.api.nvim_create_user_command("AIReplOpen", function() M.open() end, {})
+  vim.api.nvim_create_user_command("AIReplClose", function() M.close() end, {})
+  vim.api.nvim_create_user_command("AIReplNew", function() M.new_session() end, {})
+  vim.api.nvim_create_user_command("AIReplSessions", function() M.open_session_picker() end, {})
+  vim.api.nvim_create_user_command("AIReplPicker", function() M.pick_process() end, {})
+
+  vim.api.nvim_set_hl(0, "AIReplPrompt", { fg = "#7aa2f7", bold = true })
 end
 
 return M

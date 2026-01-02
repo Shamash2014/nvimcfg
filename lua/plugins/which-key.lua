@@ -32,6 +32,7 @@ return {
       { "<leader>b", group = "buffers" },
       { "<leader>d", group = "debug/diagnostics" },
       { "<leader>s", group = "search" },
+      { "<leader>a", group = "ai" },
       { "[", group = "prev" },
       { "]", group = "next" },
       { "g", group = "goto" },
@@ -44,6 +45,36 @@ return {
         require("which-key").show({ global = false })
       end,
       desc = "Buffer Keymaps",
+    },
+    {
+      "<leader>aa",
+      function()
+        require("ai_repl").new_session()
+      end,
+      mode = { "n", "v" },
+      desc = "New AI Session",
+    },
+    {
+      "<leader>ar",
+      function()
+        require("ai_repl").toggle()
+      end,
+      mode = { "n", "v" },
+      desc = "Toggle AI REPL",
+    },
+    {
+      "<leader>ap",
+      function()
+        require("ai_repl").open_session_picker()
+      end,
+      desc = "Session Picker",
+    },
+    {
+      "<leader>ab",
+      function()
+        require("ai_repl").list_session_buffers()
+      end,
+      desc = "List Session Buffers",
     },
   },
 }

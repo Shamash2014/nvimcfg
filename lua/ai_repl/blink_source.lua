@@ -9,11 +9,45 @@ function source:enabled()
 end
 
 function source:get_trigger_characters()
-  return { "/" }
+  return { "/", "@" }
 end
 
 function source:get_completions(ctx, callback)
   local items = {}
+  local line = ctx.line
+  local cursor_col = ctx.cursor[2]
+  local before_cursor = line:sub(1, cursor_col)
+
+  local at_match = before_cursor:match("@([^%s]*)$")
+  if at_match then
+    local query = at_match or ""
+    local cwd = vim.fn.getcwd()
+    local files = vim.fn.glob(cwd .. "/**/*", false, true)
+
+    for _, file in ipairs(files) do
+      if vim.fn.isdirectory(file) == 0 then
+        local rel_path = vim.fn.fnamemodify(file, ":.")
+        local filename = vim.fn.fnamemodify(file, ":t")
+        if query == "" or rel_path:lower():find(query:lower(), 1, true) or filename:lower():find(query:lower(), 1, true) then
+          table.insert(items, {
+            label = "@" .. rel_path,
+            filterText = rel_path,
+            insertText = "@" .. rel_path,
+            kind = vim.lsp.protocol.CompletionItemKind.File,
+            documentation = file,
+          })
+        end
+      end
+      if #items >= 100 then break end
+    end
+
+    callback({
+      items = items,
+      is_incomplete_backward = false,
+      is_incomplete_forward = #items >= 100,
+    })
+    return
+  end
 
   local local_cmds = {
     { name = "help", desc = "Show help" },

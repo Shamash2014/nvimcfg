@@ -14,8 +14,8 @@ return {
         env = {}
       },
       history_size = 1000,
-      approvals = "ask",      -- "ask" = prompt when requested, "never" = auto-approve, "always" = always prompt
-      show_tool_calls = true  -- show tool execution in buffer
+      permission_mode = "default",  -- "default" | "acceptEdits" | "plan" | "dontAsk" | "bypassPermissions"
+      show_tool_calls = true
     })
   end,
   keys = {
@@ -26,28 +26,10 @@ return {
       desc = "Toggle AI REPL"
     },
     {
-      "<leader>ao",
-      function() require("ai_repl").open() end,
-      mode = { "n", "v", "i" },
-      desc = "Open AI REPL"
-    },
-    {
-      "<leader>aq",
-      function() require("ai_repl").close() end,
-      mode = { "n", "v", "i" },
-      desc = "Close AI REPL"
-    },
-    {
       "<leader>aa",
-      function() require("ai_repl").add_file_or_selection_to_context() end,
-      mode = { "n", "v" },
-      desc = "Add file/selection to AI REPL context"
-    },
-    {
-      "<leader>af",
-      function() require("ai_repl").add_current_file_to_context() end,
-      mode = { "n" },
-      desc = "Add current file to AI REPL context"
+      function() require("ai_repl").new_session() end,
+      mode = { "n", "v", "i" },
+      desc = "New AI REPL session"
     },
     {
       "<leader>as",
@@ -56,16 +38,28 @@ return {
       desc = "Send selection to AI"
     },
     {
-      "<leader>ap",
-      function() require("ai_repl").open_session_picker() end,
-      mode = { "n", "v", "i" },
-      desc = "Open AI REPL session picker"
-    },
-    {
       "<leader>av",
       function() require("ai_repl").add_selection_to_prompt() end,
       mode = { "v" },
       desc = "Add selection to AI REPL prompt"
+    },
+    {
+      "<leader>ap",
+      function() require("ai_repl").pick_process() end,
+      mode = { "n" },
+      desc = "Pick AI process/session"
+    },
+    {
+      "<leader>ab",
+      function() require("ai_repl").switch_to_buffer() end,
+      mode = { "n" },
+      desc = "Switch AI session buffer"
+    },
+    {
+      "<leader>ak",
+      function() require("ai_repl").kill_current_session() end,
+      mode = { "n" },
+      desc = "Kill current AI session"
     }
   },
   cmd = { "AIRepl", "AIReplOpen", "AIReplClose", "AIReplSessions", "AIReplNew", "AIReplAddFile", "AIReplAddSelection", "AIReplPicker" }
