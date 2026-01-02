@@ -60,6 +60,12 @@ return {
       function() require("ai_repl").open_session_picker() end,
       mode = { "n", "v", "i" },
       desc = "Open AI REPL session picker"
+    },
+    {
+      "<leader>av",
+      function() require("ai_repl").add_selection_to_prompt() end,
+      mode = { "v" },
+      desc = "Add selection to AI REPL prompt"
     }
   },
   cmd = { "AIRepl", "AIReplOpen", "AIReplClose", "AIReplSessions", "AIReplNew", "AIReplAddFile", "AIReplAddSelection", "AIReplPicker" }

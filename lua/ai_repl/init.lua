@@ -11,16 +11,33 @@ local config = {
     args = {},
     env = {}
   },
+  adapter = "claude",
   history_size = 1000,
   approvals = "ask",  -- "ask" = show when requested, "always" = always prompt, "never" = auto-approve
   show_tool_calls = true,
+  debug = false,
   reconnect = true,
   max_reconnect_attempts = 3,
   sessions_file = vim.fn.stdpath("data") .. "/ai_repl_sessions.json",
   max_sessions_per_project = 20
 }
 
+local adapters = {}
+local function get_adapter()
+  if not config.adapter then return nil end
+  if not adapters[config.adapter] then
+    local ok, adapter = pcall(require, "ai_repl.adapters." .. config.adapter)
+    if ok then adapters[config.adapter] = adapter end
+  end
+  return adapters[config.adapter]
+end
+
 local PROMPT_MARKER = "$> "
+
+local prompt = {
+  extmark_id = nil,
+  line = nil
+}
 
 local state = {
   active = false,
@@ -49,8 +66,9 @@ local state = {
   agent_capabilities = {},
   client_capabilities = {},
   reconnect_count = 0,
-  prompt_line = nil,
-  pending_files = nil
+  pending_files = nil,
+  busy = false,
+  prompt_queue = {}
 }
 
 local SPINNERS = {
@@ -60,6 +78,8 @@ local SPINNERS = {
 }
 local SPIN_TIMING = { generating = 100, thinking = 400, executing = 150 }
 local NS_ANIM = vim.api.nvim_create_namespace("ai_repl_anim")
+local NS_DIFF = vim.api.nvim_create_namespace("ai_repl_diff")
+local NS_PROMPT = vim.api.nvim_create_namespace("ai_repl_prompt")
 
 local animation = {
   active = false,
@@ -129,6 +149,29 @@ local function start_animation(anim_state)
   reset_idle_timer()
   animation.frame = 1
   vim.schedule(render_anim_frame)
+end
+
+local function render_prompt()
+  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
+  local line_count = vim.api.nvim_buf_line_count(state.buf)
+  prompt.line = line_count
+  prompt.extmark_id = vim.api.nvim_buf_set_extmark(state.buf, NS_PROMPT, line_count - 1, 0, {
+    id = prompt.extmark_id,
+    virt_text = { { PROMPT_MARKER, "AIReplPrompt" } },
+    virt_text_pos = "inline",
+    right_gravity = false
+  })
+end
+
+local function get_prompt_line()
+  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return nil end
+  if prompt.extmark_id then
+    local ok, pos = pcall(vim.api.nvim_buf_get_extmark_by_id, state.buf, NS_PROMPT, prompt.extmark_id, {})
+    if ok and pos and #pos >= 1 then
+      return pos[1] + 1
+    end
+  end
+  return prompt.line or vim.api.nvim_buf_line_count(state.buf)
 end
 
 local function json_encode(obj)
@@ -241,6 +284,7 @@ local function append_to_buffer(lines)
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
   vim.schedule(function()
     if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
+    vim.bo[state.buf].modifiable = true
     local to_append = {}
     if type(lines) == "string" then
       for line in lines:gmatch("[^\r\n]*") do
@@ -256,13 +300,10 @@ local function append_to_buffer(lines)
       end
     end
     if #to_append > 0 then
-      local line_count = vim.api.nvim_buf_line_count(state.buf)
-      local last_line = vim.api.nvim_buf_get_lines(state.buf, line_count - 1, line_count, false)[1] or ""
-      local insert_at = line_count
-      if last_line:match("^" .. vim.pesc(PROMPT_MARKER)) then
-        insert_at = line_count - 1
-      end
+      local prompt_ln = get_prompt_line()
+      local insert_at = prompt_ln and (prompt_ln - 1) or vim.api.nvim_buf_line_count(state.buf)
       vim.api.nvim_buf_set_lines(state.buf, insert_at, insert_at, false, to_append)
+      render_prompt()
     end
   end)
 end
@@ -270,7 +311,40 @@ end
 local function clear_buffer()
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
   vim.schedule(function()
-    vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, { PROMPT_MARKER })
+    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
+    vim.bo[state.buf].modifiable = true
+    vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, { "" })
+    render_prompt()
+  end)
+end
+
+local function render_session_history(messages)
+  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
+  if not messages or #messages == 0 then return end
+  vim.schedule(function()
+    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
+    vim.bo[state.buf].modifiable = true
+    local lines = {}
+    for _, msg in ipairs(messages) do
+      if msg.role == "user" then
+        table.insert(lines, "> " .. msg.content)
+        table.insert(lines, "")
+      else
+        for line in msg.content:gmatch("[^\n]+") do
+          table.insert(lines, line)
+        end
+        table.insert(lines, "")
+        table.insert(lines, "---")
+        table.insert(lines, "")
+      end
+    end
+    table.insert(lines, "")
+    vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
+    render_prompt()
+    local line_count = vim.api.nvim_buf_line_count(state.buf)
+    if state.win and vim.api.nvim_win_is_valid(state.win) then
+      vim.api.nvim_win_set_cursor(state.win, { line_count, 0 })
+    end
   end)
 end
 
@@ -355,19 +429,28 @@ local function update_streaming_response(text)
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
   vim.schedule(function()
     if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
+    vim.bo[state.buf].modifiable = true
     local lines = {}
     for line in state.streaming_response:gmatch("[^\r\n]*") do
       table.insert(lines, line)
     end
-    local line_count = vim.api.nvim_buf_line_count(state.buf)
-    local last_line = vim.api.nvim_buf_get_lines(state.buf, line_count - 1, line_count, false)[1] or ""
-    local has_prompt = last_line:match("^" .. vim.pesc(PROMPT_MARKER))
+    local prompt_ln = get_prompt_line()
     if not state.streaming_start_line then
-      state.streaming_start_line = has_prompt and (line_count - 1) or line_count
+      if prompt_ln then
+        local prev_line = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 2, prompt_ln - 1, false)[1] or ""
+        if prev_line == "" then
+          state.streaming_start_line = prompt_ln - 1
+        else
+          vim.api.nvim_buf_set_lines(state.buf, prompt_ln - 1, prompt_ln - 1, false, { "" })
+          state.streaming_start_line = prompt_ln
+        end
+      else
+        state.streaming_start_line = vim.api.nvim_buf_line_count(state.buf)
+      end
     end
-    local end_line = has_prompt and (line_count - 1) or line_count
-    table.insert(lines, PROMPT_MARKER)
+    table.insert(lines, "")
     vim.api.nvim_buf_set_lines(state.buf, state.streaming_start_line, -1, false, lines)
+    render_prompt()
   end)
 end
 
@@ -375,6 +458,9 @@ local function handle_session_update(params)
   local u = params.update
   if not u then return end
   local update_type = u.sessionUpdate
+  if config.debug and update_type ~= "agent_message_chunk" then
+    append_to_buffer({ "[debug] " .. (update_type or "unknown") })
+  end
   if update_type == "agent_message_chunk" then
     start_animation("generating")
     local content = u.content
@@ -498,6 +584,11 @@ local function handle_session_update(params)
     state.slash_commands = u.availableCommands or {}
   elseif update_type == "stop" then
     stop_animation()
+    state.busy = false
+    if state.busy_timer then
+      pcall(vim.fn.timer_stop, state.busy_timer)
+      state.busy_timer = nil
+    end
     state.current_plan = {}
     state.active_tools = {}
     state.streaming_response = ""
@@ -512,13 +603,14 @@ local function handle_session_update(params)
     }
     local mode_str = state.current_mode and (" [" .. state.current_mode .. "]") or ""
     append_to_buffer({ "", (reason_msgs[reason] or "---") .. mode_str, "" })
-    vim.schedule(function()
-      if state.buf and vim.api.nvim_buf_is_valid(state.buf) and state.win and vim.api.nvim_win_is_valid(state.win) then
-        local line_count = vim.api.nvim_buf_line_count(state.buf)
-        local last_line = vim.api.nvim_buf_get_lines(state.buf, line_count - 1, line_count, false)[1] or ""
-        vim.api.nvim_win_set_cursor(state.win, { line_count, #last_line })
+    vim.defer_fn(function()
+      if #state.prompt_queue > 0 and not state.busy then
+        local next_item = table.remove(state.prompt_queue, 1)
+        if next_item then
+          M.send_prompt(next_item.content, next_item.opts)
+        end
       end
-    end)
+    end, 200)
   elseif update_type == "modes" then
     state.modes = u.modes or {}
     state.current_mode = u.currentModeId
@@ -527,6 +619,10 @@ local function handle_session_update(params)
     local content = u.content
     if content and content.text then
       append_to_buffer({ "[...] " .. content.text:sub(1, 100) })
+    end
+  else
+    if config.debug and update_type then
+      append_to_buffer({ "[debug] unknown update: " .. update_type })
     end
   end
 end
@@ -567,14 +663,34 @@ local function compute_inline_diff(old_text, new_text)
 end
 
 render_inline_diff = function(file_path, old_content, new_content)
-  local diff_lines = compute_inline_diff(old_content, new_content)
+  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
+  local diff_data = compute_inline_diff(old_content, new_content)
   local lines = { "", "--- " .. vim.fn.fnamemodify(file_path, ":t") .. " ---" }
-  for _, d in ipairs(diff_lines) do
+  for _, d in ipairs(diff_data) do
     table.insert(lines, d.text)
   end
   table.insert(lines, "---")
   table.insert(lines, "")
-  append_to_buffer(lines)
+
+  vim.schedule(function()
+    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
+    vim.bo[state.buf].modifiable = true
+    local prompt_ln = get_prompt_line()
+    local insert_at = prompt_ln and (prompt_ln - 1) or vim.api.nvim_buf_line_count(state.buf)
+
+    vim.api.nvim_buf_set_lines(state.buf, insert_at, insert_at, false, lines)
+    render_prompt()
+
+    local diff_start = insert_at + 2
+    for i, d in ipairs(diff_data) do
+      if d.hl then
+        pcall(vim.api.nvim_buf_set_extmark, state.buf, NS_DIFF, diff_start + i - 1, 0, {
+          end_col = #d.text,
+          hl_group = d.hl
+        })
+      end
+    end
+  end)
 end
 
 local function handle_permission_request(id, params)
@@ -814,6 +930,12 @@ end
 local function handle_message(line)
   local msg = json_decode(line)
   if not msg then return end
+  if config.debug and msg.method then
+    local method_short = msg.method:gsub("session/", "")
+    if method_short ~= "update" or (msg.params and msg.params.update and msg.params.update.sessionUpdate ~= "agent_message_chunk") then
+      append_to_buffer({ "[debug] method: " .. method_short })
+    end
+  end
   if msg.method then
     if msg.method == "session/update" then
       handle_session_update(msg.params)
@@ -863,10 +985,11 @@ local function start_process()
       end
     end,
     on_stderr = function(_, data)
+      if not config.debug then return end
       for _, line in ipairs(data or {}) do
         if line and line ~= "" then
           if not line:match("^%s*$") and not line:match("Session not found") then
-            append_to_buffer({ "stderr: " .. line })
+            append_to_buffer({ "[debug] " .. line })
           end
         end
       end
@@ -1022,6 +1145,15 @@ create_session = function()
   }
 end
 
+local function process_prompt_queue()
+  if #state.prompt_queue == 0 then return end
+  if state.busy then return end
+  local next_item = table.remove(state.prompt_queue, 1)
+  if next_item then
+    M.send_prompt(next_item.content, next_item.opts)
+  end
+end
+
 function M.send_prompt(content, opts)
   opts = opts or {}
   if not state.process then
@@ -1032,6 +1164,28 @@ function M.send_prompt(content, opts)
     append_to_buffer({ "Error: No active session" })
     return
   end
+  if state.busy and not opts.force then
+    table.insert(state.prompt_queue, { content = content, opts = opts })
+    local queue_size = #state.prompt_queue
+    append_to_buffer({ "[queued: " .. queue_size .. " pending]" })
+    return
+  end
+  state.busy = true
+  state.streaming_response = ""
+  state.streaming_start_line = nil
+  if state.busy_timer then
+    pcall(vim.fn.timer_stop, state.busy_timer)
+  end
+  state.busy_timer = vim.fn.timer_start(5000, function()
+    vim.schedule(function()
+      if state.busy then
+        state.busy = false
+        if config.debug then
+          append_to_buffer({ "[debug] busy timeout - reset" })
+        end
+      end
+    end)
+  end)
   local prompt
   if type(content) == "string" then
     prompt = { create_text_content(content) }
@@ -1054,6 +1208,7 @@ function M.send_prompt(content, opts)
       append_to_buffer({ "", "> " .. preview:sub(1, 100), "" })
     end
   else
+    state.busy = false
     return
   end
   send_jsonrpc("session/prompt", {
@@ -1075,48 +1230,38 @@ end
 function M.cancel()
   if not state.process or not state.session_id then return end
   send_jsonrpc("session/cancel", { sessionId = state.session_id }, true)
+  state.busy = false
+  state.prompt_queue = {}
+  stop_animation()
   append_to_buffer({ "Cancelled" })
 end
 
 local function ensure_prompt()
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-  local line_count = vim.api.nvim_buf_line_count(state.buf)
-  local last_line = vim.api.nvim_buf_get_lines(state.buf, line_count - 1, line_count, false)[1] or ""
-  if not last_line:match("^" .. vim.pesc(PROMPT_MARKER)) then
-    vim.api.nvim_buf_set_lines(state.buf, line_count, line_count, false, { PROMPT_MARKER })
-  end
-  state.prompt_line = vim.api.nvim_buf_line_count(state.buf)
+  render_prompt()
 end
 
 local function find_prompt_line()
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return nil end
-  local line_count = vim.api.nvim_buf_line_count(state.buf)
-  for i = line_count, 1, -1 do
-    local line = vim.api.nvim_buf_get_lines(state.buf, i - 1, i, false)[1] or ""
-    if line:match("^" .. vim.pesc(PROMPT_MARKER)) then
-      return i
-    end
-  end
-  return nil
+  return get_prompt_line()
 end
 
 local function get_prompt_input()
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return "" end
-  local prompt_line = find_prompt_line()
-  if not prompt_line then return "" end
+  local prompt_ln = get_prompt_line()
+  if not prompt_ln then return "" end
   local line_count = vim.api.nvim_buf_line_count(state.buf)
-  local lines = vim.api.nvim_buf_get_lines(state.buf, prompt_line - 1, line_count, false)
+  local lines = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, line_count, false)
   if #lines == 0 then return "" end
-  lines[1] = lines[1]:sub(#PROMPT_MARKER + 1)
   return table.concat(lines, "\n")
 end
 
 local function clear_prompt_input()
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
-  local prompt_line = find_prompt_line()
-  if not prompt_line then return end
-  local line_count = vim.api.nvim_buf_line_count(state.buf)
-  vim.api.nvim_buf_set_lines(state.buf, prompt_line - 1, line_count, false, { PROMPT_MARKER })
+  local prompt_ln = get_prompt_line()
+  if not prompt_ln then return end
+  vim.bo[state.buf].modifiable = true
+  vim.api.nvim_buf_set_lines(state.buf, prompt_ln - 1, -1, false, { "" })
+  render_prompt()
 end
 
 local function create_ui()
@@ -1128,13 +1273,29 @@ local function create_ui()
   vim.api.nvim_win_set_width(state.win, width)
   vim.bo[state.buf].buftype = "nofile"
   vim.bo[state.buf].bufhidden = "hide"
-  vim.bo[state.buf].filetype = "ai_repl"
+  vim.bo[state.buf].modifiable = true
+  vim.bo[state.buf].swapfile = false
   vim.wo[state.win].wrap = true
   vim.wo[state.win].cursorline = true
   vim.wo[state.win].number = false
   vim.wo[state.win].relativenumber = false
   vim.wo[state.win].signcolumn = "no"
   require("ai_repl.syntax").apply_to_buffer(state.buf)
+
+  vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+    buffer = state.buf,
+    callback = function()
+      local prompt_ln = get_prompt_line()
+      if not prompt_ln then return end
+      local cursor = vim.api.nvim_win_get_cursor(state.win)
+      local row = cursor[1]
+      if row < prompt_ln then
+        vim.bo[state.buf].modifiable = false
+      else
+        vim.bo[state.buf].modifiable = true
+      end
+    end
+  })
 
   local function submit()
     local text = get_prompt_input():gsub("^%s*(.-)%s*$", "%1")
@@ -1165,9 +1326,11 @@ local function create_ui()
 
   local function goto_prompt()
     if state.win and vim.api.nvim_win_is_valid(state.win) then
-      local line_count = vim.api.nvim_buf_line_count(state.buf)
-      local last_line = vim.api.nvim_buf_get_lines(state.buf, line_count - 1, line_count, false)[1] or ""
-      vim.api.nvim_win_set_cursor(state.win, { line_count, #last_line })
+      local prompt_ln = get_prompt_line()
+      if prompt_ln then
+        local line = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, prompt_ln, false)[1] or ""
+        vim.api.nvim_win_set_cursor(state.win, { prompt_ln, #line })
+      end
       vim.cmd("startinsert!")
     end
   end
@@ -1196,13 +1359,15 @@ local function create_ui()
         if item and item.file then
           local file_path = vim.fn.fnamemodify(item.file, ":p")
           local file_name = vim.fn.fnamemodify(item.file, ":t")
-          local line_count = vim.api.nvim_buf_line_count(state.buf)
-          local last_line = vim.api.nvim_buf_get_lines(state.buf, line_count - 1, line_count, false)[1] or ""
-          local new_line = last_line .. "@" .. file_name .. " "
-          vim.api.nvim_buf_set_lines(state.buf, line_count - 1, line_count, false, { new_line })
-          vim.api.nvim_win_set_cursor(state.win, { line_count, #new_line })
-          state.pending_files = state.pending_files or {}
-          table.insert(state.pending_files, file_path)
+          local prompt_ln = get_prompt_line()
+          if prompt_ln then
+            local line = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, prompt_ln, false)[1] or ""
+            local new_line = line .. "@" .. file_name .. " "
+            vim.api.nvim_buf_set_lines(state.buf, prompt_ln - 1, prompt_ln, false, { new_line })
+            vim.api.nvim_win_set_cursor(state.win, { prompt_ln, #new_line })
+            state.pending_files = state.pending_files or {}
+            table.insert(state.pending_files, file_path)
+          end
           vim.cmd("startinsert!")
         end
       end
@@ -1228,6 +1393,9 @@ function M.handle_command(cmd)
       " /sessions  Session picker",
       " /new       New session",
       " /root      Show project root",
+      " /status    Show state",
+      " /flush     Process queue",
+      " /debug     Toggle debug",
       " /quit      Close",
       "",
       "----------------------------------------",
@@ -1282,6 +1450,28 @@ function M.handle_command(cmd)
     M.new_session()
   elseif command == "root" or command == "cwd" then
     append_to_buffer({ "Project root: " .. get_current_project_root() })
+  elseif command == "debug" then
+    config.debug = not config.debug
+    append_to_buffer({ "Debug: " .. (config.debug and "on" or "off") })
+  elseif command == "status" then
+    append_to_buffer({
+      "busy: " .. tostring(state.busy),
+      "queue: " .. #state.prompt_queue,
+      "session: " .. (state.session_id and state.session_id:sub(1, 8) or "none"),
+      "mode: " .. (state.current_mode or "default")
+    })
+  elseif command == "flush" then
+    state.busy = false
+    local count = #state.prompt_queue
+    if count > 0 then
+      append_to_buffer({ "Processing " .. count .. " queued messages..." })
+      local next_item = table.remove(state.prompt_queue, 1)
+      if next_item then
+        M.send_prompt(next_item.content, next_item.opts)
+      end
+    else
+      append_to_buffer({ "Queue is empty" })
+    end
   else
     M.send_prompt("/" .. cmd)
   end
@@ -1314,10 +1504,10 @@ function M.open()
   state.active = true
   state.is_first_open = true
   create_ui()
-  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, { "AI REPL | /help for commands", "", PROMPT_MARKER })
-  state.prompt_line = 3
+  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, { "AI REPL | /help for commands", "", "" })
+  render_prompt()
   local line_count = vim.api.nvim_buf_line_count(state.buf)
-  vim.api.nvim_win_set_cursor(state.win, { line_count, #PROMPT_MARKER })
+  vim.api.nvim_win_set_cursor(state.win, { line_count, 0 })
   vim.cmd("startinsert!")
   if start_process() then
     vim.defer_fn(initialize, 100)
@@ -1334,7 +1524,8 @@ function M.close()
   end
   state.win = nil
   state.buf = nil
-  state.prompt_line = nil
+  prompt.extmark_id = nil
+  prompt.line = nil
 end
 
 function M.hide()
@@ -1359,9 +1550,11 @@ function M.show()
   vim.wo[state.win].number = false
   vim.wo[state.win].relativenumber = false
   vim.wo[state.win].signcolumn = "no"
-  local line_count = vim.api.nvim_buf_line_count(state.buf)
-  local last_line = vim.api.nvim_buf_get_lines(state.buf, line_count - 1, line_count, false)[1] or ""
-  vim.api.nvim_win_set_cursor(state.win, { line_count, #last_line })
+  local prompt_ln = get_prompt_line()
+  if prompt_ln then
+    local line = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, prompt_ln, false)[1] or ""
+    vim.api.nvim_win_set_cursor(state.win, { prompt_ln, #line })
+  end
   vim.cmd("startinsert!")
 end
 
@@ -1522,6 +1715,62 @@ function M.add_file_or_selection_to_context()
   end
 end
 
+function M.add_selection_to_prompt()
+  local mode = vim.fn.mode()
+  local start_pos, end_pos
+  if mode == "v" or mode == "V" or mode == "\22" then
+    start_pos = vim.fn.getpos("v")
+    end_pos = vim.fn.getpos(".")
+    if start_pos[2] > end_pos[2] or (start_pos[2] == end_pos[2] and start_pos[3] > end_pos[3]) then
+      start_pos, end_pos = end_pos, start_pos
+    end
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
+  else
+    start_pos = vim.fn.getpos("'<")
+    end_pos = vim.fn.getpos("'>")
+  end
+  local buf = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(buf, start_pos[2] - 1, end_pos[2], false)
+  if #lines == 0 then return end
+  if #lines == 1 then
+    lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
+  else
+    lines[1] = lines[1]:sub(start_pos[3])
+    lines[#lines] = lines[#lines]:sub(1, end_pos[3])
+  end
+  local content = table.concat(lines, "\n")
+  if content == "" then return end
+  if not state.active then
+    M.open()
+  end
+  vim.schedule(function()
+    if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then return end
+    local prompt_ln = get_prompt_line()
+    if not prompt_ln then return end
+    vim.bo[state.buf].modifiable = true
+    local line_count = vim.api.nvim_buf_line_count(state.buf)
+    local existing = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, line_count, false)
+    local new_lines = vim.split(content, "\n", { plain = true })
+    if #existing > 0 then
+      existing[#existing] = existing[#existing] .. new_lines[1]
+      for i = 2, #new_lines do
+        table.insert(existing, new_lines[i])
+      end
+    else
+      existing = new_lines
+    end
+    vim.api.nvim_buf_set_lines(state.buf, prompt_ln - 1, line_count, false, existing)
+    render_prompt()
+    if state.win and vim.api.nvim_win_is_valid(state.win) then
+      local new_count = vim.api.nvim_buf_line_count(state.buf)
+      local last = vim.api.nvim_buf_get_lines(state.buf, new_count - 1, new_count, false)[1] or ""
+      vim.api.nvim_win_set_cursor(state.win, { new_count, #last })
+      vim.api.nvim_set_current_win(state.win)
+      vim.cmd("startinsert!")
+    end
+  end)
+end
+
 local function save_current_session()
   if state.session_id then
     local exists = false
@@ -1563,6 +1812,14 @@ function M.load_session(session_id)
         if result.modes then
           state.modes = result.modes.availableModes or {}
           state.current_mode = result.modes.currentModeId
+        end
+      end
+      local adapter = get_adapter()
+      if adapter and adapter.read_session_messages then
+        local messages = adapter.read_session_messages(root, session_id)
+        if messages and #messages > 0 then
+          render_session_history(messages)
+          return
         end
       end
       append_to_buffer({ "[+] Session loaded: " .. session_id:sub(1, 8) .. "...", "" })
