@@ -59,6 +59,17 @@ local function simplify_agent_name(name)
   return friendly_names[simplified] or simplified
 end
 
+local function count_background_busy()
+  local count = 0
+  local active_id = registry.active_session_id()
+  for sid, p in pairs(registry.all()) do
+    if sid ~= active_id and p.state.busy then
+      count = count + 1
+    end
+  end
+  return count
+end
+
 local function update_statusline()
   local proc = registry.active()
   if not ui.win or not vim.api.nvim_win_is_valid(ui.win) then return end
@@ -66,8 +77,10 @@ local function update_statusline()
   local mode = proc and proc.state.mode or "plan"
   local queue_count = proc and #proc.data.prompt_queue or 0
   local queue_str = queue_count > 0 and (" Q:" .. queue_count) or ""
-  local busy_str = proc and proc.state.busy and " *" or ""
-  vim.wo[ui.win].statusline = " " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str
+  local busy_str = proc and proc.state.busy and " ●" or ""
+  local bg_count = count_background_busy()
+  local bg_str = bg_count > 0 and (" [" .. bg_count .. " bg]") or ""
+  vim.wo[ui.win].statusline = " " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str .. bg_str
 end
 
 local function setup_window_options(win)
@@ -227,6 +240,14 @@ local function handle_session_update(proc, params)
         tool_calls_to_save = vim.deepcopy(proc.ui.pending_tool_calls)
       end
       registry.append_message(proc.session_id, "assistant", proc.ui.streaming_response, tool_calls_to_save)
+
+      if #proc.ui.current_plan == 0 then
+        local md_plan = render.parse_markdown_plan(proc.ui.streaming_response)
+        if #md_plan >= 3 then
+          proc.ui.current_plan = md_plan
+          render.render_plan(buf, md_plan)
+        end
+      end
     end
 
     proc.ui.current_plan = {}
@@ -264,20 +285,78 @@ local function handle_session_update(proc, params)
   end
 end
 
+local TOOL_NAMES = {
+  Read = "Read",
+  Edit = "Edit",
+  Write = "Write",
+  Bash = "Run",
+  Glob = "Find Files",
+  Grep = "Search",
+  Task = "Agent",
+  WebFetch = "Fetch",
+  WebSearch = "Web Search",
+  TodoWrite = "Plan",
+  NotebookEdit = "Notebook",
+  LSP = "LSP",
+  KillShell = "Kill Process",
+}
+
+local function get_tool_description(title, input, locations)
+  if title == "Read" then
+    local path = input.file_path or input.path or ""
+    return vim.fn.fnamemodify(path, ":~:.")
+  elseif title == "Edit" then
+    local path = input.file_path or input.path or ""
+    return vim.fn.fnamemodify(path, ":~:.")
+  elseif title == "Write" then
+    local path = input.file_path or input.path or ""
+    return vim.fn.fnamemodify(path, ":~:.")
+  elseif title == "Bash" then
+    local desc = input.description or ""
+    if desc ~= "" then return desc end
+    local cmd = input.command or ""
+    if #cmd > 60 then cmd = cmd:sub(1, 57) .. "..." end
+    return cmd
+  elseif title == "Glob" then
+    return input.pattern or ""
+  elseif title == "Grep" then
+    return (input.pattern or "") .. (input.path and (" in " .. vim.fn.fnamemodify(input.path, ":~:.")) or "")
+  elseif title == "Task" then
+    return input.description or ""
+  elseif title == "WebFetch" then
+    local url = input.url or ""
+    return url:match("://([^/]+)") or url:sub(1, 40)
+  elseif title == "WebSearch" then
+    return input.query or ""
+  elseif title == "LSP" then
+    return input.operation or ""
+  elseif title == "KillShell" then
+    return input.shell_id or ""
+  end
+
+  if locations and #locations > 0 then
+    local l = locations[1]
+    local path = l.path or l.uri or ""
+    local loc = vim.fn.fnamemodify(path, ":~:.")
+    if l.line then loc = loc .. ":" .. l.line end
+    return loc
+  end
+
+  return ""
+end
+
 local function handle_permission_request(proc, msg_id, params)
   render.stop_animation()
   local buf = proc.data.buf
 
   vim.schedule(function()
     local tool = params.toolCall or {}
-    local title = tool.title or tool.kind or "tool"
+    local raw_title = tool.title or tool.kind or "tool"
+    local friendly_name = TOOL_NAMES[raw_title] or raw_title
+    local input = tool.rawInput or {}
     local locations = tool.locations or {}
-    local loc_str = ""
-    if #locations > 0 then
-      local l = locations[1]
-      loc_str = " -> " .. (l.path or l.uri or "")
-      if l.line then loc_str = loc_str .. ":" .. l.line end
-    end
+
+    local desc = get_tool_description(raw_title, input, locations)
 
     local agent_options = params.options or {}
     local first_allow_id, first_deny_id, allow_always_id
@@ -307,7 +386,28 @@ local function handle_permission_request(proc, msg_id, params)
       return
     end
 
-    render.append_content(buf, { "", "[?] Permission: " .. title .. loc_str })
+    local display = friendly_name
+    if desc ~= "" then
+      display = display .. ": " .. desc
+    end
+    render.append_content(buf, { "", "[?] " .. display })
+
+    local file_path = input.file_path or input.filePath or input.path
+    local old_str = input.old_string or input.oldString or input.oldText
+    local new_str = input.new_string or input.newString or input.newText
+
+    if raw_title == "Edit" and (old_str or new_str) then
+      render.render_diff(buf, file_path or "file", old_str or "", new_str or "")
+    elseif raw_title == "Write" and input.content and file_path then
+      local old_content = ""
+      if vim.fn.filereadable(file_path) == 1 then
+        local lines = vim.fn.readfile(file_path)
+        old_content = table.concat(lines, "\n")
+      end
+      render.render_diff(buf, file_path, old_content, input.content)
+    elseif raw_title == "Bash" and input.command then
+      render.append_content(buf, { "$ " .. input.command })
+    end
 
     local function send_selected(option_id)
       local response = {
@@ -328,7 +428,7 @@ local function handle_permission_request(proc, msg_id, params)
     end
 
     local choices = { "Allow", "Allow Always", "Deny", "Cancel" }
-    vim.ui.select(choices, { prompt = "Permission for " .. title .. "?" }, function(choice)
+    vim.ui.select(choices, { prompt = display .. "?" }, function(choice)
       if choice == "Allow" then
         send_selected(first_allow_id or "allow_once")
       elseif choice == "Allow Always" then
@@ -350,10 +450,15 @@ local function handle_method(proc, method, params, msg_id)
   local is_active = proc.session_id == registry.active_session_id()
 
   if method == "session/update" then
-    if is_active then
-      handle_session_update(proc, params)
-    else
-      table.insert(proc.ui.pending_updates, params)
+    handle_session_update(proc, params)
+
+    if not is_active then
+      local u = params.update
+      if u and u.sessionUpdate == "stop" then
+        update_statusline()
+        local agent_name = proc:get_agent_name()
+        vim.notify("Background: " .. agent_name .. " completed", vim.log.levels.INFO)
+      end
     end
 
   elseif method == "session/request_permission" then
@@ -580,16 +685,6 @@ local function setup_buffer_keymaps(buf)
       if p and sid and sid ~= registry.active_session_id() then
         registry.set_active(sid)
         update_statusline()
-
-        if #p.ui.pending_updates > 0 then
-          vim.defer_fn(function()
-            local pending = p.ui.pending_updates
-            p.ui.pending_updates = {}
-            for _, params in ipairs(pending) do
-              handle_session_update(p, params)
-            end
-          end, 50)
-        end
       end
     end
   })
@@ -1144,9 +1239,6 @@ function M.add_file_as_link(file, message)
 end
 
 function M.add_selection_to_prompt()
-  local proc = registry.active()
-  if not proc or not proc.data.buf then return end
-
   local mode = vim.fn.mode()
   if mode:match("[vV\22]") then
     vim.cmd('normal! "vy')
@@ -1170,16 +1262,29 @@ function M.add_selection_to_prompt()
 
   if not text or text == "" then return end
 
-  local current = render.get_prompt_input(proc.data.buf)
-  render.set_prompt_input(proc.data.buf, current .. "\n```\n" .. text .. "\n```\n")
+  local function add_to_prompt()
+    local proc = registry.active()
+    if not proc or not proc.data.buf then return end
 
-  local win = ui.win
-  if not win or not vim.api.nvim_win_is_valid(win) then
-    win = vim.fn.bufwinid(proc.data.buf)
+    local current = render.get_prompt_input(proc.data.buf)
+    local separator = current ~= "" and "\n" or ""
+    render.set_prompt_input(proc.data.buf, current .. separator .. "```\n" .. text .. "\n```\n")
+
+    local win = ui.win
+    if not win or not vim.api.nvim_win_is_valid(win) then
+      win = vim.fn.bufwinid(proc.data.buf)
+    end
+    if win ~= -1 and vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_set_current_win(win)
+      render.goto_prompt(proc.data.buf, win)
+    end
   end
-  if win ~= -1 and vim.api.nvim_win_is_valid(win) then
-    vim.api.nvim_set_current_win(win)
-    render.goto_prompt(proc.data.buf, win)
+
+  if not ui.active then
+    M.open()
+    vim.defer_fn(add_to_prompt, 500)
+  else
+    add_to_prompt()
   end
 end
 

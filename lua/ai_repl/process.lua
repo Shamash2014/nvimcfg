@@ -53,7 +53,6 @@ function Process.new(session_id, opts)
     active_tools = {},
     pending_tool_calls = {},
     current_plan = {},
-    pending_updates = {},
   }
   return self
 end

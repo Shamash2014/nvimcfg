@@ -194,53 +194,122 @@ function M.set_prompt_input(buf, text)
   M.render_prompt(buf)
 end
 
-local title_to_kind = {
-  Task = "think", Read = "read", NotebookRead = "read", LS = "search",
-  Edit = "edit", NotebookEdit = "edit", Write = "edit",
-  Bash = "execute", BashOutput = "execute", KillShell = "execute",
-  Glob = "search", Grep = "search",
-  WebFetch = "fetch", WebSearch = "fetch",
-  TodoWrite = "think", ExitPlanMode = "switch_mode", EnterPlanMode = "switch_mode",
-  Skill = "other", SlashCommand = "other"
+local TOOL_DISPLAY = {
+  Read = { icon = "📄", name = "Read" },
+  Edit = { icon = "✏️", name = "Edit" },
+  Write = { icon = "📝", name = "Write" },
+  Bash = { icon = "⚡", name = "Run" },
+  Glob = { icon = "🔍", name = "Find" },
+  Grep = { icon = "🔎", name = "Search" },
+  Task = { icon = "🤖", name = "Agent" },
+  WebFetch = { icon = "🌐", name = "Fetch" },
+  WebSearch = { icon = "🔍", name = "Search Web" },
+  TodoWrite = { icon = "📋", name = "Plan" },
+  LSP = { icon = "💡", name = "LSP" },
+  NotebookEdit = { icon = "📓", name = "Notebook" },
+  ExitPlanMode = { icon = "▶️", name = "Execute" },
+  EnterPlanMode = { icon = "📝", name = "Plan Mode" },
+  AskUserQuestion = { icon = "❓", name = "Question" },
 }
 
-local kind_short = {
-  read = "R", edit = "E", search = "S", execute = "X", think = "T", fetch = "F",
-  switch_mode = "M", other = "-", delete = "D"
-}
+local function get_tool_description(tool)
+  local input = tool.rawInput or {}
+  local title = tool.title or ""
+
+  if title == "Read" then
+    local path = input.file_path or input.path or ""
+    return vim.fn.fnamemodify(path, ":t")
+  elseif title == "Edit" then
+    local path = input.file_path or input.path or ""
+    return vim.fn.fnamemodify(path, ":t")
+  elseif title == "Write" then
+    local path = input.file_path or input.path or ""
+    return vim.fn.fnamemodify(path, ":t")
+  elseif title == "Bash" then
+    local cmd = input.command or ""
+    local desc = input.description or ""
+    if desc ~= "" then return desc end
+    if #cmd > 50 then cmd = cmd:sub(1, 47) .. "..." end
+    return cmd
+  elseif title == "Glob" then
+    return input.pattern or ""
+  elseif title == "Grep" then
+    return input.pattern or ""
+  elseif title == "Task" then
+    return input.description or input.prompt and input.prompt:sub(1, 40) or ""
+  elseif title == "WebFetch" then
+    local url = input.url or ""
+    return url:match("://([^/]+)") or url:sub(1, 30)
+  elseif title == "WebSearch" then
+    return input.query or ""
+  elseif title == "LSP" then
+    return input.operation or ""
+  end
+
+  if tool.locations and #tool.locations > 0 then
+    local l = tool.locations[1]
+    local path = l.path or l.uri or ""
+    return vim.fn.fnamemodify(path, ":t")
+  end
+
+  return ""
+end
 
 function M.render_tool(buf, tool)
-  local icons = { pending = "[~]", in_progress = "[>]", completed = "[+]", failed = "[!]" }
+  local status_icons = { pending = "○", in_progress = "◐", completed = "●", failed = "✗" }
   if tool.status == "pending" or tool.status == "in_progress" then
     return
   end
 
-  local s = icons[tool.status] or "[?]"
-  local inferred_kind = tool.kind or (tool.title and title_to_kind[tool.title])
-  local k = (inferred_kind and kind_short[inferred_kind]) or "-"
+  local status = status_icons[tool.status] or "○"
   local title = tool.title or tool.kind or "tool"
-  local loc = ""
-  if tool.locations and #tool.locations > 0 then
-    local l = tool.locations[1]
-    loc = " -> " .. (l.path or l.uri or "")
-    if l.line then loc = loc .. ":" .. l.line end
+  local display = TOOL_DISPLAY[title] or { icon = "•", name = title }
+  local desc = get_tool_description(tool)
+
+  local line = status .. " " .. display.name
+  if desc ~= "" then
+    line = line .. ": " .. desc
   end
 
-  M.append_content(buf, { s .. " " .. k .. " " .. title .. loc })
+  M.append_content(buf, { line })
 end
 
 function M.render_plan(buf, plan)
   if #plan == 0 then return end
-  local lines = { "", "Plan:" }
-  for _, item in ipairs(plan) do
-    local icons = { pending = "[ ]", in_progress = "[>]", completed = "[x]" }
-    local icon = icons[item.status] or "[ ]"
-    local pri = item.priority == "high" and "!" or ""
+  local lines = { "", "━━━ Plan ━━━" }
+  for i, item in ipairs(plan) do
+    local icons = { pending = "○", in_progress = "◐", completed = "●" }
+    local icon = icons[item.status] or "○"
+    local pri = item.priority == "high" and "! " or ""
     local text = item.content or item.text or item.activeForm or item.description or tostring(item)
-    table.insert(lines, pri .. icon .. " " .. text)
+    table.insert(lines, string.format(" %s %d. %s%s", icon, i, pri, text))
   end
+  table.insert(lines, "━━━━━━━━━━━━")
   table.insert(lines, "")
   M.append_content(buf, lines)
+end
+
+function M.parse_markdown_plan(text)
+  local plan = {}
+  for line in text:gmatch("[^\r\n]+") do
+    local checkbox, content = line:match("^%s*[%-*]%s*%[([%sx ])%]%s*(.+)")
+    if checkbox and content then
+      local status = "pending"
+      if checkbox == "x" or checkbox == "X" then
+        status = "completed"
+      end
+      table.insert(plan, { content = content, status = status })
+    else
+      local num, content2 = line:match("^%s*(%d+)[%.%)%s]+(.+)")
+      if num and content2 and not content2:match("^%s*$") then
+        local clean = content2:gsub("^%*%*(.-)%*%*", "%1"):gsub("^__(.-)__", "%1")
+        if #clean > 0 and #clean < 200 then
+          table.insert(plan, { content = clean, status = "pending" })
+        end
+      end
+    end
+  end
+  return plan
 end
 
 function M.render_diff(buf, file_path, old_content, new_content)
