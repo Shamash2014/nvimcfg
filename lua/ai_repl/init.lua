@@ -67,6 +67,7 @@ local state = {
   client_capabilities = {},
   reconnect_count = 0,
   pending_files = nil,
+  context_files = {},
   busy = false,
   prompt_queue = {}
 }
@@ -233,6 +234,15 @@ end
 
 local function get_project_name(cwd)
   return vim.fn.fnamemodify(cwd, ":t")
+end
+
+local function simplify_agent_name(name)
+  if not name then return "Agent" end
+  local simplified = name:gsub("^@[^/]+/", "")
+  local friendly_names = {
+    ["claude-code-acp"] = "Claude Code",
+  }
+  return friendly_names[simplified] or simplified
 end
 
 local function format_session_name(cwd, timestamp)
@@ -1107,8 +1117,11 @@ local function initialize()
       if state.agent_capabilities.loadSession then table.insert(caps, "sessions") end
       if state.agent_capabilities.modes then table.insert(caps, "modes") end
       if state.agent_capabilities.plans then table.insert(caps, "plans") end
-      local agent_name = result.agentInfo and result.agentInfo.name or "Agent"
+      local agent_name = simplify_agent_name(result.agentInfo and result.agentInfo.name)
       local caps_str = #caps > 0 and " [" .. table.concat(caps, ", ") .. "]" or ""
+      if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+        pcall(vim.api.nvim_buf_set_name, state.buf, agent_name)
+      end
       append_to_buffer({ "Connected: " .. agent_name .. caps_str })
       create_session()
     end
@@ -1271,6 +1284,7 @@ local function create_ui()
   state.buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_win_set_buf(state.win, state.buf)
   vim.api.nvim_win_set_width(state.win, width)
+  vim.api.nvim_buf_set_name(state.buf, "AI REPL")
   vim.bo[state.buf].buftype = "nofile"
   vim.bo[state.buf].bufhidden = "hide"
   vim.bo[state.buf].modifiable = true
@@ -1304,11 +1318,9 @@ local function create_ui()
     if text:sub(1, 1) == "/" then
       M.handle_command(text:sub(2))
     else
-      local pending = state.pending_files or {}
-      state.pending_files = nil
-      if #pending > 0 then
+      if #state.context_files > 0 then
         local prompt = {}
-        for _, file_path in ipairs(pending) do
+        for _, file_path in ipairs(state.context_files) do
           local f = io.open(file_path, "r")
           if f then
             local content = f:read("*a")
@@ -1359,14 +1371,19 @@ local function create_ui()
         if item and item.file then
           local file_path = vim.fn.fnamemodify(item.file, ":p")
           local file_name = vim.fn.fnamemodify(item.file, ":t")
+          for _, f in ipairs(state.context_files) do
+            if f == file_path then
+              vim.cmd("startinsert!")
+              return
+            end
+          end
+          table.insert(state.context_files, file_path)
           local prompt_ln = get_prompt_line()
           if prompt_ln then
             local line = vim.api.nvim_buf_get_lines(state.buf, prompt_ln - 1, prompt_ln, false)[1] or ""
             local new_line = line .. "@" .. file_name .. " "
             vim.api.nvim_buf_set_lines(state.buf, prompt_ln - 1, prompt_ln, false, { new_line })
             vim.api.nvim_win_set_cursor(state.win, { prompt_ln, #new_line })
-            state.pending_files = state.pending_files or {}
-            table.insert(state.pending_files, file_path)
           end
           vim.cmd("startinsert!")
         end
@@ -1392,10 +1409,9 @@ function M.handle_command(cmd)
       " /plan      Current plan",
       " /sessions  Session picker",
       " /new       New session",
-      " /root      Show project root",
+      " /files     List context files",
+      " /rm        Remove file (picker)",
       " /status    Show state",
-      " /flush     Process queue",
-      " /debug     Toggle debug",
       " /quit      Close",
       "",
       "----------------------------------------",
@@ -1457,6 +1473,7 @@ function M.handle_command(cmd)
     append_to_buffer({
       "busy: " .. tostring(state.busy),
       "queue: " .. #state.prompt_queue,
+      "files: " .. #state.context_files,
       "session: " .. (state.session_id and state.session_id:sub(1, 8) or "none"),
       "mode: " .. (state.current_mode or "default")
     })
@@ -1472,6 +1489,35 @@ function M.handle_command(cmd)
     else
       append_to_buffer({ "Queue is empty" })
     end
+  elseif command == "files" or command == "context" then
+    if #state.context_files == 0 then
+      append_to_buffer({ "No files in context. Use @ to add files." })
+    else
+      append_to_buffer({ "Context files:" })
+      for i, f in ipairs(state.context_files) do
+        append_to_buffer({ "  " .. i .. ". " .. vim.fn.fnamemodify(f, ":t") })
+      end
+      append_to_buffer({ "", "Use /clear-files to remove all" })
+    end
+  elseif command == "clear-files" then
+    local count = #state.context_files
+    state.context_files = {}
+    append_to_buffer({ "Cleared " .. count .. " files from context" })
+  elseif command == "rm" or command == "remove" then
+    if #state.context_files == 0 then
+      append_to_buffer({ "No files in context" })
+      return
+    end
+    local items = {}
+    for i, f in ipairs(state.context_files) do
+      table.insert(items, i .. ". " .. vim.fn.fnamemodify(f, ":t"))
+    end
+    vim.ui.select(items, { prompt = "Remove file:" }, function(_, idx)
+      if idx then
+        local removed = table.remove(state.context_files, idx)
+        append_to_buffer({ "Removed: " .. vim.fn.fnamemodify(removed, ":t") })
+      end
+    end)
   else
     M.send_prompt("/" .. cmd)
   end
