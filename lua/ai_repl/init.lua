@@ -27,11 +27,31 @@ local config = {
 }
 
 local ui = {
-  win = nil,
+  wins = {},  -- per-tab windows: { [tabpage] = win }
   active = false,
   source_buf = nil,
   project_root = nil,
 }
+
+local function get_tab_win()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local win = ui.wins[tab]
+  if win and vim.api.nvim_win_is_valid(win) then
+    return win
+  end
+  ui.wins[tab] = nil
+  return nil
+end
+
+local function set_tab_win(win)
+  local tab = vim.api.nvim_get_current_tabpage()
+  ui.wins[tab] = win
+end
+
+local function clear_tab_win()
+  local tab = vim.api.nvim_get_current_tabpage()
+  ui.wins[tab] = nil
+end
 
 local function get_project_root(buf)
   local file = buf and vim.api.nvim_buf_get_name(buf) or vim.api.nvim_buf_get_name(0)
@@ -72,7 +92,8 @@ end
 
 local function update_statusline()
   local proc = registry.active()
-  if not ui.win or not vim.api.nvim_win_is_valid(ui.win) then return end
+  local win = get_tab_win()
+  if not win then return end
   local agent_name = simplify_agent_name(proc and proc.state.agent_info and proc.state.agent_info.name)
   local mode = proc and proc.state.mode or "plan"
   local queue_count = proc and #proc.data.prompt_queue or 0
@@ -80,7 +101,7 @@ local function update_statusline()
   local busy_str = proc and proc.state.busy and " ●" or ""
   local bg_count = count_background_busy()
   local bg_str = bg_count > 0 and (" [" .. bg_count .. " bg]") or ""
-  vim.wo[ui.win].statusline = " " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str .. bg_str
+  vim.wo[win].statusline = " " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str .. bg_str
 end
 
 local function setup_window_options(win)
@@ -897,9 +918,10 @@ local function create_ui()
   local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
 
   vim.cmd("botright vsplit")
-  ui.win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_width(ui.win, width)
-  setup_window_options(ui.win)
+  local win = vim.api.nvim_get_current_win()
+  set_tab_win(win)
+  vim.api.nvim_win_set_width(win, width)
+  setup_window_options(win)
 
   local temp_id = "temp_" .. os.time() .. "_" .. math.random(1000, 9999)
   local proc = create_process(temp_id, { cwd = ui.project_root })
@@ -908,14 +930,14 @@ local function create_ui()
   registry.set(temp_id, proc)
   registry.set_active(temp_id)
 
-  vim.api.nvim_win_set_buf(ui.win, buf)
+  vim.api.nvim_win_set_buf(win, buf)
   setup_buffer_keymaps(buf)
 
   render.append_content(buf, { "AI REPL | /help for commands", "" })
 
   proc:start()
 
-  render.goto_prompt(buf, ui.win)
+  render.goto_prompt(buf, win)
 end
 
 function M.send_prompt(content, opts)
@@ -1138,7 +1160,8 @@ function M.show_mode_picker()
 end
 
 function M.open()
-  if ui.active then
+  local win = get_tab_win()
+  if win then
     M.show()
     return
   end
@@ -1149,16 +1172,18 @@ function M.open()
 end
 
 function M.close()
-  if ui.win and vim.api.nvim_win_is_valid(ui.win) then
-    vim.api.nvim_win_close(ui.win, true)
+  local win = get_tab_win()
+  if win then
+    vim.api.nvim_win_close(win, true)
   end
-  ui.win = nil
+  clear_tab_win()
   ui.active = false
 end
 
 function M.hide()
-  if ui.win and vim.api.nvim_win_is_valid(ui.win) then
-    vim.api.nvim_win_hide(ui.win)
+  local win = get_tab_win()
+  if win then
+    vim.api.nvim_win_hide(win)
   end
 end
 
@@ -1169,25 +1194,28 @@ function M.show()
     return
   end
 
-  if not ui.win or not vim.api.nvim_win_is_valid(ui.win) then
+  local win = get_tab_win()
+  if not win then
     local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
     vim.cmd("botright vsplit")
-    ui.win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_width(ui.win, width)
-    setup_window_options(ui.win)
+    win = vim.api.nvim_get_current_win()
+    set_tab_win(win)
+    vim.api.nvim_win_set_width(win, width)
+    setup_window_options(win)
   end
 
-  vim.api.nvim_win_set_buf(ui.win, proc.data.buf)
+  vim.api.nvim_win_set_buf(win, proc.data.buf)
   update_statusline()
-  vim.api.nvim_set_current_win(ui.win)
+  vim.api.nvim_set_current_win(win)
 end
 
 function M.toggle()
-  if ui.win and vim.api.nvim_win_is_valid(ui.win) then
-    if vim.api.nvim_get_current_win() == ui.win then
+  local win = get_tab_win()
+  if win then
+    if vim.api.nvim_get_current_win() == win then
       M.hide()
     else
-      vim.api.nvim_set_current_win(ui.win)
+      vim.api.nvim_set_current_win(win)
     end
   else
     M.open()
@@ -1204,19 +1232,16 @@ function M.new_session(opts)
   end
   ui.project_root = opts.cwd or get_project_root(ui.source_buf or cur_buf)
 
-  if not ui.active then
+  local win = get_tab_win()
+  if not win then
     ui.active = true
     create_ui()
     return
   end
 
   local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
-  if not ui.win or not vim.api.nvim_win_is_valid(ui.win) then
-    vim.cmd("botright vsplit")
-    ui.win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_width(ui.win, width)
-  end
-  setup_window_options(ui.win)
+  vim.api.nvim_win_set_width(win, width)
+  setup_window_options(win)
 
   local temp_id = "temp_" .. os.time() .. "_" .. math.random(1000, 9999)
   local new_proc = create_process(temp_id, { cwd = ui.project_root })
@@ -1225,14 +1250,14 @@ function M.new_session(opts)
   registry.set(temp_id, new_proc)
   registry.set_active(temp_id)
 
-  vim.api.nvim_win_set_buf(ui.win, buf)
+  vim.api.nvim_win_set_buf(win, buf)
   setup_buffer_keymaps(buf)
 
   render.append_content(buf, { "Creating new session..." })
 
   new_proc:start()
 
-  render.goto_prompt(buf, ui.win)
+  render.goto_prompt(buf, win)
 end
 
 function M.load_session(session_id, opts)
@@ -1241,8 +1266,9 @@ function M.load_session(session_id, opts)
   local existing = registry.get(session_id)
   if existing and existing:is_ready() then
     registry.set_active(session_id)
-    if ui.win and vim.api.nvim_win_is_valid(ui.win) then
-      vim.api.nvim_win_set_buf(ui.win, existing.data.buf)
+    local win = get_tab_win()
+    if win then
+      vim.api.nvim_win_set_buf(win, existing.data.buf)
     end
     update_statusline()
     render.append_content(existing.data.buf, { "[+] Switched to session: " .. session_id:sub(1, 8) .. "...", "" })
@@ -1263,9 +1289,10 @@ function M.load_session(session_id, opts)
   registry.set(session_id, proc)
   registry.set_active(session_id)
 
-  if ui.win and vim.api.nvim_win_is_valid(ui.win) then
-    vim.api.nvim_win_set_buf(ui.win, buf)
-    setup_window_options(ui.win)
+  local win = get_tab_win()
+  if win then
+    vim.api.nvim_win_set_buf(win, buf)
+    setup_window_options(win)
   end
 
   setup_buffer_keymaps(buf)
@@ -1273,11 +1300,10 @@ function M.load_session(session_id, opts)
 
   proc:start()
 
-  local win = ui.win
-  if not win or not vim.api.nvim_win_is_valid(win) then
+  if not win then
     win = vim.fn.bufwinid(buf)
   end
-  if win ~= -1 and vim.api.nvim_win_is_valid(win) then
+  if win and win ~= -1 and vim.api.nvim_win_is_valid(win) then
     render.goto_prompt(buf, win)
   end
 end
@@ -1393,14 +1419,15 @@ function M.switch_to_buffer()
   vim.ui.select(labels, { prompt = "Switch to buffer:" }, function(choice, idx)
     if not choice or not idx then return end
     local item = items[idx]
+    local win = get_tab_win()
     if item.is_current then
-      if ui.win and vim.api.nvim_win_is_valid(ui.win) then
-        vim.api.nvim_set_current_win(ui.win)
+      if win then
+        vim.api.nvim_set_current_win(win)
       end
     else
       registry.set_active(item.session_id)
-      if ui.win and vim.api.nvim_win_is_valid(ui.win) then
-        vim.api.nvim_win_set_buf(ui.win, item.buf)
+      if win then
+        vim.api.nvim_win_set_buf(win, item.buf)
       end
       update_statusline()
     end
@@ -1496,11 +1523,11 @@ function M.add_selection_to_prompt()
     local separator = current ~= "" and "\n" or ""
     render.set_prompt_input(proc.data.buf, current .. separator .. "```\n" .. text .. "\n```\n")
 
-    local win = ui.win
-    if not win or not vim.api.nvim_win_is_valid(win) then
+    local win = get_tab_win()
+    if not win then
       win = vim.fn.bufwinid(proc.data.buf)
     end
-    if win ~= -1 and vim.api.nvim_win_is_valid(win) then
+    if win and win ~= -1 and vim.api.nvim_win_is_valid(win) then
       vim.api.nvim_set_current_win(win)
       render.goto_prompt(proc.data.buf, win)
     end
