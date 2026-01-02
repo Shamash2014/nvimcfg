@@ -33,19 +33,20 @@ return {
     vim.cmd.colorscheme("lackluster")
 
     -- Force override any remaining color highlights
-    vim.api.nvim_set_hl(0, "GitSignsAdd", { fg = "#808080" })
-    vim.api.nvim_set_hl(0, "GitSignsChange", { fg = "#808080" })
-    vim.api.nvim_set_hl(0, "GitSignsDelete", { fg = "#808080" })
-    vim.api.nvim_set_hl(0, "DiffAdd", { bg = "#2A2A2A" })
-    vim.api.nvim_set_hl(0, "DiffChange", { bg = "#333333" })
-    vim.api.nvim_set_hl(0, "DiffDelete", { bg = "#1A1A1A" })
+    vim.api.nvim_set_hl(0, "GitSignsAdd", { fg = "#5f9f5f" })
+    vim.api.nvim_set_hl(0, "GitSignsChange", { fg = "#9f9f5f" })
+    vim.api.nvim_set_hl(0, "GitSignsDelete", { fg = "#9f5f5f" })
+    vim.api.nvim_set_hl(0, "DiffAdd", { bg = "#1a2f1a" })
+    vim.api.nvim_set_hl(0, "DiffChange", { bg = "#2f2f1a" })
+    vim.api.nvim_set_hl(0, "DiffDelete", { bg = "#2f1a1a" })
+    vim.api.nvim_set_hl(0, "DiffText", { bg = "#3f3f2a" })
     vim.api.nvim_set_hl(0, "Directory", { fg = "#DDDDDD", bold = true })
 
     -- Override any plugin colors that might be green/blue
     vim.api.nvim_set_hl(0, "NeoTreeDirectoryIcon", { fg = "#999999" })
     vim.api.nvim_set_hl(0, "NeoTreeDirectoryName", { fg = "#CCCCCC" })
-    vim.api.nvim_set_hl(0, "NeoTreeGitAdded", { fg = "#808080" })
-    vim.api.nvim_set_hl(0, "NeoTreeGitModified", { fg = "#808080" })
+    vim.api.nvim_set_hl(0, "NeoTreeGitAdded", { fg = "#5f9f5f" })
+    vim.api.nvim_set_hl(0, "NeoTreeGitModified", { fg = "#9f9f5f" })
     vim.api.nvim_set_hl(0, "TelescopeSelection", { bg = "#404040" })
     vim.api.nvim_set_hl(0, "TelescopeMatching", { fg = "#FFFFFF", bold = true })
 

@@ -26,8 +26,14 @@ return {
     },
 
     sources = {
-      default = { "lsp", "path", "snippets", "buffer" },
+      default = { "lsp", "path", "snippets", "buffer", "ai_repl_commands" },
       providers = {
+        ai_repl_commands = {
+          name = "AI Commands",
+          enabled = true,
+          module = "ai_repl.blink_source",
+          score_offset = 90,
+        },
         lsp = {
           name = "LSP",
           enabled = true,
