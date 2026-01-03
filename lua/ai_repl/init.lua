@@ -1817,6 +1817,85 @@ function M.send_selection()
   end
 end
 
+local QUICK_ACTIONS = {
+  { label = "Explain this code", prompt = "Explain this code concisely:\n```\n%s\n```" },
+  { label = "Check for issues", prompt = "Check this code for bugs, issues, or improvements:\n```\n%s\n```" },
+  { label = "Add types", prompt = "Add type annotations to this code:\n```\n%s\n```" },
+  { label = "Refactor", prompt = "Refactor this code to be cleaner and more maintainable:\n```\n%s\n```" },
+  { label = "Write tests", prompt = "Write tests for this code:\n```\n%s\n```" },
+  { label = "Add documentation", prompt = "Add documentation/comments to this code:\n```\n%s\n```" },
+  { label = "Simplify", prompt = "Simplify this code while maintaining functionality:\n```\n%s\n```" },
+  { label = "Optimize", prompt = "Optimize this code for performance:\n```\n%s\n```" },
+}
+
+local function get_visual_selection()
+  local mode = vim.fn.mode()
+  if mode:match("[vV\22]") then
+    vim.cmd('normal! "vy')
+  end
+
+  local text = vim.fn.getreg("v")
+  if text and text ~= "" then
+    return text
+  end
+
+  local start_pos = vim.fn.getpos("'<")
+  local end_pos = vim.fn.getpos("'>")
+  local lines = vim.fn.getline(start_pos[2], end_pos[2])
+  if #lines == 0 then return nil end
+
+  if #lines == 1 then
+    lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
+  else
+    lines[1] = lines[1]:sub(start_pos[3])
+    lines[#lines] = lines[#lines]:sub(1, end_pos[3])
+  end
+  return table.concat(lines, "\n")
+end
+
+function M.quick_action(action_index)
+  local text = get_visual_selection()
+  if not text or text == "" then
+    vim.notify("No selection", vim.log.levels.WARN)
+    return
+  end
+
+  local function execute_action(action)
+    local prompt = string.format(action.prompt, text)
+    if not ui.active then
+      M.open()
+      vim.defer_fn(function()
+        M.send_prompt(prompt)
+      end, 500)
+    else
+      M.send_prompt(prompt)
+    end
+  end
+
+  if action_index and QUICK_ACTIONS[action_index] then
+    execute_action(QUICK_ACTIONS[action_index])
+    return
+  end
+
+  local labels = {}
+  for _, action in ipairs(QUICK_ACTIONS) do
+    table.insert(labels, action.label)
+  end
+
+  vim.ui.select(labels, { prompt = "Quick Action:" }, function(choice, idx)
+    if not choice or not idx then return end
+    execute_action(QUICK_ACTIONS[idx])
+  end)
+end
+
+function M.explain_selection()
+  M.quick_action(1)
+end
+
+function M.check_selection()
+  M.quick_action(2)
+end
+
 function M.get_slash_commands()
   local proc = registry.active()
   return proc and proc.data.slash_commands or {}

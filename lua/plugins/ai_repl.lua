@@ -60,6 +60,24 @@ return {
       function() require("ai_repl").kill_current_session() end,
       mode = { "n" },
       desc = "Kill current AI session"
+    },
+    {
+      "<leader>aq",
+      function() require("ai_repl").quick_action() end,
+      mode = { "v" },
+      desc = "Quick AI action on selection"
+    },
+    {
+      "<leader>ae",
+      function() require("ai_repl").explain_selection() end,
+      mode = { "v" },
+      desc = "Explain selection"
+    },
+    {
+      "<leader>ac",
+      function() require("ai_repl").check_selection() end,
+      mode = { "v" },
+      desc = "Check selection for issues"
     }
   },
   cmd = { "AIRepl", "AIReplOpen", "AIReplClose", "AIReplSessions", "AIReplNew", "AIReplAddFile", "AIReplAddSelection", "AIReplPicker" }
