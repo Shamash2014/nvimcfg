@@ -70,6 +70,16 @@ local function get_current_project_root()
   return get_project_root(ui.source_buf)
 end
 
+local function get_session_name(cwd)
+  cwd = cwd or get_current_project_root()
+  local dir_name = vim.fn.fnamemodify(cwd, ":t")
+  local branch = vim.fn.systemlist("git -C " .. vim.fn.shellescape(cwd) .. " branch --show-current 2>/dev/null")[1]
+  if vim.v.shell_error == 0 and branch and branch ~= "" then
+    return dir_name .. "/" .. branch
+  end
+  return dir_name
+end
+
 local function simplify_agent_name(name)
   if not name then return "Agent" end
   local simplified = name:gsub("^@[^/]+/", "")
@@ -666,10 +676,24 @@ local function create_process(session_id, opts)
         render.append_content(buf, { "Connected: " .. agent_name .. caps_str })
 
       elseif status == "session_created" then
+        local session_name = get_session_name(self.data.cwd)
+        self.data.name = session_name
+        local buf_name = "AI: " .. session_name
+        if vim.api.nvim_buf_is_valid(buf) then
+          pcall(vim.api.nvim_buf_set_name, buf, buf_name)
+        end
         render.append_content(buf, { "Project: " .. self.data.cwd, "[+] Session ready", "" })
         update_statusline()
 
       elseif status == "session_loaded" then
+        if not self.data.name or self.data.name == "New Session" then
+          local session_name = get_session_name(self.data.cwd)
+          self.data.name = session_name
+          local buf_name = "AI: " .. session_name
+          if vim.api.nvim_buf_is_valid(buf) then
+            pcall(vim.api.nvim_buf_set_name, buf, buf_name)
+          end
+        end
         local messages = registry.load_messages(self.session_id)
         if messages and #messages > 0 then
           render.render_history(buf, messages)
@@ -701,11 +725,13 @@ end
 
 local function create_buffer(proc, name)
   local buf = vim.api.nvim_create_buf(true, false)
-  local buf_name = "AI: " .. (name or "Session") .. " [" .. proc.session_id:sub(1, 8) .. "]"
+  local session_name = name or get_session_name(proc.data.cwd)
+  local buf_name = "AI: " .. session_name
   pcall(vim.api.nvim_buf_set_name, buf, buf_name)
 
   render.init_buffer(buf)
   proc.data.buf = buf
+  proc.data.name = session_name
 
   return buf
 end
@@ -842,6 +868,8 @@ local function setup_buffer_keymaps(buf)
   vim.keymap.set("n", "<C-c>", M.cancel, opts)
   vim.keymap.set("i", "<C-c>", M.cancel, opts)
   vim.keymap.set({ "n", "i" }, "<S-Tab>", function() M.show_mode_picker() end, opts)
+  vim.keymap.set("n", "<C-q>", M.show_queue, opts)
+  vim.keymap.set("n", "<C-e>", M.edit_queued, opts)
   vim.keymap.set("n", "i", function()
     local win = vim.fn.bufwinid(buf)
     if win ~= -1 then render.goto_prompt(buf, win) end
@@ -1016,6 +1044,200 @@ function M.cancel()
   render.append_content(proc.data.buf, { "Cancelled" })
 end
 
+function M.show_queue()
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active AI session", vim.log.levels.ERROR)
+    return
+  end
+
+  local queue = proc:get_queue()
+  if #queue == 0 then
+    render.append_content(proc.data.buf, { "[i] Queue is empty" })
+    return
+  end
+
+  local lines = { "", "━━━ Queue ━━━" }
+  for i, item in ipairs(queue) do
+    local text = item.text or (type(item.prompt) == "string" and item.prompt or "")
+    if #text > 60 then text = text:sub(1, 57) .. "..." end
+    table.insert(lines, string.format(" %d. %s", i, text))
+  end
+  table.insert(lines, "━━━━━━━━━━━━")
+  table.insert(lines, "")
+  render.append_content(proc.data.buf, lines)
+end
+
+function M.edit_queued(index)
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active AI session", vim.log.levels.ERROR)
+    return
+  end
+
+  local queue = proc:get_queue()
+  if #queue == 0 then
+    vim.notify("Queue is empty", vim.log.levels.INFO)
+    return
+  end
+
+  local function do_edit(idx)
+    local item = proc:get_queued_item(idx)
+    if not item then
+      vim.notify("Invalid queue index: " .. idx, vim.log.levels.ERROR)
+      return
+    end
+
+    local current_text = item.text or (type(item.prompt) == "string" and item.prompt or "")
+    vim.ui.input({ prompt = "Edit queued #" .. idx .. ": ", default = current_text }, function(new_text)
+      if new_text and new_text ~= "" then
+        proc:update_queued_item(idx, new_text)
+        render.append_content(proc.data.buf, { "[+] Updated queued #" .. idx })
+        update_statusline()
+      end
+    end)
+  end
+
+  if index then
+    do_edit(index)
+  elseif #queue == 1 then
+    do_edit(1)
+  else
+    local items = {}
+    for i, item in ipairs(queue) do
+      local text = item.text or (type(item.prompt) == "string" and item.prompt or "")
+      if #text > 50 then text = text:sub(1, 47) .. "..." end
+      table.insert(items, string.format("#%d: %s", i, text))
+    end
+
+    vim.ui.select(items, { prompt = "Select message to edit:" }, function(choice, idx)
+      if choice and idx then
+        do_edit(idx)
+      end
+    end)
+  end
+end
+
+function M.remove_queued(index)
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active AI session", vim.log.levels.ERROR)
+    return
+  end
+
+  local queue = proc:get_queue()
+  if #queue == 0 then
+    vim.notify("Queue is empty", vim.log.levels.INFO)
+    return
+  end
+
+  local function do_remove(idx)
+    local removed = proc:remove_queued_item(idx)
+    if removed then
+      render.append_content(proc.data.buf, { "[x] Removed queued #" .. idx })
+      update_statusline()
+    else
+      vim.notify("Invalid queue index: " .. idx, vim.log.levels.ERROR)
+    end
+  end
+
+  if index then
+    do_remove(index)
+  elseif #queue == 1 then
+    do_remove(1)
+  else
+    local items = {}
+    for i, item in ipairs(queue) do
+      local text = item.text or (type(item.prompt) == "string" and item.prompt or "")
+      if #text > 50 then text = text:sub(1, 47) .. "..." end
+      table.insert(items, string.format("#%d: %s", i, text))
+    end
+
+    vim.ui.select(items, { prompt = "Select message to remove:" }, function(choice, idx)
+      if choice and idx then
+        do_remove(idx)
+      end
+    end)
+  end
+end
+
+function M.clear_queue()
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active AI session", vim.log.levels.ERROR)
+    return
+  end
+
+  local count = #proc:get_queue()
+  if count == 0 then
+    vim.notify("Queue is empty", vim.log.levels.INFO)
+    return
+  end
+
+  proc:clear_queue()
+  render.append_content(proc.data.buf, { "[x] Cleared " .. count .. " queued messages" })
+  update_statusline()
+end
+
+local function get_settings_path()
+  local proc = registry.active()
+  local cwd = proc and proc.data.cwd or vim.fn.getcwd()
+  return cwd .. "/.claude/settings.local.json"
+end
+
+local function read_settings()
+  local path = get_settings_path()
+  if vim.fn.filereadable(path) ~= 1 then return nil end
+  local ok, data = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), "\n"))
+  return ok and data or nil
+end
+
+local function write_settings(data)
+  local path = get_settings_path()
+  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+  vim.fn.writefile({ vim.json.encode(data) }, path)
+end
+
+function M.show_permissions()
+  local proc = registry.active()
+  if not proc then return end
+
+  local data = read_settings()
+  local allow = data and data.permissions and data.permissions.allow or {}
+
+  if #allow == 0 then
+    render.append_content(proc.data.buf, { "[i] No allow rules" })
+    return
+  end
+
+  local lines = { "", "━━━ Allowed ━━━" }
+  for i, rule in ipairs(allow) do
+    table.insert(lines, string.format("  %d. %s", i, rule))
+  end
+  table.insert(lines, "━━━━━━━━━━━━━━━")
+  render.append_content(proc.data.buf, lines)
+end
+
+function M.revoke_permission()
+  local proc = registry.active()
+  if not proc then return end
+
+  local data = read_settings()
+  local allow = data and data.permissions and data.permissions.allow or {}
+
+  if #allow == 0 then
+    vim.notify("No permissions to revoke", vim.log.levels.INFO)
+    return
+  end
+
+  vim.ui.select(allow, { prompt = "Revoke:" }, function(choice, idx)
+    if not choice then return end
+    table.remove(data.permissions.allow, idx)
+    write_settings(data)
+    render.append_content(proc.data.buf, { "[x] Revoked: " .. choice })
+  end)
+end
+
 function M.handle_command(cmd)
   local proc = registry.active()
   local buf = proc and proc.data.buf
@@ -1033,6 +1255,12 @@ function M.handle_command(cmd)
       "  /cm - Agent slash commands",
       "  /mode <mode> - Set mode",
       "  /cwd [path] - Show/change working directory",
+      "  /queue - Show queued messages",
+      "  /edit [n] - Edit queued message",
+      "  /remove [n] - Remove queued message",
+      "  /clearq - Clear all queued messages",
+      "  /perms - Show allow rules",
+      "  /revoke - Revoke allow rule",
       "  /clear - Clear buffer",
       "  /cancel - Cancel current",
       "  /quit - Close REPL",
@@ -1072,7 +1300,21 @@ function M.handle_command(cmd)
     end
   elseif command == "cancel" then
     M.cancel()
-  elseif command == "quit" or command == "q" then
+  elseif command == "queue" or command == "q" then
+    M.show_queue()
+  elseif command == "edit" or command == "e" then
+    local idx = args[1] and tonumber(args[1])
+    M.edit_queued(idx)
+  elseif command == "remove" or command == "rm" then
+    local idx = args[1] and tonumber(args[1])
+    M.remove_queued(idx)
+  elseif command == "clearq" or command == "cq" then
+    M.clear_queue()
+  elseif command == "perms" or command == "permissions" then
+    M.show_permissions()
+  elseif command == "revoke" then
+    M.revoke_permission()
+  elseif command == "quit" or command == "close" then
     M.close()
   elseif command == "debug" then
     config.debug = not config.debug
@@ -1357,7 +1599,7 @@ function M.pick_process()
   local items = {}
   for _, r in ipairs(running) do
     local is_current = r.session_id == registry.active_session_id()
-    local name = r.process.state.agent_info and r.process.state.agent_info.name or r.session_id:sub(1, 8)
+    local name = r.process.data.name or r.session_id:sub(1, 8)
     local status = is_current and "[*]" or "[~]"
     table.insert(items, {
       label = status .. " " .. name,
@@ -1388,7 +1630,7 @@ function M.switch_to_buffer()
     if proc.data.buf and vim.api.nvim_buf_is_valid(proc.data.buf) then
       local is_current = sid == registry.active_session_id()
       local has_process = proc:is_alive()
-      local name = proc.state.agent_info and proc.state.agent_info.name or sid:sub(1, 8)
+      local name = proc.data.name or sid:sub(1, 8)
       local status = is_current and "[*]" or (has_process and "[~]" or "[ ]")
 
       table.insert(items, {

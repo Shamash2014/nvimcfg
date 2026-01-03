@@ -137,6 +137,7 @@ function M.save_to_disk()
     if not sid:match("^temp_") then
       data[sid] = {
         session_id = sid,
+        name = proc.data.name,
         cwd = proc.data.cwd,
         env = proc.data.env,
         mode = proc.state.mode,

@@ -331,7 +331,17 @@ function Process:send_prompt(prompt)
     return nil
   end
   if self.state.busy then
-    table.insert(self.data.prompt_queue, prompt)
+    local text = ""
+    if type(prompt) == "string" then
+      text = prompt
+    elseif type(prompt) == "table" then
+      for _, block in ipairs(prompt) do
+        if block.type == "text" then
+          text = text .. (block.text or "")
+        end
+      end
+    end
+    table.insert(self.data.prompt_queue, { prompt = prompt, text = text })
     if self.config.debug and self._on_debug then
       self:_on_debug("send_prompt: busy, queued")
     end
@@ -390,8 +400,41 @@ function Process:process_queued_prompts()
   if self.state.busy then return end
   if #self.data.prompt_queue > 0 then
     local next_prompt = table.remove(self.data.prompt_queue, 1)
-    self:send_prompt(next_prompt)
+    self:send_prompt(next_prompt.prompt or next_prompt)
   end
+end
+
+function Process:get_queue()
+  return self.data.prompt_queue
+end
+
+function Process:get_queued_item(index)
+  return self.data.prompt_queue[index]
+end
+
+function Process:update_queued_item(index, new_prompt)
+  if index < 1 or index > #self.data.prompt_queue then
+    return false
+  end
+  local item = self.data.prompt_queue[index]
+  if type(item) == "table" then
+    item.prompt = new_prompt
+    item.text = type(new_prompt) == "string" and new_prompt or (new_prompt[1] and new_prompt[1].text or "")
+  else
+    self.data.prompt_queue[index] = { prompt = new_prompt, text = type(new_prompt) == "string" and new_prompt or "" }
+  end
+  return true
+end
+
+function Process:remove_queued_item(index)
+  if index < 1 or index > #self.data.prompt_queue then
+    return nil
+  end
+  return table.remove(self.data.prompt_queue, index)
+end
+
+function Process:clear_queue()
+  self.data.prompt_queue = {}
 end
 
 function Process:restart()
