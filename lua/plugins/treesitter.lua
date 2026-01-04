@@ -15,16 +15,18 @@ return {
       end,
     })
 
-    -- Enable treesitter folding
+    -- Enable treesitter folding for all supported filetypes
     vim.api.nvim_create_autocmd('FileType', {
       pattern = {
         'lua', 'python', 'javascript', 'typescript', 'jsx', 'tsx',
-        'go', 'rust', 'elixir'
+        'go', 'rust', 'elixir', 'heex', 'eex', 'json', 'html', 'css',
+        'yaml', 'toml', 'dart', 'swift', 'kotlin', 'java', 'astro', 'vue'
       },
       callback = function()
-        vim.wo[0][0].foldexpr = 'v:lua.vim.treesitter.foldexpr()'
-        vim.wo[0][0].foldmethod = 'expr'
-        vim.wo[0][0].foldenable = false -- Start with folds open
+        vim.wo.foldexpr = 'v:lua.vim.treesitter.foldexpr()'
+        vim.wo.foldmethod = 'expr'
+        vim.wo.foldlevel = 99
+        vim.wo.foldenable = true
       end,
     })
 

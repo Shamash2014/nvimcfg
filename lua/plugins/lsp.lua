@@ -51,13 +51,6 @@ return {
             autoImports = true,
             includeCompletionsForModuleExports = true,
           },
-        typescript = {
-          updateImportsOnFileMove = { enabled = "always" },
-          suggest = {
-            completeFunctionCalls = true,
-            autoImports = true,
-            includeCompletionsForModuleExports = true,
-          },
           preferences = {
             importModuleSpecifier = "relative",
             includePackageJsonAutoImports = "on",
@@ -106,8 +99,8 @@ return {
             insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false,
           },
         },
-      }
-    }}))
+      },
+    }))
 
     -- Python with basedpyright
     lspconfig.basedpyright.setup(default_config)

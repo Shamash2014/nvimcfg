@@ -1,6 +1,10 @@
 return {
   "stevearc/resession.nvim",
-  lazy = false,
+  event = "VimEnter",
+  keys = {
+    { "<leader>ps", desc = "Save session" },
+    { "<leader>pl", desc = "Load session" },
+  },
   opts = {
     dir = "session",
     autosave = {
