@@ -12,9 +12,10 @@ local buffer_state = {}
 local SPINNERS = {
   generating = { "|", "/", "-", "\\" },
   thinking = { ".", "..", "..." },
-  executing = { "[=  ]", "[ = ]", "[  =]", "[ = ]" }
+  executing = { "[=  ]", "[ = ]", "[  =]", "[ = ]" },
+  compacting = { "◜", "◠", "◝", "◞", "◡", "◟" }
 }
-local SPIN_TIMING = { generating = 100, thinking = 400, executing = 150 }
+local SPIN_TIMING = { generating = 100, thinking = 400, executing = 150, compacting = 120 }
 
 local animation = {
   active = false,
@@ -508,6 +509,64 @@ function M.setup_cursor_lock(buf)
       end
     end
   })
+
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+    buffer = buf,
+    callback = function()
+      local line_count = vim.api.nvim_buf_line_count(buf)
+      local state = get_state(buf)
+      if line_count == 0 or (state.prompt_extmark and not pcall(vim.api.nvim_buf_get_extmark_by_id, buf, NS_PROMPT, state.prompt_extmark, {})) then
+        vim.schedule(function()
+          if vim.api.nvim_buf_is_valid(buf) then
+            M.render_prompt(buf)
+          end
+        end)
+      end
+    end
+  })
+
+  vim.keymap.set({ "n", "i" }, "<BS>", function()
+    local prompt_ln = M.get_prompt_line(buf)
+    local win = vim.fn.bufwinid(buf)
+    if win == -1 then return end
+    local cursor = vim.api.nvim_win_get_cursor(win)
+    local row, col = cursor[1], cursor[2]
+    if row == prompt_ln and col == 0 then
+      return
+    end
+    local mode = vim.fn.mode()
+    if mode == "i" then
+      return vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<BS>", true, false, true), "n", false)
+    else
+      return vim.api.nvim_feedkeys("X", "n", false)
+    end
+  end, { buffer = buf, silent = true })
+
+  vim.keymap.set("n", "dd", function()
+    local prompt_ln = M.get_prompt_line(buf)
+    local win = vim.fn.bufwinid(buf)
+    if win == -1 then return end
+    local cursor = vim.api.nvim_win_get_cursor(win)
+    local row = cursor[1]
+    local line_count = vim.api.nvim_buf_line_count(buf)
+    if row == prompt_ln and line_count == prompt_ln then
+      return
+    end
+    if row >= prompt_ln then
+      return vim.api.nvim_feedkeys("dd", "n", false)
+    end
+  end, { buffer = buf, silent = true })
+
+  vim.keymap.set("n", "x", function()
+    local prompt_ln = M.get_prompt_line(buf)
+    local win = vim.fn.bufwinid(buf)
+    if win == -1 then return end
+    local cursor = vim.api.nvim_win_get_cursor(win)
+    local row = cursor[1]
+    if row >= prompt_ln then
+      return vim.api.nvim_feedkeys("x", "n", false)
+    end
+  end, { buffer = buf, silent = true })
 end
 
 function M.goto_prompt(buf, win)

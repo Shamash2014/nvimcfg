@@ -341,6 +341,19 @@ local function handle_session_update(proc, params)
 
   elseif update_type == "agent_thought_chunk" then
     render.start_animation(buf, "thinking")
+
+  elseif update_type == "context_compact" or update_type == "compact" or update_type == "summarize" then
+    render.stop_animation()
+    render.append_content(buf, { "", "[~] Compacting context...", "" })
+    render.start_animation(buf, "compacting")
+
+  elseif update_type == "context_compacted" or update_type == "compacted" or update_type == "summarized" then
+    render.stop_animation()
+    local summary = u.summary or u.message or "Context summarized"
+    if type(summary) == "string" and #summary > 100 then
+      summary = summary:sub(1, 97) .. "..."
+    end
+    render.append_content(buf, { "[+] Context compacted: " .. tostring(summary) })
   end
 end
 
