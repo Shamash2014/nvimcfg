@@ -129,6 +129,15 @@ local function handle_session_update(proc, params)
   local buf = proc.data.buf
   local update_type = u.sessionUpdate
 
+  if u.type == "system" and u.subtype == "compact_boundary" then
+    render.stop_animation()
+    local tokens = u.compactMetadata and u.compactMetadata.preTokens
+    local trigger = u.compactMetadata and u.compactMetadata.trigger or "auto"
+    local info = tokens and string.format(" (%s, %dk tokens)", trigger, math.floor(tokens / 1000)) or ""
+    render.append_content(buf, { "", "[~] Context compacted" .. info, "" })
+    return
+  end
+
   if config.debug and update_type ~= "agent_message_chunk" then
     render.append_content(buf, { "[debug] " .. (update_type or "unknown") })
   end
@@ -137,6 +146,11 @@ local function handle_session_update(proc, params)
     render.start_animation(buf, "generating")
     local content = u.content
     if content and content.text then
+      if content.text:match("%[compact%]") or content.text:match("Conversation compacted") then
+        render.stop_animation()
+        render.append_content(buf, { "", "[~] Context compacted", "" })
+        return
+      end
       render.update_streaming(buf, content.text, proc.ui)
     end
 
@@ -341,19 +355,6 @@ local function handle_session_update(proc, params)
 
   elseif update_type == "agent_thought_chunk" then
     render.start_animation(buf, "thinking")
-
-  elseif update_type == "context_compact" or update_type == "compact" or update_type == "summarize" then
-    render.stop_animation()
-    render.append_content(buf, { "", "[~] Compacting context...", "" })
-    render.start_animation(buf, "compacting")
-
-  elseif update_type == "context_compacted" or update_type == "compacted" or update_type == "summarized" then
-    render.stop_animation()
-    local summary = u.summary or u.message or "Context summarized"
-    if type(summary) == "string" and #summary > 100 then
-      summary = summary:sub(1, 97) .. "..."
-    end
-    render.append_content(buf, { "[+] Context compacted: " .. tostring(summary) })
   end
 end
 
@@ -612,6 +613,17 @@ local function handle_method(proc, method, params, msg_id)
       }
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
       render.append_content(buf, { "[+] Auto-approved (background): " .. (params.toolCall and params.toolCall.title or "tool") })
+    end
+
+  elseif method == "session/system" or method == "session/notification" then
+    if params.type == "system" and params.subtype == "compact_boundary" then
+      render.stop_animation()
+      local tokens = params.compactMetadata and params.compactMetadata.preTokens
+      local trigger = params.compactMetadata and params.compactMetadata.trigger or "auto"
+      local info = tokens and string.format(" (%s, %dk tokens)", trigger, math.floor(tokens / 1000)) or ""
+      render.append_content(buf, { "", "[~] Context compacted" .. info, "" })
+    elseif config.debug then
+      render.append_content(buf, { "[debug] system: " .. vim.inspect(params):sub(1, 200) })
     end
 
   elseif method:match("^terminal/") then
