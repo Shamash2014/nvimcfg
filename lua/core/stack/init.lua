@@ -366,7 +366,7 @@ function M.sync()
         return
       end
 
-      config.get_stack_root(function(root)
+      config.get_stack_root(nil, function(root)
         if not root then
           notify_error("Not in a stack")
           return
