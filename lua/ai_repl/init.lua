@@ -1479,13 +1479,14 @@ end
 function M.toggle()
   local win = get_tab_win()
   if win then
-    if vim.api.nvim_get_current_win() == win then
-      M.hide()
-    else
-      vim.api.nvim_set_current_win(win)
-    end
+    M.hide()
   else
-    M.open()
+    local proc = registry.active()
+    if proc and proc.data.buf and vim.api.nvim_buf_is_valid(proc.data.buf) then
+      M.show()
+    else
+      M.open()
+    end
   end
 end
 
