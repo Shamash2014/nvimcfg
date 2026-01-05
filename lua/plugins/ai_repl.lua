@@ -8,10 +8,10 @@ return {
         border = "rounded",
         title = "AI REPL"
       },
-      provider = {
-        cmd = "claude-code-acp",
-        args = {},
-        env = {}
+      default_provider = "claude",
+      providers = {
+        claude = { name = "Claude", cmd = "claude-code-acp", args = {}, env = {} },
+        cursor = { name = "Cursor", cmd = "cursor-agent-acp", args = {}, env = {} },
       },
       history_size = 1000,
       permission_mode = "plan",  -- "default" | "acceptEdits" | "plan" | "dontAsk" | "bypassPermissions"

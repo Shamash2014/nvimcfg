@@ -140,6 +140,7 @@ function M.save_to_disk()
         name = proc.data.name,
         cwd = proc.data.cwd,
         env = proc.data.env,
+        provider = proc.data.provider,
         mode = proc.state.mode,
         agent_info = proc.state.agent_info,
         created_at = proc._created_at or os.time(),

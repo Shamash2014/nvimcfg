@@ -41,6 +41,7 @@ function Process.new(session_id, opts)
     buf = nil,
     cwd = opts.cwd,
     env = opts.env or {},
+    provider = opts.provider or "claude",
     messages = {},
     context_files = {},
     terminals = {},

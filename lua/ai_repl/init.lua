@@ -3,6 +3,7 @@ local M = {}
 local Process = require("ai_repl.process")
 local registry = require("ai_repl.registry")
 local render = require("ai_repl.render")
+local providers = require("ai_repl.providers")
 
 local config = {
   window = {
@@ -10,12 +11,11 @@ local config = {
     border = "rounded",
     title = "AI REPL"
   },
-  provider = {
-    cmd = "claude-code-acp",
-    args = {},
-    env = {}
+  default_provider = "claude",
+  providers = {
+    claude = { name = "Claude", cmd = "claude-code-acp", args = {}, env = {} },
+    cursor = { name = "Cursor", cmd = "cursor-agent-acp", args = {}, env = {} },
   },
-  adapter = "claude",
   history_size = 1000,
   permission_mode = "default",
   show_tool_calls = true,
@@ -104,6 +104,9 @@ local function update_statusline()
   local proc = registry.active()
   local win = get_tab_win()
   if not win then return end
+  local provider_id = proc and proc.data.provider or config.default_provider
+  local provider = config.providers[provider_id]
+  local provider_name = provider and provider.name or provider_id
   local agent_name = simplify_agent_name(proc and proc.state.agent_info and proc.state.agent_info.name)
   local mode = proc and proc.state.mode or "plan"
   local queue_count = proc and #proc.data.prompt_queue or 0
@@ -111,7 +114,7 @@ local function update_statusline()
   local busy_str = proc and proc.state.busy and " ●" or ""
   local bg_count = count_background_busy()
   local bg_str = bg_count > 0 and (" [" .. bg_count .. " bg]") or ""
-  vim.wo[win].statusline = " " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str .. bg_str
+  vim.wo[win].statusline = " " .. provider_name .. " | " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str .. bg_str
 end
 
 local function setup_window_options(win)
@@ -641,16 +644,28 @@ local function handle_method(proc, method, params, msg_id)
   end
 end
 
+local function get_provider(provider_id)
+  provider_id = provider_id or config.default_provider
+  return provider_id, config.providers[provider_id]
+end
+
 local function create_process(session_id, opts)
   opts = opts or {}
 
+  local provider_id, provider = get_provider(opts.provider)
+  if not provider then
+    provider_id = config.default_provider
+    provider = config.providers[provider_id]
+  end
+
   local proc = Process.new(session_id, {
-    cmd = config.provider.cmd,
-    args = config.provider.args,
-    env = vim.tbl_extend("force", config.provider.env, opts.env or {}),
+    cmd = provider.cmd,
+    args = provider.args or {},
+    env = vim.tbl_extend("force", provider.env or {}, opts.env or {}),
     cwd = opts.cwd or get_current_project_root(),
     debug = config.debug,
     load_session_id = opts.load_session_id,
+    provider = provider_id,
   })
   proc._created_at = os.time()
 
@@ -976,8 +991,11 @@ local function create_ui()
   vim.api.nvim_win_set_width(win, width)
   setup_window_options(win)
 
+  local provider_id = ui.pending_provider or config.default_provider
+  ui.pending_provider = nil
+
   local temp_id = "temp_" .. os.time() .. "_" .. math.random(1000, 9999)
-  local proc = create_process(temp_id, { cwd = ui.project_root })
+  local proc = create_process(temp_id, { cwd = ui.project_root, provider = provider_id })
   local buf = create_buffer(proc, "New Session")
 
   registry.set(temp_id, proc)
@@ -986,7 +1004,8 @@ local function create_ui()
   vim.api.nvim_win_set_buf(win, buf)
   setup_buffer_keymaps(buf)
 
-  render.append_content(buf, { "AI REPL | /help for commands", "" })
+  local provider = config.providers[provider_id]
+  render.append_content(buf, { "AI REPL (" .. (provider and provider.name or provider_id) .. ") | /help for commands", "" })
 
   proc:start()
 
@@ -1490,19 +1509,42 @@ function M.toggle()
   end
 end
 
-function M.new_session(opts)
-  opts = opts or {}
+function M.pick_provider(callback)
+  local items = {}
+  for id, p in pairs(config.providers) do
+    table.insert(items, { id = id, name = p.name or id })
+  end
+  table.sort(items, function(a, b) return a.name < b.name end)
+
+  vim.ui.select(items, {
+    prompt = "Select AI Provider:",
+    format_item = function(item) return item.name end,
+  }, function(choice)
+    if choice and callback then
+      callback(choice.id)
+    end
+  end)
+end
+
+function M.new_session(provider_id)
+  if not provider_id then
+    M.pick_provider(function(id)
+      M.new_session(id)
+    end)
+    return
+  end
 
   local cur_buf = vim.api.nvim_get_current_buf()
   local proc = registry.active()
   if not (proc and proc.data.buf and cur_buf == proc.data.buf) then
     ui.source_buf = cur_buf
   end
-  ui.project_root = opts.cwd or get_project_root(ui.source_buf or cur_buf)
+  ui.project_root = get_project_root(ui.source_buf or cur_buf)
 
   local win = get_tab_win()
   if not win then
     ui.active = true
+    ui.pending_provider = provider_id
     create_ui()
     return
   end
@@ -1512,7 +1554,7 @@ function M.new_session(opts)
   setup_window_options(win)
 
   local temp_id = "temp_" .. os.time() .. "_" .. math.random(1000, 9999)
-  local new_proc = create_process(temp_id, { cwd = ui.project_root })
+  local new_proc = create_process(temp_id, { cwd = ui.project_root, provider = provider_id })
   local buf = create_buffer(new_proc, "New Session")
 
   registry.set(temp_id, new_proc)
@@ -1521,7 +1563,8 @@ function M.new_session(opts)
   vim.api.nvim_win_set_buf(win, buf)
   setup_buffer_keymaps(buf)
 
-  render.append_content(buf, { "Creating new session..." })
+  local provider = config.providers[provider_id]
+  render.append_content(buf, { "Creating new session with " .. (provider and provider.name or provider_id) .. "..." })
 
   new_proc:start()
 
@@ -1549,6 +1592,7 @@ function M.load_session(session_id, opts)
   local proc = create_process(session_id, {
     cwd = session_info and session_info.cwd or get_current_project_root(),
     env = session_info and session_info.env or {},
+    provider = session_info and session_info.provider or config.default_provider,
     load_session_id = session_id,
   })
 
@@ -1592,8 +1636,9 @@ function M.open_session_picker()
     else
       prefix = "[ ] "
     end
+    local provider_badge = s.provider and (" [" .. s.provider .. "]") or ""
     table.insert(items, {
-      label = prefix .. (s.name or s.session_id:sub(1, 8)),
+      label = prefix .. (s.name or s.session_id:sub(1, 8)) .. provider_badge,
       action = s.is_active and "current" or "load",
       id = s.session_id
     })
@@ -1627,8 +1672,9 @@ function M.pick_process()
     local is_current = r.session_id == registry.active_session_id()
     local name = r.process.data.name or r.session_id:sub(1, 8)
     local status = is_current and "[*]" or "[~]"
+    local provider_badge = r.process.data.provider and (" [" .. r.process.data.provider .. "]") or ""
     table.insert(items, {
-      label = status .. " " .. name,
+      label = status .. " " .. name .. provider_badge,
       session_id = r.session_id,
       is_current = is_current
     })
@@ -1658,9 +1704,10 @@ function M.switch_to_buffer()
       local has_process = proc:is_alive()
       local name = proc.data.name or sid:sub(1, 8)
       local status = is_current and "[*]" or (has_process and "[~]" or "[ ]")
+      local provider_badge = proc.data.provider and (" [" .. proc.data.provider .. "]") or ""
 
       table.insert(items, {
-        label = status .. " " .. name,
+        label = status .. " " .. name .. provider_badge,
         session_id = sid,
         buf = proc.data.buf,
         is_current = is_current
