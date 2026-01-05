@@ -10,6 +10,47 @@ M.terminals = {}
 M.command_history = {}
 M.max_history = 50
 
+-- Build full terminal environment for task execution
+local function build_terminal_env(extra)
+  local shell = vim.env.SHELL or "/bin/zsh"
+  local env = {
+    TERM = vim.env.TERM or "xterm-256color",
+    COLORTERM = vim.env.COLORTERM or "truecolor",
+    LANG = vim.env.LANG or "en_US.UTF-8",
+    HOME = vim.env.HOME,
+    USER = vim.env.USER,
+    SHELL = shell,
+    PATH = vim.env.PATH,
+    EDITOR = vim.env.EDITOR or "nvim",
+    VISUAL = vim.env.VISUAL or "nvim",
+  }
+
+  local dev_vars = {
+    "NVM_DIR", "PYENV_ROOT", "GOPATH", "GOROOT", "CARGO_HOME", "RUSTUP_HOME",
+    "ASDF_DIR", "VOLTA_HOME", "FNM_DIR", "BUN_INSTALL", "PNPM_HOME",
+    "MIX_HOME", "HEX_HOME", "MISE_HOME",
+  }
+  for _, var in ipairs(dev_vars) do
+    if vim.env[var] then
+      env[var] = vim.env[var]
+    end
+  end
+
+  if extra then
+    for k, v in pairs(extra) do
+      env[k] = v
+    end
+  end
+
+  return env
+end
+
+-- Wrap command in login shell for full environment
+local function wrap_cmd_with_shell(cmd)
+  local shell = vim.env.SHELL or "/bin/zsh"
+  return string.format("%s -l -c %s", shell, vim.fn.shellescape(cmd))
+end
+
 -- Add command to history
 local function add_to_history(task)
   local entry = {
@@ -443,32 +484,21 @@ function M.run_task(task, opts)
   local win_config = not opts.background and {
     position = is_custom and "right" or "bottom",
     height = not is_custom and 0.3 or nil,
-    width = is_custom and 0.3 or nil,  -- Smaller width for vertical splits
+    width = is_custom and 0.3 or nil,
   } or nil
 
-  -- Create a unique terminal using a wrapper command to ensure uniqueness
-  -- Add timestamp to make each command unique for Snacks
-  local unique_cmd = cmd
   local timestamp = tostring(vim.loop.hrtime())
-
-  -- For custom commands, wrap in a shell with unique environment variable
-  if task.name:match("^custom:") then
-    -- Use shell -c to run the command with a unique env var
-    local shell = vim.o.shell or "/bin/sh"
-    unique_cmd = string.format("%s -c 'TASK_ID=%s %s'", shell, timestamp, cmd)
-  end
-
-  -- Use Snacks terminal but force it to see each as unique
+  local unique_cmd = wrap_cmd_with_shell(cmd)
+  local env = build_terminal_env({
+    SNACKS_TASK_ID = timestamp,
+    TASK_NAME = task.name,
+  })
   local term = require("snacks").terminal(unique_cmd, {
     cwd = cwd,
     interactive = not opts.background,
     hidden = opts.background or false,
     win = win_config,
-    -- Add unique identifier to prevent caching
-    env = {
-      SNACKS_TASK_ID = timestamp,
-      TASK_NAME = task.name,
-    },
+    env = env,
   })
 
   if not opts.background then
@@ -968,25 +998,21 @@ end
 
 -- Toggle terminal with unique instance
 function M.toggle_terminal()
-  -- Check if terminal instance exists
   if M.terminal_instance and M.terminal_instance.buf and vim.api.nvim_buf_is_valid(M.terminal_instance.buf) then
-    -- Check if terminal is visible
     local wins = vim.fn.win_findbuf(M.terminal_instance.buf)
     if #wins > 0 then
-      -- Terminal is visible, hide it
       M.terminal_instance:hide()
     else
-      -- Terminal is hidden, show it
       M.terminal_instance:show()
       M.terminal_instance:focus()
     end
   else
-    -- Create new terminal instance
     M.terminal_instance = require("snacks").terminal(nil, {
       win = {
         position = "bottom",
         height = 0.3,
-      }
+      },
+      env = build_terminal_env(),
     })
     M.terminal_instance:show()
     M.terminal_instance:focus()
