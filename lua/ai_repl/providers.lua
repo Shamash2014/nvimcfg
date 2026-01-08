@@ -13,6 +13,12 @@ local providers = {
     args = {},
     env = {},
   },
+  goose = {
+    name = "Goose",
+    cmd = "goose",
+    args = {"acp"},
+    env = {},
+  },
 }
 
 function M.get(id)

@@ -12,6 +12,7 @@ return {
       providers = {
         claude = { name = "Claude", cmd = "claude-code-acp", args = {}, env = {} },
         cursor = { name = "Cursor", cmd = "cursor-agent-acp", args = {}, env = {} },
+        goose = { name = "Goose", cmd = "goose", args = {"acp"}, env = {} },
       },
       history_size = 1000,
       permission_mode = "plan",  -- "default" | "acceptEdits" | "plan" | "dontAsk" | "bypassPermissions"
