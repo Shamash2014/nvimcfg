@@ -19,6 +19,12 @@ local providers = {
     args = {"acp"},
     env = {},
   },
+  opencode = {
+    name = "OpenCode",
+    cmd = "opencode",
+    args = {"acp"},
+    env = {},
+  },
 }
 
 function M.get(id)
