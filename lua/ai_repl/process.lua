@@ -324,7 +324,9 @@ function Process:_handle_session_result(result)
   end
 end
 
-function Process:send_prompt(prompt)
+function Process:send_prompt(prompt, opts)
+  opts = opts or {}
+
   if not self:is_ready() then
     if self.config.debug and self._on_debug then
       self:_on_debug("send_prompt: not ready")
@@ -342,7 +344,7 @@ function Process:send_prompt(prompt)
         end
       end
     end
-    table.insert(self.data.prompt_queue, { prompt = prompt, text = text })
+    table.insert(self.data.prompt_queue, { prompt = prompt, text = text, opts = opts })
     if self.config.debug and self._on_debug then
       self:_on_debug("send_prompt: busy, queued")
     end
@@ -358,10 +360,39 @@ function Process:send_prompt(prompt)
     self:_on_debug("send_prompt: sending to session " .. self.session_id)
   end
 
-  return self:send("session/prompt", {
+  prompt = self:_transform_ultrathink(prompt)
+
+  local modes_module = require("ai_repl.modes")
+  local current_mode = modes_module.get_current_mode()
+  local mode_context = nil
+
+  if current_mode == "spec" then
+    local spec_mode = require("ai_repl.spec_mode")
+    local phase = spec_mode.get_current_phase()
+    if phase then
+      local phase_info = spec_mode.get_phase_info(phase)
+      mode_context = {
+        mode = "spec",
+        phase = phase,
+        phase_name = phase_info.name,
+        phase_icon = phase_info.icon,
+        phase_description = phase_info.description,
+        phase_prompts = phase_info.prompts,
+      }
+    end
+  end
+
+  local request_params = {
     sessionId = self.session_id,
     prompt = prompt
-  }, function(result, err)
+  }
+
+  if mode_context then
+    request_params.metadata = request_params.metadata or {}
+    request_params.metadata.mode = mode_context
+  end
+
+  return self:send("session/prompt", request_params, function(result, err)
     if err then
       if self._on_debug then
         self:_on_debug("Prompt error: " .. vim.inspect(err))
@@ -401,7 +432,11 @@ function Process:process_queued_prompts()
   if self.state.busy then return end
   if #self.data.prompt_queue > 0 then
     local next_prompt = table.remove(self.data.prompt_queue, 1)
-    self:send_prompt(next_prompt.prompt or next_prompt)
+    if type(next_prompt) == "table" and next_prompt.prompt then
+      self:send_prompt(next_prompt.prompt, next_prompt.opts)
+    else
+      self:send_prompt(next_prompt)
+    end
   end
 end
 
@@ -452,6 +487,73 @@ function Process:get_agent_name()
     return friendly[name] or name
   end
   return "Agent"
+end
+
+function Process:_transform_ultrathink(prompt)
+  local ULTRATHINK_KEYWORDS = {
+    "ultrathink:",
+    "think harder:",
+    "megathink:",
+    "ultrathought:",
+  }
+
+  local text = ""
+  if type(prompt) == "string" then
+    text = prompt
+  elseif type(prompt) == "table" then
+    for _, block in ipairs(prompt) do
+      if block.type == "text" then
+        text = text .. (block.text or "")
+      end
+    end
+  end
+
+  local has_ultrathink = false
+  local keyword_found = nil
+  for _, keyword in ipairs(ULTRATHINK_KEYWORDS) do
+    if text:lower():match(keyword:lower():gsub(":", "")) then
+      has_ultrathink = true
+      keyword_found = keyword
+      break
+    end
+  end
+
+  if not has_ultrathink then
+    return prompt
+  end
+
+  local provider_id = self.data.provider or "claude"
+
+  if provider_id == "claude" then
+    return prompt
+  end
+
+  local enhanced_prompt = text:gsub(keyword_found:gsub(":", ""), "")
+  enhanced_prompt = [[I need you to think deeply and carefully about this task. Take your time to:
+
+1. Break down the problem into key components
+2. Consider multiple approaches and their trade-offs
+3. Think through edge cases and potential issues
+4. Reason step-by-step through the solution
+5. Validate your reasoning before responding
+
+Task: ]] .. enhanced_prompt
+
+  if type(prompt) == "string" then
+    return enhanced_prompt
+  elseif type(prompt) == "table" then
+    local new_prompt = {}
+    for _, block in ipairs(prompt) do
+      if block.type == "text" then
+        table.insert(new_prompt, { type = "text", text = enhanced_prompt })
+      else
+        table.insert(new_prompt, block)
+      end
+    end
+    return new_prompt
+  end
+
+  return prompt
 end
 
 return Process

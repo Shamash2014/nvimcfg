@@ -114,7 +114,8 @@ local function update_statusline()
   local busy_str = proc and proc.state.busy and " ●" or ""
   local bg_count = count_background_busy()
   local bg_str = bg_count > 0 and (" [" .. bg_count .. " bg]") or ""
-  vim.wo[win].statusline = " " .. provider_name .. " | " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str .. bg_str
+  local skill_str = proc and proc.data.active_skill and (" 🎯 " .. proc.data.active_skill) or ""
+  vim.wo[win].statusline = " " .. provider_name .. " | " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str .. bg_str .. skill_str
 end
 
 local function setup_window_options(win)
@@ -1294,10 +1295,17 @@ function M.handle_command(cmd)
     render.append_content(buf, {
       "", "Commands:",
       "  /help - Show this help",
+      "  /ext - All extensions (skills + commands + local)",
+      "  /ext <category> - Filter by category (skills/agent/session)",
+      "  /cmd - Agent slash commands only",
+      "  /skill - Make a skill available to agent",
+      "  /skill off - Remove skill symlink",
+      "  /skill info <name> - Show skill information",
+      "  /skill verify - Verify all skills for current provider",
       "  /new - New session",
       "  /sessions - List sessions",
-      "  /cm - Agent slash commands",
-      "  /mode <mode> - Set mode",
+      "  /mode [mode] - Show/switch mode (chat/spec)",
+      "  /spec export - Export spec to markdown",
       "  /cwd [path] - Show/change working directory",
       "  /queue - Show queued messages",
       "  /edit [n] - Edit queued message",
@@ -1308,6 +1316,20 @@ function M.handle_command(cmd)
       "  /clear - Clear buffer",
       "  /cancel - Cancel current",
       "  /quit - Close REPL",
+      "",
+      "Extensions System:",
+      "  /ext - Unified picker for skills, agent commands, and local commands",
+      "  Categories: skills, agent, session, messages, security, control, system",
+      "  Use /ext <category> to filter (e.g., /ext skills)",
+      "",
+      "Skills:",
+      "  Skills are agent-side features that agents load automatically",
+      "  when relevant. /skill symlinks to provider-specific paths where",
+      "  agents discover them. Use /skill verify to check accessibility.",
+      "",
+      "Modes:",
+      "  💬 Chat - Free-form conversation (default)",
+      "  📋 Spec - Spec-driven development (Requirements→Design→Tasks→Implementation)",
       ""
     })
   elseif command == "new" then
@@ -1316,10 +1338,12 @@ function M.handle_command(cmd)
     M.open_session_picker()
   elseif command == "mode" then
     if args[1] then
-      M.set_mode(args[1])
+      M.switch_to_mode(args[1])
     else
-      M.show_mode_picker()
+      M.show_mode_status()
     end
+  elseif command == "spec" then
+    M.handle_spec_command(args)
   elseif command == "cwd" then
     if args[1] then
       local new_cwd = vim.fn.expand(args[1])
@@ -1366,46 +1390,20 @@ function M.handle_command(cmd)
       proc.config.debug = config.debug
     end
     render.append_content(buf, { "Debug: " .. tostring(config.debug) })
-  elseif command == "cm" or command == "commands" then
-    if not proc or not proc.data.slash_commands or #proc.data.slash_commands == 0 then
-      render.append_content(buf, { "[!] No agent commands available" })
-      return
-    end
-    local ok, snacks = pcall(require, "snacks")
-    if ok and snacks.picker then
-      local items = {}
-      for _, sc in ipairs(proc.data.slash_commands) do
-        table.insert(items, {
-          text = sc.name .. (sc.description and (" - " .. sc.description) or ""),
-          name = sc.name,
-        })
-      end
-      snacks.picker.pick({
-        source = "select",
-        items = items,
-        prompt = "Slash Commands",
-        format = function(item) return { { item.text } } end,
-        confirm = function(picker, item)
-          picker:close()
-          if item then
-            vim.schedule(function()
-              proc:notify("session/slash_command", {
-                sessionId = proc.session_id,
-                commandName = item.name,
-                args = ""
-              })
-            end)
-          end
-        end,
-      })
+  elseif command == "skill" or command == "skills" then
+    if args[1] == "off" or args[1] == "clear" then
+      M.deactivate_skill()
+    elseif args[1] == "info" and args[2] then
+      M.show_skill_info(args[2])
+    elseif args[1] == "verify" then
+      M.verify_all_skills()
     else
-      local lines = { "", "Agent Commands:" }
-      for _, sc in ipairs(proc.data.slash_commands) do
-        table.insert(lines, "  " .. sc.name .. (sc.description and (" - " .. sc.description) or ""))
-      end
-      table.insert(lines, "")
-      render.append_content(buf, lines)
+      M.show_skill_picker()
     end
+  elseif command == "ext" or command == "extensions" then
+    M.show_extensions_picker(args[1])
+  elseif command == "cm" or command == "commands" or command == "cmd" then
+    M.show_agent_commands_only()
   else
     if proc and proc.data.slash_commands then
       for _, sc in ipairs(proc.data.slash_commands) do
@@ -1420,6 +1418,472 @@ function M.handle_command(cmd)
       end
     end
     render.append_content(buf, { "[!] Unknown command: " .. command })
+  end
+end
+
+function M.show_skill_picker()
+  local skills_module = require("ai_repl.skills")
+  local skills = skills_module.list_skills()
+
+  if #skills == 0 then
+    vim.notify("No skills found in ~/.claude/skills", vim.log.levels.WARN)
+    return
+  end
+
+  local lines = {}
+  for i, skill in ipairs(skills) do
+    local desc = skill.description:sub(1, 100)
+    if #skill.description > 100 then desc = desc .. "..." end
+    table.insert(lines, string.format("%d. %s - %s", i, skill.name, desc))
+  end
+
+  vim.ui.select(lines, {
+    prompt = "Select a skill to activate:",
+  }, function(choice, idx)
+    if choice and idx then
+      M.activate_skill(skills[idx].name)
+    end
+  end)
+end
+
+function M.activate_skill(skill_name)
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active session", vim.log.levels.ERROR)
+    return
+  end
+
+  local skills_module = require("ai_repl.skills")
+  local provider_id = proc.data.provider or config.default_provider
+
+  local success, status = skills_module.ensure_skill_available_for_provider(skill_name, provider_id)
+
+  if not success then
+    vim.notify("Failed to activate skill: " .. status, vim.log.levels.ERROR)
+    return
+  end
+
+  local is_accessible, path = skills_module.verify_skill_accessible(skill_name, provider_id)
+
+  local buf = proc.data.buf
+  if buf then
+    local status_msg = ""
+    if status == "linked" then
+      status_msg = " (symlinked)"
+    elseif status == "copied" then
+      status_msg = " (copied)"
+    elseif status == "already_available" or status == "already_linked" then
+      status_msg = " (already available)"
+    end
+
+    local provider_msg = ""
+    if is_accessible then
+      provider_msg = "\n[Accessible to " .. provider_id .. " at " .. path .. "]"
+    end
+
+    render.append_content(buf, {
+      "",
+      "[Skill made available: " .. skill_name .. status_msg .. "]" .. provider_msg,
+      "[Agent will load when relevant]",
+      ""
+    })
+  end
+
+  proc.data.active_skill = skill_name
+
+  vim.notify("Skill available to " .. provider_id .. ": " .. skill_name, vim.log.levels.INFO)
+end
+
+function M.deactivate_skill()
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active session", vim.log.levels.ERROR)
+    return
+  end
+
+  if not proc.data.active_skill then
+    vim.notify("No skill is currently active", vim.log.levels.INFO)
+    return
+  end
+
+  local skill_name = proc.data.active_skill
+  local skills_module = require("ai_repl.skills")
+  local success, status = skills_module.remove_skill_link(skill_name)
+
+  proc.data.active_skill = nil
+
+  local buf = proc.data.buf
+  if buf then
+    local msg = "[Skill tracking stopped: " .. skill_name .. "]"
+    if success then
+      msg = "[Skill removed: " .. skill_name .. " (symlink removed)]"
+    end
+
+    render.append_content(buf, {
+      "",
+      msg,
+      ""
+    })
+  end
+
+  if success then
+    vim.notify("Skill removed: " .. skill_name, vim.log.levels.INFO)
+  else
+    vim.notify("Skill tracking stopped (manual cleanup may be needed)", vim.log.levels.WARN)
+  end
+end
+
+function M.show_skill_info(skill_name)
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active session", vim.log.levels.ERROR)
+    return
+  end
+
+  local skills_module = require("ai_repl.skills")
+  local skill = skills_module.get_skill(skill_name)
+
+  if not skill then
+    vim.notify("Skill not found: " .. skill_name, vim.log.levels.ERROR)
+    return
+  end
+
+  local provider_id = proc.data.provider or config.default_provider
+  local is_accessible, path = skills_module.verify_skill_accessible(skill_name, provider_id)
+
+  local buf = proc.data.buf
+  if buf then
+    local lines = {
+      "",
+      "Skill: " .. skill.name,
+      "Description: " .. skill.description,
+      "Version: " .. skill.version,
+      "Source: " .. skill.path,
+      "",
+      "Provider: " .. provider_id,
+      "Accessible: " .. (is_accessible and "Yes" or "No"),
+    }
+
+    if is_accessible then
+      table.insert(lines, "Available at: " .. path)
+    end
+
+    table.insert(lines, "")
+    table.insert(lines, "References: " .. #skill.references)
+    table.insert(lines, "Scripts: " .. #skill.scripts)
+    table.insert(lines, "")
+
+    render.append_content(buf, lines)
+  end
+end
+
+function M.verify_all_skills()
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active session", vim.log.levels.ERROR)
+    return
+  end
+
+  local skills_module = require("ai_repl.skills")
+  local all_skills = skills_module.list_skills()
+  local provider_id = proc.data.provider or config.default_provider
+
+  if #all_skills == 0 then
+    vim.notify("No skills found", vim.log.levels.WARN)
+    return
+  end
+
+  local buf = proc.data.buf
+  if buf then
+    local lines = {
+      "",
+      "Skill Accessibility for Provider: " .. provider_id,
+      "",
+    }
+
+    for _, skill in ipairs(all_skills) do
+      local is_accessible, path = skills_module.verify_skill_accessible(skill.name, provider_id)
+      local status = is_accessible and "✓" or "✗"
+      local location = is_accessible and (" (" .. path .. ")") or ""
+      table.insert(lines, "  " .. status .. " " .. skill.name .. location)
+    end
+
+    table.insert(lines, "")
+    render.append_content(buf, lines)
+  end
+
+  vim.notify("Verified " .. #all_skills .. " skills for " .. provider_id, vim.log.levels.INFO)
+end
+
+function M.show_extensions_picker(category_filter)
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active session", vim.log.levels.ERROR)
+    return
+  end
+
+  local extensions_module = require("ai_repl.extensions")
+  local all_extensions = extensions_module.create_unified_picker(proc)
+
+  if category_filter then
+    all_extensions = extensions_module.filter_by_category(all_extensions, category_filter)
+  end
+
+  if #all_extensions == 0 then
+    vim.notify("No extensions available", vim.log.levels.WARN)
+    return
+  end
+
+  local ok, snacks = pcall(require, "snacks")
+  if ok and snacks.picker then
+    local items = {}
+    for _, ext in ipairs(all_extensions) do
+      table.insert(items, {
+        text = extensions_module.format_extension_for_display(ext),
+        extension = ext,
+      })
+    end
+
+    snacks.picker.pick({
+      source = "select",
+      items = items,
+      prompt = category_filter and ("Extensions [" .. category_filter .. "]") or "All Extensions",
+      format = function(item) return { { item.text } } end,
+      confirm = function(picker, item)
+        picker:close()
+        if item and item.extension then
+          vim.schedule(function()
+            M.execute_extension(item.extension)
+          end)
+        end
+      end,
+    })
+  else
+    local buf = proc.data.buf
+    if buf then
+      local lines = { "", "Available Extensions:" }
+
+      local by_category = {}
+      for _, ext in ipairs(all_extensions) do
+        by_category[ext.category] = by_category[ext.category] or {}
+        table.insert(by_category[ext.category], ext)
+      end
+
+      local categories = { "skills", "agent", "session", "messages", "security", "control", "system" }
+      for _, cat in ipairs(categories) do
+        if by_category[cat] then
+          table.insert(lines, "")
+          table.insert(lines, "[" .. cat:upper() .. "]")
+          for _, ext in ipairs(by_category[cat]) do
+            table.insert(lines, "  " .. extensions_module.format_extension_for_display(ext))
+          end
+        end
+      end
+
+      table.insert(lines, "")
+      render.append_content(buf, lines)
+    end
+  end
+end
+
+function M.show_agent_commands_only()
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active session", vim.log.levels.ERROR)
+    return
+  end
+
+  if not proc.data.slash_commands or #proc.data.slash_commands == 0 then
+    local buf = proc.data.buf
+    if buf then
+      render.append_content(buf, { "", "[!] No agent commands available", "" })
+    end
+    vim.notify("No agent commands available", vim.log.levels.WARN)
+    return
+  end
+
+  local ok, snacks = pcall(require, "snacks")
+  if ok and snacks.picker then
+    local items = {}
+    for _, sc in ipairs(proc.data.slash_commands) do
+      table.insert(items, {
+        text = "⚡ " .. sc.name .. (sc.description and (" - " .. sc.description) or ""),
+        command = sc,
+      })
+    end
+
+    snacks.picker.pick({
+      source = "select",
+      items = items,
+      prompt = "Agent Slash Commands",
+      format = function(item) return { { item.text } } end,
+      confirm = function(picker, item)
+        picker:close()
+        if item and item.command then
+          vim.schedule(function()
+            local cmd_text = "/" .. item.command.name
+            render.append_content(proc.data.buf, { "", "> " .. cmd_text, "" })
+            proc:send_prompt(cmd_text)
+          end)
+        end
+      end,
+    })
+  else
+    local buf = proc.data.buf
+    if buf then
+      local lines = { "", "Agent Commands:" }
+      for _, sc in ipairs(proc.data.slash_commands) do
+        table.insert(lines, "  ⚡ " .. sc.name .. (sc.description and (" - " .. sc.description) or ""))
+      end
+      table.insert(lines, "")
+      render.append_content(buf, lines)
+    end
+  end
+end
+
+function M.execute_extension(extension)
+  if extension.type == "skill" then
+    M.activate_skill(extension.name)
+  elseif extension.type == "command" then
+    local proc = registry.active()
+    if proc and proc.data.buf then
+      local cmd_text = "/" .. extension.name
+      render.append_content(proc.data.buf, { "", "> " .. cmd_text, "" })
+      proc:send_prompt(cmd_text)
+    end
+  elseif extension.type == "local" then
+    M.handle_command(extension.name)
+  end
+end
+
+function M.show_mode_status()
+  local proc = registry.active()
+  if not proc then return end
+
+  local modes_module = require("ai_repl.modes")
+  local current_mode = modes_module.get_current_mode()
+  local mode_info = modes_module.get_mode_info(current_mode)
+
+  local lines = { "", "Mode: " .. mode_info.icon .. " " .. mode_info.name }
+
+  for _, mode in ipairs(modes_module.list_modes()) do
+    local marker = mode.id == current_mode and "[*]" or "[ ]"
+    table.insert(lines, marker .. " " .. mode.icon .. " " .. mode.name)
+  end
+
+  if current_mode == "spec" then
+    local spec_mode = require("ai_repl.spec_mode")
+    table.insert(lines, "")
+    table.insert(lines, "Phase: " .. spec_mode.format_progress_display())
+  end
+
+  render.append_content(proc.data.buf, lines)
+end
+
+function M.switch_to_mode(mode_id)
+  local proc = registry.active()
+  if not proc then return end
+
+  local modes_module = require("ai_repl.modes")
+  local success, result = modes_module.switch_mode(mode_id)
+
+  if not success then
+    render.append_content(proc.data.buf, { result })
+    return
+  end
+
+  if result == "already_in_mode" then
+    return
+  end
+
+  local info = result.info
+  render.append_content(proc.data.buf, { "", info.icon .. " " .. info.name .. " mode" })
+
+  if mode_id == "spec" then
+    local spec_mode = require("ai_repl.spec_mode")
+    spec_mode.init_spec_session(proc.session_id)
+
+    local skills_module = require("ai_repl.skills")
+    local has_guide = skills_module.get_skill("spec-mode-guide")
+
+    if has_guide then
+      local accessible = skills_module.verify_skill_accessible("spec-mode-guide", proc.data.provider or "claude")
+      if not accessible then
+        render.append_content(proc.data.buf, {
+          "",
+          "💡 Tip: Activate spec-mode-guide skill for agent guidance",
+          "   Use /skill and select 'spec-mode-guide'"
+        })
+      end
+    end
+
+    render.append_content(proc.data.buf, { "Phase: 📝 Requirements" })
+  end
+end
+
+function M.handle_phase_command(args)
+  local proc = registry.active()
+  if not proc then return end
+
+  local modes_module = require("ai_repl.modes")
+  if not modes_module.is_spec_mode() then
+    render.append_content(proc.data.buf, { "[!] Phase commands require /mode spec" })
+    return
+  end
+
+  local spec_mode = require("ai_repl.spec_mode")
+  local action = args[1]
+
+  if not action then
+    local phase_info = spec_mode.get_phase_info()
+    render.append_content(proc.data.buf, {
+      "", "Current: " .. phase_info.icon .. " " .. phase_info.name,
+      "Actions: /phase next | back | requirements | design | tasks | implementation"
+    })
+    return
+  end
+
+  if action == "next" then
+    local success, result = spec_mode.advance_to_next_phase()
+    if success then
+      local phase_info = spec_mode.get_phase_info()
+      render.append_content(proc.data.buf, { "", "→ " .. phase_info.icon .. " " .. phase_info.name })
+    else
+      render.append_content(proc.data.buf, { result })
+    end
+  elseif action == "back" then
+    local success = spec_mode.move_to_previous_phase()
+    if success then
+      local phase_info = spec_mode.get_phase_info()
+      render.append_content(proc.data.buf, { "", "← " .. phase_info.icon .. " " .. phase_info.name })
+    end
+  elseif action == "requirements" or action == "design" or action == "tasks" or action == "implementation" then
+    spec_mode.jump_to_phase(action)
+    local phase_info = spec_mode.get_phase_info()
+    render.append_content(proc.data.buf, { "", phase_info.icon .. " " .. phase_info.name })
+  end
+end
+
+function M.handle_spec_command(args)
+  local proc = registry.active()
+  if not proc then return end
+
+  local modes_module = require("ai_repl.modes")
+  if not modes_module.is_spec_mode() then
+    render.append_content(proc.data.buf, { "[!] Spec commands require /mode spec" })
+    return
+  end
+
+  local spec_mode = require("ai_repl.spec_mode")
+  local action = args[1]
+
+  if action == "export" then
+    local success, path = spec_mode.export_spec()
+    if success then
+      render.append_content(proc.data.buf, { "", "Exported: " .. path })
+    end
+  else
+    render.append_content(proc.data.buf, { "", "Commands: /spec export" })
   end
 end
 
