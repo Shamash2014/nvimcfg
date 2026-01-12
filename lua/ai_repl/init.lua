@@ -1411,7 +1411,7 @@ function M.handle_command(cmd)
           proc:notify("session/slash_command", {
             sessionId = proc.session_id,
             commandName = sc.name,
-            args = table.concat(args, " ")
+            args = args
           })
           return
         end

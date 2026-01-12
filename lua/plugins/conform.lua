@@ -46,7 +46,7 @@ return {
     },
     format_after_save = {
       async = true,
-      lsp_fallback = true,
+      lsp_fallback = false,
     },
     formatters = {
       shfmt = {

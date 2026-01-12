@@ -382,9 +382,22 @@ function Process:send_prompt(prompt, opts)
     end
   end
 
+  -- Transform prompt to ACP array format if needed
+  local formatted_prompt = prompt
+  if type(prompt) == "string" then
+    formatted_prompt = { { type = "text", text = prompt } }
+  elseif type(prompt) == "table" and #prompt > 0 and type(prompt[1]) == "string" then
+    -- Handle case where prompt is an array of strings
+    local new_prompt = {}
+    for _, text in ipairs(prompt) do
+      table.insert(new_prompt, { type = "text", text = text })
+    end
+    formatted_prompt = new_prompt
+  end
+
   local request_params = {
     sessionId = self.session_id,
-    prompt = prompt
+    prompt = formatted_prompt
   }
 
   if mode_context then
