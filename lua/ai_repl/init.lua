@@ -13,11 +13,41 @@ local config = {
   },
   default_provider = "claude",
   providers = {
-    claude = { name = "Claude", cmd = "claude-code-acp", args = {}, env = {} },
-    cursor = { name = "Cursor", cmd = "cursor-agent-acp", args = {}, env = {} },
+    claude = { 
+      name = "Claude", 
+      cmd = "claude-code-acp", 
+      args = {}, 
+      env = {},
+      permission_mode = "default",
+      background_permissions = "allow_once",
+    },
+    cursor = { 
+      name = "Cursor", 
+      cmd = "cursor-agent-acp", 
+      args = {}, 
+      env = {},
+      permission_mode = "default",
+      background_permissions = "allow_once",
+    },
+    goose = {
+      name = "Goose",
+      cmd = "goose",
+      args = {"acp"},
+      env = {},
+      permission_mode = "default",
+      background_permissions = "allow_once",
+    },
+    opencode = {
+      name = "OpenCode",
+      cmd = "opencode",
+      args = {"acp"},
+      env = {},
+      permission_mode = "default",
+      background_permissions = "allow_once",
+    },
   },
   history_size = 1000,
-  permission_mode = "default",
+  permission_mode = "default",  -- Fallback for providers without specific config
   show_tool_calls = true,
   debug = false,
   reconnect = true,
@@ -481,7 +511,11 @@ local function handle_permission_request(proc, msg_id, params)
       end
     end
 
-    local mode = config.permission_mode
+    -- Get provider-specific permission mode
+    local provider_id = proc.data.provider or config.default_provider
+    local provider_config = config.providers[provider_id] or {}
+    local mode = provider_config.permission_mode or config.permission_mode
+    
     if mode == "bypassPermissions" or mode == "dontAsk" then
       local response = {
         jsonrpc = "2.0",
@@ -610,13 +644,59 @@ local function handle_method(proc, method, params, msg_id)
     if is_active then
       handle_permission_request(proc, msg_id, params)
     else
+      -- Get provider-specific background permission policy
+      local provider_id = proc.data.provider or config.default_provider
+      local provider_config = config.providers[provider_id] or {}
+      local background_mode = provider_config.background_permissions or "allow_once"
+      
+      -- Extract agent-provided options to find appropriate response
+      local agent_options = params.options or {}
+      local tool_call = params.toolCall or {}
+      
+      -- Find option IDs based on agent's provided options
+      local first_allow_id, allow_always_id, default_option_id
+      for _, opt in ipairs(agent_options) do
+        local oid = opt.optionId or opt.id
+        local okind = opt.kind or ""
+        
+        -- Check for agent's marked default
+        if opt.default or opt.isDefault then
+          default_option_id = default_option_id or oid
+        end
+        
+        -- Find allow_always option
+        if oid and (oid:match("allow_always") or oid:match("allowAlways")) then
+          allow_always_id = allow_always_id or oid
+        end
+        
+        -- Find first allow option
+        if oid and okind:match("allow") and not first_allow_id then
+          first_allow_id = oid
+        end
+      end
+      
+      -- Determine which option to select based on provider's background policy
+      local selected_option_id
+      if background_mode == "respect_agent" and default_option_id then
+        -- Use agent's suggested default
+        selected_option_id = default_option_id
+      elseif background_mode == "allow_once" then
+        -- Use first allow option (not always)
+        selected_option_id = first_allow_id or "allow_once"
+      else
+        -- Default to allow_always (backward compatible)
+        selected_option_id = allow_always_id or first_allow_id or "allow_always"
+      end
+      
       local response = {
         jsonrpc = "2.0",
         id = msg_id,
-        result = { outcome = { outcome = "selected", optionId = "allow_always" } }
+        result = { outcome = { outcome = "selected", optionId = selected_option_id } }
       }
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
-      render.append_content(buf, { "[+] Auto-approved (background): " .. (params.toolCall and params.toolCall.title or "tool") })
+      render.append_content(buf, { 
+        "[+] Auto-approved (background " .. background_mode .. "): " .. (tool_call.title or "tool") 
+      })
     end
 
   elseif method == "session/system" or method == "session/notification" then
