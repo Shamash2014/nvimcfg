@@ -1148,10 +1148,19 @@ function M.send_prompt(content, opts)
   local modes_module = require("ai_repl.modes")
   if modes_module.is_ralph_wiggum_mode() and not is_queued and not opts.silent then
     local ralph = require("ai_repl.modes.ralph_wiggum")
-    if ralph.get_iteration_count() == 0 then
-      -- First prompt in Ralph mode, save the original task
+    if ralph.get_iteration_count() == 0 and ralph.is_planning_phase() then
       ralph.set_original_prompt(user_message_text)
-      render.append_content(proc.data.buf, { "", "[🔄 Ralph Wiggum mode enabled - will loop until completion]", "" })
+      local planning_prompt = ralph.get_planning_prompt(user_message_text)
+      render.append_content(proc.data.buf, {
+        "",
+        "┌─ Ralph Wiggum Mode ─────────────────────────",
+        "│ Phase 1: PLANNING (research & docs)",
+        "│ Phase 2: EXECUTION (implementation)",
+        "└─────────────────────────────────────────────",
+        "",
+      })
+      prompt = planning_prompt
+      user_message_text = planning_prompt:sub(1, 100)
     end
   end
 
@@ -1554,11 +1563,14 @@ function M.handle_command(cmd)
     elseif subcommand == "status" then
       local status = ralph.get_status()
       if status.enabled then
+        local phase_display = status.phase == "planning" and "📋 PLANNING" or "⚡ EXECUTION"
         render.append_content(buf, {
           "",
           "┌─ Ralph Wiggum Status ───────────────────────",
           string.format("│ State: %s", status.paused and "PAUSED" or "RUNNING"),
-          string.format("│ Iteration: %d/%d (%d%%)", status.iteration, status.max_iterations, status.progress_pct),
+          string.format("│ Phase: %s", phase_display),
+          string.format("│ Iteration: %d%s", status.iteration, status.phase == "execution" and ("/" .. status.max_iterations .. " (" .. status.progress_pct .. "%)") or ""),
+          string.format("│ Has plan: %s", status.has_plan and "Yes" or "No"),
           string.format("│ Stuck count: %d", status.stuck_count),
           string.format("│ Current delay: %dms", status.backoff_delay),
           "└─────────────────────────────────────────────",
