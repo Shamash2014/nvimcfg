@@ -5,6 +5,9 @@ local PHASE_INFO = {
   design = { name = "Design", icon = "🎨", order = 2 },
   tasks = { name = "Tasks", icon = "✅", order = 3 },
   implementation = { name = "Implementation", icon = "🔨", order = 4 },
+  review = { name = "Review", icon = "🔍", order = 5 },
+  testing = { name = "Testing", icon = "🧪", order = 6 },
+  completion = { name = "Completion", icon = "✅✅", order = 7 },
 }
 
 function M.get_phase_info(phase_id)

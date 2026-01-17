@@ -111,16 +111,18 @@ local function show_summary(buf, ralph)
     table.insert(lines, "│ SDLC Phases:")
     table.insert(lines, string.format("│   📝 Requirements: %d iters", summary.phase_iterations.requirements or 0))
     table.insert(lines, string.format("│   🎨 Design: %d iters", summary.phase_iterations.design or 0))
+    table.insert(lines, string.format("│   ✅ Tasks: %d iters", summary.phase_iterations.tasks or 0))
     table.insert(lines, string.format("│   🔨 Implementation: %d iters", summary.phase_iterations.implementation or 0))
     table.insert(lines, string.format("│   🔍 Review: %d iters", summary.phase_iterations.review or 0))
     table.insert(lines, string.format("│   🧪 Testing: %d iters", summary.phase_iterations.testing or 0))
-    table.insert(lines, string.format("│   ✅ Completion: %d iters", summary.phase_iterations.completion or 0))
+    table.insert(lines, string.format("│   ✅✅ Completion: %d iters", summary.phase_iterations.completion or 0))
   end
 
   table.insert(lines, "│")
   table.insert(lines, "│ Quality Gates:")
   table.insert(lines, string.format("│   Requirements: %s", quality_gates.requirements_approved and "✅" or "⏳"))
   table.insert(lines, string.format("│   Design: %s", quality_gates.design_approved and "✅" or "⏳"))
+  table.insert(lines, string.format("│   Tasks: %s", quality_gates.tasks_approved and "✅" or "⏳"))
   table.insert(lines, string.format("│   Implementation: %s", quality_gates.implementation_complete and "✅" or "⏳"))
   table.insert(lines, string.format("│   Review: %s", quality_gates.review_passed and "✅" or "⏳"))
   table.insert(lines, string.format("│   Tests: %s", quality_gates.tests_passed and "✅" or "⏳"))
@@ -269,6 +271,21 @@ function M.check_and_continue(proc, response_text)
     end
 
     if reason and reason:match("^design_complete:") then
+      ralph.transition_to_tasks()
+      vim.schedule(function()
+        show_phase_transition(buf, "design", "tasks", ralph)
+      end)
+
+      local tasks_prompt = ralph.get_tasks_prompt()
+      vim.defer_fn(function()
+        if ralph.is_enabled() and not ralph.is_paused() then
+          proc:send_prompt(tasks_prompt, { silent = true })
+        end
+      end, 500)
+      return true
+    end
+
+    if reason and reason:match("^tasks_complete:") then
       ralph.update_draft_plan(response_text)
       local plan_status = ralph.get_status()
 
@@ -284,9 +301,14 @@ function M.check_and_continue(proc, response_text)
       vim.schedule(function()
         local lines = {
           "",
-          "┌─ 🎨 Design Phase Complete ──────────────────",
+          "┌─ ✅ Tasks Phase Complete ────────────────────",
           "│",
-          "│ Plan is ready for your review!",
+          "│ Spec is ready for your review!",
+          "│",
+          "│ Planning phases complete:",
+          "│   📝 Requirements ✓",
+          "│   🎨 Design ✓",
+          "│   ✅ Tasks ✓",
           "│",
         }
         if plan_status.steps_total and plan_status.steps_total > 0 then
@@ -297,7 +319,7 @@ function M.check_and_continue(proc, response_text)
         table.insert(lines, "│")
         table.insert(lines, "│ Options:")
         table.insert(lines, "│   [Y] Confirm - Start autonomous execution")
-        table.insert(lines, "│   [N] Reject  - Go back to refine the plan")
+        table.insert(lines, "│   [N] Reject  - Go back to refine tasks")
         table.insert(lines, "│   [E] Edit    - Provide feedback for revision")
         table.insert(lines, "│")
         table.insert(lines, "└────────────────────────────────────────────")
@@ -549,7 +571,7 @@ function M.handle_confirm(proc)
     end
     table.insert(lines, "│")
     table.insert(lines, "│ Execution path:")
-    table.insert(lines, "│   🔨 Implementation → 🔍 Review → 🧪 Testing → ✅ Completion")
+    table.insert(lines, "│   🔨 Implementation → 🔍 Review → 🧪 Testing → ✅✅ Completion")
     table.insert(lines, "│")
     table.insert(lines, "│ Use /ralph pause to stop at any time")
     table.insert(lines, "│")
@@ -557,7 +579,7 @@ function M.handle_confirm(proc)
     table.insert(lines, "")
     render.append_content(buf, lines)
 
-    show_phase_transition(buf, "design", "implementation", ralph)
+    show_phase_transition(buf, "tasks", "implementation", ralph)
   end)
 
   if callback then

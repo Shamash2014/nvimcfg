@@ -25,6 +25,7 @@ local M = {}
 local PHASE = {
   REQUIREMENTS = "requirements",
   DESIGN = "design",
+  TASKS = "tasks",
   IMPLEMENTATION = "implementation",
   REVIEW = "review",
   TESTING = "testing",
@@ -34,19 +35,21 @@ local PHASE = {
 local PHASE_ORDER = {
   [PHASE.REQUIREMENTS] = 1,
   [PHASE.DESIGN] = 2,
-  [PHASE.IMPLEMENTATION] = 3,
-  [PHASE.REVIEW] = 4,
-  [PHASE.TESTING] = 5,
-  [PHASE.COMPLETION] = 6,
+  [PHASE.TASKS] = 3,
+  [PHASE.IMPLEMENTATION] = 4,
+  [PHASE.REVIEW] = 5,
+  [PHASE.TESTING] = 6,
+  [PHASE.COMPLETION] = 7,
 }
 
 local PHASE_INFO = {
   [PHASE.REQUIREMENTS] = { name = "Requirements", icon = "📝", description = "Clarify scope and gather context" },
   [PHASE.DESIGN] = { name = "Design", icon = "🎨", description = "Plan architecture and approach" },
+  [PHASE.TASKS] = { name = "Tasks", icon = "✅", description = "Break down into implementation steps" },
   [PHASE.IMPLEMENTATION] = { name = "Implementation", icon = "🔨", description = "Write code with skill routing" },
   [PHASE.REVIEW] = { name = "Review", icon = "🔍", description = "Code review and quality checks" },
   [PHASE.TESTING] = { name = "Testing", icon = "🧪", description = "Run tests and verify functionality" },
-  [PHASE.COMPLETION] = { name = "Completion", icon = "✅", description = "Final verification and cleanup" },
+  [PHASE.COMPLETION] = { name = "Completion", icon = "✅✅", description = "Final verification and cleanup" },
 }
 
 local SKILL_ROUTING = {
@@ -54,7 +57,6 @@ local SKILL_ROUTING = {
   ui = { patterns = { "ui", "component", "style", "css", "tailwind", "design", "layout", "responsive" }, skill = "ui-styling" },
   figma = { patterns = { "figma", "screenshot", "mockup", "design spec", "pixel" }, skill = "figma-screenshot-implementation" },
   testing = { patterns = { "test", "playwright", "e2e", "browser", "automation" }, skill = "playwright-skill:playwright-skill" },
-  spec = { patterns = { "spec", "requirements", "design doc" }, skill = "spec-mode-guide" },
 }
 
 local ralph_state = {
@@ -81,6 +83,7 @@ local ralph_state = {
   quality_gates = {
     requirements_approved = false,
     design_approved = false,
+    tasks_approved = false,
     implementation_complete = false,
     review_passed = false,
     tests_passed = false,
@@ -88,6 +91,7 @@ local ralph_state = {
   artifacts = {
     requirements = nil,
     design = nil,
+    tasks = nil,
     implementation_summary = nil,
     review_findings = nil,
     test_results = nil,
@@ -123,7 +127,14 @@ local PHASE_TRANSITION_PATTERNS = {
     "%[DESIGN[%s_-]?COMPLETE%]",
     "Design complete",
     "Architecture defined",
+    "Moving to [Tt]asks",
+  },
+  [PHASE.TASKS] = {
+    "%[TASKS?[%s_-]?COMPLETE%]",
+    "Tasks complete",
+    "Implementation plan ready",
     "Moving to [Ii]mplementation",
+    "Spec is ready",
   },
   [PHASE.IMPLEMENTATION] = {
     "%[IMPLEMENTATION[%s_-]?COMPLETE%]",
@@ -153,6 +164,10 @@ local QUALITY_GATE_PATTERNS = {
   design = {
     pass = { "design approved", "architecture looks good", "design is solid" },
     fail = { "design concerns", "architecture issues", "needs redesign" },
+  },
+  tasks = {
+    pass = { "tasks approved", "plan looks good", "ready to implement", "tasks complete" },
+    fail = { "missing tasks", "incomplete plan", "needs more breakdown" },
   },
   review = {
     pass = { "code looks good", "review passed", "no issues found", "lgtm" },
@@ -194,6 +209,7 @@ function M.enable(opts)
   ralph_state.quality_gates = {
     requirements_approved = false,
     design_approved = false,
+    tasks_approved = false,
     implementation_complete = false,
     review_passed = false,
     tests_passed = false,
@@ -201,6 +217,7 @@ function M.enable(opts)
   ralph_state.artifacts = {
     requirements = nil,
     design = nil,
+    tasks = nil,
     implementation_summary = nil,
     review_findings = nil,
     test_results = nil,
@@ -241,7 +258,7 @@ end
 function M.confirm_plan()
   ralph_state.plan_confirmed = true
   ralph_state.awaiting_confirmation = false
-  ralph_state.quality_gates.design_approved = true
+  ralph_state.quality_gates.tasks_approved = true
   ralph_state.phase = PHASE.IMPLEMENTATION
   ralph_state.current_iteration = 0
   ralph_state.stuck_count = 0
@@ -256,7 +273,7 @@ end
 function M.reject_plan(feedback)
   ralph_state.awaiting_confirmation = false
   ralph_state.plan_confirmed = false
-  ralph_state.phase = PHASE.DESIGN
+  ralph_state.phase = PHASE.TASKS
   ralph_state.confirmation_callback = nil
   return feedback
 end
@@ -399,7 +416,9 @@ function M.get_phase()
 end
 
 function M.is_planning_phase()
-  return ralph_state.phase == PHASE.REQUIREMENTS or ralph_state.phase == PHASE.DESIGN
+  return ralph_state.phase == PHASE.REQUIREMENTS
+      or ralph_state.phase == PHASE.DESIGN
+      or ralph_state.phase == PHASE.TASKS
 end
 
 function M.is_execution_phase()
@@ -412,6 +431,10 @@ end
 
 function M.is_design_phase()
   return ralph_state.phase == PHASE.DESIGN
+end
+
+function M.is_tasks_phase()
+  return ralph_state.phase == PHASE.TASKS
 end
 
 function M.is_implementation_phase()
@@ -873,6 +896,13 @@ function M.transition_to_phase(target_phase)
   return true
 end
 
+function M.transition_to_tasks()
+  ralph_state.phase = PHASE.TASKS
+  ralph_state.quality_gates.design_approved = true
+  ralph_state.stuck_count = 0
+  ralph_state.last_response_hash = nil
+end
+
 function M.transition_to_review()
   ralph_state.phase = PHASE.REVIEW
   ralph_state.quality_gates.implementation_complete = true
@@ -960,6 +990,14 @@ function M.should_continue(response_text)
     return true, "design"
   end
 
+  if ralph_state.phase == PHASE.TASKS then
+    local transition, pattern = M.check_phase_transition(response_text)
+    if transition then
+      return false, "tasks_complete:" .. (pattern or "unknown")
+    end
+    return true, "tasks"
+  end
+
   if ralph_state.phase == PHASE.REVIEW then
     local transition, pattern = M.check_phase_transition(response_text)
     if transition then
@@ -1023,24 +1061,24 @@ function M.get_requirements_prompt(original_prompt)
   end
 
   return string.format([[
-[Ralph Wiggum - 📝 REQUIREMENTS PHASE (1/6)]
+[Ralph Wiggum - 📝 REQUIREMENTS PHASE (1/7)]
 
 SDLC Phase: Requirements Gathering
-Goal: Understand scope, clarify ambiguities, gather context
+Goal: Define what needs to be built
 
 TASK: %s
 %s
 
 REQUIREMENTS CHECKLIST:
 1. **Understand the Problem** - What exactly needs to be solved?
-2. **Identify Constraints** - What are the boundaries and limitations?
-3. **Gather Context** - Read relevant code, docs, or references
-4. **Clarify Ambiguities** - List any assumptions or questions
-5. **Define Success Criteria** - How do we know when it's done?
+2. **Identify Users** - Who will use this?
+3. **Core Features** - What are the essential features?
+4. **Acceptance Criteria** - How do we know when it's done?
+5. **Constraints** - What are the boundaries and limitations?
 
 DO:
 - Read existing code to understand patterns
-- Search documentation for relevant APIs
+- Ask clarifying questions if needed
 - List functional requirements clearly
 - Note any technical constraints
 
@@ -1050,14 +1088,29 @@ DON'T:
 - Skip reading existing code
 
 OUTPUT FORMAT:
-## Requirements Summary
-- Problem: [concise statement]
-- Scope: [what's in/out of scope]
-- Constraints: [technical/business constraints]
-- Success Criteria: [how we verify completion]
+## Requirements: [Feature Name]
 
-## Questions/Assumptions
-- [Any clarifications needed]
+### Problem Statement
+[Clear description]
+
+### Users
+- User type 1
+- User type 2
+
+### Core Features
+1. Feature 1
+2. Feature 2
+
+### Acceptance Criteria
+- ✅ Criterion 1
+- ✅ Criterion 2
+
+### Constraints
+[Technical/business constraints]
+
+### Non-Functional Requirements
+- Performance: [requirement]
+- Security: [requirement]
 
 When requirements are clear, say: "Requirements complete. Moving to Design..."
 ]], original_prompt, skill_hint)
@@ -1076,10 +1129,10 @@ function M.get_design_prompt()
   end
 
   return string.format([[
-[Ralph Wiggum - 🎨 DESIGN PHASE (2/6)]
+[Ralph Wiggum - 🎨 DESIGN PHASE (2/7)]
 
 SDLC Phase: Design & Architecture
-Goal: Plan the solution approach before coding
+Goal: Architect the solution before breaking into tasks
 %s%s
 
 Original Task: %s
@@ -1089,32 +1142,114 @@ DESIGN CHECKLIST:
 2. **Data Flow** - How does data move through the system?
 3. **API/Interface Design** - What interfaces are needed?
 4. **Technology Choices** - What tools/libraries to use?
-5. **Implementation Plan** - Ordered steps with dependencies
+5. **Component Breakdown** - What modules/files are needed?
 
 DO:
 - Consider multiple approaches, pick the best
 - Identify potential issues early
-- Break work into small, testable steps
-- Define clear interfaces
+- Define clear interfaces and data models
+- Explain trade-offs in your choices
 
 DON'T:
 - Write implementation code yet
+- Create task lists yet (that's next phase)
 - Over-engineer the solution
 - Ignore existing patterns in codebase
 
 OUTPUT FORMAT:
-## Design Overview
-[High-level approach]
+## Design: [Feature Name]
 
-## Implementation Plan
-- [ ] Step 1: [description] (dependencies: none)
-- [ ] Step 2: [description] (dependencies: step 1)
-- [ ] etc...
+### Architecture
+[Description or diagram]
 
-## Potential Risks
+### Components
+1. Component A
+   - Purpose
+   - Responsibilities
+
+### Data Models
+```typescript
+interface Model {
+  // fields
+}
+```
+
+### API Design
+```
+GET /api/endpoint
+POST /api/endpoint
+```
+
+### Technology Stack
+- [tech choices with rationale]
+
+### Potential Risks
 - [Risk 1 and mitigation]
 
-When design is complete, say: "Design complete. Moving to Implementation..."
+When design is complete, say: "Design complete. Moving to Tasks..."
+]], skillbook_context, skill_hint, original)
+end
+
+function M.get_tasks_prompt()
+  local original = ralph_state.original_prompt or "the task"
+  local skillbook_context = ""
+  if M.has_skills() then
+    skillbook_context = "\n\nLEARNED PATTERNS:\n" .. M.format_skillbook()
+  end
+
+  local skill_hint = ""
+  if ralph_state.active_skill then
+    skill_hint = string.format("\n\n💡 Active skill: %s", ralph_state.active_skill)
+  end
+
+  return string.format([[
+[Ralph Wiggum - ✅ TASKS PHASE (3/7)]
+
+SDLC Phase: Task Breakdown
+Goal: Break design into ordered implementation steps
+%s%s
+
+Original Task: %s
+
+TASKS CHECKLIST:
+1. **Ordered Steps** - Create implementation steps in correct order
+2. **Dependencies** - Identify what depends on what
+3. **Complexity** - Estimate each task's complexity (Low/Medium/High)
+4. **Testability** - Each task should be independently verifiable
+
+DO:
+- Create specific, actionable tasks
+- Include subtasks for complex items
+- Mark dependencies between tasks
+- Keep tasks small and focused
+
+DON'T:
+- Write implementation code yet
+- Skip dependency analysis
+- Create vague or overly broad tasks
+
+OUTPUT FORMAT:
+## Implementation Tasks
+
+### 1. [Task Name] (Complexity: Low/Medium/High)
+- Subtask 1
+- Subtask 2
+Dependencies: None
+
+### 2. [Task Name] (Complexity: Medium)
+- Subtask 1
+Dependencies: Task 1
+
+### 3. [Task Name] (Complexity: Low)
+Dependencies: Tasks 1, 2
+
+[Continue for all tasks...]
+
+---
+
+When tasks are ready, say: "Tasks complete! Ready for your review."
+
+⚠️ IMPORTANT: After this, you will be asked to CONFIRM before implementation begins.
 ]], skillbook_context, skill_hint, original)
 end
 
@@ -1127,7 +1262,7 @@ function M.get_review_prompt()
   end
 
   return string.format([[
-[Ralph Wiggum - 🔍 REVIEW PHASE (4/6)]
+[Ralph Wiggum - 🔍 REVIEW PHASE (5/7)]
 
 SDLC Phase: Code Review & Quality Check
 Goal: Verify implementation quality before testing
@@ -1190,7 +1325,7 @@ function M.get_testing_prompt()
   end
 
   return string.format([[
-[Ralph Wiggum - 🧪 TESTING PHASE (5/6)]
+[Ralph Wiggum - 🧪 TESTING PHASE (6/7)]
 
 SDLC Phase: Testing & Verification
 Goal: Verify implementation works correctly
@@ -1245,7 +1380,7 @@ function M.get_completion_prompt()
   local quality_gates = M.get_quality_gates()
 
   return string.format([[
-[Ralph Wiggum - ✅ COMPLETION PHASE (6/6)]
+[Ralph Wiggum - ✅✅ COMPLETION PHASE (7/7)]
 
 SDLC Phase: Final Verification & Cleanup
 Goal: Confirm task is truly complete
@@ -1259,6 +1394,7 @@ Steps: %d/%d completed
 QUALITY GATES:
 - Requirements: %s
 - Design: %s
+- Tasks: %s
 - Implementation: %s
 - Review: %s
 - Tests: %s
@@ -1293,6 +1429,7 @@ End with: [DONE] or "All tasks complete!"
 ]], original, plan_status, progress.passed, progress.total,
     quality_gates.requirements_approved and "✅" or "⏳",
     quality_gates.design_approved and "✅" or "⏳",
+    quality_gates.tasks_approved and "✅" or "⏳",
     quality_gates.implementation_complete and "✅" or "⏳",
     quality_gates.review_passed and "✅" or "⏳",
     quality_gates.tests_passed and "✅" or "⏳")
@@ -1365,6 +1502,19 @@ When requirements are clear, say: "Requirements complete. Moving to Design..."
   end
 
   if ralph_state.phase == PHASE.DESIGN then
+    return string.format([[
+[Ralph Wiggum - %s %s | Iter %d]
+
+Continue designing:
+- Finalize architecture decisions
+- Define data models and APIs
+- Identify components and their responsibilities
+
+When design is complete, say: "Design complete. Moving to Tasks..."
+]], phase_info.icon, phase_info.name, iteration)
+  end
+
+  if ralph_state.phase == PHASE.TASKS then
     local draft_steps = ralph_state.plan_steps
     if #draft_steps > 0 then
       local step_list = {}
@@ -1375,27 +1525,27 @@ When requirements are clear, say: "Requirements complete. Moving to Design..."
       return string.format([[
 [Ralph Wiggum - %s %s | Iter %d]
 
-Current implementation plan:
+Current task list:
 %s
 
-Refine the design:
+Refine the tasks:
 - Are there missing steps?
 - Are dependencies correct?
-- Is the architecture sound?
+- Are complexities estimated?
 
-When design is complete, say: "Design complete. Moving to Implementation..."
+When tasks are ready, say: "Tasks complete! Ready for your review."
 ]], phase_info.icon, phase_info.name, iteration, table.concat(step_list, "\n"))
     end
 
     return string.format([[
 [Ralph Wiggum - %s %s | Iter %d]
 
-Continue designing:
-- Finalize architecture decisions
-- Create implementation plan with checkbox items
-- Identify dependencies between steps
+Continue breaking down tasks:
+- Create ordered implementation steps
+- Mark dependencies between tasks
+- Estimate complexity (Low/Medium/High)
 
-When design is complete, say: "Design complete. Moving to Implementation..."
+When tasks are ready, say: "Tasks complete! Ready for your review."
 ]], phase_info.icon, phase_info.name, iteration)
   end
 
@@ -1501,6 +1651,7 @@ function M.get_summary()
   local phase_iterations = {
     requirements = 0,
     design = 0,
+    tasks = 0,
     implementation = 0,
     review = 0,
     testing = 0,
@@ -1522,7 +1673,7 @@ function M.get_summary()
   return {
     iterations = ralph_state.current_iteration,
     phase_iterations = phase_iterations,
-    planning_iterations = phase_iterations.requirements + phase_iterations.design,
+    planning_iterations = phase_iterations.requirements + phase_iterations.design + phase_iterations.tasks,
     execution_iterations = phase_iterations.implementation + phase_iterations.review + phase_iterations.testing,
     total_response_chars = total_chars,
     duration_seconds = duration,
@@ -1550,7 +1701,7 @@ function M.get_status()
     phase_name = phase_info and phase_info.name or ralph_state.phase,
     phase_icon = phase_info and phase_info.icon or "🔄",
     phase_order = PHASE_ORDER[ralph_state.phase] or 1,
-    total_phases = 6,
+    total_phases = 7,
     iteration = ralph_state.current_iteration,
     max_iterations = ralph_state.max_iterations,
     progress_pct = math.floor((ralph_state.current_iteration / ralph_state.max_iterations) * 100),
@@ -1609,6 +1760,7 @@ function M.restore_state(state)
   ralph_state.quality_gates = state.quality_gates or {
     requirements_approved = false,
     design_approved = false,
+    tasks_approved = false,
     implementation_complete = false,
     review_passed = false,
     tests_passed = false,
