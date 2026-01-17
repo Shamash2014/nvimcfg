@@ -269,24 +269,49 @@ function M.check_and_continue(proc, response_text)
     end
 
     if reason and reason:match("^design_complete:") then
-      ralph.transition_to_execution(response_text)
-      ralph.quality_gates.design_approved = true
+      ralph.update_draft_plan(response_text)
       local plan_status = ralph.get_status()
+
+      ralph.set_awaiting_confirmation(true, function()
+        local execution_prompt = ralph.get_execution_prompt()
+        vim.defer_fn(function()
+          if ralph.is_enabled() and not ralph.is_paused() then
+            proc:send_prompt(execution_prompt, { silent = true })
+          end
+        end, 300)
+      end)
+
       vim.schedule(function()
-        show_phase_transition(buf, "design", "implementation", ralph)
+        local lines = {
+          "",
+          "┌─ 🎨 Design Phase Complete ──────────────────",
+          "│",
+          "│ Plan is ready for your review!",
+          "│",
+        }
+        if plan_status.steps_total and plan_status.steps_total > 0 then
+          table.insert(lines, string.format("│ 📋 %d implementation steps identified", plan_status.steps_total))
+          table.insert(lines, "│")
+        end
+        table.insert(lines, "│ ⏳ AWAITING YOUR CONFIRMATION")
+        table.insert(lines, "│")
+        table.insert(lines, "│ Options:")
+        table.insert(lines, "│   [Y] Confirm - Start autonomous execution")
+        table.insert(lines, "│   [N] Reject  - Go back to refine the plan")
+        table.insert(lines, "│   [E] Edit    - Provide feedback for revision")
+        table.insert(lines, "│")
+        table.insert(lines, "└────────────────────────────────────────────")
+        table.insert(lines, "")
+        render.append_content(buf, lines)
+
         if plan_status.steps and #plan_status.steps > 0 then
           proc.ui.current_plan = plan_status.steps
           render.render_plan(buf, plan_status.steps)
         end
-      end)
 
-      local execution_prompt = ralph.get_execution_prompt()
-      vim.defer_fn(function()
-        if ralph.is_enabled() and not ralph.is_paused() then
-          proc:send_prompt(execution_prompt, { silent = true })
-        end
-      end, 500)
-      return true
+        M.prompt_plan_confirmation(proc)
+      end)
+      return false
     end
 
     if reason and reason:match("^review_complete:") then
@@ -447,6 +472,155 @@ end
 
 function M.reset()
   reset_ace_cycle()
+end
+
+function M.prompt_plan_confirmation(proc)
+  local ralph = require("ai_repl.modes.ralph_wiggum")
+  local buf = proc.data.buf
+
+  vim.ui.select(
+    { "Yes - Execute the plan", "No - Reject and refine", "Edit - Provide feedback" },
+    {
+      prompt = "🎨 Confirm implementation plan?",
+      format_item = function(item)
+        return item
+      end,
+    },
+    function(choice, idx)
+      if not choice then
+        vim.schedule(function()
+          render.append_content(buf, {
+            "",
+            "[⏸️ Ralph Wiggum: Confirmation cancelled. Use /ralph confirm or /ralph reject]",
+          })
+        end)
+        return
+      end
+
+      if idx == 1 then
+        M.handle_confirm(proc)
+      elseif idx == 2 then
+        M.handle_reject(proc, nil)
+      elseif idx == 3 then
+        vim.ui.input({ prompt = "Feedback for plan revision: " }, function(feedback)
+          if feedback and #feedback > 0 then
+            M.handle_reject(proc, feedback)
+          else
+            vim.schedule(function()
+              render.append_content(buf, {
+                "",
+                "[⏸️ Ralph Wiggum: No feedback provided. Use /ralph reject <feedback>]",
+              })
+            end)
+          end
+        end)
+      end
+    end
+  )
+end
+
+function M.handle_confirm(proc)
+  local ralph = require("ai_repl.modes.ralph_wiggum")
+  local buf = proc.data.buf
+
+  if not ralph.is_awaiting_confirmation() then
+    vim.schedule(function()
+      render.append_content(buf, {
+        "",
+        "[⚠️ Ralph Wiggum: No plan awaiting confirmation]",
+      })
+    end)
+    return false
+  end
+
+  local success, callback = ralph.confirm_plan()
+  local plan_status = ralph.get_status()
+
+  vim.schedule(function()
+    local lines = {
+      "",
+      "┌─ ✅ Plan Confirmed ──────────────────────────",
+      "│",
+      "│ Starting autonomous execution loop!",
+      "│",
+    }
+    if plan_status.steps_total and plan_status.steps_total > 0 then
+      table.insert(lines, string.format("│ 🔨 Executing %d steps...", plan_status.steps_total))
+    end
+    table.insert(lines, "│")
+    table.insert(lines, "│ Execution path:")
+    table.insert(lines, "│   🔨 Implementation → 🔍 Review → 🧪 Testing → ✅ Completion")
+    table.insert(lines, "│")
+    table.insert(lines, "│ Use /ralph pause to stop at any time")
+    table.insert(lines, "│")
+    table.insert(lines, "└────────────────────────────────────────────")
+    table.insert(lines, "")
+    render.append_content(buf, lines)
+
+    show_phase_transition(buf, "design", "implementation", ralph)
+  end)
+
+  if callback then
+    callback()
+  end
+
+  return true
+end
+
+function M.handle_reject(proc, feedback)
+  local ralph = require("ai_repl.modes.ralph_wiggum")
+  local buf = proc.data.buf
+
+  if not ralph.is_awaiting_confirmation() then
+    vim.schedule(function()
+      render.append_content(buf, {
+        "",
+        "[⚠️ Ralph Wiggum: No plan awaiting confirmation]",
+      })
+    end)
+    return false
+  end
+
+  ralph.reject_plan(feedback)
+
+  vim.schedule(function()
+    local lines = {
+      "",
+      "┌─ 🔄 Plan Rejected ───────────────────────────",
+      "│",
+      "│ Going back to refine the design.",
+      "│",
+    }
+    if feedback and #feedback > 0 then
+      table.insert(lines, "│ Your feedback:")
+      table.insert(lines, "│   " .. feedback:sub(1, 50) .. (feedback:len() > 50 and "..." or ""))
+    end
+    table.insert(lines, "│")
+    table.insert(lines, "│ The agent will revise the plan.")
+    table.insert(lines, "│")
+    table.insert(lines, "└────────────────────────────────────────────")
+    table.insert(lines, "")
+    render.append_content(buf, lines)
+  end)
+
+  local revision_prompt = string.format([[
+[Ralph Wiggum - 🎨 Design Revision]
+
+The user has reviewed the plan and requested changes.
+
+%s
+
+Please revise the implementation plan based on this feedback.
+When the revised plan is ready, say: "Design complete. Moving to Implementation..."
+]], feedback and ("User feedback: " .. feedback) or "Please refine and present the plan again for review.")
+
+  vim.defer_fn(function()
+    if ralph.is_enabled() and not ralph.is_paused() then
+      proc:send_prompt(revision_prompt, { silent = true })
+    end
+  end, 500)
+
+  return true
 end
 
 return M

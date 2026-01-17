@@ -8,15 +8,17 @@
 --   Phase 5: Testing (run tests, verify functionality)
 --   Phase 6: Completion (final verification, cleanup)
 --
--- Implements ACE (Agentic Context Engineering) from Stanford:
---   - Skillbook: evolving context of learned strategies
---   - Reflector: analyzes outcomes and extracts insights
---   - SkillManager: updates skillbook with new learnings
+-- Implements ACE (Agentic Context Engineering) from Stanford (arXiv:2510.04618):
+--   - Skillbook: evolving playbook of learned strategies (helpful/harmful/neutral)
+--   - Reflector: analyzes outcomes and extracts insights after each step
+--   - SkillManager: delta updates with similarity checking (grow-and-refine)
+--   - Three roles: Agent, Reflector, SkillManager (same model, different prompts)
+--   - Prevents context collapse via incremental updates
 --
 -- Skill Integration:
 --   - Routes tasks to appropriate skills (debugging, UI, testing, etc.)
 --   - Maintains skill context across iterations
---   - Learns from skill outcomes
+--   - Learns from skill outcomes via ACE reflection loop
 
 local M = {}
 
@@ -90,6 +92,9 @@ local ralph_state = {
     review_findings = nil,
     test_results = nil,
   },
+  awaiting_confirmation = false,
+  plan_confirmed = false,
+  confirmation_callback = nil,
 }
 
 local COMPLETION_PATTERNS = {
@@ -215,6 +220,45 @@ function M.disable()
   ralph_state.stuck_count = 0
   ralph_state.active_skill = nil
   ralph_state.skill_context = {}
+  ralph_state.awaiting_confirmation = false
+  ralph_state.plan_confirmed = false
+  ralph_state.confirmation_callback = nil
+end
+
+function M.is_awaiting_confirmation()
+  return ralph_state.awaiting_confirmation
+end
+
+function M.set_awaiting_confirmation(value, callback)
+  ralph_state.awaiting_confirmation = value
+  ralph_state.confirmation_callback = callback
+end
+
+function M.is_plan_confirmed()
+  return ralph_state.plan_confirmed
+end
+
+function M.confirm_plan()
+  ralph_state.plan_confirmed = true
+  ralph_state.awaiting_confirmation = false
+  ralph_state.quality_gates.design_approved = true
+  ralph_state.phase = PHASE.IMPLEMENTATION
+  ralph_state.current_iteration = 0
+  ralph_state.stuck_count = 0
+  ralph_state.last_response_hash = nil
+
+  local callback = ralph_state.confirmation_callback
+  ralph_state.confirmation_callback = nil
+
+  return true, callback
+end
+
+function M.reject_plan(feedback)
+  ralph_state.awaiting_confirmation = false
+  ralph_state.plan_confirmed = false
+  ralph_state.phase = PHASE.DESIGN
+  ralph_state.confirmation_callback = nil
+  return feedback
 end
 
 function M.get_phase_info(phase_id)
@@ -544,15 +588,121 @@ function M.get_skillbook()
   return ralph_state.skillbook
 end
 
-function M.add_skill(category, skill)
+local function normalize_skill(text)
+  return text:lower():gsub("[%s%p]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function skill_similarity(a, b)
+  local norm_a = normalize_skill(a)
+  local norm_b = normalize_skill(b)
+
+  if norm_a == norm_b then return 1.0 end
+
+  local words_a = {}
+  for word in norm_a:gmatch("%S+") do
+    words_a[word] = true
+  end
+
+  local words_b = {}
+  for word in norm_b:gmatch("%S+") do
+    words_b[word] = true
+  end
+
+  local intersection = 0
+  local union = 0
+
+  for word in pairs(words_a) do
+    union = union + 1
+    if words_b[word] then
+      intersection = intersection + 1
+    end
+  end
+  for word in pairs(words_b) do
+    if not words_a[word] then
+      union = union + 1
+    end
+  end
+
+  if union == 0 then return 0 end
+  return intersection / union
+end
+
+local function find_similar_skill(category, new_skill, threshold)
+  threshold = threshold or 0.6
+  if not ralph_state.skillbook[category] then return nil, nil end
+
+  for i, existing in ipairs(ralph_state.skillbook[category]) do
+    local sim = skill_similarity(existing.content, new_skill)
+    if sim >= threshold then
+      return existing, i
+    end
+  end
+  return nil, nil
+end
+
+function M.add_skill(category, skill, opts)
+  opts = opts or {}
   if not ralph_state.skillbook[category] then
     ralph_state.skillbook[category] = {}
   end
+
+  local existing, idx = find_similar_skill(category, skill, opts.similarity_threshold)
+
+  if existing then
+    existing.use_count = existing.use_count + 1
+    existing.last_seen = os.time()
+    if opts.merge and #skill > #existing.content then
+      existing.content = skill
+    end
+    return false, "merged"
+  end
+
   table.insert(ralph_state.skillbook[category], {
     content = skill,
     created_at = os.time(),
-    use_count = 0,
+    last_seen = os.time(),
+    use_count = 1,
   })
+  return true, "added"
+end
+
+function M.prune_skillbook(max_per_category)
+  max_per_category = max_per_category or 10
+
+  for category, skills in pairs(ralph_state.skillbook) do
+    if #skills > max_per_category then
+      table.sort(skills, function(a, b)
+        return (a.use_count or 0) > (b.use_count or 0)
+      end)
+
+      while #skills > max_per_category do
+        table.remove(skills)
+      end
+    end
+  end
+end
+
+function M.get_skill_stats()
+  local stats = {
+    total = 0,
+    helpful = #ralph_state.skillbook.helpful,
+    harmful = #ralph_state.skillbook.harmful,
+    neutral = #ralph_state.skillbook.neutral,
+    most_used = nil,
+  }
+  stats.total = stats.helpful + stats.harmful + stats.neutral
+
+  local max_use = 0
+  for _, category in pairs(ralph_state.skillbook) do
+    for _, skill in ipairs(category) do
+      if (skill.use_count or 0) > max_use then
+        max_use = skill.use_count
+        stats.most_used = skill.content
+      end
+    end
+  end
+
+  return stats
 end
 
 function M.format_skillbook()
@@ -1414,6 +1564,8 @@ function M.get_status()
     steps_percent = steps_progress.percent,
     active_skill = ralph_state.active_skill,
     quality_gates = ralph_state.quality_gates,
+    awaiting_confirmation = ralph_state.awaiting_confirmation,
+    plan_confirmed = ralph_state.plan_confirmed,
   }
 end
 
@@ -1434,6 +1586,8 @@ function M.save_state()
     skill_context = ralph_state.skill_context,
     quality_gates = ralph_state.quality_gates,
     artifacts = ralph_state.artifacts,
+    awaiting_confirmation = ralph_state.awaiting_confirmation,
+    plan_confirmed = ralph_state.plan_confirmed,
   }
 end
 
@@ -1460,6 +1614,9 @@ function M.restore_state(state)
     tests_passed = false,
   }
   ralph_state.artifacts = state.artifacts or {}
+  ralph_state.awaiting_confirmation = state.awaiting_confirmation or false
+  ralph_state.plan_confirmed = state.plan_confirmed or false
+  ralph_state.confirmation_callback = nil
   return true
 end
 
