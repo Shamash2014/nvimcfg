@@ -14,6 +14,7 @@ return {
         cursor = { name = "Cursor", cmd = "cursor-agent-acp", args = {}, env = {} },
         goose = { name = "Goose", cmd = "goose", args = {"acp"}, env = {} },
         opencode = { name = "OpenCode", cmd = "opencode", args = {"acp"}, env = {} },
+        codex = { name = "Codex", cmd = "codex-acp", args = {}, env = {} },
       },
       history_size = 1000,
       permission_mode = "plan",
@@ -24,13 +25,13 @@ return {
     {
       "<leader>ar",
       function() require("ai_repl").toggle() end,
-      mode = { "n", "v", "i" },
+      mode = "n",
       desc = "Toggle AI REPL"
     },
     {
       "<leader>aa",
       function() require("ai_repl").new_session() end,
-      mode = { "n", "v", "i" },
+      mode = "n",
       desc = "New AI REPL session"
     },
     {

@@ -3,6 +3,7 @@ local M = {}
 local MODE_INFO = {
   chat = { name = "Chat", icon = "💬", description = "Free-form conversation" },
   spec = { name = "Spec", icon = "📋", description = "Spec-driven: Requirements→Design→Tasks→Implementation" },
+  ralph_wiggum = { name = "Ralph Wiggum", icon = "🔄", description = "Persistent looping until task completion" },
 }
 
 local current_mode = "chat"
@@ -30,12 +31,30 @@ function M.switch_mode(mode_id)
   if mode_id == current_mode then
     return true, "already_in_mode"
   end
+  
+  -- Disable previous mode if needed
+  if current_mode == "ralph_wiggum" then
+    local ralph = require("ai_repl.modes.ralph_wiggum")
+    ralph.disable()
+  end
+  
   current_mode = mode_id
+  
+  -- Enable new mode if needed
+  if mode_id == "ralph_wiggum" then
+    local ralph = require("ai_repl.modes.ralph_wiggum")
+    ralph.enable()
+  end
+  
   return true, { info = MODE_INFO[mode_id] }
 end
 
 function M.is_spec_mode()
   return current_mode == "spec"
+end
+
+function M.is_ralph_wiggum_mode()
+  return current_mode == "ralph_wiggum"
 end
 
 return M

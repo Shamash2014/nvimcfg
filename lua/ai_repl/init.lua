@@ -4,6 +4,7 @@ local Process = require("ai_repl.process")
 local registry = require("ai_repl.registry")
 local render = require("ai_repl.render")
 local providers = require("ai_repl.providers")
+local ralph_helper = require("ai_repl.ralph_helper")
 
 local config = {
   window = {
@@ -374,6 +375,13 @@ local function handle_session_update(proc, params)
     local queue_count = #proc.data.prompt_queue
     local queue_info = queue_count > 0 and (" [" .. queue_count .. " queued]") or ""
     render.append_content(buf, { "", (reason_msgs[reason] or "---") .. mode_str .. queue_info, "" })
+
+    -- Ralph Wiggum mode: Check if we should continue looping
+    local response_text = proc.ui.streaming_response or ""
+    local ralph_continuing = ralph_helper.check_and_continue(proc, response_text)
+    if ralph_continuing then
+      return -- Don't process queued prompts, Ralph is handling it
+    end
 
     update_statusline()
 
@@ -1136,6 +1144,17 @@ function M.send_prompt(content, opts)
 
   local is_queued = proc.state.busy
 
+  -- Initialize Ralph Wiggum mode if enabled
+  local modes_module = require("ai_repl.modes")
+  if modes_module.is_ralph_wiggum_mode() and not is_queued and not opts.silent then
+    local ralph = require("ai_repl.modes.ralph_wiggum")
+    if ralph.get_iteration_count() == 0 then
+      -- First prompt in Ralph mode, save the original task
+      ralph.set_original_prompt(user_message_text)
+      render.append_content(proc.data.buf, { "", "[🔄 Ralph Wiggum mode enabled - will loop until completion]", "" })
+    end
+  end
+
   if not opts.silent then
     if is_queued then
       local queue_pos = #proc.data.prompt_queue + 1
@@ -1397,6 +1416,14 @@ function M.handle_command(cmd)
       "  /cancel - Cancel current",
       "  /quit - Close REPL",
       "",
+      "Ralph Wiggum:",
+      "  /ralph pause   - Pause looping",
+      "  /ralph resume  - Resume looping",
+      "  /ralph stop    - Stop and show summary",
+      "  /ralph status  - Show current status",
+      "  /ralph history - Show iteration history",
+      "  /ralph max N   - Set max iterations",
+      "",
       "Extensions System:",
       "  /ext - Unified picker for skills, agent commands, and local commands",
       "  Categories: skills, agent, session, messages, security, control, system",
@@ -1410,6 +1437,7 @@ function M.handle_command(cmd)
       "Modes:",
       "  💬 Chat - Free-form conversation (default)",
       "  📋 Spec - Spec-driven development (Requirements→Design→Tasks→Implementation)",
+      "  🔄 Ralph Wiggum - Persistent looping until task completion (works with ALL providers)",
       ""
     })
   elseif command == "new" then
@@ -1484,6 +1512,97 @@ function M.handle_command(cmd)
     M.show_extensions_picker(args[1])
   elseif command == "cm" or command == "commands" or command == "cmd" then
     M.show_agent_commands_only()
+  elseif command == "ralph" then
+    local ralph = require("ai_repl.modes.ralph_wiggum")
+    local modes = require("ai_repl.modes")
+    local subcommand = args[1]
+
+    if subcommand == "pause" then
+      if ralph.pause() then
+        render.append_content(buf, { "", "[⏸️ Ralph Wiggum paused. Use /ralph resume to continue]" })
+      else
+        render.append_content(buf, { "", "[!] Ralph Wiggum not active" })
+      end
+    elseif subcommand == "resume" then
+      if ralph.resume() then
+        render.append_content(buf, { "", "[▶️ Ralph Wiggum resumed]" })
+        if proc then
+          local continuation = ralph.get_continuation_prompt()
+          vim.defer_fn(function()
+            proc:send_prompt(continuation, { silent = true })
+          end, 500)
+        end
+      else
+        render.append_content(buf, { "", "[!] Ralph Wiggum not paused or not active" })
+      end
+    elseif subcommand == "stop" or subcommand == "cancel" then
+      if ralph.is_enabled() then
+        local summary = ralph.get_summary()
+        ralph.disable()
+        modes.switch_mode("chat")
+        render.append_content(buf, { "", "[⏹️ Ralph Wiggum stopped]" })
+        if summary then
+          render.append_content(buf, {
+            "┌─ Final Summary ─────────────────────────────",
+            string.format("│ Completed iterations: %d", summary.iterations),
+            "└─────────────────────────────────────────────",
+          })
+        end
+      else
+        render.append_content(buf, { "", "[!] Ralph Wiggum not active" })
+      end
+    elseif subcommand == "status" then
+      local status = ralph.get_status()
+      if status.enabled then
+        render.append_content(buf, {
+          "",
+          "┌─ Ralph Wiggum Status ───────────────────────",
+          string.format("│ State: %s", status.paused and "PAUSED" or "RUNNING"),
+          string.format("│ Iteration: %d/%d (%d%%)", status.iteration, status.max_iterations, status.progress_pct),
+          string.format("│ Stuck count: %d", status.stuck_count),
+          string.format("│ Current delay: %dms", status.backoff_delay),
+          "└─────────────────────────────────────────────",
+        })
+      else
+        render.append_content(buf, { "", "[i] Ralph Wiggum not active" })
+      end
+    elseif subcommand == "history" then
+      local history = ralph.get_history()
+      if #history == 0 then
+        render.append_content(buf, { "", "[i] No iteration history" })
+      else
+        local lines = { "", "┌─ Iteration History ─────────────────────────" }
+        for _, entry in ipairs(history) do
+          table.insert(lines, string.format("│ #%d: %d chars%s",
+            entry.iteration,
+            entry.response_length or 0,
+            entry.stuck_count > 0 and " (stuck:" .. entry.stuck_count .. ")" or ""
+          ))
+        end
+        table.insert(lines, "└─────────────────────────────────────────────")
+        render.append_content(buf, lines)
+      end
+    elseif subcommand == "max" and args[2] then
+      local new_max = tonumber(args[2])
+      if new_max and new_max > 0 then
+        ralph.enable({ max_iterations = new_max })
+        render.append_content(buf, { "", "[i] Max iterations set to " .. new_max })
+      else
+        render.append_content(buf, { "", "[!] Invalid number" })
+      end
+    else
+      render.append_content(buf, {
+        "", "Ralph Wiggum Commands:",
+        "  /ralph pause   - Pause looping",
+        "  /ralph resume  - Resume looping",
+        "  /ralph stop    - Stop and show summary",
+        "  /ralph status  - Show current status",
+        "  /ralph history - Show iteration history",
+        "  /ralph max N   - Set max iterations",
+        "",
+        "To enable Ralph mode: /mode ralph_wiggum",
+      })
+    end
   else
     if proc and proc.data.slash_commands then
       for _, sc in ipairs(proc.data.slash_commands) do
