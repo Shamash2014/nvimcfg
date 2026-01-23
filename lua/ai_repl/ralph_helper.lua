@@ -13,6 +13,13 @@
 --   - Reflector analyzes outcome and extracts learnings
 --   - SkillManager updates skillbook with new insights
 --   - Loop continues with enriched context
+--
+-- Ralph Loop: Simple re-injection loop for ACP agents
+--   - Stop hook intercepts agent exit
+--   - Re-injects the SAME prompt until completion
+--   - Completion detected via exact string match (completion_promise)
+--   - Circuit breaker after N consecutive completion signals
+--   - Response timeout kicks if agent stalls
 
 local M = {}
 local render = require("ai_repl.render")
@@ -30,6 +37,507 @@ local ace_state = {
   max_reflections_per_step = 1,
   last_phase = nil,
 }
+
+local LOOP_PHASE = {
+  PLANNING = "planning",
+  AWAITING_CONFIRMATION = "awaiting_confirmation",
+  EXECUTING = "executing",
+}
+
+local ralph_loop = {
+  enabled = false,
+  phase = nil,
+  original_prompt = nil,
+  plan_prompt = nil,
+  execution_prompt = nil,
+  completion_promise = nil,
+  max_iterations = 150,
+  current_iteration = 0,
+  consecutive_completion_signals = 0,
+  circuit_breaker_threshold = 5,
+  response_timeout_ms = 60000,
+  response_timer = nil,
+  last_activity_time = nil,
+  confirmation_callback = nil,
+}
+
+function M.stop_response_monitoring()
+  if ralph_loop.response_timer then
+    ralph_loop.response_timer:stop()
+    ralph_loop.response_timer:close()
+    ralph_loop.response_timer = nil
+  end
+end
+
+function M.start_response_monitoring(proc)
+  M.stop_response_monitoring()
+
+  ralph_loop.last_activity_time = vim.uv.now()
+  ralph_loop.response_timer = vim.uv.new_timer()
+
+  ralph_loop.response_timer:start(ralph_loop.response_timeout_ms, 0, function()
+    vim.schedule(function()
+      if ralph_loop.enabled and proc and proc.job_id then
+        local buf = proc.data.buf
+
+        if ralph_loop.phase == LOOP_PHASE.PLANNING then
+          render.append_content(buf, {
+            "",
+            string.format("[⏰ Ralph Loop: Response timeout (%ds) - continuing planning]",
+              ralph_loop.response_timeout_ms / 1000)
+          })
+          M.continue_planning(proc)
+        elseif ralph_loop.phase == LOOP_PHASE.EXECUTING then
+          render.append_content(buf, {
+            "",
+            string.format("[⏰ Ralph Loop: Response timeout (%ds) - re-injecting prompt]",
+              ralph_loop.response_timeout_ms / 1000)
+          })
+          M.continue_loop(proc)
+        end
+      end
+    end)
+  end)
+end
+
+function M.record_activity()
+  if not ralph_loop.enabled then
+    return
+  end
+
+  ralph_loop.last_activity_time = vim.uv.now()
+
+  if ralph_loop.response_timer then
+    ralph_loop.response_timer:stop()
+    ralph_loop.response_timer:start(ralph_loop.response_timeout_ms, 0, function()
+      vim.schedule(function()
+        if ralph_loop.enabled then
+          local proc = require("ai_repl.registry").active()
+          if proc and proc.job_id then
+            if ralph_loop.phase == LOOP_PHASE.PLANNING then
+              M.continue_planning(proc)
+            elseif ralph_loop.phase == LOOP_PHASE.EXECUTING then
+              M.continue_loop(proc)
+            end
+          end
+        end
+      end)
+    end)
+  end
+end
+
+function M.should_exit_loop(response_text)
+  if ralph_loop.current_iteration >= ralph_loop.max_iterations then
+    return true, "max_iterations"
+  end
+
+  if ralph_loop.consecutive_completion_signals >= ralph_loop.circuit_breaker_threshold then
+    return true, "circuit_breaker"
+  end
+
+  if response_text:match("EXIT_SIGNAL:%s*true") and ralph_loop.consecutive_completion_signals >= 1 then
+    return true, "exit_signal"
+  end
+
+  return false, nil
+end
+
+function M.continue_loop(proc)
+  if not ralph_loop.enabled then
+    return
+  end
+
+  local prompt_to_send = ralph_loop.execution_prompt or ralph_loop.original_prompt
+  if not prompt_to_send then
+    return
+  end
+
+  local buf = proc.data.buf
+
+  vim.schedule(function()
+    render.append_content(buf, {
+      "",
+      string.format("[🔄 Ralph Loop: Iteration %d/%d]",
+        ralph_loop.current_iteration + 1, ralph_loop.max_iterations)
+    })
+  end)
+
+  vim.defer_fn(function()
+    if ralph_loop.enabled and ralph_loop.phase == LOOP_PHASE.EXECUTING and proc and proc.job_id then
+      proc:send_prompt(prompt_to_send, { silent = true })
+      M.start_response_monitoring(proc)
+    end
+  end, 500)
+end
+
+function M.end_loop(proc, reason)
+  M.stop_response_monitoring()
+  ralph_loop.enabled = false
+
+  local buf = proc.data.buf
+  local phase_str = ralph_loop.phase == LOOP_PHASE.PLANNING and "planning"
+    or ralph_loop.phase == LOOP_PHASE.AWAITING_CONFIRMATION and "awaiting confirmation"
+    or "execution"
+
+  local reason_msgs = {
+    complete = "[✅ Ralph Loop: Completion promise matched - task complete!]",
+    max_iterations = string.format("[⚠️ Ralph Loop: Max iterations reached (%d)]", ralph_loop.max_iterations),
+    circuit_breaker = string.format("[🛑 Ralph Loop: Circuit breaker triggered (%d consecutive signals)]",
+      ralph_loop.circuit_breaker_threshold),
+    exit_signal = "[🏁 Ralph Loop: Exit signal received]",
+    cancelled = string.format("[❌ Ralph Loop: Cancelled by user (was in %s phase)]", phase_str),
+  }
+
+  vim.schedule(function()
+    render.append_content(buf, {
+      "",
+      reason_msgs[reason] or "[Ralph Loop: Ended]",
+      string.format("Total execution iterations: %d", ralph_loop.current_iteration),
+      "",
+    })
+  end)
+
+  ralph_loop.phase = nil
+  ralph_loop.original_prompt = nil
+  ralph_loop.plan_prompt = nil
+  ralph_loop.execution_prompt = nil
+  ralph_loop.completion_promise = nil
+  ralph_loop.current_iteration = 0
+  ralph_loop.consecutive_completion_signals = 0
+end
+
+function M.on_agent_stop(proc, response_text)
+  if not ralph_loop.enabled then
+    return false
+  end
+
+  M.stop_response_monitoring()
+
+  if ralph_loop.phase == LOOP_PHASE.PLANNING then
+    local plan_ready = M.detect_plan_ready(response_text)
+    if plan_ready then
+      ralph_loop.phase = LOOP_PHASE.AWAITING_CONFIRMATION
+      M.prompt_loop_confirmation(proc, response_text)
+      return false
+    end
+
+    M.continue_planning(proc)
+    return true
+  end
+
+  if ralph_loop.phase == LOOP_PHASE.AWAITING_CONFIRMATION then
+    return false
+  end
+
+  if ralph_loop.phase == LOOP_PHASE.EXECUTING then
+    ralph_loop.current_iteration = ralph_loop.current_iteration + 1
+
+    if ralph_loop.completion_promise and response_text:match(vim.pesc(ralph_loop.completion_promise)) then
+      ralph_loop.consecutive_completion_signals = ralph_loop.consecutive_completion_signals + 1
+    else
+      ralph_loop.consecutive_completion_signals = 0
+    end
+
+    local should_exit, reason = M.should_exit_loop(response_text)
+    if should_exit then
+      M.end_loop(proc, reason)
+      return false
+    end
+
+    if ralph_loop.completion_promise and ralph_loop.consecutive_completion_signals >= 1 then
+      M.end_loop(proc, "complete")
+      return false
+    end
+
+    M.continue_loop(proc)
+    return true
+  end
+
+  return false
+end
+
+function M.detect_plan_ready(response_text)
+  if not response_text then return false end
+  local ralph = require("ai_repl.modes.ralph_wiggum")
+  local ready, _ = ralph.check_plan_ready(response_text)
+  if ready then return true end
+
+  local step_count = 0
+  for _ in response_text:gmatch("%d+%.%s+[^\n]+") do
+    step_count = step_count + 1
+  end
+  return step_count >= 3
+end
+
+function M.continue_planning(proc)
+  if not ralph_loop.enabled then return end
+
+  local buf = proc.data.buf
+  vim.schedule(function()
+    render.append_content(buf, { "", "[📋 Ralph Loop: Continuing to plan...]" })
+  end)
+
+  vim.defer_fn(function()
+    if ralph_loop.enabled and ralph_loop.phase == LOOP_PHASE.PLANNING then
+      local continuation = [[
+Continue planning. When the plan is complete and ready for execution, output:
+
+[PLAN_READY]
+
+Make sure to include numbered steps for implementation.
+]]
+      proc:send_prompt(continuation, { silent = true })
+      M.start_response_monitoring(proc)
+    end
+  end, 500)
+end
+
+function M.prompt_loop_confirmation(proc, plan_text)
+  local buf = proc.data.buf
+
+  vim.schedule(function()
+    render.append_content(buf, {
+      "",
+      "┌─ 📋 Plan Ready ──────────────────────────────",
+      "│",
+      "│ The agent has created an implementation plan.",
+      "│",
+      "│ ⏳ AWAITING YOUR CONFIRMATION",
+      "│",
+      "│ Options:",
+      "│   [Y] Confirm - Start autonomous execution loop",
+      "│   [N] Reject  - Cancel the loop",
+      "│   [E] Edit    - Provide feedback for revision",
+      "│",
+      "└────────────────────────────────────────────",
+      "",
+    })
+
+    vim.ui.select(
+      { "Yes - Execute the plan", "No - Cancel loop", "Edit - Provide feedback" },
+      {
+        prompt = "📋 Confirm execution plan?",
+        format_item = function(item)
+          return item
+        end,
+      },
+      function(choice, idx)
+        if not choice then
+          vim.schedule(function()
+            render.append_content(buf, {
+              "",
+              "[⏸️ Ralph Loop: Confirmation pending. Use /cancel-ralph to abort]",
+            })
+          end)
+          return
+        end
+
+        if idx == 1 then
+          M.confirm_loop_plan(proc)
+        elseif idx == 2 then
+          M.cancel_loop(proc)
+        elseif idx == 3 then
+          vim.ui.input({ prompt = "Feedback for plan revision: " }, function(feedback)
+            if feedback and #feedback > 0 then
+              M.revise_loop_plan(proc, feedback)
+            else
+              vim.schedule(function()
+                render.append_content(buf, {
+                  "",
+                  "[⏸️ Ralph Loop: No feedback provided. Waiting for confirmation...]",
+                })
+              end)
+            end
+          end)
+        end
+      end
+    )
+  end)
+end
+
+function M.confirm_loop_plan(proc)
+  if not ralph_loop.enabled then return end
+
+  ralph_loop.phase = LOOP_PHASE.EXECUTING
+  ralph_loop.current_iteration = 0
+  ralph_loop.consecutive_completion_signals = 0
+
+  local buf = proc.data.buf
+  vim.schedule(function()
+    render.append_content(buf, {
+      "",
+      "┌─ ✅ Plan Confirmed ──────────────────────────",
+      "│",
+      "│ Starting autonomous execution loop!",
+      "│",
+      string.format("│ Max iterations: %d", ralph_loop.max_iterations),
+      string.format("│ Completion promise: %s", ralph_loop.completion_promise or "(none)"),
+      "│",
+      "│ Use /cancel-ralph to stop at any time",
+      "│",
+      "└────────────────────────────────────────────",
+      "",
+    })
+  end)
+
+  vim.defer_fn(function()
+    if ralph_loop.enabled and ralph_loop.phase == LOOP_PHASE.EXECUTING then
+      proc:send_prompt(ralph_loop.execution_prompt, { silent = true })
+      M.start_response_monitoring(proc)
+    end
+  end, 500)
+end
+
+function M.revise_loop_plan(proc, feedback)
+  if not ralph_loop.enabled then return end
+
+  ralph_loop.phase = LOOP_PHASE.PLANNING
+
+  local buf = proc.data.buf
+  vim.schedule(function()
+    render.append_content(buf, {
+      "",
+      "┌─ 🔄 Plan Revision ───────────────────────────",
+      "│",
+      "│ Your feedback: " .. feedback:sub(1, 50) .. (feedback:len() > 50 and "..." or ""),
+      "│",
+      "│ The agent will revise the plan.",
+      "│",
+      "└────────────────────────────────────────────",
+      "",
+    })
+  end)
+
+  local revision_prompt = string.format([[
+The user has reviewed the plan and requested changes.
+
+User feedback: %s
+
+Please revise the implementation plan based on this feedback.
+When the revised plan is ready, output: [PLAN_READY]
+]], feedback)
+
+  vim.defer_fn(function()
+    if ralph_loop.enabled and ralph_loop.phase == LOOP_PHASE.PLANNING then
+      proc:send_prompt(revision_prompt, { silent = true })
+      M.start_response_monitoring(proc)
+    end
+  end, 500)
+end
+
+function M.start_loop(proc, prompt, opts)
+  opts = opts or {}
+
+  ralph_loop.enabled = true
+  ralph_loop.phase = LOOP_PHASE.PLANNING
+  ralph_loop.original_prompt = prompt
+  ralph_loop.completion_promise = opts.completion_promise
+  ralph_loop.max_iterations = opts.max_iterations or 150
+  ralph_loop.current_iteration = 0
+  ralph_loop.consecutive_completion_signals = 0
+  ralph_loop.circuit_breaker_threshold = opts.circuit_breaker_threshold or 5
+  ralph_loop.response_timeout_ms = opts.response_timeout_ms or 60000
+
+  ralph_loop.plan_prompt = string.format([[
+[Ralph Loop - 📋 PLANNING PHASE]
+
+TASK: %s
+
+Before executing, create an implementation plan:
+
+1. **Understand the Task** - What exactly needs to be done?
+2. **Break Down Steps** - Create numbered implementation steps
+3. **Identify Dependencies** - What must happen in what order?
+4. **Define Completion Criteria** - How do we know when it's done?
+
+OUTPUT FORMAT:
+## Implementation Plan
+
+### Steps
+1. [First step]
+2. [Second step]
+3. [Third step]
+...
+
+### Completion Criteria
+- [How to verify completion]
+
+When the plan is ready, output: [PLAN_READY]
+
+DO NOT start implementation yet. Just create the plan.
+]], prompt)
+
+  ralph_loop.execution_prompt = string.format([[
+[Ralph Loop - 🔨 EXECUTION PHASE]
+
+Execute the approved plan for: %s
+
+Work through each step systematically:
+1. Execute the current step
+2. Verify it completed successfully
+3. Move to the next step
+
+%s
+
+When ALL steps are complete and the task is done, output: %s
+
+Continue execution...
+]], prompt,
+    ralph_loop.completion_promise and ("When finished, include: " .. ralph_loop.completion_promise) or "",
+    ralph_loop.completion_promise or "[DONE]")
+
+  local buf = proc.data.buf
+  vim.schedule(function()
+    render.append_content(buf, {
+      "",
+      "┌─ 🔄 Ralph Loop Started ────────────────────",
+      "│",
+      "│ Phase: 📋 PLANNING (will ask for confirmation)",
+      "│",
+      string.format("│ Max iterations: %d", ralph_loop.max_iterations),
+      string.format("│ Completion promise: %s", ralph_loop.completion_promise or "(none)"),
+      string.format("│ Response timeout: %ds", ralph_loop.response_timeout_ms / 1000),
+      "│",
+      "│ Use /cancel-ralph to stop the loop",
+      "│",
+      "└────────────────────────────────────────────",
+      "",
+    })
+  end)
+
+  proc:send_prompt(ralph_loop.plan_prompt, { silent = false })
+  M.start_response_monitoring(proc)
+end
+
+function M.cancel_loop(proc)
+  if not ralph_loop.enabled then
+    return false
+  end
+
+  M.end_loop(proc, "cancelled")
+  return true
+end
+
+function M.is_loop_enabled()
+  return ralph_loop.enabled
+end
+
+function M.get_loop_status()
+  local phase_display = ralph_loop.phase == LOOP_PHASE.PLANNING and "📋 Planning"
+    or ralph_loop.phase == LOOP_PHASE.AWAITING_CONFIRMATION and "⏳ Awaiting Confirmation"
+    or ralph_loop.phase == LOOP_PHASE.EXECUTING and "🔨 Executing"
+    or "Unknown"
+
+  return {
+    enabled = ralph_loop.enabled,
+    phase = ralph_loop.phase,
+    phase_display = phase_display,
+    current_iteration = ralph_loop.current_iteration,
+    max_iterations = ralph_loop.max_iterations,
+    completion_promise = ralph_loop.completion_promise,
+    consecutive_completion_signals = ralph_loop.consecutive_completion_signals,
+  }
+end
 
 local function format_duration(seconds)
   if seconds < 60 then
@@ -488,159 +996,6 @@ function M.check_and_continue(proc, response_text)
       proc:send_prompt(continuation_prompt, { silent = true })
     end
   end, delay)
-
-  return true
-end
-
-function M.reset()
-  reset_ace_cycle()
-end
-
-function M.prompt_plan_confirmation(proc)
-  local ralph = require("ai_repl.modes.ralph_wiggum")
-  local buf = proc.data.buf
-
-  vim.ui.select(
-    { "Yes - Execute the plan", "No - Reject and refine", "Edit - Provide feedback" },
-    {
-      prompt = "🎨 Confirm implementation plan?",
-      format_item = function(item)
-        return item
-      end,
-    },
-    function(choice, idx)
-      if not choice then
-        vim.schedule(function()
-          render.append_content(buf, {
-            "",
-            "[⏸️ Ralph Wiggum: Confirmation cancelled. Use /ralph confirm or /ralph reject]",
-          })
-        end)
-        return
-      end
-
-      if idx == 1 then
-        M.handle_confirm(proc)
-      elseif idx == 2 then
-        M.handle_reject(proc, nil)
-      elseif idx == 3 then
-        vim.ui.input({ prompt = "Feedback for plan revision: " }, function(feedback)
-          if feedback and #feedback > 0 then
-            M.handle_reject(proc, feedback)
-          else
-            vim.schedule(function()
-              render.append_content(buf, {
-                "",
-                "[⏸️ Ralph Wiggum: No feedback provided. Use /ralph reject <feedback>]",
-              })
-            end)
-          end
-        end)
-      end
-    end
-  )
-end
-
-function M.handle_confirm(proc)
-  local ralph = require("ai_repl.modes.ralph_wiggum")
-  local buf = proc.data.buf
-
-  if not ralph.is_awaiting_confirmation() then
-    vim.schedule(function()
-      render.append_content(buf, {
-        "",
-        "[⚠️ Ralph Wiggum: No plan awaiting confirmation]",
-      })
-    end)
-    return false
-  end
-
-  local success, callback = ralph.confirm_plan()
-  local plan_status = ralph.get_status()
-
-  vim.schedule(function()
-    local lines = {
-      "",
-      "┌─ ✅ Plan Confirmed ──────────────────────────",
-      "│",
-      "│ Starting autonomous execution loop!",
-      "│",
-    }
-    if plan_status.steps_total and plan_status.steps_total > 0 then
-      table.insert(lines, string.format("│ 🔨 Executing %d steps...", plan_status.steps_total))
-    end
-    table.insert(lines, "│")
-    table.insert(lines, "│ Execution path:")
-    table.insert(lines, "│   🔨 Implementation → 🔍 Review → 🧪 Testing → ✅✅ Completion")
-    table.insert(lines, "│")
-    table.insert(lines, "│ Use /ralph pause to stop at any time")
-    table.insert(lines, "│")
-    table.insert(lines, "└────────────────────────────────────────────")
-    table.insert(lines, "")
-    render.append_content(buf, lines)
-
-    show_phase_transition(buf, "tasks", "implementation", ralph)
-  end)
-
-  if callback then
-    callback()
-  end
-
-  return true
-end
-
-function M.handle_reject(proc, feedback)
-  local ralph = require("ai_repl.modes.ralph_wiggum")
-  local buf = proc.data.buf
-
-  if not ralph.is_awaiting_confirmation() then
-    vim.schedule(function()
-      render.append_content(buf, {
-        "",
-        "[⚠️ Ralph Wiggum: No plan awaiting confirmation]",
-      })
-    end)
-    return false
-  end
-
-  ralph.reject_plan(feedback)
-
-  vim.schedule(function()
-    local lines = {
-      "",
-      "┌─ 🔄 Plan Rejected ───────────────────────────",
-      "│",
-      "│ Going back to refine the design.",
-      "│",
-    }
-    if feedback and #feedback > 0 then
-      table.insert(lines, "│ Your feedback:")
-      table.insert(lines, "│   " .. feedback:sub(1, 50) .. (feedback:len() > 50 and "..." or ""))
-    end
-    table.insert(lines, "│")
-    table.insert(lines, "│ The agent will revise the plan.")
-    table.insert(lines, "│")
-    table.insert(lines, "└────────────────────────────────────────────")
-    table.insert(lines, "")
-    render.append_content(buf, lines)
-  end)
-
-  local revision_prompt = string.format([[
-[Ralph Wiggum - 🎨 Design Revision]
-
-The user has reviewed the plan and requested changes.
-
-%s
-
-Please revise the implementation plan based on this feedback.
-When the revised plan is ready, say: "Design complete. Moving to Implementation..."
-]], feedback and ("User feedback: " .. feedback) or "Please refine and present the plan again for review.")
-
-  vim.defer_fn(function()
-    if ralph.is_enabled() and not ralph.is_paused() then
-      proc:send_prompt(revision_prompt, { silent = true })
-    end
-  end, 500)
 
   return true
 end

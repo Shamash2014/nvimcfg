@@ -1,5 +1,7 @@
 local M = {}
 
+local tool_utils = require("ai_repl.tool_utils")
+
 local NS = vim.api.nvim_create_namespace("ai_repl_render")
 local NS_ANIM = vim.api.nvim_create_namespace("ai_repl_anim")
 local NS_DIFF = vim.api.nvim_create_namespace("ai_repl_diff")
@@ -222,53 +224,15 @@ local TOOL_DISPLAY = {
 local function get_tool_description(tool)
   local input = tool.rawInput or {}
   local title = tool.title or ""
-
-  if title == "Read" then
-    local path = input.file_path or input.path or ""
-    return vim.fn.fnamemodify(path, ":t")
-  elseif title == "Edit" then
-    local path = input.file_path or input.path or ""
-    return vim.fn.fnamemodify(path, ":t")
-  elseif title == "Write" then
-    local path = input.file_path or input.path or ""
-    return vim.fn.fnamemodify(path, ":t")
-  elseif title == "Bash" then
-    local cmd = input.command or ""
-    local desc = input.description or ""
-    if desc ~= "" then return desc end
-    if #cmd > 50 then cmd = cmd:sub(1, 47) .. "..." end
-    return cmd
-  elseif title == "Glob" then
-    return input.pattern or ""
-  elseif title == "Grep" then
-    return input.pattern or ""
-  elseif title == "Task" then
-    return input.description or input.prompt and input.prompt:sub(1, 40) or ""
-  elseif title == "WebFetch" then
-    local url = input.url or ""
-    return url:match("://([^/]+)") or url:sub(1, 30)
-  elseif title == "WebSearch" then
-    return input.query or ""
-  elseif title == "LSP" then
-    return input.operation or ""
-  end
-
-  if tool.locations and #tool.locations > 0 then
-    local l = tool.locations[1]
-    local path = l.path or l.uri or ""
-    return vim.fn.fnamemodify(path, ":t")
-  end
-
-  return ""
+  return tool_utils.get_tool_description(title, input, tool.locations, { path_format = ":t", max_cmd_len = 50 })
 end
 
 function M.render_tool(buf, tool)
-  local status_icons = { pending = "○", in_progress = "◐", completed = "●", failed = "✗" }
   if tool.status == "pending" or tool.status == "in_progress" then
     return
   end
 
-  local status = status_icons[tool.status] or "○"
+  local status = tool_utils.STATUS_ICONS[tool.status] or "○"
   local title = tool.title or tool.kind or "tool"
   local display = TOOL_DISPLAY[title] or { icon = "•", name = title }
   local desc = get_tool_description(tool)
@@ -285,8 +249,7 @@ function M.render_plan(buf, plan)
   if #plan == 0 then return end
   local lines = { "", "━━━ Plan ━━━" }
   for i, item in ipairs(plan) do
-    local icons = { pending = "○", in_progress = "◐", completed = "●" }
-    local icon = icons[item.status] or "○"
+    local icon = tool_utils.STATUS_ICONS[item.status] or "○"
     local pri = item.priority == "high" and "! " or ""
     local text = item.content or item.text or item.activeForm or item.description or tostring(item)
     table.insert(lines, string.format(" %s %d. %s%s", icon, i, pri, text))

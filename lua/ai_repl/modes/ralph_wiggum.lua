@@ -179,6 +179,13 @@ local QUALITY_GATE_PATTERNS = {
   },
 }
 
+local PLAN_READY_PATTERNS = {
+  "PLAN[%s_-]?READY",
+  "ready to execute",
+  "plan is ready",
+  "Implementation plan ready",
+}
+
 local function hash_response(text)
   if not text then return nil end
   local sample = text:sub(-500)
@@ -189,12 +196,9 @@ local function hash_response(text)
   return hash
 end
 
-function M.enable(opts)
-  opts = opts or {}
-  ralph_state.enabled = true
+local function reset_state()
   ralph_state.paused = false
   ralph_state.phase = PHASE.REQUIREMENTS
-  ralph_state.max_iterations = opts.max_iterations or 50
   ralph_state.current_iteration = 0
   ralph_state.iteration_history = {}
   ralph_state.original_prompt = nil
@@ -206,6 +210,9 @@ function M.enable(opts)
   ralph_state.pending_reflection = nil
   ralph_state.active_skill = nil
   ralph_state.skill_context = {}
+  ralph_state.awaiting_confirmation = false
+  ralph_state.plan_confirmed = false
+  ralph_state.confirmation_callback = nil
   ralph_state.quality_gates = {
     requirements_approved = false,
     design_approved = false,
@@ -222,24 +229,19 @@ function M.enable(opts)
     review_findings = nil,
     test_results = nil,
   }
+end
+
+function M.enable(opts)
+  opts = opts or {}
+  reset_state()
+  ralph_state.enabled = true
+  ralph_state.max_iterations = opts.max_iterations or 50
   return true
 end
 
 function M.disable()
+  reset_state()
   ralph_state.enabled = false
-  ralph_state.paused = false
-  ralph_state.phase = PHASE.REQUIREMENTS
-  ralph_state.current_iteration = 0
-  ralph_state.original_prompt = nil
-  ralph_state.plan = nil
-  ralph_state.plan_steps = {}
-  ralph_state.last_response_hash = nil
-  ralph_state.stuck_count = 0
-  ralph_state.active_skill = nil
-  ralph_state.skill_context = {}
-  ralph_state.awaiting_confirmation = false
-  ralph_state.plan_confirmed = false
-  ralph_state.confirmation_callback = nil
 end
 
 function M.is_awaiting_confirmation()
@@ -415,43 +417,26 @@ function M.get_phase()
   return ralph_state.phase
 end
 
+function M.is_phase(phase_name)
+  return ralph_state.phase == phase_name
+end
+
 function M.is_planning_phase()
-  return ralph_state.phase == PHASE.REQUIREMENTS
-      or ralph_state.phase == PHASE.DESIGN
-      or ralph_state.phase == PHASE.TASKS
+  local p = ralph_state.phase
+  return p == PHASE.REQUIREMENTS or p == PHASE.DESIGN or p == PHASE.TASKS
 end
 
 function M.is_execution_phase()
   return ralph_state.phase == PHASE.IMPLEMENTATION
 end
 
-function M.is_requirements_phase()
-  return ralph_state.phase == PHASE.REQUIREMENTS
-end
-
-function M.is_design_phase()
-  return ralph_state.phase == PHASE.DESIGN
-end
-
-function M.is_tasks_phase()
-  return ralph_state.phase == PHASE.TASKS
-end
-
-function M.is_implementation_phase()
-  return ralph_state.phase == PHASE.IMPLEMENTATION
-end
-
-function M.is_review_phase()
-  return ralph_state.phase == PHASE.REVIEW
-end
-
-function M.is_testing_phase()
-  return ralph_state.phase == PHASE.TESTING
-end
-
-function M.is_completion_phase()
-  return ralph_state.phase == PHASE.COMPLETION
-end
+function M.is_requirements_phase() return ralph_state.phase == PHASE.REQUIREMENTS end
+function M.is_design_phase() return ralph_state.phase == PHASE.DESIGN end
+function M.is_tasks_phase() return ralph_state.phase == PHASE.TASKS end
+function M.is_implementation_phase() return ralph_state.phase == PHASE.IMPLEMENTATION end
+function M.is_review_phase() return ralph_state.phase == PHASE.REVIEW end
+function M.is_testing_phase() return ralph_state.phase == PHASE.TESTING end
+function M.is_completion_phase() return ralph_state.phase == PHASE.COMPLETION end
 
 function M.set_original_prompt(prompt)
   ralph_state.original_prompt = prompt
@@ -669,7 +654,7 @@ function M.add_skill(category, skill, opts)
     ralph_state.skillbook[category] = {}
   end
 
-  local existing, idx = find_similar_skill(category, skill, opts.similarity_threshold)
+  local existing = find_similar_skill(category, skill, opts.similarity_threshold)
 
   if existing then
     existing.use_count = existing.use_count + 1
@@ -692,7 +677,7 @@ end
 function M.prune_skillbook(max_per_category)
   max_per_category = max_per_category or 10
 
-  for category, skills in pairs(ralph_state.skillbook) do
+  for _, skills in pairs(ralph_state.skillbook) do
     if #skills > max_per_category then
       table.sort(skills, function(a, b)
         return (a.use_count or 0) > (b.use_count or 0)
@@ -886,6 +871,13 @@ function M.transition_to_execution(response_text)
   end
 end
 
+local PHASE_GATES = {
+  [PHASE.TASKS] = "design_approved",
+  [PHASE.REVIEW] = "implementation_complete",
+  [PHASE.TESTING] = "review_passed",
+  [PHASE.COMPLETION] = "tests_passed",
+}
+
 function M.transition_to_phase(target_phase)
   if not PHASE_ORDER[target_phase] then
     return false, "Invalid phase"
@@ -893,35 +885,27 @@ function M.transition_to_phase(target_phase)
   ralph_state.phase = target_phase
   ralph_state.stuck_count = 0
   ralph_state.last_response_hash = nil
+  local gate = PHASE_GATES[target_phase]
+  if gate then
+    ralph_state.quality_gates[gate] = true
+  end
   return true
 end
 
 function M.transition_to_tasks()
-  ralph_state.phase = PHASE.TASKS
-  ralph_state.quality_gates.design_approved = true
-  ralph_state.stuck_count = 0
-  ralph_state.last_response_hash = nil
+  M.transition_to_phase(PHASE.TASKS)
 end
 
 function M.transition_to_review()
-  ralph_state.phase = PHASE.REVIEW
-  ralph_state.quality_gates.implementation_complete = true
-  ralph_state.stuck_count = 0
-  ralph_state.last_response_hash = nil
+  M.transition_to_phase(PHASE.REVIEW)
 end
 
 function M.transition_to_testing()
-  ralph_state.phase = PHASE.TESTING
-  ralph_state.quality_gates.review_passed = true
-  ralph_state.stuck_count = 0
-  ralph_state.last_response_hash = nil
+  M.transition_to_phase(PHASE.TESTING)
 end
 
 function M.transition_to_completion()
-  ralph_state.phase = PHASE.COMPLETION
-  ralph_state.quality_gates.tests_passed = true
-  ralph_state.stuck_count = 0
-  ralph_state.last_response_hash = nil
+  M.transition_to_phase(PHASE.COMPLETION)
 end
 
 function M.check_completion(response_text)
@@ -974,47 +958,24 @@ function M.should_continue(response_text)
     return false, "paused"
   end
 
-  if ralph_state.phase == PHASE.REQUIREMENTS then
+  local phase = ralph_state.phase
+  local phase_checks = {
+    [PHASE.REQUIREMENTS] = "requirements",
+    [PHASE.DESIGN] = "design",
+    [PHASE.TASKS] = "tasks",
+    [PHASE.REVIEW] = "review",
+    [PHASE.TESTING] = "testing",
+  }
+
+  if phase_checks[phase] then
     local transition, pattern = M.check_phase_transition(response_text)
     if transition then
-      return false, "requirements_complete:" .. (pattern or "unknown")
+      return false, phase_checks[phase] .. "_complete:" .. (pattern or "unknown")
     end
-    return true, "requirements"
+    return true, phase_checks[phase]
   end
 
-  if ralph_state.phase == PHASE.DESIGN then
-    local transition, pattern = M.check_phase_transition(response_text)
-    if transition then
-      return false, "design_complete:" .. (pattern or "unknown")
-    end
-    return true, "design"
-  end
-
-  if ralph_state.phase == PHASE.TASKS then
-    local transition, pattern = M.check_phase_transition(response_text)
-    if transition then
-      return false, "tasks_complete:" .. (pattern or "unknown")
-    end
-    return true, "tasks"
-  end
-
-  if ralph_state.phase == PHASE.REVIEW then
-    local transition, pattern = M.check_phase_transition(response_text)
-    if transition then
-      return false, "review_complete:" .. (pattern or "unknown")
-    end
-    return true, "review"
-  end
-
-  if ralph_state.phase == PHASE.TESTING then
-    local transition, pattern = M.check_phase_transition(response_text)
-    if transition then
-      return false, "testing_complete:" .. (pattern or "unknown")
-    end
-    return true, "testing"
-  end
-
-  if ralph_state.phase == PHASE.COMPLETION then
+  if phase == PHASE.COMPLETION then
     return false, "completed:completion_phase"
   end
 

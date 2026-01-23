@@ -10,6 +10,10 @@ local SKILL_SEARCH_PATHS = {
 
 local TARGET_SKILL_DIR = vim.fn.expand("~/.claude/skills")
 
+local skills_cache = nil
+local cache_time = 0
+local CACHE_TTL = 30
+
 local PROVIDER_SKILL_PATHS = {
   claude = { vim.fn.expand("~/.claude/skills") },
   cursor = { vim.fn.expand("~/.cursor/skills"), vim.fn.expand("~/.claude/skills") },
@@ -46,7 +50,12 @@ local function read_skill_file(skill_path)
   return content
 end
 
-function M.discover_skills()
+function M.discover_skills(force_refresh)
+  local now = vim.fn.localtime()
+  if not force_refresh and skills_cache and (now - cache_time) < CACHE_TTL then
+    return skills_cache
+  end
+
   local skills = {}
   local seen_skills = {}
 
@@ -112,7 +121,14 @@ function M.discover_skills()
     end
   end
 
+  skills_cache = skills
+  cache_time = now
   return skills
+end
+
+function M.invalidate_cache()
+  skills_cache = nil
+  cache_time = 0
 end
 
 function M.get_skill(skill_name)

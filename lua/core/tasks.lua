@@ -11,7 +11,10 @@ M.command_history = {}
 M.max_history = 50
 
 -- Build full terminal environment for task execution
-local function build_terminal_env(extra)
+local function build_terminal_env(extra, cwd)
+  local mise = require("core.mise")
+  local mise_env = mise.get_env(cwd)
+
   local shell = vim.env.SHELL or "/bin/zsh"
   local env = {
     TERM = vim.env.TERM or "xterm-256color",
@@ -35,6 +38,8 @@ local function build_terminal_env(extra)
       env[var] = vim.env[var]
     end
   end
+
+  env = vim.tbl_extend("force", env, mise_env)
 
   if extra then
     for k, v in pairs(extra) do
@@ -492,7 +497,7 @@ function M.run_task(task, opts)
   local env = build_terminal_env({
     SNACKS_TASK_ID = timestamp,
     TASK_NAME = task.name,
-  })
+  }, cwd)
   local term = require("snacks").terminal(unique_cmd, {
     cwd = cwd,
     interactive = not opts.background,

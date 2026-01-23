@@ -5,57 +5,34 @@ local registry = require("ai_repl.registry")
 local render = require("ai_repl.render")
 local providers = require("ai_repl.providers")
 local ralph_helper = require("ai_repl.ralph_helper")
+local tool_utils = require("ai_repl.tool_utils")
 
-local config = {
+local config = setmetatable({
   window = {
     width = 0.45,
     border = "rounded",
     title = "AI REPL"
   },
   default_provider = "claude",
-  providers = {
-    claude = { 
-      name = "Claude", 
-      cmd = "claude-code-acp", 
-      args = {}, 
-      env = {},
-      permission_mode = "default",
-      background_permissions = "allow_once",
-    },
-    cursor = { 
-      name = "Cursor", 
-      cmd = "cursor-agent-acp", 
-      args = {}, 
-      env = {},
-      permission_mode = "default",
-      background_permissions = "allow_once",
-    },
-    goose = {
-      name = "Goose",
-      cmd = "goose",
-      args = {"acp"},
-      env = {},
-      permission_mode = "default",
-      background_permissions = "allow_once",
-    },
-    opencode = {
-      name = "OpenCode",
-      cmd = "opencode",
-      args = {"acp"},
-      env = {},
-      permission_mode = "default",
-      background_permissions = "allow_once",
-    },
-  },
   history_size = 1000,
-  permission_mode = "default",  -- Fallback for providers without specific config
+  permission_mode = "default",
   show_tool_calls = true,
   debug = false,
   reconnect = true,
   max_reconnect_attempts = 3,
   sessions_file = vim.fn.stdpath("data") .. "/ai_repl_sessions.json",
   max_sessions_per_project = 20
-}
+}, {
+  __index = function(_, key)
+    if key == "providers" then
+      local p = {}
+      for _, provider in ipairs(providers.list()) do
+        p[provider.id] = provider
+      end
+      return p
+    end
+  end
+})
 
 local ui = {
   wins = {},  -- per-tab windows: { [tabpage] = win }
@@ -179,6 +156,7 @@ local function handle_session_update(proc, params)
 
   if update_type == "agent_message_chunk" then
     render.start_animation(buf, "generating")
+    ralph_helper.record_activity()
     local content = u.content
     if content and content.text then
       if content.text:match("%[compact%]") or content.text:match("Conversation compacted") then
@@ -376,8 +354,16 @@ local function handle_session_update(proc, params)
     local queue_info = queue_count > 0 and (" [" .. queue_count .. " queued]") or ""
     render.append_content(buf, { "", (reason_msgs[reason] or "---") .. mode_str .. queue_info, "" })
 
-    -- Ralph Wiggum mode: Check if we should continue looping
+    -- Ralph Loop: Simple re-injection loop (takes priority)
     local response_text = proc.ui.streaming_response or ""
+    if ralph_helper.is_loop_enabled() then
+      local loop_continuing = ralph_helper.on_agent_stop(proc, response_text)
+      if loop_continuing then
+        return -- Ralph Loop is re-injecting prompt
+      end
+    end
+
+    -- Ralph Wiggum mode: Check if we should continue looping
     local ralph_continuing = ralph_helper.check_and_continue(proc, response_text)
     if ralph_continuing then
       return -- Don't process queued prompts, Ralph is handling it
@@ -417,47 +403,7 @@ local TOOL_NAMES = {
 }
 
 local function get_tool_description(title, input, locations)
-  if title == "Read" then
-    local path = input.file_path or input.path or ""
-    return vim.fn.fnamemodify(path, ":~:.")
-  elseif title == "Edit" then
-    local path = input.file_path or input.path or ""
-    return vim.fn.fnamemodify(path, ":~:.")
-  elseif title == "Write" then
-    local path = input.file_path or input.path or ""
-    return vim.fn.fnamemodify(path, ":~:.")
-  elseif title == "Bash" then
-    local desc = input.description or ""
-    if desc ~= "" then return desc end
-    local cmd = input.command or ""
-    if #cmd > 60 then cmd = cmd:sub(1, 57) .. "..." end
-    return cmd
-  elseif title == "Glob" then
-    return input.pattern or ""
-  elseif title == "Grep" then
-    return (input.pattern or "") .. (input.path and (" in " .. vim.fn.fnamemodify(input.path, ":~:.")) or "")
-  elseif title == "Task" then
-    return input.description or ""
-  elseif title == "WebFetch" then
-    local url = input.url or ""
-    return url:match("://([^/]+)") or url:sub(1, 40)
-  elseif title == "WebSearch" then
-    return input.query or ""
-  elseif title == "LSP" then
-    return input.operation or ""
-  elseif title == "KillShell" then
-    return input.shell_id or ""
-  end
-
-  if locations and #locations > 0 then
-    local l = locations[1]
-    local path = l.path or l.uri or ""
-    local loc = vim.fn.fnamemodify(path, ":~:.")
-    if l.line then loc = loc .. ":" .. l.line end
-    return loc
-  end
-
-  return ""
+  return tool_utils.get_tool_description(title, input, locations, { include_path = true, include_line = true })
 end
 
 local function handle_permission_request(proc, msg_id, params)
@@ -1425,13 +1371,19 @@ function M.handle_command(cmd)
       "  /cancel - Cancel current",
       "  /quit - Close REPL",
       "",
-      "Ralph Wiggum:",
+      "Ralph Wiggum (SDLC mode):",
       "  /ralph pause   - Pause looping",
       "  /ralph resume  - Resume looping",
       "  /ralph stop    - Stop and show summary",
       "  /ralph status  - Show current status",
       "  /ralph history - Show iteration history",
       "  /ralph max N   - Set max iterations",
+      "",
+      "Ralph Loop (simple re-injection):",
+      "  /ralph-loop <prompt> - Start loop that re-injects same prompt",
+      "  /ralph-loop-status   - Show loop status",
+      "  /cancel-ralph        - Cancel the loop",
+      "  Options: --max-iterations N --completion-promise STRING --timeout N",
       "",
       "Extensions System:",
       "  /ext - Unified picker for skills, agent commands, and local commands",
@@ -1459,8 +1411,6 @@ function M.handle_command(cmd)
     else
       M.show_mode_status()
     end
-  elseif command == "spec" then
-    M.handle_spec_command(args)
   elseif command == "cwd" then
     if args[1] then
       local new_cwd = vim.fn.expand(args[1])
@@ -1614,6 +1564,93 @@ function M.handle_command(cmd)
         "",
         "To enable Ralph mode: /mode ralph_wiggum",
       })
+    end
+  elseif command == "ralph-loop" then
+    if not proc then
+      render.append_content(buf, { "", "[!] No active session" })
+      return
+    end
+
+    local prompt_parts = {}
+    local max_iterations = 150
+    local completion_promise = nil
+    local response_timeout_ms = 60000
+    local circuit_breaker_threshold = 5
+
+    local i = 1
+    while i <= #args do
+      local arg = args[i]
+      if arg == "--max-iterations" and args[i + 1] then
+        max_iterations = tonumber(args[i + 1]) or 150
+        i = i + 2
+      elseif arg == "--completion-promise" and args[i + 1] then
+        completion_promise = args[i + 1]
+        i = i + 2
+      elseif arg == "--timeout" and args[i + 1] then
+        response_timeout_ms = (tonumber(args[i + 1]) or 60) * 1000
+        i = i + 2
+      elseif arg == "--circuit-breaker" and args[i + 1] then
+        circuit_breaker_threshold = tonumber(args[i + 1]) or 5
+        i = i + 2
+      else
+        table.insert(prompt_parts, arg)
+        i = i + 1
+      end
+    end
+
+    local prompt = table.concat(prompt_parts, " ")
+    if prompt == "" then
+      render.append_content(buf, {
+        "", "Usage: /ralph-loop <prompt> [options]",
+        "",
+        "Options:",
+        "  --max-iterations N       Max loop iterations (default: 150)",
+        "  --completion-promise STR  Exit when output contains this string",
+        "  --timeout N              Response timeout in seconds (default: 60)",
+        "  --circuit-breaker N      Exit after N consecutive completion signals (default: 5)",
+        "",
+        "Example:",
+        "  /ralph-loop Build a REST API. Output <promise>DONE</promise> when complete. --completion-promise DONE --max-iterations 50",
+      })
+      return
+    end
+
+    ralph_helper.start_loop(proc, prompt, {
+      max_iterations = max_iterations,
+      completion_promise = completion_promise,
+      response_timeout_ms = response_timeout_ms,
+      circuit_breaker_threshold = circuit_breaker_threshold,
+    })
+
+  elseif command == "cancel-ralph" then
+    if not proc then
+      render.append_content(buf, { "", "[!] No active session" })
+      return
+    end
+
+    if ralph_helper.is_loop_enabled() then
+      ralph_helper.cancel_loop(proc)
+    else
+      render.append_content(buf, { "", "[!] Ralph Loop not active" })
+    end
+
+  elseif command == "ralph-loop-status" then
+    local status = ralph_helper.get_loop_status()
+    if status.enabled then
+      render.append_content(buf, {
+        "",
+        "┌─ Ralph Loop Status ─────────────────────────",
+        string.format("│ State: RUNNING"),
+        string.format("│ Phase: %s", status.phase_display),
+        string.format("│ Execution iteration: %d/%d", status.current_iteration, status.max_iterations),
+        string.format("│ Completion promise: %s", status.completion_promise or "(none)"),
+        string.format("│ Consecutive completion signals: %d", status.consecutive_completion_signals),
+        "│",
+        "│ Use /cancel-ralph to stop",
+        "└─────────────────────────────────────────────",
+      })
+    else
+      render.append_content(buf, { "", "[i] Ralph Loop not active" })
     end
   else
     if proc and proc.data.slash_commands then
@@ -1982,12 +2019,6 @@ function M.show_mode_status()
     table.insert(lines, marker .. " " .. mode.icon .. " " .. mode.name)
   end
 
-  if current_mode == "spec" then
-    local spec_mode = require("ai_repl.spec_mode")
-    table.insert(lines, "")
-    table.insert(lines, "Phase: " .. spec_mode.format_progress_display())
-  end
-
   render.append_content(proc.data.buf, lines)
 end
 
@@ -2009,93 +2040,6 @@ function M.switch_to_mode(mode_id)
 
   local info = result.info
   render.append_content(proc.data.buf, { "", info.icon .. " " .. info.name .. " mode" })
-
-  if mode_id == "spec" then
-    local spec_mode = require("ai_repl.spec_mode")
-    spec_mode.init_spec_session(proc.session_id)
-
-    local skills_module = require("ai_repl.skills")
-    local has_guide = skills_module.get_skill("spec-mode-guide")
-
-    if has_guide then
-      local accessible = skills_module.verify_skill_accessible("spec-mode-guide", proc.data.provider or "claude")
-      if not accessible then
-        render.append_content(proc.data.buf, {
-          "",
-          "💡 Tip: Activate spec-mode-guide skill for agent guidance",
-          "   Use /skill and select 'spec-mode-guide'"
-        })
-      end
-    end
-
-    render.append_content(proc.data.buf, { "Phase: 📝 Requirements" })
-  end
-end
-
-function M.handle_phase_command(args)
-  local proc = registry.active()
-  if not proc then return end
-
-  local modes_module = require("ai_repl.modes")
-  if not modes_module.is_spec_mode() then
-    render.append_content(proc.data.buf, { "[!] Phase commands require /mode spec" })
-    return
-  end
-
-  local spec_mode = require("ai_repl.spec_mode")
-  local action = args[1]
-
-  if not action then
-    local phase_info = spec_mode.get_phase_info()
-    render.append_content(proc.data.buf, {
-      "", "Current: " .. phase_info.icon .. " " .. phase_info.name,
-      "Actions: /phase next | back | requirements | design | tasks | implementation"
-    })
-    return
-  end
-
-  if action == "next" then
-    local success, result = spec_mode.advance_to_next_phase()
-    if success then
-      local phase_info = spec_mode.get_phase_info()
-      render.append_content(proc.data.buf, { "", "→ " .. phase_info.icon .. " " .. phase_info.name })
-    else
-      render.append_content(proc.data.buf, { result })
-    end
-  elseif action == "back" then
-    local success = spec_mode.move_to_previous_phase()
-    if success then
-      local phase_info = spec_mode.get_phase_info()
-      render.append_content(proc.data.buf, { "", "← " .. phase_info.icon .. " " .. phase_info.name })
-    end
-  elseif action == "requirements" or action == "design" or action == "tasks" or action == "implementation" then
-    spec_mode.jump_to_phase(action)
-    local phase_info = spec_mode.get_phase_info()
-    render.append_content(proc.data.buf, { "", phase_info.icon .. " " .. phase_info.name })
-  end
-end
-
-function M.handle_spec_command(args)
-  local proc = registry.active()
-  if not proc then return end
-
-  local modes_module = require("ai_repl.modes")
-  if not modes_module.is_spec_mode() then
-    render.append_content(proc.data.buf, { "[!] Spec commands require /mode spec" })
-    return
-  end
-
-  local spec_mode = require("ai_repl.spec_mode")
-  local action = args[1]
-
-  if action == "export" then
-    local success, path = spec_mode.export_spec()
-    if success then
-      render.append_content(proc.data.buf, { "", "Exported: " .. path })
-    end
-  else
-    render.append_content(proc.data.buf, { "", "Commands: /spec export" })
-  end
 end
 
 function M.show_mode_picker()

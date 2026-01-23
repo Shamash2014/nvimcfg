@@ -2,7 +2,6 @@ local M = {}
 
 local MODE_INFO = {
   chat = { name = "Chat", icon = "💬", description = "Free-form conversation" },
-  spec = { name = "Spec", icon = "📋", description = "Spec-driven: Requirements→Design→Tasks→Implementation" },
   ralph_wiggum = { name = "Ralph Wiggum", icon = "🔄", description = "Persistent looping until task completion" },
 }
 
@@ -47,10 +46,6 @@ function M.switch_mode(mode_id)
   end
   
   return true, { info = MODE_INFO[mode_id] }
-end
-
-function M.is_spec_mode()
-  return current_mode == "spec"
 end
 
 function M.is_ralph_wiggum_mode()

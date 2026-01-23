@@ -130,7 +130,6 @@ function M.get_local_commands()
 end
 
 function M.create_unified_picker(proc)
-  local skills_module = require("ai_repl.skills")
   local provider_id = proc.data.provider or "claude"
 
   local extensions = M.discover_all_extensions(provider_id)
@@ -176,39 +175,6 @@ function M.format_extension_for_display(ext)
   end
 
   return category_prefix .. ext.display_name .. status .. " - " .. desc
-end
-
-function M.get_extension_by_name(extensions, name)
-  for _, ext in ipairs(extensions) do
-    if ext.name == name or ext.name == "/" .. name then
-      return ext
-    end
-  end
-  return nil
-end
-
-function M.filter_by_category(extensions, category)
-  local filtered = {}
-  for _, ext in ipairs(extensions) do
-    if ext.category == category then
-      table.insert(filtered, ext)
-    end
-  end
-  return filtered
-end
-
-function M.get_categories(extensions)
-  local categories = {}
-  local seen = {}
-
-  for _, ext in ipairs(extensions) do
-    if not seen[ext.category] then
-      seen[ext.category] = true
-      table.insert(categories, ext.category)
-    end
-  end
-
-  return categories
 end
 
 return M

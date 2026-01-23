@@ -59,7 +59,9 @@ function Process.new(session_id, opts)
 end
 
 function Process:start()
-  local env = vim.tbl_extend("force", vim.fn.environ(), self.config.env)
+  local mise = require("core.mise")
+  local mise_env = mise.get_env(self.config.cwd)
+  local env = vim.tbl_extend("force", vim.fn.environ(), mise_env, self.config.env)
   local captured_self = self
 
   self.job_id = vim.fn.jobstart({ self.config.cmd, unpack(self.config.args) }, {
@@ -362,26 +364,6 @@ function Process:send_prompt(prompt, opts)
 
   prompt = self:_transform_ultrathink(prompt)
 
-  local modes_module = require("ai_repl.modes")
-  local current_mode = modes_module.get_current_mode()
-  local mode_context = nil
-
-  if current_mode == "spec" then
-    local spec_mode = require("ai_repl.spec_mode")
-    local phase = spec_mode.get_current_phase()
-    if phase then
-      local phase_info = spec_mode.get_phase_info(phase)
-      mode_context = {
-        mode = "spec",
-        phase = phase,
-        phase_name = phase_info.name,
-        phase_icon = phase_info.icon,
-        phase_description = phase_info.description,
-        phase_prompts = phase_info.prompts,
-      }
-    end
-  end
-
   -- Transform prompt to ACP array format if needed
   local formatted_prompt = prompt
   if type(prompt) == "string" then
@@ -399,11 +381,6 @@ function Process:send_prompt(prompt, opts)
     sessionId = self.session_id,
     prompt = formatted_prompt
   }
-
-  if mode_context then
-    request_params.metadata = request_params.metadata or {}
-    request_params.metadata.mode = mode_context
-  end
 
   return self:send("session/prompt", request_params, function(result, err)
     if err then
