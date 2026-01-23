@@ -159,6 +159,22 @@ local PHASE_TRANSITION_PATTERNS = {
   },
 }
 
+local PHASE_APPROVAL_REQUIRED = {
+  [PHASE.REQUIREMENTS] = true,
+  [PHASE.DESIGN] = true,
+  [PHASE.TASKS] = true,
+  [PHASE.IMPLEMENTATION] = false,
+  [PHASE.REVIEW] = false,
+  [PHASE.TESTING] = false,
+  [PHASE.COMPLETION] = false,
+}
+
+local phase_user_approved = {
+  [PHASE.REQUIREMENTS] = false,
+  [PHASE.DESIGN] = false,
+  [PHASE.TASKS] = false,
+}
+
 local QUALITY_GATE_PATTERNS = {
   requirements = {
     pass = { "requirements approved", "scope confirmed", "requirements look good" },
@@ -233,6 +249,9 @@ local function reset_state()
     review_findings = nil,
     test_results = nil,
   }
+  phase_user_approved[PHASE.REQUIREMENTS] = false
+  phase_user_approved[PHASE.DESIGN] = false
+  phase_user_approved[PHASE.TASKS] = false
 end
 
 function M.enable(opts)
@@ -282,6 +301,30 @@ function M.reject_plan(feedback)
   ralph_state.phase = PHASE.TASKS
   ralph_state.confirmation_callback = nil
   return feedback
+end
+
+function M.is_phase_approval_required(phase)
+  phase = phase or ralph_state.phase
+  return PHASE_APPROVAL_REQUIRED[phase] == true
+end
+
+function M.is_phase_approved(phase)
+  phase = phase or ralph_state.phase
+  return phase_user_approved[phase] == true
+end
+
+function M.approve_phase(phase)
+  phase = phase or ralph_state.phase
+  if PHASE_APPROVAL_REQUIRED[phase] then
+    phase_user_approved[phase] = true
+    return true
+  end
+  return false
+end
+
+function M.is_awaiting_phase_approval()
+  local phase = ralph_state.phase
+  return PHASE_APPROVAL_REQUIRED[phase] and not phase_user_approved[phase]
 end
 
 function M.get_phase_info(phase_id)
@@ -975,6 +1018,9 @@ function M.should_continue(response_text)
       if M.is_planning_phase() and M.needs_more_planning() then
         return true, "needs_more_planning"
       end
+      if M.is_phase_approval_required(phase) and not M.is_phase_approved(phase) then
+        return false, "awaiting_" .. phase_checks[phase] .. "_approval"
+      end
       return false, phase_checks[phase] .. "_complete:" .. (pattern or "unknown")
     end
     return true, phase_checks[phase]
@@ -1025,6 +1071,10 @@ end
 
 function M.needs_more_planning()
   return ralph_state.planning_iteration < MIN_PLANNING_ITERATIONS
+end
+
+function M.reset_planning_iteration()
+  ralph_state.planning_iteration = 0
 end
 
 function M.get_planning_prompt(original_prompt)
@@ -1684,6 +1734,9 @@ function M.get_status()
     planning_iteration = ralph_state.planning_iteration,
     min_planning_iterations = MIN_PLANNING_ITERATIONS,
     needs_more_planning = M.needs_more_planning(),
+    phase_approval_required = M.is_phase_approval_required(),
+    phase_approved = M.is_phase_approved(),
+    awaiting_phase_approval = M.is_awaiting_phase_approval(),
   }
 end
 
