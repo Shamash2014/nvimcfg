@@ -759,10 +759,30 @@ function M.check_and_continue(proc, response_text)
 
   local should_continue, reason = ralph.should_continue(response_text)
 
+  if reason == "needs_more_planning" then
+    local status = ralph.get_status()
+    vim.schedule(function()
+      render.append_content(buf, {
+        "",
+        string.format("[🔄 Ralph (Planning %d/%d): Need more planning iterations before proceeding...]",
+          status.planning_iteration, status.min_planning_iterations),
+      })
+    end)
+
+    local continuation_prompt = ralph.get_continuation_prompt()
+    vim.defer_fn(function()
+      if ralph.is_enabled() and not ralph.is_paused() then
+        proc:send_prompt(continuation_prompt, { silent = true })
+      end
+    end, 500)
+    return true
+  end
+
   if not should_continue then
     local status = ralph.get_status()
 
     if reason and reason:match("^requirements_complete:") then
+      ralph.set_artifact("requirements", response_text)
       ralph.transition_to_phase(ralph.PHASE.DESIGN)
       ralph.quality_gates.requirements_approved = true
       vim.schedule(function()
@@ -779,6 +799,7 @@ function M.check_and_continue(proc, response_text)
     end
 
     if reason and reason:match("^design_complete:") then
+      ralph.set_artifact("design", response_text)
       ralph.transition_to_tasks()
       vim.schedule(function()
         show_phase_transition(buf, "design", "tasks", ralph)
@@ -794,6 +815,8 @@ function M.check_and_continue(proc, response_text)
     end
 
     if reason and reason:match("^tasks_complete:") then
+      ralph.set_artifact("tasks", response_text)
+      ralph.set_plan(response_text)
       ralph.update_draft_plan(response_text)
       local plan_status = ralph.get_status()
 
@@ -845,6 +868,7 @@ function M.check_and_continue(proc, response_text)
     end
 
     if reason and reason:match("^review_complete:") then
+      ralph.set_artifact("review_findings", response_text)
       ralph.transition_to_testing()
       vim.schedule(function()
         show_phase_transition(buf, "review", "testing", ralph)
@@ -860,6 +884,7 @@ function M.check_and_continue(proc, response_text)
     end
 
     if reason and reason:match("^testing_complete:") then
+      ralph.set_artifact("test_results", response_text)
       ralph.transition_to_completion()
       vim.schedule(function()
         show_phase_transition(buf, "testing", "completion", ralph)
@@ -915,6 +940,7 @@ function M.check_and_continue(proc, response_text)
   end
 
   if ralph.is_implementation_phase() and ralph.all_steps_passed() then
+    ralph.set_artifact("implementation_summary", response_text)
     ralph.transition_to_review()
     vim.schedule(function()
       show_phase_transition(buf, "implementation", "review", ralph)

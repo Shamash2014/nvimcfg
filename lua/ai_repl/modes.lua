@@ -23,7 +23,12 @@ function M.list_modes()
   return modes
 end
 
+local MODE_ALIASES = {
+  ralph = "ralph_wiggum",
+}
+
 function M.switch_mode(mode_id)
+  mode_id = MODE_ALIASES[mode_id] or mode_id
   if not MODE_INFO[mode_id] then
     return false, "Unknown mode: " .. mode_id
   end

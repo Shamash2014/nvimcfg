@@ -59,12 +59,15 @@ local SKILL_ROUTING = {
   testing = { patterns = { "test", "playwright", "e2e", "browser", "automation" }, skill = "playwright-skill:playwright-skill" },
 }
 
+local MIN_PLANNING_ITERATIONS = 4
+
 local ralph_state = {
   enabled = false,
   paused = false,
   phase = PHASE.REQUIREMENTS,
   max_iterations = 50,
   current_iteration = 0,
+  planning_iteration = 0,
   iteration_history = {},
   original_prompt = nil,
   plan = nil,
@@ -200,6 +203,7 @@ local function reset_state()
   ralph_state.paused = false
   ralph_state.phase = PHASE.REQUIREMENTS
   ralph_state.current_iteration = 0
+  ralph_state.planning_iteration = 0
   ralph_state.iteration_history = {}
   ralph_state.original_prompt = nil
   ralph_state.plan = nil
@@ -365,9 +369,7 @@ function M.get_quality_gates()
 end
 
 function M.set_artifact(phase, content)
-  if ralph_state.artifacts[phase] ~= nil then
-    ralph_state.artifacts[phase] = content
-  end
+  ralph_state.artifacts[phase] = content
 end
 
 function M.get_artifacts()
@@ -970,6 +972,9 @@ function M.should_continue(response_text)
   if phase_checks[phase] then
     local transition, pattern = M.check_phase_transition(response_text)
     if transition then
+      if M.is_planning_phase() and M.needs_more_planning() then
+        return true, "needs_more_planning"
+      end
       return false, phase_checks[phase] .. "_complete:" .. (pattern or "unknown")
     end
     return true, phase_checks[phase]
@@ -999,6 +1004,10 @@ end
 function M.record_iteration(response)
   ralph_state.current_iteration = ralph_state.current_iteration + 1
 
+  if M.is_planning_phase() then
+    ralph_state.planning_iteration = ralph_state.planning_iteration + 1
+  end
+
   table.insert(ralph_state.iteration_history, {
     iteration = ralph_state.current_iteration,
     phase = ralph_state.phase,
@@ -1006,7 +1015,16 @@ function M.record_iteration(response)
     response_length = response and #response or 0,
     response_summary = response and response:sub(1, 300) or nil,
     stuck_count = ralph_state.stuck_count,
+    planning_iteration = ralph_state.planning_iteration,
   })
+end
+
+function M.get_planning_iteration()
+  return ralph_state.planning_iteration
+end
+
+function M.needs_more_planning()
+  return ralph_state.planning_iteration < MIN_PLANNING_ITERATIONS
 end
 
 function M.get_planning_prompt(original_prompt)
@@ -1025,55 +1043,37 @@ function M.get_requirements_prompt(original_prompt)
 [Ralph Wiggum - 📝 REQUIREMENTS PHASE (1/7)]
 
 SDLC Phase: Requirements Gathering
-Goal: Define what needs to be built
+Goal: Understand and clarify what needs to be built WITH THE USER
 
 TASK: %s
 %s
 
-REQUIREMENTS CHECKLIST:
-1. **Understand the Problem** - What exactly needs to be solved?
-2. **Identify Users** - Who will use this?
-3. **Core Features** - What are the essential features?
-4. **Acceptance Criteria** - How do we know when it's done?
-5. **Constraints** - What are the boundaries and limitations?
+YOUR ROLE: Guide the user through requirements gathering interactively.
 
-DO:
+STEP 1 - EXPLORE:
 - Read existing code to understand patterns
-- Ask clarifying questions if needed
-- List functional requirements clearly
-- Note any technical constraints
+- Search for related files and documentation
+- Identify current implementation (if any)
 
-DON'T:
-- Write implementation code yet
-- Make design decisions yet
-- Skip reading existing code
+STEP 2 - PRESENT FINDINGS:
+- Show the user what you found
+- Explain current state of the codebase
+- Highlight relevant patterns
 
-OUTPUT FORMAT:
-## Requirements: [Feature Name]
+STEP 3 - ASK CLARIFYING QUESTIONS:
+- "I found X, is this the area you want to modify?"
+- "Should this feature also handle Y?"
+- "What should happen when Z occurs?"
 
-### Problem Statement
-[Clear description]
+STEP 4 - PROPOSE REQUIREMENTS:
+Present requirements and ask: "Does this capture what you need?"
 
-### Users
-- User type 1
-- User type 2
+## Questions for the User:
+1. [Specific question about scope]
+2. [Specific question about behavior]
+3. [Specific question about constraints]
 
-### Core Features
-1. Feature 1
-2. Feature 2
-
-### Acceptance Criteria
-- ✅ Criterion 1
-- ✅ Criterion 2
-
-### Constraints
-[Technical/business constraints]
-
-### Non-Functional Requirements
-- Performance: [requirement]
-- Security: [requirement]
-
-When requirements are clear, say: "Requirements complete. Moving to Design..."
+When the user confirms requirements, say: "Requirements complete. Moving to Design..."
 ]], original_prompt, skill_hint)
 end
 
@@ -1093,61 +1093,35 @@ function M.get_design_prompt()
 [Ralph Wiggum - 🎨 DESIGN PHASE (2/7)]
 
 SDLC Phase: Design & Architecture
-Goal: Architect the solution before breaking into tasks
+Goal: Design the solution WITH USER INPUT on key decisions
 %s%s
 
 Original Task: %s
 
-DESIGN CHECKLIST:
-1. **Architecture** - How will components interact?
-2. **Data Flow** - How does data move through the system?
-3. **API/Interface Design** - What interfaces are needed?
-4. **Technology Choices** - What tools/libraries to use?
-5. **Component Breakdown** - What modules/files are needed?
+YOUR ROLE: Present design options and get user approval.
 
-DO:
-- Consider multiple approaches, pick the best
-- Identify potential issues early
-- Define clear interfaces and data models
-- Explain trade-offs in your choices
+STEP 1 - PROPOSE ARCHITECTURE:
+Present your recommended approach and explain why.
 
-DON'T:
-- Write implementation code yet
-- Create task lists yet (that's next phase)
-- Over-engineer the solution
-- Ignore existing patterns in codebase
+STEP 2 - SHOW ALTERNATIVES (if applicable):
+- Option A: [approach] - Pros: X, Cons: Y
+- Option B: [approach] - Pros: X, Cons: Y
+Ask: "Which approach would you prefer?"
 
-OUTPUT FORMAT:
-## Design: [Feature Name]
+STEP 3 - VALIDATE WITH USER:
+- "Does this architecture make sense for your use case?"
+- "Are there any constraints I should know about?"
+- "Should I consider any specific patterns?"
 
-### Architecture
-[Description or diagram]
+STEP 4 - DOCUMENT DESIGN:
+Once user approves, document the agreed design.
 
-### Components
-1. Component A
-   - Purpose
-   - Responsibilities
+## Design Questions for User:
+1. [Question about architectural preference]
+2. [Question about technology choices]
+3. [Question about scope/complexity]
 
-### Data Models
-```typescript
-interface Model {
-  // fields
-}
-```
-
-### API Design
-```
-GET /api/endpoint
-POST /api/endpoint
-```
-
-### Technology Stack
-- [tech choices with rationale]
-
-### Potential Risks
-- [Risk 1 and mitigation]
-
-When design is complete, say: "Design complete. Moving to Tasks..."
+When the user confirms the design, say: "Design complete. Moving to Tasks..."
 ]], skillbook_context, skill_hint, original)
 end
 
@@ -1167,50 +1141,43 @@ function M.get_tasks_prompt()
 [Ralph Wiggum - ✅ TASKS PHASE (3/7)]
 
 SDLC Phase: Task Breakdown
-Goal: Break design into ordered implementation steps
+Goal: Create implementation plan WITH USER REVIEW
 %s%s
 
 Original Task: %s
 
-TASKS CHECKLIST:
-1. **Ordered Steps** - Create implementation steps in correct order
-2. **Dependencies** - Identify what depends on what
-3. **Complexity** - Estimate each task's complexity (Low/Medium/High)
-4. **Testability** - Each task should be independently verifiable
+YOUR ROLE: Present the implementation plan and get user approval.
 
-DO:
-- Create specific, actionable tasks
-- Include subtasks for complex items
-- Mark dependencies between tasks
-- Keep tasks small and focused
+STEP 1 - PROPOSE TASKS:
+Break down the design into concrete steps with estimates.
 
-DON'T:
-- Write implementation code yet
-- Skip dependency analysis
-- Create vague or overly broad tasks
-
-OUTPUT FORMAT:
-## Implementation Tasks
+STEP 2 - PRESENT TO USER:
+## Proposed Implementation Plan
 
 ### 1. [Task Name] (Complexity: Low/Medium/High)
-- Subtask 1
-- Subtask 2
-Dependencies: None
+- What: [description]
+- Why: [rationale]
+- Files: [affected files]
 
-### 2. [Task Name] (Complexity: Medium)
-- Subtask 1
-Dependencies: Task 1
+### 2. [Task Name] ...
 
-### 3. [Task Name] (Complexity: Low)
-Dependencies: Tasks 1, 2
+STEP 3 - ASK FOR FEEDBACK:
+- "Does this plan cover everything?"
+- "Should I add/remove any steps?"
+- "Is the order correct?"
+- "Any concerns about complexity?"
 
-[Continue for all tasks...]
+STEP 4 - REVISE IF NEEDED:
+Incorporate user feedback into the plan.
 
----
+## Questions for User:
+1. Does this plan look complete?
+2. Any steps that seem unnecessary?
+3. Anything missing that should be included?
 
-When tasks are ready, say: "Tasks complete! Ready for your review."
+When the user confirms the plan, say: "Tasks complete! Ready for your review."
 
-⚠️ IMPORTANT: After this, you will be asked to CONFIRM before implementation begins.
+⚠️ After this phase, you will be asked to CONFIRM before implementation begins.
 ]], skillbook_context, skill_hint, original)
 end
 
@@ -1448,31 +1415,52 @@ end
 function M.get_continuation_prompt()
   local phase_info = M.get_phase_info()
   local iteration = ralph_state.current_iteration + 1
+  local planning_iter = ralph_state.planning_iteration
+  local needs_more = M.needs_more_planning()
+  local planning_status = needs_more
+      and string.format("⚠️ Planning iteration %d/%d - More review needed before proceeding", planning_iter, MIN_PLANNING_ITERATIONS)
+      or string.format("✅ Planning iteration %d/%d - Ready to proceed when complete", planning_iter, MIN_PLANNING_ITERATIONS)
 
   if ralph_state.phase == PHASE.REQUIREMENTS then
     return string.format([[
 [Ralph Wiggum - %s %s | Iter %d]
+%s
 
-Continue gathering requirements:
-- Read more code if needed
-- Search for relevant documentation
-- Clarify any remaining questions
+GUIDE THE USER through requirements gathering:
+1. Present what you've learned so far
+2. Ask clarifying questions about unclear areas
+3. Propose requirements and ask for user confirmation
+4. Validate assumptions with the user
 
-When requirements are clear, say: "Requirements complete. Moving to Design..."
-]], phase_info.icon, phase_info.name, iteration)
+DO:
+- Present findings clearly to the user
+- Ask specific questions (not vague ones)
+- Wait for user input on key decisions
+- Summarize understanding and ask "Does this look correct?"
+
+When requirements are confirmed by the user, say: "Requirements complete. Moving to Design..."
+]], phase_info.icon, phase_info.name, iteration, planning_status)
   end
 
   if ralph_state.phase == PHASE.DESIGN then
     return string.format([[
 [Ralph Wiggum - %s %s | Iter %d]
+%s
 
-Continue designing:
-- Finalize architecture decisions
-- Define data models and APIs
-- Identify components and their responsibilities
+GUIDE THE USER through design decisions:
+1. Present your proposed architecture/approach
+2. Explain trade-offs and alternatives
+3. Ask for user preferences on key decisions
+4. Validate the design direction with the user
 
-When design is complete, say: "Design complete. Moving to Tasks..."
-]], phase_info.icon, phase_info.name, iteration)
+DO:
+- Present 2-3 options when there are alternatives
+- Explain pros/cons of each approach
+- Ask "Which approach would you prefer?" or "Does this design work for you?"
+- Document user's decisions
+
+When design is confirmed by the user, say: "Design complete. Moving to Tasks..."
+]], phase_info.icon, phase_info.name, iteration, planning_status)
   end
 
   if ralph_state.phase == PHASE.TASKS then
@@ -1485,29 +1473,44 @@ When design is complete, say: "Design complete. Moving to Tasks..."
       end
       return string.format([[
 [Ralph Wiggum - %s %s | Iter %d]
+%s
 
 Current task list:
 %s
 
-Refine the tasks:
-- Are there missing steps?
-- Are dependencies correct?
-- Are complexities estimated?
+GUIDE THE USER through task review:
+1. Present the implementation plan clearly
+2. Ask if any steps are missing or need adjustment
+3. Confirm priorities and order with the user
+4. Ask "Does this plan look good to you?"
 
-When tasks are ready, say: "Tasks complete! Ready for your review."
-]], phase_info.icon, phase_info.name, iteration, table.concat(step_list, "\n"))
+DO:
+- Walk through the plan step by step
+- Ask about edge cases or concerns
+- Confirm scope is correct (not too much, not too little)
+
+When tasks are confirmed by the user, say: "Tasks complete! Ready for your review."
+]], phase_info.icon, phase_info.name, iteration, planning_status, table.concat(step_list, "\n"))
     end
 
     return string.format([[
 [Ralph Wiggum - %s %s | Iter %d]
+%s
 
-Continue breaking down tasks:
+GUIDE THE USER through task breakdown:
+1. Propose implementation steps based on the design
+2. Present estimated complexity for each task
+3. Ask for user input on priorities
+4. Validate the plan with "Does this breakdown look right?"
+
+DO:
 - Create ordered implementation steps
 - Mark dependencies between tasks
 - Estimate complexity (Low/Medium/High)
+- Ask user to review and confirm
 
-When tasks are ready, say: "Tasks complete! Ready for your review."
-]], phase_info.icon, phase_info.name, iteration)
+When tasks are confirmed by the user, say: "Tasks complete! Ready for your review."
+]], phase_info.icon, phase_info.name, iteration, planning_status)
   end
 
   if ralph_state.phase == PHASE.REVIEW then
@@ -1678,6 +1681,9 @@ function M.get_status()
     quality_gates = ralph_state.quality_gates,
     awaiting_confirmation = ralph_state.awaiting_confirmation,
     plan_confirmed = ralph_state.plan_confirmed,
+    planning_iteration = ralph_state.planning_iteration,
+    min_planning_iterations = MIN_PLANNING_ITERATIONS,
+    needs_more_planning = M.needs_more_planning(),
   }
 end
 
@@ -1688,6 +1694,7 @@ function M.save_state()
     phase = ralph_state.phase,
     max_iterations = ralph_state.max_iterations,
     current_iteration = ralph_state.current_iteration,
+    planning_iteration = ralph_state.planning_iteration,
     iteration_history = ralph_state.iteration_history,
     original_prompt = ralph_state.original_prompt,
     plan = ralph_state.plan,
@@ -1710,6 +1717,7 @@ function M.restore_state(state)
   ralph_state.phase = state.phase or PHASE.REQUIREMENTS
   ralph_state.max_iterations = state.max_iterations or 50
   ralph_state.current_iteration = state.current_iteration or 0
+  ralph_state.planning_iteration = state.planning_iteration or 0
   ralph_state.iteration_history = state.iteration_history or {}
   ralph_state.original_prompt = state.original_prompt
   ralph_state.plan = state.plan
@@ -1737,5 +1745,6 @@ M.PHASE = PHASE
 M.PHASE_INFO = PHASE_INFO
 M.PHASE_ORDER = PHASE_ORDER
 M.SKILL_ROUTING = SKILL_ROUTING
+M.MIN_PLANNING_ITERATIONS = MIN_PLANNING_ITERATIONS
 
 return M
