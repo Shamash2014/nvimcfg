@@ -11,6 +11,40 @@ local PROMPT_MARKER = "$> "
 
 local buffer_state = {}
 
+-- Diff cache for performance optimization
+local diff_cache = {}
+local CACHE_SIZE_LIMIT = 100
+
+local function get_cache_key(old_content, new_content)
+  return vim.fn.sha256(old_content .. "|" .. new_content)
+end
+
+local function get_cached_diff(cache_key)
+  return diff_cache[cache_key]
+end
+
+local function cache_diff_result(cache_key, result)
+  -- Simple LRU-style cache cleanup
+  if vim.tbl_count(diff_cache) >= CACHE_SIZE_LIMIT then
+    local keys_to_remove = {}
+    local count = 0
+    for _ in pairs(diff_cache) do
+      count = count + 1
+      if count > CACHE_SIZE_LIMIT * 0.8 then
+        table.insert(keys_to_remove, _)
+      end
+    end
+    for _, key in ipairs(keys_to_remove) do
+      diff_cache[key] = nil
+    end
+  end
+  
+  diff_cache[cache_key] = {
+    result = result,
+    timestamp = os.time()
+  }
+end
+
 local SPINNERS = {
   generating = { "|", "/", "-", "\\" },
   thinking = { ".", "..", "..." },
@@ -47,6 +81,7 @@ function M.init_buffer(buf)
   vim.bo[buf].swapfile = false
   vim.bo[buf].buflisted = true
   vim.bo[buf].modifiable = true
+  vim.b[buf].ai_repl = true
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
 
@@ -285,47 +320,306 @@ end
 function M.render_diff(buf, file_path, old_content, new_content)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
 
-  local function compute_diff(old_text, new_text)
+  -- Check cache first
+  local cache_key = get_cache_key(old_content, new_content)
+  local cached_result = get_cached_diff(cache_key)
+  local diff_data, stats
+  
+  local function compute_enhanced_diff(old_text, new_text)
     if type(old_text) ~= "string" then old_text = "" end
     if type(new_text) ~= "string" then new_text = "" end
     local old_lines = vim.split(old_text, "\n", { plain = true })
     local new_lines = vim.split(new_text, "\n", { plain = true })
     local result = {}
     local hunks = vim.diff(old_text or "", new_text or "", { result_type = "indices" })
+    
     local old_idx = 1
+    local new_idx = 1
+    local hunk_num = 0
+    local total_additions = 0
+    local total_deletions = 0
 
     for _, hunk in ipairs(hunks or {}) do
       local old_start, old_count, new_start, new_count = hunk[1], hunk[2], hunk[3], hunk[4]
+      hunk_num = hunk_num + 1
+      
+      -- Add unchanged context lines before hunk
       while old_idx < old_start do
-        table.insert(result, { text = "  " .. (old_lines[old_idx] or ""), hl = nil })
+        table.insert(result, { 
+          text = string.format(" %s%d  %s", " ", old_idx, old_lines[old_idx] or ""),
+          old_line = old_idx,
+          new_line = new_idx,
+          type = "context"
+        })
         old_idx = old_idx + 1
+        new_idx = new_idx + 1
       end
+      
+      -- Add hunk header with Git-style @@ notation
+      local context_start = math.max(1, old_start - 3)
+      local context_count = (old_start - context_start) + math.max(old_count, new_count) + 3
+      local hunk_header = string.format("@@ -%d,%d +%d,%d @@", 
+        old_start, old_count, new_start, new_count)
+      table.insert(result, {
+        text = hunk_header,
+        type = "hunk_header",
+        hunk_num = hunk_num,
+        old_start = old_start,
+        new_start = new_start
+      })
+      
+      -- Process deleted lines
       for i = old_start, old_start + old_count - 1 do
         if old_lines[i] then
-          table.insert(result, { text = "- " .. old_lines[i], hl = "DiffDelete" })
+          local line_text = old_lines[i]
+          local word_diffs = M.compute_word_diff(line_text, "")
+          table.insert(result, {
+            text = string.format("-%s%d  %s", " ", i, line_text),
+            old_line = i,
+            new_line = nil,
+            type = "delete",
+            word_diffs = word_diffs
+          })
+          total_deletions = total_deletions + 1
         end
       end
+      
       old_idx = old_start + old_count
+      new_idx = new_start
+      
+      -- Process added lines
       for i = new_start, new_start + new_count - 1 do
         if new_lines[i] then
-          table.insert(result, { text = "+ " .. new_lines[i], hl = "DiffAdd" })
+          local line_text = new_lines[i]
+          local word_diffs = M.compute_word_diff("", line_text)
+          table.insert(result, {
+            text = string.format("+%s%d  %s", " ", i, line_text),
+            old_line = nil,
+            new_line = i,
+            type = "add",
+            word_diffs = word_diffs
+          })
+          total_additions = total_additions + 1
+          new_idx = new_idx + 1
         end
       end
     end
+    
+    -- Add remaining unchanged lines
     while old_idx <= #old_lines do
-      table.insert(result, { text = "  " .. (old_lines[old_idx] or ""), hl = nil })
+      table.insert(result, { 
+        text = string.format(" %s%d  %s", " ", old_idx, old_lines[old_idx] or ""),
+        old_line = old_idx,
+        new_line = new_idx,
+        type = "context"
+      })
       old_idx = old_idx + 1
+      new_idx = new_idx + 1
     end
-    return result
+    
+    return result, {
+      additions = total_additions,
+      deletions = total_deletions,
+      hunks = hunk_num
+    }
   end
 
-  local diff_data = compute_diff(old_content, new_content)
-  local lines = { "", "--- " .. vim.fn.fnamemodify(file_path, ":t") .. " ---" }
+  local function compute_word_diff(old_line, new_line)
+    if old_line == "" and new_line ~= "" then
+      return { type = "full_add", text = new_line }
+    elseif old_line ~= "" and new_line == "" then
+      return { type = "full_delete", text = old_line }
+    elseif old_line ~= new_line then
+      -- Enhanced word-level diff using character-based diff
+      local char_diff = vim.diff(old_line, new_line, { 
+        result_type = "indices",
+        algorithm = "minimal"
+      })
+      
+      local segments = {}
+      local old_pos = 1
+      local new_pos = 1
+      
+      for _, hunk in ipairs(char_diff or {}) do
+        local old_start, old_count, new_start, new_count = hunk[1], hunk[2], hunk[3], hunk[4]
+        
+        -- Add unchanged prefix
+        if old_pos < old_start then
+          local unchanged = old_line:sub(old_pos, old_start - 1)
+          table.insert(segments, { 
+            text = unchanged, 
+            type = "unchanged",
+            old_start = old_pos,
+            old_end = old_start - 1,
+            new_start = new_pos,
+            new_end = new_pos + (old_start - old_pos) - 1
+          })
+          new_pos = new_pos + (old_start - old_pos)
+        end
+        
+        -- Add deleted part
+        if old_count > 0 then
+          local deleted = old_line:sub(old_start, old_start + old_count - 1)
+          table.insert(segments, { 
+            text = deleted, 
+            type = "delete",
+            old_start = old_start,
+            old_end = old_start + old_count - 1
+          })
+        end
+        
+        -- Add added part
+        if new_count > 0 then
+          local added = new_line:sub(new_start, new_start + new_count - 1)
+          table.insert(segments, { 
+            text = added, 
+            type = "add",
+            new_start = new_start,
+            new_end = new_start + new_count - 1
+          })
+          new_pos = new_start + new_count
+        end
+        
+        old_pos = old_start + old_count
+      end
+      
+      -- Add trailing unchanged part
+      if old_pos <= #old_line then
+        local unchanged = old_line:sub(old_pos)
+        table.insert(segments, { 
+          text = unchanged, 
+          type = "unchanged",
+          old_start = old_pos,
+          old_end = #old_line
+        })
+      end
+      
+      return { type = "mixed", segments = segments }
+    end
+    return nil
+  end
+
+  -- Add word diff computation method
+  M.compute_word_diff = compute_word_diff
+
+  local diff_data, stats = compute_enhanced_diff(old_content, new_content)
+  
+  -- Cache the result if not from cache
+  if not cached_result then
+    cache_diff_result(cache_key, { diff_data = diff_data, stats = stats })
+  end
+  
+  -- Build header with file info and stats
+  local filename = vim.fn.fnamemodify(file_path, ":t")
+  local stats_text = string.format("+%d -%d", stats.additions, stats.deletions)
+  local header = string.format("--- %s (%s) ---", filename, stats_text)
+  
+  local lines = { "", header }
   for _, d in ipairs(diff_data) do
     table.insert(lines, d.text)
   end
   table.insert(lines, "---")
   table.insert(lines, "")
+
+  local function apply_syntax_highlighting(buf, line_num, content_line, file_path)
+    -- Try to determine filetype from path
+    local filetype = vim.filetype.match({ filename = file_path }) or "text"
+    
+    -- Create temporary buffer for syntax highlighting
+    local temp_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(temp_buf, 0, -1, false, { content_line })
+    vim.bo[temp_buf].filetype = filetype
+    
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(temp_buf) then return end
+      
+      -- Try to start treesitter parsing
+      local ok, parser = pcall(vim.treesitter.get_parser, temp_buf, filetype)
+      if ok and parser then
+        parser:parse()
+        
+        -- Get syntax highlights and apply them to diff buffer
+        local highlights = {}
+        for id, node in parser:trees()[1]:root():iter_children() do
+          if node:type() ~= nil then
+            local start_row, start_col, end_row, end_col = node:range()
+            if start_row == 0 then -- Only highlight first line
+              table.insert(highlights, {
+                start_col = start_col,
+                end_col = end_col,
+                hl_group = "@" .. node:type()
+              })
+            end
+          end
+        end
+        
+        -- Apply highlights to diff buffer with diff background
+        for _, hl in ipairs(highlights) do
+          local content_start = content_line:find("%s%s") + 1
+          pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 
+            content_start + hl.start_col, {
+              end_col = content_start + hl.end_col,
+              hl_group = hl.hl_group,
+              virt_text = { { "", "AIReplDiffContext" } },
+              virt_text_pos = "overlay"
+            })
+        end
+      end
+      
+      vim.api.nvim_buf_delete(temp_buf, { force = true })
+    -- Store hunk locations for navigation
+    local hunk_positions = {}
+    for i, d in ipairs(diff_data) do
+      if d.type == "hunk_header" then
+        table.insert(hunk_positions, diff_start + i - 1)
+      end
+    end
+    
+    if #hunk_positions > 0 then
+      -- Create local keymaps for diff navigation
+      local opts = { buffer = buf, silent = true, nowait = true }
+      vim.keymap.set('n', '[h', function()
+        local current_line = vim.api.nvim_win_get_cursor(0)[1]
+        for i = #hunk_positions, 1, -1 do
+          if hunk_positions[i] < current_line then
+            vim.api.nvim_win_set_cursor(0, { hunk_positions[i], 0 })
+            break
+          end
+        end
+      end, opts)
+      
+      vim.keymap.set('n', ']h', function()
+        local current_line = vim.api.nvim_win_get_cursor(0)[1]
+        for i, pos in ipairs(hunk_positions) do
+          if pos > current_line then
+            vim.api.nvim_win_set_cursor(0, { pos, 0 })
+            break
+          end
+        end
+      end, opts)
+      
+      vim.keymap.set('n', '[c', function()
+        local current_line = vim.api.nvim_win_get_cursor(0)[1]
+        for i = #hunk_positions, 1, -1 do
+          if hunk_positions[i] < current_line then
+            vim.api.nvim_win_set_cursor(0, { hunk_positions[i] + 1, 0 })
+            break
+          end
+        end
+      end, opts)
+      
+      vim.keymap.set('n', ']c', function()
+        local current_line = vim.api.nvim_win_get_cursor(0)[1]
+        for i, pos in ipairs(hunk_positions) do
+          if pos > current_line then
+            vim.api.nvim_win_set_cursor(0, { pos + 1, 0 })
+            break
+          end
+        end
+      end, opts)
+    end
+  end)
+end
 
   vim.schedule(function()
     if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
@@ -338,13 +632,82 @@ function M.render_diff(buf, file_path, old_content, new_content)
 
     local diff_start = insert_at + 2
     for i, d in ipairs(diff_data) do
-      if d.hl then
-        pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, diff_start + i - 1, 0, {
+      local line_num = diff_start + i - 1
+      
+      if d.type == "hunk_header" then
+        pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 0, {
           end_col = #d.text,
-          hl_group = d.hl
+          hl_group = "AIReplDiffHunk"
         })
+      elseif d.type == "add" then
+        pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 0, {
+          end_col = #d.text,
+          hl_group = "AIReplDiffAdd"
+        })
+        -- Apply enhanced word-level highlighting for additions
+        if d.word_diffs then
+          local content_start = d.text:find("%s%s") + 1
+          if d.word_diffs.type == "full_add" then
+            pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, content_start, {
+              end_col = #d.text,
+              hl_group = "AIReplDiffAddWord"
+            })
+          elseif d.word_diffs.type == "mixed" and d.word_diffs.segments then
+            for _, segment in ipairs(d.word_diffs.segments) do
+              if segment.type == "add" then
+                local start_col = content_start + segment.new_start - 1
+                local end_col = content_start + segment.new_end - 1
+                pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, start_col, {
+                  end_col = end_col + 1,
+                  hl_group = "AIReplDiffAddWord"
+                })
+              end
+            end
+          end
+        end
+      elseif d.type == "delete" then
+        pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 0, {
+          end_col = #d.text,
+          hl_group = "AIReplDiffDelete"
+        })
+        -- Apply enhanced word-level highlighting for deletions
+        if d.word_diffs then
+          local content_start = d.text:find("%s%s") + 1
+          if d.word_diffs.type == "full_delete" then
+            pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, content_start, {
+              end_col = #d.text,
+              hl_group = "AIReplDiffDeleteWord"
+            })
+          elseif d.word_diffs.type == "mixed" and d.word_diffs.segments then
+            for _, segment in ipairs(d.word_diffs.segments) do
+              if segment.type == "delete" then
+                local start_col = content_start + segment.old_start - 1
+                local end_col = content_start + segment.old_end - 1
+                pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, start_col, {
+                  end_col = end_col + 1,
+                  hl_group = "AIReplDiffDeleteWord"
+                })
+              end
+            end
+          end
+        end
+      elseif d.type == "context" then
+        pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 0, {
+          end_col = d.text:find("%s%d%s") + 2,
+          hl_group = "AIReplDiffContext"
+        })
+        -- Apply syntax highlighting to context lines
+        local content_start = d.text:find("%s%d%s") + 2
+        local content = d.text:sub(content_start)
+        apply_syntax_highlighting(buf, line_num, content, file_path)
       end
     end
+    
+    -- Highlight the header with stats
+    pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, diff_start - 1, 0, {
+      end_col = #header,
+      hl_group = "AIReplDiffHeader"
+    })
   end)
 end
 

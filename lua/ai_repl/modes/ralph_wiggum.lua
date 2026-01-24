@@ -60,6 +60,7 @@ local SKILL_ROUTING = {
 }
 
 local MIN_PLANNING_ITERATIONS = 4
+local MAX_PLANNING_ITERATIONS = 12
 
 local ralph_state = {
   enabled = false,
@@ -68,6 +69,7 @@ local ralph_state = {
   max_iterations = 50,
   current_iteration = 0,
   planning_iteration = 0,
+  analysis_mode = "summary",
   iteration_history = {},
   original_prompt = nil,
   plan = nil,
@@ -259,6 +261,7 @@ function M.enable(opts)
   reset_state()
   ralph_state.enabled = true
   ralph_state.max_iterations = opts.max_iterations or 50
+  ralph_state.analysis_mode = opts.analysis_mode or "summary"
   return true
 end
 
@@ -878,6 +881,52 @@ After reflection, continue with the next step.
 ]], step_content or "unknown step", outcome or "no outcome recorded", skillbook_context)
 end
 
+function M.format_execution_context()
+  return {
+    original_prompt = ralph_state.original_prompt,
+    artifacts = ralph_state.artifacts,
+    plan_steps = ralph_state.plan_steps,
+    skillbook = ralph_state.skillbook,
+    active_skill = ralph_state.active_skill,
+    quality_gates = ralph_state.quality_gates,
+  }
+end
+
+function M.get_execution_injection_prompt()
+  local ctx = M.format_execution_context()
+  local plan_status = M.format_plan_status()
+  local skillbook_text = M.has_skills() and M.format_skillbook() or ""
+
+  local artifacts_summary = ""
+  if ctx.artifacts.requirements then
+    artifacts_summary = artifacts_summary .. "\n### Requirements\n" .. ctx.artifacts.requirements:sub(1, 2000)
+  end
+  if ctx.artifacts.design then
+    artifacts_summary = artifacts_summary .. "\n\n### Design\n" .. ctx.artifacts.design:sub(1, 2000)
+  end
+  if ctx.artifacts.tasks then
+    artifacts_summary = artifacts_summary .. "\n\n### Tasks\n" .. ctx.artifacts.tasks:sub(1, 2000)
+  end
+
+  local skill_section = ""
+  if skillbook_text ~= "" then
+    skill_section = "\n\n## Learned Patterns\n" .. skillbook_text
+  end
+
+  return string.format([[
+[Ralph Wiggum - 🔨 Execution | Fresh Context]
+
+## Task
+%s
+
+## Approved Plan
+%s
+%s%s
+---
+Execute each step. Mark completed with [x]. When ALL done, say "Implementation complete. Moving to Review..."
+]], ctx.original_prompt or "Complete the task", plan_status, artifacts_summary, skill_section)
+end
+
 function M.check_plan_ready(response_text)
   if not response_text then return false, nil end
 
@@ -1069,12 +1118,59 @@ function M.get_planning_iteration()
   return ralph_state.planning_iteration
 end
 
+function M.has_significant_discoveries()
+  -- Check if we have meaningful discoveries from requirements phase
+  local artifacts = ralph_state.artifacts
+  if artifacts.requirements then
+    local req_text = artifacts.requirements
+    -- Look for indicators of meaningful analysis
+    return req_text:match("found") or 
+           req_text:match("discovered") or 
+           req_text:match("identified") or
+           req_text:match("components") or
+           req_text:match("architecture") or
+           req_text:match("dependencies") or
+           #req_text > 200  -- Substantial content
+  end
+  return false
+end
+
 function M.needs_more_planning()
-  return ralph_state.planning_iteration < MIN_PLANNING_ITERATIONS
+  local min_iter = MIN_PLANNING_ITERATIONS
+  local max_iter = MAX_PLANNING_ITERATIONS
+  
+  -- Allow adaptive iteration based on analysis mode
+  if ralph_state.analysis_mode == "verbose" then
+    max_iter = max_iter + 4  -- More iterations for verbose analysis
+  elseif ralph_state.analysis_mode == "silent" then
+    max_iter = min_iter      -- Minimum iterations for silent mode
+  end
+  
+  -- Check if we've discovered significant information
+  local has_discoveries = M.has_significant_discoveries()
+  
+  return ralph_state.planning_iteration < min_iter or 
+         (ralph_state.planning_iteration < max_iter and not has_discoveries)
 end
 
 function M.reset_planning_iteration()
   ralph_state.planning_iteration = 0
+end
+
+function M.get_analysis_mode()
+  return ralph_state.analysis_mode or "summary"
+end
+
+function M.set_analysis_mode(mode)
+  ralph_state.analysis_mode = mode
+end
+
+function M.should_show_analysis(mode)
+  mode = mode or "summary"
+  if mode == "verbose" then return true end
+  if mode == "summary" then return ralph_state.planning_iteration == 0 end
+  if mode == "silent" then return false end
+  return false
 end
 
 function M.get_planning_prompt(original_prompt)
@@ -1082,335 +1178,106 @@ function M.get_planning_prompt(original_prompt)
 end
 
 function M.get_requirements_prompt(original_prompt)
-  local skill_hint = ""
-  local detected_skill, category = M.detect_skill_for_task(original_prompt)
+  local detected_skill, _ = M.detect_skill_for_task(original_prompt)
   if detected_skill then
-    skill_hint = string.format("\n\n💡 Suggested skill: %s (%s)\nConsider using this skill during implementation.", detected_skill, category)
     ralph_state.active_skill = detected_skill
   end
 
+  local analysis_mode = ralph_state.analysis_mode or "summary"
+  local exploration_guidance = ""
+  
+  if analysis_mode == "verbose" then
+    exploration_guidance = [[
+Show detailed exploration process:
+- Use search tools (glob, grep) systematically to discover relevant files
+- Document file patterns, dependencies and architectural findings
+- Explain reasoning behind each discovery and insight
+- Provide step-by-step analysis of codebase structure
+- Use Task tool for comprehensive exploration when needed
+]]
+  elseif analysis_mode == "summary" then
+    exploration_guidance = [[
+Provide structured analysis summary:
+- Use targeted searches (glob, grep) to identify key patterns
+- Document main architectural components and their relationships
+- Identify critical dependencies and integration points
+- Formulate specific clarifying questions based on findings
+- Highlight any obstacles or ambiguities discovered
+]]
+  end
+
   return string.format([[
-[Ralph Wiggum - 📝 REQUIREMENTS PHASE (1/7)]
+[📝 Requirements (1/7)]
 
-SDLC Phase: Requirements Gathering
-Goal: Understand and clarify what needs to be built WITH THE USER
+Task: %s
 
-TASK: %s
+Explore codebase, present findings, ask clarifying questions.
 %s
-
-YOUR ROLE: Guide the user through requirements gathering interactively.
-
-STEP 1 - EXPLORE:
-- Read existing code to understand patterns
-- Search for related files and documentation
-- Identify current implementation (if any)
-
-STEP 2 - PRESENT FINDINGS:
-- Show the user what you found
-- Explain current state of the codebase
-- Highlight relevant patterns
-
-STEP 3 - ASK CLARIFYING QUESTIONS:
-- "I found X, is this the area you want to modify?"
-- "Should this feature also handle Y?"
-- "What should happen when Z occurs?"
-
-STEP 4 - PROPOSE REQUIREMENTS:
-Present requirements and ask: "Does this capture what you need?"
-
-## Questions for the User:
-1. [Specific question about scope]
-2. [Specific question about behavior]
-3. [Specific question about constraints]
-
-When the user confirms requirements, say: "Requirements complete. Moving to Design..."
-]], original_prompt, skill_hint)
+When confirmed: "Requirements complete. Moving to Design..."
+]], original_prompt, exploration_guidance)
 end
 
 function M.get_design_prompt()
   local original = ralph_state.original_prompt or "the task"
-  local skillbook_context = ""
-  if M.has_skills() then
-    skillbook_context = "\n\nLEARNED PATTERNS:\n" .. M.format_skillbook()
-  end
-
-  local skill_hint = ""
-  if ralph_state.active_skill then
-    skill_hint = string.format("\n\n💡 Active skill: %s", ralph_state.active_skill)
-  end
+  local skillbook_context = M.has_skills() and ("\n" .. M.format_skillbook()) or ""
 
   return string.format([[
-[Ralph Wiggum - 🎨 DESIGN PHASE (2/7)]
+[🎨 Design (2/7)]
 
-SDLC Phase: Design & Architecture
-Goal: Design the solution WITH USER INPUT on key decisions
-%s%s
+Task: %s%s
 
-Original Task: %s
-
-YOUR ROLE: Present design options and get user approval.
-
-STEP 1 - PROPOSE ARCHITECTURE:
-Present your recommended approach and explain why.
-
-STEP 2 - SHOW ALTERNATIVES (if applicable):
-- Option A: [approach] - Pros: X, Cons: Y
-- Option B: [approach] - Pros: X, Cons: Y
-Ask: "Which approach would you prefer?"
-
-STEP 3 - VALIDATE WITH USER:
-- "Does this architecture make sense for your use case?"
-- "Are there any constraints I should know about?"
-- "Should I consider any specific patterns?"
-
-STEP 4 - DOCUMENT DESIGN:
-Once user approves, document the agreed design.
-
-## Design Questions for User:
-1. [Question about architectural preference]
-2. [Question about technology choices]
-3. [Question about scope/complexity]
-
-When the user confirms the design, say: "Design complete. Moving to Tasks..."
-]], skillbook_context, skill_hint, original)
+Present architecture, show alternatives if applicable, get user approval.
+When confirmed: "Design complete. Moving to Tasks..."
+]], original, skillbook_context)
 end
 
 function M.get_tasks_prompt()
   local original = ralph_state.original_prompt or "the task"
-  local skillbook_context = ""
-  if M.has_skills() then
-    skillbook_context = "\n\nLEARNED PATTERNS:\n" .. M.format_skillbook()
-  end
-
-  local skill_hint = ""
-  if ralph_state.active_skill then
-    skill_hint = string.format("\n\n💡 Active skill: %s", ralph_state.active_skill)
-  end
+  local skillbook_context = M.has_skills() and ("\n" .. M.format_skillbook()) or ""
 
   return string.format([[
-[Ralph Wiggum - ✅ TASKS PHASE (3/7)]
+[✅ Tasks (3/7)]
 
-SDLC Phase: Task Breakdown
-Goal: Create implementation plan WITH USER REVIEW
-%s%s
+Task: %s%s
 
-Original Task: %s
-
-YOUR ROLE: Present the implementation plan and get user approval.
-
-STEP 1 - PROPOSE TASKS:
-Break down the design into concrete steps with estimates.
-
-STEP 2 - PRESENT TO USER:
-## Proposed Implementation Plan
-
-### 1. [Task Name] (Complexity: Low/Medium/High)
-- What: [description]
-- Why: [rationale]
-- Files: [affected files]
-
-### 2. [Task Name] ...
-
-STEP 3 - ASK FOR FEEDBACK:
-- "Does this plan cover everything?"
-- "Should I add/remove any steps?"
-- "Is the order correct?"
-- "Any concerns about complexity?"
-
-STEP 4 - REVISE IF NEEDED:
-Incorporate user feedback into the plan.
-
-## Questions for User:
-1. Does this plan look complete?
-2. Any steps that seem unnecessary?
-3. Anything missing that should be included?
-
-When the user confirms the plan, say: "Tasks complete! Ready for your review."
-
-⚠️ After this phase, you will be asked to CONFIRM before implementation begins.
-]], skillbook_context, skill_hint, original)
+Break down into implementation steps. Get user approval.
+When confirmed: "Tasks complete. Ready for your review."
+]], original, skillbook_context)
 end
 
 function M.get_review_prompt()
-  local original = ralph_state.original_prompt or "the task"
   local plan_status = M.format_plan_status()
-  local skillbook_context = ""
-  if M.has_skills() then
-    skillbook_context = "\n\nLEARNED PATTERNS:\n" .. M.format_skillbook()
-  end
 
   return string.format([[
-[Ralph Wiggum - 🔍 REVIEW PHASE (5/7)]
+[🔍 Review (5/7)]
 
-SDLC Phase: Code Review & Quality Check
-Goal: Verify implementation quality before testing
 %s
 
-Original Task: %s
-
-IMPLEMENTATION STATUS:
-%s
-
-CODE REVIEW CHECKLIST:
-1. **Correctness** - Does the code do what it should?
-2. **Code Quality** - Is it readable and maintainable?
-3. **Error Handling** - Are edge cases handled?
-4. **Security** - No vulnerabilities introduced?
-5. **Performance** - No obvious performance issues?
-6. **Style** - Follows codebase conventions?
-
-DO:
-- Review all changed/created files
-- Check for common issues (null checks, error handling)
-- Verify code matches design intent
-- Look for code smells or anti-patterns
-
-DON'T:
-- Skip files thinking they're fine
-- Ignore error handling
-- Over-optimize prematurely
-
-OUTPUT FORMAT:
-## Review Summary
-- Files reviewed: [count]
-- Issues found: [count]
-
-## Findings
-### Issues to Fix
-- [ ] [Issue description and location]
-
-### Suggestions (non-blocking)
-- [Suggestion]
-
-## Verdict
-[PASS/NEEDS_CHANGES]
-
-If review passes, say: "Review complete. Moving to Testing..."
-If issues found, fix them and re-review.
-]], skillbook_context, original, plan_status)
+Review changed files for correctness, security, error handling.
+When passed: "Review complete. Moving to Testing..."
+]], plan_status)
 end
 
 function M.get_testing_prompt()
-  local original = ralph_state.original_prompt or "the task"
-  local skillbook_context = ""
-  if M.has_skills() then
-    skillbook_context = "\n\nLEARNED PATTERNS:\n" .. M.format_skillbook()
-  end
+  return [[
+[🧪 Testing (6/7)]
 
-  local test_skill_hint = ""
-  if ralph_state.active_skill == "playwright-skill:playwright-skill" then
-    test_skill_hint = "\n\n💡 Playwright skill active - use for E2E/browser testing"
-  end
-
-  return string.format([[
-[Ralph Wiggum - 🧪 TESTING PHASE (6/7)]
-
-SDLC Phase: Testing & Verification
-Goal: Verify implementation works correctly
-%s%s
-
-Original Task: %s
-
-TESTING CHECKLIST:
-1. **Run Existing Tests** - Ensure nothing is broken
-2. **Add New Tests** - Cover new functionality
-3. **Manual Verification** - Test the happy path
-4. **Edge Cases** - Test boundary conditions
-5. **Integration** - Verify components work together
-
-DO:
-- Run the test suite first
-- Add tests for new functionality
-- Test error conditions
-- Verify success criteria from requirements
-
-DON'T:
-- Skip running existing tests
-- Only test happy path
-- Ignore failing tests
-
-OUTPUT FORMAT:
-## Test Results
-
-### Existing Tests
-- Status: [PASS/FAIL]
-- Details: [summary]
-
-### New Tests Added
-- [Test 1]: [description]
-- [Test 2]: [description]
-
-### Manual Verification
-- [x] [Scenario tested]
-
-## Verdict
-[ALL_TESTS_PASS / TESTS_FAILING]
-
-If all tests pass, say: "Tests pass. Moving to Completion..."
-If tests fail, fix issues and re-test.
-]], skillbook_context, test_skill_hint, original)
+Run existing tests, add new tests for new functionality.
+When passed: "Tests pass. Moving to Completion..."
+]]
 end
 
 function M.get_completion_prompt()
-  local original = ralph_state.original_prompt or "the task"
-  local plan_status = M.format_plan_status()
   local progress = M.get_steps_progress()
-  local quality_gates = M.get_quality_gates()
 
   return string.format([[
-[Ralph Wiggum - ✅✅ COMPLETION PHASE (7/7)]
+[✅ Completion (7/7)]
 
-SDLC Phase: Final Verification & Cleanup
-Goal: Confirm task is truly complete
+Steps: %d/%d
 
-Original Task: %s
-
-PROGRESS:
-%s
-Steps: %d/%d completed
-
-QUALITY GATES:
-- Requirements: %s
-- Design: %s
-- Tasks: %s
-- Implementation: %s
-- Review: %s
-- Tests: %s
-
-COMPLETION CHECKLIST:
-1. **All Steps Done** - Every planned step completed?
-2. **Tests Passing** - All tests green?
-3. **Code Reviewed** - Quality verified?
-4. **Requirements Met** - Success criteria satisfied?
-5. **Cleanup** - No debug code, temp files, etc.?
-
-OUTPUT FORMAT:
-## Completion Summary
-
-### What Was Built
-[Summary of implementation]
-
-### Files Changed
-- [file1]: [change summary]
-- [file2]: [change summary]
-
-### How to Use/Test
-[Brief instructions]
-
-### Known Limitations
-[Any caveats or future work]
-
----
-🎯 FULLY COMPLETE
-
-End with: [DONE] or "All tasks complete!"
-]], original, plan_status, progress.passed, progress.total,
-    quality_gates.requirements_approved and "✅" or "⏳",
-    quality_gates.design_approved and "✅" or "⏳",
-    quality_gates.tasks_approved and "✅" or "⏳",
-    quality_gates.implementation_complete and "✅" or "⏳",
-    quality_gates.review_passed and "✅" or "⏳",
-    quality_gates.tests_passed and "✅" or "⏳")
+Summarize what was built, files changed, how to test.
+End with: [DONE]
+]], progress.passed, progress.total)
 end
 
 function M.format_plan_status()
@@ -1465,195 +1332,52 @@ end
 function M.get_continuation_prompt()
   local phase_info = M.get_phase_info()
   local iteration = ralph_state.current_iteration + 1
-  local planning_iter = ralph_state.planning_iteration
-  local needs_more = M.needs_more_planning()
-  local planning_status = needs_more
-      and string.format("⚠️ Planning iteration %d/%d - More review needed before proceeding", planning_iter, MIN_PLANNING_ITERATIONS)
-      or string.format("✅ Planning iteration %d/%d - Ready to proceed when complete", planning_iter, MIN_PLANNING_ITERATIONS)
+  local progress = M.get_steps_progress()
+  local analysis_mode = ralph_state.analysis_mode or "summary"
 
   if ralph_state.phase == PHASE.REQUIREMENTS then
-    return string.format([[
-[Ralph Wiggum - %s %s | Iter %d]
-%s
-
-GUIDE THE USER through requirements gathering:
-1. Present what you've learned so far
-2. Ask clarifying questions about unclear areas
-3. Propose requirements and ask for user confirmation
-4. Validate assumptions with the user
-
-DO:
-- Present findings clearly to the user
-- Ask specific questions (not vague ones)
-- Wait for user input on key decisions
-- Summarize understanding and ask "Does this look correct?"
-
-When requirements are confirmed by the user, say: "Requirements complete. Moving to Design..."
-]], phase_info.icon, phase_info.name, iteration, planning_status)
+    local guidance = ""
+    if analysis_mode == "verbose" then
+      guidance = "\nShow detailed exploration process and findings."
+    elseif analysis_mode == "summary" and ralph_state.planning_iteration == 0 then
+      guidance = "\nPresent key discoveries and clarifying questions."
+    end
+    
+    return string.format("[%s Requirements | Iter %d]\nContinue gathering requirements.%s When confirmed: \"Requirements complete. Moving to Design...\"", phase_info.icon, iteration, guidance)
   end
 
   if ralph_state.phase == PHASE.DESIGN then
-    return string.format([[
-[Ralph Wiggum - %s %s | Iter %d]
-%s
-
-GUIDE THE USER through design decisions:
-1. Present your proposed architecture/approach
-2. Explain trade-offs and alternatives
-3. Ask for user preferences on key decisions
-4. Validate the design direction with the user
-
-DO:
-- Present 2-3 options when there are alternatives
-- Explain pros/cons of each approach
-- Ask "Which approach would you prefer?" or "Does this design work for you?"
-- Document user's decisions
-
-When design is confirmed by the user, say: "Design complete. Moving to Tasks..."
-]], phase_info.icon, phase_info.name, iteration, planning_status)
+    return string.format("[%s Design | Iter %d]\nContinue design. When confirmed: \"Design complete. Moving to Tasks...\"", phase_info.icon, iteration)
   end
 
   if ralph_state.phase == PHASE.TASKS then
-    local draft_steps = ralph_state.plan_steps
-    if #draft_steps > 0 then
-      local step_list = {}
-      for _, step in ipairs(draft_steps) do
-        local marker = step.status == "completed" and "[x]" or "[ ]"
-        table.insert(step_list, string.format("- %s %s", marker, step.content))
-      end
-      return string.format([[
-[Ralph Wiggum - %s %s | Iter %d]
-%s
-
-Current task list:
-%s
-
-GUIDE THE USER through task review:
-1. Present the implementation plan clearly
-2. Ask if any steps are missing or need adjustment
-3. Confirm priorities and order with the user
-4. Ask "Does this plan look good to you?"
-
-DO:
-- Walk through the plan step by step
-- Ask about edge cases or concerns
-- Confirm scope is correct (not too much, not too little)
-
-When tasks are confirmed by the user, say: "Tasks complete! Ready for your review."
-]], phase_info.icon, phase_info.name, iteration, planning_status, table.concat(step_list, "\n"))
-    end
-
-    return string.format([[
-[Ralph Wiggum - %s %s | Iter %d]
-%s
-
-GUIDE THE USER through task breakdown:
-1. Propose implementation steps based on the design
-2. Present estimated complexity for each task
-3. Ask for user input on priorities
-4. Validate the plan with "Does this breakdown look right?"
-
-DO:
-- Create ordered implementation steps
-- Mark dependencies between tasks
-- Estimate complexity (Low/Medium/High)
-- Ask user to review and confirm
-
-When tasks are confirmed by the user, say: "Tasks complete! Ready for your review."
-]], phase_info.icon, phase_info.name, iteration, planning_status)
+    local plan_status = M.format_plan_status()
+    return string.format("[%s Tasks | Iter %d]\n\n%s\n\nWhen confirmed: \"Tasks complete. Ready for your review.\"", phase_info.icon, iteration, plan_status)
   end
 
   if ralph_state.phase == PHASE.REVIEW then
-    return string.format([[
-[Ralph Wiggum - %s %s | Iter %d]
-
-Continue code review:
-- Check remaining files
-- Verify error handling
-- Fix any issues found
-
-When review passes, say: "Review complete. Moving to Testing..."
-]], phase_info.icon, phase_info.name, iteration)
+    return string.format("[🔍 Review | Iter %d]\nContinue review. When passed: \"Review complete. Moving to Testing...\"", iteration)
   end
 
   if ralph_state.phase == PHASE.TESTING then
-    return string.format([[
-[Ralph Wiggum - %s %s | Iter %d]
-
-Continue testing:
-- Fix any failing tests
-- Add missing test coverage
-- Verify functionality works
-
-When all tests pass, say: "Tests pass. Moving to Completion..."
-]], phase_info.icon, phase_info.name, iteration)
+    return string.format("[🧪 Testing | Iter %d]\nContinue testing. When passed: \"Tests pass. Moving to Completion...\"", iteration)
   end
 
   if ralph_state.phase == PHASE.COMPLETION then
     return M.get_completion_prompt()
   end
 
-  local original = ralph_state.original_prompt or "the task"
-  local next_step = M.get_next_pending_step()
   local plan_status = M.format_plan_status()
-  local progress = M.get_steps_progress()
-  local skillbook_context = ""
-  if M.has_skills() then
-    skillbook_context = "\n\nLEARNED SKILLS:\n" .. M.format_skillbook()
-  end
+  local next_step = M.get_next_pending_step()
+  local focus = next_step and ("\nFocus: " .. next_step.content) or ""
 
-  local skill_hint = ""
-  if ralph_state.active_skill then
-    skill_hint = string.format("\n💡 Active skill: %s", ralph_state.active_skill)
-  end
+  return string.format([[
+[🔨 Implementation | Iter %d/%d | %d/%d steps]%s
 
-  local step_focus = ""
-  if next_step then
-    step_focus = string.format("\nFOCUS ON: %s", next_step.content)
-  end
-
-  if iteration <= 5 then
-    return string.format([[
-[Ralph Wiggum - 🔨 Implementation | Iter %d/%d | Steps: %d/%d]%s%s
-
-PLAN STATUS:
 %s
-%s
-Continue implementing. Mark completed steps with [x].
-Note learnings: ✓ [worked] ✗ [avoid]
-When ALL implementation steps are done, say: "Implementation complete. Moving to Review..."
-]], iteration, ralph_state.max_iterations, progress.passed, progress.total, step_focus, skill_hint, plan_status, skillbook_context)
 
-  elseif iteration <= 15 then
-    return string.format([[
-[Ralph Wiggum - 🔨 Implementation | Iter %d/%d | Steps: %d/%d]%s%s
-
-PLAN STATUS:
-%s
-%s
-Continue working on remaining steps. If blocked, explain what's blocking.
-Mark completed steps with [x]. Note learnings: ✓ [worked] ✗ [avoid]
-When ALL implementation steps are done, say: "Implementation complete. Moving to Review..."
-]], iteration, ralph_state.max_iterations, progress.passed, progress.total, step_focus, skill_hint, plan_status, skillbook_context)
-
-  else
-    return string.format([[
-[Ralph Wiggum - 🔨 Implementation | Iter %d/%d | Steps: %d/%d] - High iteration count%s%s
-
-PLAN STATUS:
-%s
-%s
-Please:
-1. Complete the current step if possible
-2. If blocked, explain what's preventing progress
-3. Mark any completed steps with [x]
-4. Note any learnings: ✓ [worked] ✗ [avoid]
-
-Original task: %s
-
-When ALL steps are complete, say: "Implementation complete. Moving to Review..."
-]], iteration, ralph_state.max_iterations, progress.passed, progress.total, step_focus, skill_hint, plan_status, skillbook_context, original)
-  end
+Mark completed with [x]. When done: "Implementation complete. Moving to Review..."
+]], iteration, ralph_state.max_iterations, progress.passed, progress.total, focus, plan_status)
 end
 
 function M.get_summary()
@@ -1799,5 +1523,6 @@ M.PHASE_INFO = PHASE_INFO
 M.PHASE_ORDER = PHASE_ORDER
 M.SKILL_ROUTING = SKILL_ROUTING
 M.MIN_PLANNING_ITERATIONS = MIN_PLANNING_ITERATIONS
+M.MAX_PLANNING_ITERATIONS = MAX_PLANNING_ITERATIONS
 
 return M

@@ -20,6 +20,16 @@ function M.setup()
   hl(0, "AIReplInfo", { fg = "#AAAAAA" })
   hl(0, "AIReplError", { fg = "#FF4444" })
   hl(0, "AIReplSeparator", { fg = "#808080" })
+  -- Diff-specific highlights
+  hl(0, "AIReplDiffHeader", { fg = "#888888", bg = "#2a2a2a", bold = true })
+  hl(0, "AIReplDiffHunk", { fg = "#AAAAAA", bg = "#252525" })
+  hl(0, "AIReplDiffAdd", { bg = "#1a2f1a", fg = "#A0C0A0" })
+  hl(0, "AIReplDiffDelete", { bg = "#2f1a1a", fg = "#C0A0A0" })
+  hl(0, "AIReplDiffChange", { bg = "#2f2f1a", fg = "#C0C0A0" })
+  hl(0, "AIReplDiffAddWord", { bg = "#2a4a2a", fg = "#B0D0B0", bold = true })
+  hl(0, "AIReplDiffDeleteWord", { bg = "#4a2a2a", fg = "#D0B0B0", bold = true })
+  hl(0, "AIReplDiffContext", { fg = "#888888" })
+  hl(0, "AIReplDiffStats", { fg = "#AAAAAA", bold = true })
 end
 
 function M.apply_to_buffer(buf)

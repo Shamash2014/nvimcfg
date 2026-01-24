@@ -470,6 +470,55 @@ function Process:restart()
   end, 100)
 end
 
+function Process:reset_session_with_context(injection_prompt, callback)
+  if not self.state.initialized then
+    if callback then callback(false, "not initialized") end
+    return
+  end
+
+  local cwd = self.data.cwd or vim.fn.getcwd()
+  local old_session_id = self.session_id
+
+  self.state.session_ready = false
+  self.state.busy = false
+  self.data.prompt_queue = {}
+  self.ui.streaming_response = ""
+  self.ui.active_tools = {}
+  self.ui.pending_tool_calls = {}
+
+  if self._on_status then
+    self:_on_status("resetting_session")
+  end
+
+  self:send("session/new", {
+    cwd = cwd,
+    mcpServers = {}
+  }, function(result, err)
+    if err then
+      if self._on_status then
+        self:_on_status("session_reset_failed", err)
+      end
+      if callback then callback(false, err) end
+      return
+    end
+
+    self:_handle_session_result(result)
+
+    if self._on_status then
+      self:_on_status("session_reset", { old_id = old_session_id, new_id = self.session_id })
+    end
+
+    if injection_prompt then
+      vim.defer_fn(function()
+        self:send_prompt(injection_prompt, { silent = true })
+        if callback then callback(true, nil) end
+      end, 100)
+    else
+      if callback then callback(true, nil) end
+    end
+  end)
+end
+
 function Process:get_agent_name()
   if self.state.agent_info and self.state.agent_info.name then
     local name = self.state.agent_info.name:gsub("^@[^/]+/", "")

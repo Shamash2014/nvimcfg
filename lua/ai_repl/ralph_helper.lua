@@ -539,6 +539,104 @@ function M.get_loop_status()
   }
 end
 
+function M.prompt_plan_confirmation(proc)
+  local ralph = require("ai_repl.modes.ralph_wiggum")
+  local buf = proc.data.buf
+
+  vim.ui.select(
+    { "Yes - Execute", "No - Revise", "Edit - Feedback" },
+    { prompt = "Confirm plan?" },
+    function(choice, idx)
+      if not choice then
+        vim.schedule(function()
+          render.append_content(buf, { "[⏸ Awaiting confirmation - /ralph confirm or /ralph reject]" })
+        end)
+        return
+      end
+
+      if idx == 1 then
+        M.execute_confirmed_plan(proc)
+      elseif idx == 2 then
+        ralph.set_awaiting_confirmation(false)
+        ralph.transition_to_phase(ralph.PHASE.TASKS)
+        vim.schedule(function()
+          render.append_content(buf, { "[↩ Back to Tasks phase]" })
+        end)
+        local tasks_prompt = ralph.get_tasks_prompt()
+        vim.defer_fn(function()
+          if ralph.is_enabled() then
+            proc:send_prompt(tasks_prompt, { silent = true })
+          end
+        end, 300)
+      elseif idx == 3 then
+        vim.ui.input({ prompt = "Feedback: " }, function(feedback)
+          if feedback and #feedback > 0 then
+            ralph.set_awaiting_confirmation(false)
+            vim.schedule(function()
+              render.append_content(buf, { "[📝 Revising: " .. feedback:sub(1, 40) .. "]" })
+            end)
+            local revision_prompt = "Revise the plan: " .. feedback
+            vim.defer_fn(function()
+              if ralph.is_enabled() then
+                proc:send_prompt(revision_prompt, { silent = true })
+              end
+            end, 300)
+          end
+        end)
+      end
+    end
+  )
+end
+
+function M.execute_confirmed_plan(proc)
+  local ralph = require("ai_repl.modes.ralph_wiggum")
+  local buf = proc.data.buf
+
+  local success, callback = ralph.confirm_plan()
+  if not success then return end
+
+  vim.schedule(function()
+    render.append_content(buf, {
+      "",
+      "───── Context Reset ─────",
+      "[✓ Plan confirmed | Resetting context...]",
+    })
+  end)
+
+  local injection_prompt = ralph.get_execution_injection_prompt()
+
+  proc:reset_session_with_context(injection_prompt, function(ok, err)
+    if not ok then
+      vim.schedule(function()
+        render.append_content(buf, { "[⚠ Session reset failed: " .. tostring(err) .. "]" })
+        vim.ui.select(
+          { "Continue with current session", "Retry reset", "Abort" },
+          { prompt = "Session reset failed:" },
+          function(choice, idx)
+            if idx == 1 then
+              local exec_prompt = ralph.get_execution_prompt()
+              proc:send_prompt(exec_prompt, { silent = true })
+            elseif idx == 2 then
+              M.execute_confirmed_plan(proc)
+            end
+          end
+        )
+      end)
+      return
+    end
+
+    vim.schedule(function()
+      local steps = ralph.get_steps_progress()
+      render.append_content(buf, {
+        "[✓ Fresh session | " .. steps.total .. " steps ready]",
+        "",
+      })
+    end)
+
+    if callback then callback() end
+  end)
+end
+
 local function format_duration(seconds)
   if seconds < 60 then
     return string.format("%ds", seconds)
@@ -682,16 +780,7 @@ end
 local function show_phase_transition(buf, from_phase, to_phase, ralph)
   local phase_info = ralph.PHASE_INFO[to_phase]
   if not phase_info then return end
-
-  local lines = {
-    "",
-    string.format("┌─ %s Phase Transition ─────────────────────", from_phase:sub(1,1):upper() .. from_phase:sub(2)),
-    string.format("│ %s %s phase complete", ralph.PHASE_INFO[from_phase] and ralph.PHASE_INFO[from_phase].icon or "✅", from_phase),
-    string.format("│ Moving to: %s %s", phase_info.icon, phase_info.name),
-    "└────────────────────────────────────────────",
-    "",
-  }
-  render.append_content(buf, lines)
+  render.append_content(buf, { "", string.format("[→ %s %s]", phase_info.icon, phase_info.name), "" })
 end
 
 function M.check_and_continue(proc, response_text)
@@ -770,9 +859,12 @@ function M.check_and_continue(proc, response_text)
     end)
 
     local continuation_prompt = ralph.get_continuation_prompt()
+    local analysis_mode = ralph.get_analysis_mode() or "summary"
+    local should_show_analysis = ralph.should_show_analysis(analysis_mode)
+    
     vim.defer_fn(function()
       if ralph.is_enabled() and not ralph.is_paused() then
-        proc:send_prompt(continuation_prompt, { silent = true })
+        proc:send_prompt(continuation_prompt, { silent = not should_show_analysis })
       end
     end, 500)
     return true
@@ -790,9 +882,12 @@ function M.check_and_continue(proc, response_text)
       end)
 
       local design_prompt = ralph.get_design_prompt()
+      local analysis_mode = ralph.get_analysis_mode() or "summary"
+      local should_show_analysis = ralph.should_show_analysis(analysis_mode)
+      
       vim.defer_fn(function()
         if ralph.is_enabled() and not ralph.is_paused() then
-          proc:send_prompt(design_prompt, { silent = true })
+          proc:send_prompt(design_prompt, { silent = not should_show_analysis })
         end
       end, 500)
       return true
@@ -806,9 +901,12 @@ function M.check_and_continue(proc, response_text)
       end)
 
       local tasks_prompt = ralph.get_tasks_prompt()
+      local analysis_mode = ralph.get_analysis_mode() or "summary"
+      local should_show_analysis = ralph.should_show_analysis(analysis_mode)
+      
       vim.defer_fn(function()
         if ralph.is_enabled() and not ralph.is_paused() then
-          proc:send_prompt(tasks_prompt, { silent = true })
+          proc:send_prompt(tasks_prompt, { silent = not should_show_analysis })
         end
       end, 500)
       return true
@@ -830,32 +928,13 @@ function M.check_and_continue(proc, response_text)
       end)
 
       vim.schedule(function()
-        local lines = {
+        local steps_info = plan_status.steps_total and plan_status.steps_total > 0
+          and string.format(" | %d steps", plan_status.steps_total) or ""
+        render.append_content(buf, {
           "",
-          "┌─ ✅ Tasks Phase Complete ────────────────────",
-          "│",
-          "│ Spec is ready for your review!",
-          "│",
-          "│ Planning phases complete:",
-          "│   📝 Requirements ✓",
-          "│   🎨 Design ✓",
-          "│   ✅ Tasks ✓",
-          "│",
-        }
-        if plan_status.steps_total and plan_status.steps_total > 0 then
-          table.insert(lines, string.format("│ 📋 %d implementation steps identified", plan_status.steps_total))
-          table.insert(lines, "│")
-        end
-        table.insert(lines, "│ ⏳ AWAITING YOUR CONFIRMATION")
-        table.insert(lines, "│")
-        table.insert(lines, "│ Options:")
-        table.insert(lines, "│   [Y] Confirm - Start autonomous execution")
-        table.insert(lines, "│   [N] Reject  - Go back to refine tasks")
-        table.insert(lines, "│   [E] Edit    - Provide feedback for revision")
-        table.insert(lines, "│")
-        table.insert(lines, "└────────────────────────────────────────────")
-        table.insert(lines, "")
-        render.append_content(buf, lines)
+          "[✓ Planning complete" .. steps_info .. " | Awaiting confirmation]",
+          "",
+        })
 
         if plan_status.steps and #plan_status.steps > 0 then
           proc.ui.current_plan = plan_status.steps

@@ -782,6 +782,15 @@ local function create_process(session_id, opts)
 
       elseif status == "init_failed" or status == "session_failed" then
         render.append_content(buf, { "[!] Error: " .. tostring(data) })
+
+      elseif status == "resetting_session" then
+        update_statusline()
+
+      elseif status == "session_reset" then
+        update_statusline()
+
+      elseif status == "session_reset_failed" then
+        render.append_content(buf, { "[!] Session reset failed" })
       end
     end,
   })

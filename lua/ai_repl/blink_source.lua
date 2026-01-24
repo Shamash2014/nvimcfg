@@ -5,7 +5,7 @@ function source.new()
 end
 
 function source:enabled()
-  return vim.bo.filetype == "ai_repl"
+  return vim.b.ai_repl == true
 end
 
 function source:get_trigger_characters()
