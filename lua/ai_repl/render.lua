@@ -16,6 +16,8 @@ local diff_cache = {}
 local CACHE_SIZE_LIMIT = 100
 
 local function get_cache_key(old_content, new_content)
+  if type(old_content) ~= "string" then old_content = "" end
+  if type(new_content) ~= "string" then new_content = "" end
   return vim.fn.sha256(old_content .. "|" .. new_content)
 end
 
