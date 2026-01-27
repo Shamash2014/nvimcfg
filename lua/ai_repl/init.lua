@@ -6,6 +6,8 @@ local render = require("ai_repl.render")
 local providers = require("ai_repl.providers")
 local ralph_helper = require("ai_repl.ralph_helper")
 local tool_utils = require("ai_repl.tool_utils")
+local questionnaire = require("ai_repl.questionnaire")
+local syntax = require("ai_repl.syntax")
 
 local config = setmetatable({
   window = {
@@ -196,30 +198,9 @@ local function handle_session_update(proc, params)
     elseif u.title == "AskUserQuestion" or (u.rawInput and u.rawInput.questions) then
       render.stop_animation()
       local questions = u.rawInput and u.rawInput.questions or {}
-      for _, q in ipairs(questions) do
-        render.append_content(buf, { "", "[?] " .. (q.question or "Question") })
-        if q.options then
-          for i, opt in ipairs(q.options) do
-            render.append_content(buf, { "  " .. i .. ". " .. (opt.label or opt) })
-          end
-        end
-      end
       if #questions > 0 then
-        vim.schedule(function()
-          local q = questions[1]
-          if q.options and #q.options > 0 then
-            local labels = {}
-            for _, opt in ipairs(q.options) do
-              table.insert(labels, opt.label or opt)
-            end
-            vim.ui.select(labels, { prompt = q.question or "Select:" }, function(choice)
-              if choice then M.send_prompt(choice) end
-            end)
-          else
-            vim.ui.input({ prompt = (q.question or "Answer") .. ": " }, function(input)
-              if input and input ~= "" then M.send_prompt(input) end
-            end)
-          end
+        questionnaire.start(proc, questions, function(response)
+          M.send_prompt(response)
         end)
       end
     else
@@ -901,6 +882,13 @@ local function setup_buffer_keymaps(buf)
   local function submit()
     local raw_text = render.get_prompt_input(buf)
     local text = raw_text:gsub("^%s*(.-)%s*$", "%1")
+
+    if questionnaire.is_awaiting_input() then
+      render.clear_prompt_input(buf)
+      questionnaire.handle_text_input(text)
+      return
+    end
+
     if text == "" then
       vim.notify("AI REPL: Empty prompt", vim.log.levels.DEBUG)
       return
@@ -2621,6 +2609,7 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("AIReplPicker", function() M.pick_process() end, {})
 
   vim.api.nvim_set_hl(0, "AIReplPrompt", { fg = "#7aa2f7", bold = true })
+  syntax.setup()
 end
 
 return M

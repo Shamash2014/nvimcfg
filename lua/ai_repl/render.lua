@@ -40,7 +40,7 @@ local function cache_diff_result(cache_key, result)
       diff_cache[key] = nil
     end
   end
-  
+
   diff_cache[cache_key] = {
     result = result,
     timestamp = os.time()
@@ -542,15 +542,21 @@ function M.render_diff(buf, file_path, old_content, new_content)
         
         -- Get syntax highlights and apply them to diff buffer
         local highlights = {}
-        for id, node in parser:trees()[1]:root():iter_children() do
-          if node:type() ~= nil then
-            local start_row, start_col, end_row, end_col = node:range()
-            if start_row == 0 then -- Only highlight first line
-              table.insert(highlights, {
-                start_col = start_col,
-                end_col = end_col,
-                hl_group = "@" .. node:type()
-              })
+        local trees = parser:trees()
+        if trees and trees[1] then
+          local root = trees[1]:root()
+          if root then
+            for node in root:iter_children() do
+              if node and node:type() then
+                local start_row, start_col, _, end_col = node:range()
+                if start_row == 0 then
+                  table.insert(highlights, {
+                    start_col = start_col,
+                    end_col = end_col,
+                    hl_group = "@" .. node:type()
+                  })
+                end
+              end
             end
           end
         end
@@ -569,59 +575,8 @@ function M.render_diff(buf, file_path, old_content, new_content)
       end
       
       vim.api.nvim_buf_delete(temp_buf, { force = true })
-    -- Store hunk locations for navigation
-    local hunk_positions = {}
-    for i, d in ipairs(diff_data) do
-      if d.type == "hunk_header" then
-        table.insert(hunk_positions, diff_start + i - 1)
-      end
-    end
-    
-    if #hunk_positions > 0 then
-      -- Create local keymaps for diff navigation
-      local opts = { buffer = buf, silent = true, nowait = true }
-      vim.keymap.set('n', '[h', function()
-        local current_line = vim.api.nvim_win_get_cursor(0)[1]
-        for i = #hunk_positions, 1, -1 do
-          if hunk_positions[i] < current_line then
-            vim.api.nvim_win_set_cursor(0, { hunk_positions[i], 0 })
-            break
-          end
-        end
-      end, opts)
-      
-      vim.keymap.set('n', ']h', function()
-        local current_line = vim.api.nvim_win_get_cursor(0)[1]
-        for i, pos in ipairs(hunk_positions) do
-          if pos > current_line then
-            vim.api.nvim_win_set_cursor(0, { pos, 0 })
-            break
-          end
-        end
-      end, opts)
-      
-      vim.keymap.set('n', '[c', function()
-        local current_line = vim.api.nvim_win_get_cursor(0)[1]
-        for i = #hunk_positions, 1, -1 do
-          if hunk_positions[i] < current_line then
-            vim.api.nvim_win_set_cursor(0, { hunk_positions[i] + 1, 0 })
-            break
-          end
-        end
-      end, opts)
-      
-      vim.keymap.set('n', ']c', function()
-        local current_line = vim.api.nvim_win_get_cursor(0)[1]
-        for i, pos in ipairs(hunk_positions) do
-          if pos > current_line then
-            vim.api.nvim_win_set_cursor(0, { pos + 1, 0 })
-            break
-          end
-        end
-      end, opts)
-    end
-  end)
-end
+    end)
+  end
 
   vim.schedule(function()
     if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
@@ -704,12 +659,63 @@ end
         apply_syntax_highlighting(buf, line_num, content, file_path)
       end
     end
-    
+
     -- Highlight the header with stats
     pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, diff_start - 1, 0, {
       end_col = #header,
       hl_group = "AIReplDiffHeader"
     })
+
+    -- Store hunk locations for navigation
+    local hunk_positions = {}
+    for i, d in ipairs(diff_data) do
+      if d.type == "hunk_header" then
+        table.insert(hunk_positions, diff_start + i - 1)
+      end
+    end
+
+    if #hunk_positions > 0 then
+      local opts = { buffer = buf, silent = true, nowait = true }
+      vim.keymap.set('n', '[h', function()
+        local current_line = vim.api.nvim_win_get_cursor(0)[1]
+        for j = #hunk_positions, 1, -1 do
+          if hunk_positions[j] < current_line then
+            vim.api.nvim_win_set_cursor(0, { hunk_positions[j], 0 })
+            break
+          end
+        end
+      end, opts)
+
+      vim.keymap.set('n', ']h', function()
+        local current_line = vim.api.nvim_win_get_cursor(0)[1]
+        for _, pos in ipairs(hunk_positions) do
+          if pos > current_line then
+            vim.api.nvim_win_set_cursor(0, { pos, 0 })
+            break
+          end
+        end
+      end, opts)
+
+      vim.keymap.set('n', '[c', function()
+        local current_line = vim.api.nvim_win_get_cursor(0)[1]
+        for j = #hunk_positions, 1, -1 do
+          if hunk_positions[j] < current_line then
+            vim.api.nvim_win_set_cursor(0, { hunk_positions[j] + 1, 0 })
+            break
+          end
+        end
+      end, opts)
+
+      vim.keymap.set('n', ']c', function()
+        local current_line = vim.api.nvim_win_get_cursor(0)[1]
+        for _, pos in ipairs(hunk_positions) do
+          if pos > current_line then
+            vim.api.nvim_win_set_cursor(0, { pos + 1, 0 })
+            break
+          end
+        end
+      end, opts)
+    end
   end)
 end
 
