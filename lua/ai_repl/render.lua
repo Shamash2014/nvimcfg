@@ -601,23 +601,25 @@ function M.render_diff(buf, file_path, old_content, new_content)
           end_col = #d.text,
           hl_group = "AIReplDiffAdd"
         })
-        -- Apply enhanced word-level highlighting for additions
         if d.word_diffs then
-          local content_start = d.text:find("%s%s") + 1
-          if d.word_diffs.type == "full_add" then
-            pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, content_start, {
-              end_col = #d.text,
-              hl_group = "AIReplDiffAddWord"
-            })
-          elseif d.word_diffs.type == "mixed" and d.word_diffs.segments then
-            for _, segment in ipairs(d.word_diffs.segments) do
-              if segment.type == "add" then
-                local start_col = content_start + segment.new_start - 1
-                local end_col = content_start + segment.new_end - 1
-                pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, start_col, {
-                  end_col = end_col + 1,
-                  hl_group = "AIReplDiffAddWord"
-                })
+          local match_pos = d.text:find("%s%s")
+          if match_pos then
+            local content_start = match_pos + 1
+            if d.word_diffs.type == "full_add" then
+              pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, content_start, {
+                end_col = #d.text,
+                hl_group = "AIReplDiffAddWord"
+              })
+            elseif d.word_diffs.type == "mixed" and d.word_diffs.segments then
+              for _, segment in ipairs(d.word_diffs.segments) do
+                if segment.type == "add" then
+                  local start_col = content_start + segment.new_start - 1
+                  local end_col = content_start + segment.new_end - 1
+                  pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, start_col, {
+                    end_col = end_col + 1,
+                    hl_group = "AIReplDiffAddWord"
+                  })
+                end
               end
             end
           end
@@ -627,36 +629,40 @@ function M.render_diff(buf, file_path, old_content, new_content)
           end_col = #d.text,
           hl_group = "AIReplDiffDelete"
         })
-        -- Apply enhanced word-level highlighting for deletions
         if d.word_diffs then
-          local content_start = d.text:find("%s%s") + 1
-          if d.word_diffs.type == "full_delete" then
-            pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, content_start, {
-              end_col = #d.text,
-              hl_group = "AIReplDiffDeleteWord"
-            })
-          elseif d.word_diffs.type == "mixed" and d.word_diffs.segments then
-            for _, segment in ipairs(d.word_diffs.segments) do
-              if segment.type == "delete" then
-                local start_col = content_start + segment.old_start - 1
-                local end_col = content_start + segment.old_end - 1
-                pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, start_col, {
-                  end_col = end_col + 1,
-                  hl_group = "AIReplDiffDeleteWord"
-                })
+          local match_pos = d.text:find("%s%s")
+          if match_pos then
+            local content_start = match_pos + 1
+            if d.word_diffs.type == "full_delete" then
+              pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, content_start, {
+                end_col = #d.text,
+                hl_group = "AIReplDiffDeleteWord"
+              })
+            elseif d.word_diffs.type == "mixed" and d.word_diffs.segments then
+              for _, segment in ipairs(d.word_diffs.segments) do
+                if segment.type == "delete" then
+                  local start_col = content_start + segment.old_start - 1
+                  local end_col = content_start + segment.old_end - 1
+                  pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, start_col, {
+                    end_col = end_col + 1,
+                    hl_group = "AIReplDiffDeleteWord"
+                  })
+                end
               end
             end
           end
         end
       elseif d.type == "context" then
-        pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 0, {
-          end_col = d.text:find("%s%d%s") + 2,
-          hl_group = "AIReplDiffContext"
-        })
-        -- Apply syntax highlighting to context lines
-        local content_start = d.text:find("%s%d%s") + 2
-        local content = d.text:sub(content_start)
-        apply_syntax_highlighting(buf, line_num, content, file_path)
+        local match_pos = d.text:find("%s%d+%s")
+        if match_pos then
+          local content_start = match_pos + 2
+          pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 0, {
+            end_col = content_start,
+            hl_group = "AIReplDiffContext"
+          })
+          local content = d.text:sub(content_start)
+          apply_syntax_highlighting(buf, line_num, content, file_path)
+        end
       end
     end
 
