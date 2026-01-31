@@ -44,6 +44,7 @@ local function get_test_result(test_idx)
       status = "pending",
       steps = {},
       duration = nil,
+      timestamp = nil,
       actual = nil,
       screenshot = nil,
       notes = nil,
@@ -200,10 +201,10 @@ local function render_runner()
   end
 
   table.insert(lines, "├" .. string.rep("─", width - 2) .. "┤")
-  table.insert(lines, "│ [p] Pass  [f] Fail  [s] Skip  [x] Remove" .. string.rep(" ", width - 44) .. " │")
-  table.insert(lines, "│ [b] Bug   [a] Screenshot      [q] Quit" .. string.rep(" ", width - 42) .. " │")
+  table.insert(lines, "│ [p] Pass  [f] Fail  [s] Skip  [r] Retest" .. string.rep(" ", width - 44) .. " │")
+  table.insert(lines, "│ [b] Bug   [a] Screenshot  [x] Remove" .. string.rep(" ", width - 40) .. " │")
   table.insert(lines, "│ [n/j] Next step    [N/k] Prev step" .. string.rep(" ", width - 38) .. " │")
-  table.insert(lines, "│ []] Next test      [[] Prev test" .. string.rep(" ", width - 36) .. " │")
+  table.insert(lines, "│ []] Next test  [[] Prev test  [q] Quit" .. string.rep(" ", width - 42) .. " │")
   table.insert(lines, "└" .. string.rep("─", width - 2) .. "┘")
 
   vim.api.nvim_buf_set_option(state.runner_bufnr, "modifiable", true)
@@ -270,6 +271,7 @@ local function mark_step_passed()
   else
     result.status = "passed"
     result.duration = os.time() - state.test_start_time
+    result.timestamp = os.date("%Y-%m-%d %H:%M")
     if state.current_test_idx < #state.tests then
       next_test()
     else
@@ -290,6 +292,7 @@ local function mark_test_passed()
   end
   result.status = "passed"
   result.duration = os.time() - state.test_start_time
+  result.timestamp = os.date("%Y-%m-%d %H:%M")
 
   if state.current_test_idx < #state.tests then
     next_test()
@@ -311,6 +314,7 @@ local function mark_test_failed()
       result.failed_step = state.current_step_idx
       result.status = "failed"
       result.duration = os.time() - state.test_start_time
+      result.timestamp = os.date("%Y-%m-%d %H:%M")
 
       vim.ui.input({ prompt = "Notes (optional): " }, function(notes)
         if notes and notes ~= "" then
@@ -337,6 +341,7 @@ local function mark_test_skipped()
       result.status = "skipped"
       result.skip_reason = reason
       result.duration = 0
+      result.timestamp = os.date("%Y-%m-%d %H:%M")
 
       if state.current_test_idx < #state.tests then
         next_test()
@@ -423,6 +428,28 @@ local function remove_test()
   end)
 end
 
+local function retest_current()
+  local test = get_current_test()
+  if not test then return end
+
+  state.results[test.id] = {
+    status = "pending",
+    steps = {},
+    duration = nil,
+    timestamp = nil,
+    actual = nil,
+    screenshot = nil,
+    notes = nil,
+    skip_reason = nil,
+    failed_step = nil,
+  }
+  state.current_step_idx = 1
+  state.test_start_time = os.time()
+
+  render_runner()
+  vim.notify("Re-testing: " .. test.id, vim.log.levels.INFO)
+end
+
 local function close_runner()
   local results_module = require("tc.results")
   local issues_module = require("tc.issues")
@@ -448,6 +475,7 @@ local function setup_keymaps()
   vim.keymap.set("n", "f", mark_test_failed, opts)
   vim.keymap.set("n", "s", mark_test_skipped, opts)
   vim.keymap.set("n", "x", remove_test, opts)
+  vim.keymap.set("n", "r", retest_current, opts)
   vim.keymap.set("n", "a", attach_screenshot, opts)
   vim.keymap.set("n", "b", file_bug, opts)
   vim.keymap.set("n", "n", next_step, opts)

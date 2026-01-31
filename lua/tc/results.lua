@@ -66,6 +66,9 @@ function M.write_results(source_file, tests, results, _)
       local status_upper = result.status:upper()
       table.insert(lines, string.format("## %s: %s - %s", test.id, test.name, status_upper))
       table.insert(lines, "**Duration:** " .. format_duration(result.duration))
+      if result.timestamp then
+        table.insert(lines, "**Completed:** " .. result.timestamp)
+      end
 
       if result.status == "passed" then
         table.insert(lines, "**All steps completed successfully**")

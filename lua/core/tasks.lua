@@ -815,6 +815,93 @@ function M.pick_task()
   end)
 end
 
+-- Combined picker for tasks and Vim commands
+function M.pick_tasks_and_commands()
+  local snacks = require("snacks")
+  local items = {}
+
+  table.insert(items, {
+    text = "Enter custom command...",
+    task = { cmd = "custom" },
+    is_task = true,
+  })
+
+  for i = 1, math.min(3, #M.command_history) do
+    local entry = M.command_history[i]
+    local time_ago = os.difftime(os.time(), entry.timestamp)
+    local time_str
+    if time_ago < 60 then
+      time_str = "just now"
+    elseif time_ago < 3600 then
+      time_str = math.floor(time_ago / 60) .. "m ago"
+    else
+      time_str = math.floor(time_ago / 3600) .. "h ago"
+    end
+    table.insert(items, {
+      text = "[" .. i .. "] " .. entry.name,
+      desc = time_str .. " - " .. entry.cmd,
+      task = { name = entry.name, cmd = entry.cmd, desc = entry.desc },
+      is_task = true,
+      is_history = true,
+    })
+  end
+
+  local available_tasks = M.get_tasks()
+  for _, task in ipairs(available_tasks) do
+    local name = task.type == "npm" and task.name:gsub("^npm: ", "") or task.name
+    table.insert(items, {
+      text = name,
+      desc = task.desc or "",
+      task = task,
+      is_task = true,
+    })
+  end
+
+  table.insert(items, {
+    text = "── Vim Commands ──",
+    is_separator = true,
+  })
+
+  local commands = vim.fn.getcompletion("", "command")
+  for _, cmd in ipairs(commands) do
+    table.insert(items, {
+      text = cmd,
+      is_command = true,
+    })
+  end
+
+  snacks.picker.pick({
+    source = "select",
+    items = items,
+    prompt = "Run",
+    layout = { preset = "vscode" },
+    format = function(item)
+      if item.is_separator then
+        return { { item.text, "Comment" } }
+      elseif item.desc and item.desc ~= "" then
+        return { { item.text }, { " " .. item.desc, "Comment" } }
+      else
+        return { { item.text } }
+      end
+    end,
+    confirm = function(picker, item)
+      picker:close()
+      if not item then return end
+      if item.is_separator then return end
+      if item.is_task then
+        if item.task.cmd == "custom" then
+          M.run_custom_command()
+        else
+          M.run_task(item.task)
+          M.last_task = item.task
+        end
+      elseif item.is_command then
+        vim.cmd(item.text)
+      end
+    end,
+  })
+end
+
 -- Get command history
 function M.get_history()
   return M.command_history
@@ -1052,10 +1139,6 @@ function M.setup()
       end
     end,
   })
-
-  vim.keymap.set("n", "<leader>rr", function()
-    M.pick_task()
-  end, { desc = "Run Task" })
 
   vim.keymap.set("n", "<leader>rl", function()
     M.run_last_task()

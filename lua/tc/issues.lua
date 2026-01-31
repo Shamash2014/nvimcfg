@@ -91,6 +91,9 @@ function M.write_issues(source_file, tests, results, bugs)
       if #test.tags > 0 then
         table.insert(lines, "| **Tags** | " .. table.concat(test.tags, ", ") .. " |")
       end
+      if result.timestamp then
+        table.insert(lines, "| **Tested At** | " .. result.timestamp .. " |")
+      end
       table.insert(lines, "")
 
       table.insert(lines, "### Summary")
