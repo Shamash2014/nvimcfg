@@ -47,7 +47,7 @@ return {
         Snacks.picker.files({ layout = { preset = "vscode" }, cwd = root })
       end, desc = "Find Files" },
     { "<leader>fr", function() Snacks.picker.recent({ layout = { preset = "vscode" } }) end, desc = "Recent Files" },
-    { "<leader>bb", function() Snacks.picker.buffers({ layout = { preset = "vscode" } }) end, desc = "List Buffers" },
+    { "<leader>bb", function() require("core.tasks").pick_buffers_tabs_tasks() end, desc = "Buffers/Tabs/Tasks" },
     { "<leader>bd", function() Snacks.bufdelete() end, desc = "Delete Buffer" },
     { "<leader>bD", function() Snacks.bufdelete.delete({ force = true }) end, desc = "Force Delete Buffer" },
     { "<leader>pp", function() Snacks.picker.projects({ layout = { preset = "vscode" } }) end, desc = "Select Projects" },
@@ -67,20 +67,5 @@ return {
     { "<leader>om", function() Snacks.picker.marks({ layout = { preset = "vscode" } }) end, desc = "Marks" },
     { "<leader>cd", function() Snacks.picker.diagnostics({ layout = { preset = "vscode" } }) end, desc = "Diagnostics" },
     { "<leader>ot", function() Snacks.terminal() end, desc = "Open Terminal" },
-    { "<leader>bt", function()
-      local tabs = {}
-      for i = 1, vim.fn.tabpagenr('$') do
-        local bufnr = vim.fn.tabpagebuflist(i)[1]
-        local name = vim.fn.fnamemodify(vim.fn.bufname(bufnr), ':t')
-        if name == '' then name = '[No Name]' end
-        table.insert(tabs, { text = string.format("Tab %d: %s", i, name), value = i })
-      end
-      vim.ui.select(tabs, {
-        prompt = "Select Tab:",
-        format_item = function(item) return item.text end,
-      }, function(choice)
-        if choice then vim.cmd('tabnext ' .. choice.value) end
-      end)
-    end, desc = "List Tabs" },
   },
 }

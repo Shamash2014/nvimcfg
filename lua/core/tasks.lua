@@ -815,6 +815,100 @@ function M.pick_task()
   end)
 end
 
+-- Combined picker for buffers, tabs, and running tasks
+function M.pick_buffers_tabs_tasks()
+  local snacks = require("snacks")
+  local items = {}
+
+  -- Running tasks section (if any)
+  local active_tasks = {}
+  for _, task in ipairs(M.running_tasks) do
+    if task.term and task.term.buf and vim.api.nvim_buf_is_valid(task.term.buf) then
+      table.insert(active_tasks, task)
+    end
+  end
+  M.running_tasks = active_tasks
+
+  if #active_tasks > 0 then
+    for _, task in ipairs(active_tasks) do
+      local runtime = os.difftime(os.time(), task.start_time)
+      local runtime_str = string.format("%dm %ds", math.floor(runtime / 60), runtime % 60)
+      local status = task.background and "BG" or "FG"
+      table.insert(items, {
+        text = string.format("[%s] %s", status, task.name),
+        desc = runtime_str,
+        is_task = true,
+        task = task,
+      })
+    end
+    table.insert(items, { text = "── Tabs ──", is_separator = true })
+  end
+
+  -- Tabs section
+  local tab_count = vim.fn.tabpagenr("$")
+  if tab_count > 1 then
+    for i = 1, tab_count do
+      local bufnr = vim.fn.tabpagebuflist(i)[1]
+      local name = vim.fn.fnamemodify(vim.fn.bufname(bufnr), ":t")
+      if name == "" then name = "[No Name]" end
+      local is_current = i == vim.fn.tabpagenr()
+      table.insert(items, {
+        text = string.format("Tab %d: %s", i, name),
+        desc = is_current and "current" or "",
+        is_tab = true,
+        tab_nr = i,
+      })
+    end
+    table.insert(items, { text = "── Buffers ──", is_separator = true })
+  end
+
+  -- Buffers section
+  local buffers = vim.fn.getbufinfo({ buflisted = 1 })
+  local current_buf = vim.api.nvim_get_current_buf()
+  for _, buf in ipairs(buffers) do
+    local name = buf.name ~= "" and vim.fn.fnamemodify(buf.name, ":t") or "[No Name]"
+    local modified = buf.changed == 1 and " [+]" or ""
+    local is_current = buf.bufnr == current_buf
+    table.insert(items, {
+      text = name .. modified,
+      desc = is_current and "current" or vim.fn.fnamemodify(buf.name, ":~:."),
+      is_buffer = true,
+      bufnr = buf.bufnr,
+    })
+  end
+
+  snacks.picker.pick({
+    source = "select",
+    items = items,
+    prompt = "Switch",
+    layout = { preset = "vscode" },
+    format = function(item)
+      if item.is_separator then
+        return { { item.text, "Comment" } }
+      elseif item.desc and item.desc ~= "" then
+        return { { item.text }, { " " .. item.desc, "Comment" } }
+      else
+        return { { item.text } }
+      end
+    end,
+    confirm = function(picker, item)
+      picker:close()
+      if not item or item.is_separator then return end
+      if item.is_task then
+        if item.task.background then
+          item.task:attach()
+        elseif item.task.term then
+          item.task.term:focus()
+        end
+      elseif item.is_tab then
+        vim.cmd("tabnext " .. item.tab_nr)
+      elseif item.is_buffer then
+        vim.api.nvim_set_current_buf(item.bufnr)
+      end
+    end,
+  })
+end
+
 -- Combined picker for tasks and Vim commands
 function M.pick_tasks_and_commands()
   local snacks = require("snacks")
@@ -1183,10 +1277,6 @@ function M.setup()
       end
     end)
   end, { desc = "Send Task to Background" })
-
-  vim.keymap.set("n", "<leader>br", function()
-    M.show_running_tasks()
-  end, { desc = "Show Running Tasks" })
 
   -- Terminal toggle
   vim.keymap.set({"n", "t"}, "<C-\\>", function()
