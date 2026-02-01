@@ -1,5 +1,5 @@
 -- Ralph Wiggum Mode: SDLC-Compliant Autonomous Agent
--- Works with ALL providers (Claude, Cursor, Goose, OpenCode, Codex)
+-- Works with any ACP-compatible provider
 -- Follows Software Development Lifecycle with skill-based delegation:
 --   Phase 1: Requirements (clarify scope, gather context)
 --   Phase 2: Design (architecture, approach planning)
@@ -19,6 +19,13 @@
 --   - Routes tasks to appropriate skills (debugging, UI, testing, etc.)
 --   - Maintains skill context across iterations
 --   - Learns from skill outcomes via ACE reflection loop
+--
+-- RLM Integration (arXiv:2512.24601):
+--   - Symbolic artifact handles: metadata references instead of raw text injection
+--   - Exploration strategies: peek, grep, partition+map, summarize
+--   - Recursive step decomposition: complex steps self-decompose into sub-steps
+--   - Context-centric task breakdown: derive steps from codebase topology
+--   - Metadata-only transitions: compact summaries prevent context pollution
 
 local M = {}
 
@@ -58,6 +65,30 @@ local SKILL_ROUTING = {
   figma = { patterns = { "figma", "screenshot", "mockup", "design spec", "pixel" }, skill = "figma-screenshot-implementation" },
   testing = { patterns = { "test", "playwright", "e2e", "browser", "automation" }, skill = "playwright-skill:playwright-skill" },
 }
+
+local QUESTION_FORMAT_INSTRUCTIONS = [[
+When asking questions:
+- Present numbered options with brief descriptions
+- Mark recommended option with "(Recommended)"
+- Maximum 3 questions at a time
+- State your default choice and proceed if no response
+]]
+
+local EXPLORATION_STRATEGIES = [[
+Exploration strategies (use in order):
+1. Peek — sample file structure and entry points to understand organization
+2. Grep — keyword/pattern search to narrow relevant files before deep reading
+3. Partition — chunk large areas by module boundary, process each independently
+4. Summarize — compress findings into constraints, key files, and decisions
+]]
+
+local SKILLBOOK_CATEGORIES = {
+  { key = "helpful", title = "HELPFUL PATTERNS (what works):", icon = "✓" },
+  { key = "harmful", title = "HARMFUL PATTERNS (what to avoid):", icon = "✗" },
+  { key = "neutral", title = "OBSERVATIONS:", icon = "○" },
+}
+
+local PLANNING_ARTIFACT_NAMES = { "requirements", "design", "tasks" }
 
 local MIN_PLANNING_ITERATIONS = 4
 local MAX_PLANNING_ITERATIONS = 12
@@ -162,8 +193,8 @@ local PHASE_TRANSITION_PATTERNS = {
 }
 
 local PHASE_APPROVAL_REQUIRED = {
-  [PHASE.REQUIREMENTS] = true,
-  [PHASE.DESIGN] = true,
+  [PHASE.REQUIREMENTS] = false,
+  [PHASE.DESIGN] = false,
   [PHASE.TASKS] = true,
   [PHASE.IMPLEMENTATION] = false,
   [PHASE.REVIEW] = false,
@@ -422,6 +453,70 @@ function M.get_artifacts()
   return ralph_state.artifacts
 end
 
+local function extract_artifact_metadata(content)
+  if not content then return nil end
+  local meta = {
+    length = #content,
+    line_count = select(2, content:gsub("\n", "\n")) + 1,
+    key_files = {},
+    decisions = {},
+    constraints = {},
+  }
+
+  for file in content:gmatch("[%w_%-/]+%.[%w]+") do
+    if not meta.key_files[file] then
+      meta.key_files[file] = true
+      meta.key_files[#meta.key_files + 1] = file
+    end
+  end
+
+  for line in content:gmatch("[^\r\n]+") do
+    if line:match("^%s*[%-*]%s*") or line:match("^%s*%d+%.") then
+      local text = line:match("^%s*[%-*]%s*(.+)") or line:match("^%s*%d+%.%s*(.+)")
+      if text and #text > 15 and #text < 150 then
+        if text:lower():match("must") or text:lower():match("constraint") or text:lower():match("require") then
+          table.insert(meta.constraints, text)
+        elseif text:lower():match("will") or text:lower():match("chose") or text:lower():match("using") or text:lower():match("approach") then
+          table.insert(meta.decisions, text)
+        end
+      end
+    end
+  end
+
+  local max_items = 8
+  while #meta.key_files > max_items do table.remove(meta.key_files) end
+  while #meta.decisions > max_items do table.remove(meta.decisions) end
+  while #meta.constraints > max_items do table.remove(meta.constraints) end
+
+  return meta
+end
+
+function M.format_artifact_handle(phase_name, content)
+  if not content then return "" end
+  local meta = extract_artifact_metadata(content)
+  if not meta then return "" end
+
+  local lines = { string.format("### %s [%d lines]", phase_name, meta.line_count) }
+
+  if #meta.key_files > 0 then
+    table.insert(lines, "Files: " .. table.concat(meta.key_files, ", ", 1, math.min(#meta.key_files, 6)))
+  end
+  if #meta.constraints > 0 then
+    table.insert(lines, "Constraints:")
+    for i = 1, math.min(#meta.constraints, 4) do
+      table.insert(lines, "  - " .. meta.constraints[i])
+    end
+  end
+  if #meta.decisions > 0 then
+    table.insert(lines, "Decisions:")
+    for i = 1, math.min(#meta.decisions, 4) do
+      table.insert(lines, "  - " .. meta.decisions[i])
+    end
+  end
+
+  return table.concat(lines, "\n")
+end
+
 function M.check_phase_transition(response_text)
   if not response_text then return false, nil end
 
@@ -509,6 +604,9 @@ function M.set_plan_steps(steps)
       description = content,
       status = status,
       passed = status == "completed",
+      sub_steps = step.sub_steps or nil,
+      depth = step.depth or 0,
+      parent_id = step.parent_id or nil,
     }
   end
 end
@@ -548,10 +646,86 @@ end
 function M.get_next_pending_step()
   for _, step in ipairs(ralph_state.plan_steps) do
     if not step.passed then
-      return step
+      if step.sub_steps then
+        for _, sub in ipairs(step.sub_steps) do
+          if not sub.passed then
+            return sub
+          end
+        end
+        step.passed = true
+        step.status = "completed"
+      else
+        return step
+      end
     end
   end
   return nil
+end
+
+function M.decompose_step(step_id, sub_step_contents)
+  local step = ralph_state.plan_steps[step_id]
+  if not step then return false end
+
+  step.sub_steps = {}
+  for i, content in ipairs(sub_step_contents) do
+    step.sub_steps[i] = {
+      id = step_id .. "." .. i,
+      content = content,
+      description = content,
+      status = "pending",
+      passed = false,
+      depth = (step.depth or 0) + 1,
+      parent_id = step_id,
+    }
+  end
+  step.status = "in_progress"
+  return true
+end
+
+function M.mark_sub_step_passed(step_id, sub_step_index)
+  local step = ralph_state.plan_steps[step_id]
+  if not step or not step.sub_steps or not step.sub_steps[sub_step_index] then
+    return false
+  end
+  step.sub_steps[sub_step_index].passed = true
+  step.sub_steps[sub_step_index].status = "completed"
+
+  local all_done = true
+  for _, sub in ipairs(step.sub_steps) do
+    if not sub.passed then
+      all_done = false
+      break
+    end
+  end
+  if all_done then
+    step.passed = true
+    step.status = "completed"
+  end
+  return true
+end
+
+function M.parse_sub_steps_from_response(response_text, parent_step_id)
+  local sub_steps = {}
+  local in_decomposition = false
+  for line in response_text:gmatch("[^\r\n]+") do
+    if line:match("sub%-steps") or line:match("decompos") or line:match("breaking.*down") then
+      in_decomposition = true
+    end
+    if in_decomposition then
+      local content = line:match("^%s*%d+%.%s*(.+)$") or line:match("^%s*[%-*]%s*(.+)$")
+      if content and #content > 5 and #content < 200 then
+        local is_header = content:match("^%*%*") or content:match("^#")
+        if not is_header then
+          table.insert(sub_steps, content)
+        end
+      end
+    end
+  end
+  if #sub_steps > 1 and parent_step_id then
+    M.decompose_step(parent_step_id, sub_steps)
+    return true
+  end
+  return false
 end
 
 function M.all_steps_passed()
@@ -559,7 +733,11 @@ function M.all_steps_passed()
     return false
   end
   for _, step in ipairs(ralph_state.plan_steps) do
-    if not step.passed then
+    if step.sub_steps then
+      for _, sub in ipairs(step.sub_steps) do
+        if not sub.passed then return false end
+      end
+    elseif not step.passed then
       return false
     end
   end
@@ -570,11 +748,19 @@ function M.get_steps_progress()
   local total = #ralph_state.plan_steps
   local passed = 0
   local in_progress = 0
+  local sub_total = 0
+  local sub_passed = 0
   for _, step in ipairs(ralph_state.plan_steps) do
     if step.passed or step.status == "completed" then
       passed = passed + 1
     elseif step.status == "in_progress" then
       in_progress = in_progress + 1
+    end
+    if step.sub_steps then
+      for _, sub in ipairs(step.sub_steps) do
+        sub_total = sub_total + 1
+        if sub.passed then sub_passed = sub_passed + 1 end
+      end
     end
   end
   return {
@@ -583,6 +769,8 @@ function M.get_steps_progress()
     in_progress = in_progress,
     remaining = total - passed,
     percent = total > 0 and math.floor((passed / total) * 100) or 0,
+    sub_total = sub_total,
+    sub_passed = sub_passed,
   }
 end
 
@@ -763,22 +951,13 @@ end
 
 function M.format_skillbook()
   local lines = {}
-  if #ralph_state.skillbook.helpful > 0 then
-    table.insert(lines, "HELPFUL PATTERNS (what works):")
-    for _, skill in ipairs(ralph_state.skillbook.helpful) do
-      table.insert(lines, "  ✓ " .. skill.content)
-    end
-  end
-  if #ralph_state.skillbook.harmful > 0 then
-    table.insert(lines, "HARMFUL PATTERNS (what to avoid):")
-    for _, skill in ipairs(ralph_state.skillbook.harmful) do
-      table.insert(lines, "  ✗ " .. skill.content)
-    end
-  end
-  if #ralph_state.skillbook.neutral > 0 then
-    table.insert(lines, "OBSERVATIONS:")
-    for _, skill in ipairs(ralph_state.skillbook.neutral) do
-      table.insert(lines, "  ○ " .. skill.content)
+  for _, cat in ipairs(SKILLBOOK_CATEGORIES) do
+    local skills = ralph_state.skillbook[cat.key]
+    if skills and #skills > 0 then
+      table.insert(lines, cat.title)
+      for _, skill in ipairs(skills) do
+        table.insert(lines, "  " .. cat.icon .. " " .. skill.content)
+      end
     end
   end
   return table.concat(lines, "\n")
@@ -801,6 +980,25 @@ function M.parse_reflection(response_text)
   local in_section = nil
   for line in response_text:gmatch("[^\r\n]+") do
     local lower = line:lower()
+
+    local marker_content = line:match("^%s*%[helpful%]%s*(.+)")
+    if marker_content and #marker_content > 5 and #marker_content < 200 then
+      table.insert(reflection.helpful, marker_content)
+      goto continue
+    end
+
+    marker_content = line:match("^%s*%[harmful%]%s*(.+)")
+    if marker_content and #marker_content > 5 and #marker_content < 200 then
+      table.insert(reflection.harmful, marker_content)
+      goto continue
+    end
+
+    marker_content = line:match("^%s*%[observation%]%s*(.+)")
+    if marker_content and #marker_content > 5 and #marker_content < 200 then
+      table.insert(reflection.neutral, marker_content)
+      goto continue
+    end
+
     if lower:match("helpful") or lower:match("worked") or lower:match("success") then
       in_section = "helpful"
     elseif lower:match("harmful") or lower:match("avoid") or lower:match("fail") then
@@ -820,23 +1018,24 @@ function M.parse_reflection(response_text)
         table.insert(reflection.insights, skill)
       end
     end
+
+    ::continue::
   end
 
   return reflection
 end
 
 function M.apply_reflection(reflection)
-  for _, skill in ipairs(reflection.helpful or {}) do
-    M.add_skill("helpful", skill)
-  end
-  for _, skill in ipairs(reflection.harmful or {}) do
-    M.add_skill("harmful", skill)
-  end
-  for _, skill in ipairs(reflection.neutral or {}) do
-    M.add_skill("neutral", skill)
-  end
-  for _, insight in ipairs(reflection.insights or {}) do
-    M.add_skill("neutral", insight)
+  local sources = {
+    { "helpful", reflection.helpful },
+    { "harmful", reflection.harmful },
+    { "neutral", reflection.neutral },
+    { "neutral", reflection.insights },
+  }
+  for _, source in ipairs(sources) do
+    for _, skill in ipairs(source[2] or {}) do
+      M.add_skill(source[1], skill)
+    end
   end
 end
 
@@ -868,17 +1067,54 @@ OUTCOME:
 %s
 Analyze what happened and extract learnings:
 
-1. What WORKED well? (mark with ✓)
-2. What should be AVOIDED? (mark with ✗)
-3. What OBSERVATIONS are useful for future steps? (mark with ○)
+1. What WORKED well?
+2. What should be AVOIDED?
+3. What OBSERVATIONS are useful for future steps?
 
 Format your insights as:
-✓ [helpful pattern or strategy that worked]
-✗ [harmful pattern or mistake to avoid]
-○ [neutral observation or context]
+[helpful] pattern or strategy that worked
+[harmful] pattern or mistake to avoid
+[observation] useful context for future steps
 
 After reflection, continue with the next step.
 ]], step_content or "unknown step", outcome or "no outcome recorded", skillbook_context)
+end
+
+function M.format_phase_summary(phase_name)
+  local content = ralph_state.artifacts[phase_name]
+  if not content then return "" end
+  local meta = extract_artifact_metadata(content)
+  if not meta then return "" end
+
+  local parts = {}
+  if #meta.key_files > 0 then
+    table.insert(parts, "files:" .. table.concat(meta.key_files, ",", 1, math.min(#meta.key_files, 4)))
+  end
+  if #meta.constraints > 0 then
+    for i = 1, math.min(#meta.constraints, 2) do
+      table.insert(parts, meta.constraints[i])
+    end
+  end
+  if #meta.decisions > 0 then
+    for i = 1, math.min(#meta.decisions, 2) do
+      table.insert(parts, meta.decisions[i])
+    end
+  end
+  if #parts == 0 then
+    return string.format("[%s: %d lines]", phase_name, meta.line_count)
+  end
+  return string.format("[%s: %s]", phase_name, table.concat(parts, " | "))
+end
+
+function M.get_phase_context_summary()
+  local summaries = {}
+  for _, name in ipairs(PLANNING_ARTIFACT_NAMES) do
+    if ralph_state.artifacts[name] then
+      table.insert(summaries, M.format_phase_summary(name))
+    end
+  end
+  if #summaries == 0 then return "" end
+  return table.concat(summaries, "\n")
 end
 
 function M.format_execution_context()
@@ -897,16 +1133,13 @@ function M.get_execution_injection_prompt()
   local plan_status = M.format_plan_status()
   local skillbook_text = M.has_skills() and M.format_skillbook() or ""
 
-  local artifacts_summary = ""
-  if ctx.artifacts.requirements then
-    artifacts_summary = artifacts_summary .. "\n### Requirements\n" .. ctx.artifacts.requirements:sub(1, 2000)
+  local handle_parts = {}
+  for _, name in ipairs(PLANNING_ARTIFACT_NAMES) do
+    if ctx.artifacts[name] then
+      table.insert(handle_parts, M.format_artifact_handle(name:sub(1, 1):upper() .. name:sub(2), ctx.artifacts[name]))
+    end
   end
-  if ctx.artifacts.design then
-    artifacts_summary = artifacts_summary .. "\n\n### Design\n" .. ctx.artifacts.design:sub(1, 2000)
-  end
-  if ctx.artifacts.tasks then
-    artifacts_summary = artifacts_summary .. "\n\n### Tasks\n" .. ctx.artifacts.tasks:sub(1, 2000)
-  end
+  local artifact_handles = #handle_parts > 0 and ("\n" .. table.concat(handle_parts, "\n\n")) or ""
 
   local skill_section = ""
   if skillbook_text ~= "" then
@@ -921,10 +1154,13 @@ function M.get_execution_injection_prompt()
 
 ## Approved Plan
 %s
+
+## Context (symbolic handles — inspect files directly when detail needed)
 %s%s
 ---
-Execute each step. Mark completed with [x]. When ALL done, say "Implementation complete. Moving to Review..."
-]], ctx.original_prompt or "Complete the task", plan_status, artifacts_summary, skill_section)
+Do NOT pause to ask questions. Decide using: codebase patterns > best practices > approved design.
+Execute each step. Mark completed with [x]. Once ALL steps are done, conclude: "Implementation complete. Moving to Review..."
+]], ctx.original_prompt or "Complete the task", plan_status, artifact_handles, skill_section)
 end
 
 function M.check_plan_ready(response_text)
@@ -966,6 +1202,7 @@ function M.transition_to_execution(response_text)
 end
 
 local PHASE_GATES = {
+  [PHASE.DESIGN] = "requirements_approved",
   [PHASE.TASKS] = "design_approved",
   [PHASE.REVIEW] = "implementation_complete",
   [PHASE.TESTING] = "review_passed",
@@ -986,21 +1223,6 @@ function M.transition_to_phase(target_phase)
   return true
 end
 
-function M.transition_to_tasks()
-  M.transition_to_phase(PHASE.TASKS)
-end
-
-function M.transition_to_review()
-  M.transition_to_phase(PHASE.REVIEW)
-end
-
-function M.transition_to_testing()
-  M.transition_to_phase(PHASE.TESTING)
-end
-
-function M.transition_to_completion()
-  M.transition_to_phase(PHASE.COMPLETION)
-end
 
 function M.check_completion(response_text)
   if not response_text then return false, nil end
@@ -1183,66 +1405,57 @@ function M.get_requirements_prompt(original_prompt)
     ralph_state.active_skill = detected_skill
   end
 
-  local analysis_mode = ralph_state.analysis_mode or "summary"
-  local exploration_guidance = ""
-  
-  if analysis_mode == "verbose" then
-    exploration_guidance = [[
-Show detailed exploration process:
-- Use search tools (glob, grep) systematically to discover relevant files
-- Document file patterns, dependencies and architectural findings
-- Explain reasoning behind each discovery and insight
-- Provide step-by-step analysis of codebase structure
-- Use Task tool for comprehensive exploration when needed
-]]
-  elseif analysis_mode == "summary" then
-    exploration_guidance = [[
-Provide structured analysis summary:
-- Use targeted searches (glob, grep) to identify key patterns
-- Document main architectural components and their relationships
-- Identify critical dependencies and integration points
-- Formulate specific clarifying questions based on findings
-- Highlight any obstacles or ambiguities discovered
-]]
-  end
-
   return string.format([[
 [📝 Requirements (1/7)]
 
 Task: %s
 
-Explore codebase, present findings, ask clarifying questions.
 %s
-When confirmed: "Requirements complete. Moving to Design..."
-]], original_prompt, exploration_guidance)
+Present:
+1. Key files and their roles
+2. Constraints and dependencies
+3. Ambiguities requiring clarification
+
+%s
+If no clarification is needed, state your assumptions and proceed.
+Once analysis is sufficient, conclude with: "Requirements complete. Moving to Design..."
+]], original_prompt, EXPLORATION_STRATEGIES, QUESTION_FORMAT_INSTRUCTIONS)
 end
 
 function M.get_design_prompt()
   local original = ralph_state.original_prompt or "the task"
   local skillbook_context = M.has_skills() and ("\n" .. M.format_skillbook()) or ""
+  local req_summary = M.format_phase_summary("requirements")
+  local prior_context = req_summary ~= "" and ("\n" .. req_summary .. "\n") or ""
 
   return string.format([[
 [🎨 Design (2/7)]
 
-Task: %s%s
+Task: %s%s%s
 
-Present architecture, show alternatives if applicable, get user approval.
-When confirmed: "Design complete. Moving to Tasks..."
-]], original, skillbook_context)
+Present your chosen approach with rationale.
+Only show alternatives when tradeoffs are meaningful — present as numbered options.
+Once the approach is defined, conclude with: "Design complete. Moving to Tasks..."
+]], original, prior_context, skillbook_context)
 end
 
 function M.get_tasks_prompt()
   local original = ralph_state.original_prompt or "the task"
   local skillbook_context = M.has_skills() and ("\n" .. M.format_skillbook()) or ""
+  local prior_context = M.get_phase_context_summary()
+  local prior_section = prior_context ~= "" and ("\n" .. prior_context .. "\n") or ""
 
   return string.format([[
 [✅ Tasks (3/7)]
 
-Task: %s%s
+Task: %s%s%s
 
-Break down into implementation steps. Get user approval.
-When confirmed: "Tasks complete. Ready for your review."
-]], original, skillbook_context)
+Derive steps from codebase structure — examine file dependencies and module boundaries first.
+Order by: dependency graph > module boundaries > logical sequence.
+Include complexity estimate and dependencies for each step.
+User reviews before execution starts.
+When ready: "Tasks complete. Ready for your review."
+]], original, prior_section, skillbook_context)
 end
 
 function M.get_review_prompt()
@@ -1254,7 +1467,8 @@ function M.get_review_prompt()
 %s
 
 Review changed files for correctness, security, error handling.
-When passed: "Review complete. Moving to Testing..."
+Fix issues directly. Do not ask permission.
+Once all issues are resolved, conclude with: "Review complete. Moving to Testing..."
 ]], plan_status)
 end
 
@@ -1263,7 +1477,8 @@ function M.get_testing_prompt()
 [🧪 Testing (6/7)]
 
 Run existing tests, add new tests for new functionality.
-When passed: "Tests pass. Moving to Completion..."
+Fix failures immediately. Do not stop to report.
+Once all tests pass, conclude with: "Tests pass. Moving to Completion..."
 ]]
 end
 
@@ -1290,6 +1505,12 @@ function M.format_plan_status()
         or step.status == "in_progress" and "[>]"
         or "[ ]"
     table.insert(lines, string.format("- %s %s", marker, step.content))
+    if step.sub_steps then
+      for _, sub in ipairs(step.sub_steps) do
+        local sub_marker = sub.passed and "[x]" or "[ ]"
+        table.insert(lines, string.format("  - %s %s", sub_marker, sub.content))
+      end
+    end
   end
   return table.concat(lines, "\n")
 end
@@ -1317,12 +1538,16 @@ Original task: %s
 PLAN STATUS:
 %s
 %s
+Do NOT pause to ask questions. Decide using: codebase patterns > best practices > approved design.
+If a step is too complex for one pass, decompose it into sub-steps and execute each.
+
 Execute the current step. When the step is complete, mark it with [x]:
 - [x] %s
 
 After completing a step, briefly note what worked or should be avoided:
-✓ [what worked]
-✗ [what to avoid]
+[helpful] [what worked]
+[harmful] [what to avoid]
+[observation] [useful context]
 
 When ALL steps are complete, end with [DONE].
 ]], iteration, ralph_state.max_iterations, original, current_step_info, plan_status,
@@ -1333,34 +1558,28 @@ function M.get_continuation_prompt()
   local phase_info = M.get_phase_info()
   local iteration = ralph_state.current_iteration + 1
   local progress = M.get_steps_progress()
-  local analysis_mode = ralph_state.analysis_mode or "summary"
 
   if ralph_state.phase == PHASE.REQUIREMENTS then
-    local guidance = ""
-    if analysis_mode == "verbose" then
-      guidance = "\nShow detailed exploration process and findings."
-    elseif analysis_mode == "summary" and ralph_state.planning_iteration == 0 then
-      guidance = "\nPresent key discoveries and clarifying questions."
-    end
-    
-    return string.format("[%s Requirements | Iter %d]\nContinue gathering requirements.%s When confirmed: \"Requirements complete. Moving to Design...\"", phase_info.icon, iteration, guidance)
+    return string.format("[%s Requirements | Iter %d]\nContinue exploration. Present options with recommended default. Once sufficient, conclude: \"Requirements complete. Moving to Design...\"", phase_info.icon, iteration)
   end
 
   if ralph_state.phase == PHASE.DESIGN then
-    return string.format("[%s Design | Iter %d]\nContinue design. When confirmed: \"Design complete. Moving to Tasks...\"", phase_info.icon, iteration)
+    local ctx = M.format_phase_summary("requirements")
+    local ctx_line = ctx ~= "" and ("\n" .. ctx) or ""
+    return string.format("[%s Design | Iter %d]%s\nContinue design. Decide autonomously where best practices are clear. Once defined, conclude: \"Design complete. Moving to Tasks...\"", phase_info.icon, iteration, ctx_line)
   end
 
   if ralph_state.phase == PHASE.TASKS then
     local plan_status = M.format_plan_status()
-    return string.format("[%s Tasks | Iter %d]\n\n%s\n\nWhen confirmed: \"Tasks complete. Ready for your review.\"", phase_info.icon, iteration, plan_status)
+    return string.format("[%s Tasks | Iter %d]\n\n%s\n\nOnce steps are complete, conclude: \"Tasks complete. Ready for your review.\"", phase_info.icon, iteration, plan_status)
   end
 
   if ralph_state.phase == PHASE.REVIEW then
-    return string.format("[🔍 Review | Iter %d]\nContinue review. When passed: \"Review complete. Moving to Testing...\"", iteration)
+    return string.format("[🔍 Review | Iter %d]\nContinue review. Fix issues directly. Once resolved, conclude: \"Review complete. Moving to Testing...\"", iteration)
   end
 
   if ralph_state.phase == PHASE.TESTING then
-    return string.format("[🧪 Testing | Iter %d]\nContinue testing. When passed: \"Tests pass. Moving to Completion...\"", iteration)
+    return string.format("[🧪 Testing | Iter %d]\nContinue testing. Fix failures immediately. Once passing, conclude: \"Tests pass. Moving to Completion...\"", iteration)
   end
 
   if ralph_state.phase == PHASE.COMPLETION then
@@ -1376,7 +1595,7 @@ function M.get_continuation_prompt()
 
 %s
 
-Mark completed with [x]. When done: "Implementation complete. Moving to Review..."
+Do not stop to ask questions. Mark completed with [x]. Once all steps done, conclude: "Implementation complete. Moving to Review..."
 ]], iteration, ralph_state.max_iterations, progress.passed, progress.total, focus, plan_status)
 end
 

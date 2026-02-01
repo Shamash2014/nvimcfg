@@ -36,6 +36,16 @@ local providers = {
     permission_mode = "default",
     background_permissions = "allow_once",
   },
+  stakpak = {
+    name = "StakPak",
+    cmd = "stakpak",
+    args = {"acp"},
+    env = {
+      STAKPAK_API_KEY = os.getenv("STAKPAK_API_KEY") or "",
+    },
+    permission_mode = "default",
+    background_permissions = "allow_once",
+  },
 }
 
 -- Helper to get provider config with fallback to defaults
@@ -44,7 +54,7 @@ function M.get_config(id)
   if not provider then
     return nil
   end
-  
+
   return {
     name = provider.name,
     cmd = provider.cmd,

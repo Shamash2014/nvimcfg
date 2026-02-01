@@ -15,6 +15,7 @@ return {
         goose = { name = "Goose", cmd = "goose", args = {"acp"}, env = {} },
         opencode = { name = "OpenCode", cmd = "opencode", args = {"acp"}, env = {} },
         codex = { name = "Codex", cmd = "codex-acp", args = {}, env = {} },
+        stakpak = { name = "StakPak", cmd = "stakpak", args = {"acp"}, env = {} },
       },
       history_size = 1000,
       permission_mode = "plan",

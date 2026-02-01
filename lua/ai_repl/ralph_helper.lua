@@ -61,6 +61,15 @@ local ralph_loop = {
   confirmation_callback = nil,
 }
 
+local function deferred_send(proc, prompt, delay)
+  local ralph = require("ai_repl.modes.ralph_wiggum")
+  vim.defer_fn(function()
+    if ralph.is_enabled() and not ralph.is_paused() then
+      proc:send_prompt(prompt, { silent = true })
+    end
+  end, delay or 300)
+end
+
 function M.stop_response_monitoring()
   if ralph_loop.response_timer then
     ralph_loop.response_timer:stop()
@@ -292,7 +301,7 @@ Make sure to include numbered steps for implementation.
   end, 500)
 end
 
-function M.prompt_loop_confirmation(proc, plan_text)
+function M.prompt_loop_confirmation(proc, _plan_text)
   local buf = proc.data.buf
 
   vim.schedule(function()
@@ -562,12 +571,7 @@ function M.prompt_plan_confirmation(proc)
         vim.schedule(function()
           render.append_content(buf, { "[↩ Back to Tasks phase]" })
         end)
-        local tasks_prompt = ralph.get_tasks_prompt()
-        vim.defer_fn(function()
-          if ralph.is_enabled() then
-            proc:send_prompt(tasks_prompt, { silent = true })
-          end
-        end, 300)
+        deferred_send(proc, ralph.get_tasks_prompt())
       elseif idx == 3 then
         vim.ui.input({ prompt = "Feedback: " }, function(feedback)
           if feedback and #feedback > 0 then
@@ -575,12 +579,7 @@ function M.prompt_plan_confirmation(proc)
             vim.schedule(function()
               render.append_content(buf, { "[📝 Revising: " .. feedback:sub(1, 40) .. "]" })
             end)
-            local revision_prompt = "Revise the plan: " .. feedback
-            vim.defer_fn(function()
-              if ralph.is_enabled() then
-                proc:send_prompt(revision_prompt, { silent = true })
-              end
-            end, 300)
+            deferred_send(proc, "Revise the plan: " .. feedback)
           end
         end)
       end
@@ -612,7 +611,7 @@ function M.execute_confirmed_plan(proc)
         vim.ui.select(
           { "Continue with current session", "Retry reset", "Abort" },
           { prompt = "Session reset failed:" },
-          function(choice, idx)
+          function(_choice, idx)
             if idx == 1 then
               local exec_prompt = ralph.get_execution_prompt()
               proc:send_prompt(exec_prompt, { silent = true })
@@ -713,25 +712,35 @@ local function show_summary(buf, ralph)
   }
 
   if summary.phase_iterations then
+    local phase_display = {
+      { "📝", "Requirements", "requirements" },
+      { "🎨", "Design", "design" },
+      { "✅", "Tasks", "tasks" },
+      { "🔨", "Implementation", "implementation" },
+      { "🔍", "Review", "review" },
+      { "🧪", "Testing", "testing" },
+      { "✅✅", "Completion", "completion" },
+    }
     table.insert(lines, "│")
     table.insert(lines, "│ SDLC Phases:")
-    table.insert(lines, string.format("│   📝 Requirements: %d iters", summary.phase_iterations.requirements or 0))
-    table.insert(lines, string.format("│   🎨 Design: %d iters", summary.phase_iterations.design or 0))
-    table.insert(lines, string.format("│   ✅ Tasks: %d iters", summary.phase_iterations.tasks or 0))
-    table.insert(lines, string.format("│   🔨 Implementation: %d iters", summary.phase_iterations.implementation or 0))
-    table.insert(lines, string.format("│   🔍 Review: %d iters", summary.phase_iterations.review or 0))
-    table.insert(lines, string.format("│   🧪 Testing: %d iters", summary.phase_iterations.testing or 0))
-    table.insert(lines, string.format("│   ✅✅ Completion: %d iters", summary.phase_iterations.completion or 0))
+    for _, p in ipairs(phase_display) do
+      table.insert(lines, string.format("│   %s %s: %d iters", p[1], p[2], summary.phase_iterations[p[3]] or 0))
+    end
   end
 
+  local gate_display = {
+    { "Requirements", "requirements_approved" },
+    { "Design", "design_approved" },
+    { "Tasks", "tasks_approved" },
+    { "Implementation", "implementation_complete" },
+    { "Review", "review_passed" },
+    { "Tests", "tests_passed" },
+  }
   table.insert(lines, "│")
   table.insert(lines, "│ Quality Gates:")
-  table.insert(lines, string.format("│   Requirements: %s", quality_gates.requirements_approved and "✅" or "⏳"))
-  table.insert(lines, string.format("│   Design: %s", quality_gates.design_approved and "✅" or "⏳"))
-  table.insert(lines, string.format("│   Tasks: %s", quality_gates.tasks_approved and "✅" or "⏳"))
-  table.insert(lines, string.format("│   Implementation: %s", quality_gates.implementation_complete and "✅" or "⏳"))
-  table.insert(lines, string.format("│   Review: %s", quality_gates.review_passed and "✅" or "⏳"))
-  table.insert(lines, string.format("│   Tests: %s", quality_gates.tests_passed and "✅" or "⏳"))
+  for _, g in ipairs(gate_display) do
+    table.insert(lines, string.format("│   %s: %s", g[1], quality_gates[g[2]] and "✅" or "⏳"))
+  end
 
   if status.steps_total and status.steps_total > 0 then
     table.insert(lines, "│")
@@ -762,25 +771,59 @@ local function show_summary(buf, ralph)
   end
 end
 
-local function get_phase_transition_prompt(ralph, target_phase)
-  if target_phase == "design" then
-    return ralph.get_design_prompt()
-  elseif target_phase == "implementation" then
-    return ralph.get_execution_prompt()
-  elseif target_phase == "review" then
-    return ralph.get_review_prompt()
-  elseif target_phase == "testing" then
-    return ralph.get_testing_prompt()
-  elseif target_phase == "completion" then
-    return ralph.get_completion_prompt()
+local PHASE_PROMPT_GETTERS = {
+  design = "get_design_prompt",
+  tasks = "get_tasks_prompt",
+  implementation = "get_execution_prompt",
+  review = "get_review_prompt",
+  testing = "get_testing_prompt",
+  completion = "get_completion_prompt",
+}
+
+local function get_phase_prompt(ralph, phase_name)
+  local getter = PHASE_PROMPT_GETTERS[phase_name]
+  if getter and ralph[getter] then
+    return ralph[getter]()
   end
   return ralph.get_continuation_prompt()
 end
 
-local function show_phase_transition(buf, from_phase, to_phase, ralph)
+local PHASE_TRANSITION_MESSAGES = {
+  design = "Analysis sufficient. Proceeding to Design.",
+  tasks = "Approach defined. Proceeding to Tasks.",
+  implementation = "Plan confirmed. Starting execution.",
+  review = "Implementation complete. Starting review.",
+  testing = "Review passed. Running tests.",
+  completion = "Tests passed. Final verification.",
+}
+
+local function show_phase_transition(buf, _, to_phase, ralph)
   local phase_info = ralph.PHASE_INFO[to_phase]
   if not phase_info then return end
-  render.append_content(buf, { "", string.format("[→ %s %s]", phase_info.icon, phase_info.name), "" })
+  local msg = PHASE_TRANSITION_MESSAGES[to_phase] or ("Moving to " .. phase_info.name)
+  render.append_content(buf, {
+    "",
+    string.format("[🤖 Agent → %s %s: %s]", phase_info.icon, phase_info.name, msg),
+    "",
+  })
+end
+
+local AUTO_TRANSITION_CONFIG = {
+  { reason_prefix = "requirements_complete:", artifact = "requirements", target = "design" },
+  { reason_prefix = "design_complete:", artifact = "design", target = "tasks" },
+  { reason_prefix = "review_complete:", artifact = "review_findings", target = "testing" },
+  { reason_prefix = "testing_complete:", artifact = "test_results", target = "completion" },
+}
+
+local function handle_auto_transition(proc, ralph, buf, response_text, config)
+  local target_phase = ralph.PHASE[config.target:upper()]
+  ralph.set_artifact(config.artifact, response_text)
+  ralph.transition_to_phase(target_phase)
+  vim.schedule(function()
+    show_phase_transition(buf, config.artifact, target_phase, ralph)
+  end)
+  deferred_send(proc, get_phase_prompt(ralph, config.target))
+  return true
 end
 
 function M.check_and_continue(proc, response_text)
@@ -792,8 +835,6 @@ function M.check_and_continue(proc, response_text)
 
   local ralph = require("ai_repl.modes.ralph_wiggum")
   local buf = proc.data.buf
-  local current_phase = ralph.get_phase()
-
   ralph.record_iteration(response_text)
 
   local completed_step_content = nil
@@ -825,7 +866,7 @@ function M.check_and_continue(proc, response_text)
     local completed_steps = ralph.detect_step_completion(response_text)
     local any_completed = false
     for _, step_desc in ipairs(completed_steps) do
-      local marked, step_id = ralph.mark_step_by_pattern(step_desc:sub(1, 30))
+      local marked = ralph.mark_step_by_pattern(step_desc:sub(1, 30))
       if marked then
         any_completed = true
         completed_step_content = step_desc
@@ -861,7 +902,7 @@ function M.check_and_continue(proc, response_text)
     local continuation_prompt = ralph.get_continuation_prompt()
     local analysis_mode = ralph.get_analysis_mode() or "summary"
     local should_show_analysis = ralph.should_show_analysis(analysis_mode)
-    
+
     vim.defer_fn(function()
       if ralph.is_enabled() and not ralph.is_paused() then
         proc:send_prompt(continuation_prompt, { silent = not should_show_analysis })
@@ -873,58 +914,20 @@ function M.check_and_continue(proc, response_text)
   if not should_continue then
     local status = ralph.get_status()
 
-    if reason and reason:match("^requirements_complete:") then
-      ralph.set_artifact("requirements", response_text)
-      ralph.transition_to_phase(ralph.PHASE.DESIGN)
-      ralph.quality_gates.requirements_approved = true
-      vim.schedule(function()
-        show_phase_transition(buf, "requirements", "design", ralph)
-      end)
-
-      local design_prompt = ralph.get_design_prompt()
-      local analysis_mode = ralph.get_analysis_mode() or "summary"
-      local should_show_analysis = ralph.should_show_analysis(analysis_mode)
-      
-      vim.defer_fn(function()
-        if ralph.is_enabled() and not ralph.is_paused() then
-          proc:send_prompt(design_prompt, { silent = not should_show_analysis })
-        end
-      end, 500)
-      return true
+    for _, config in ipairs(AUTO_TRANSITION_CONFIG) do
+      if reason and reason:match("^" .. vim.pesc(config.reason_prefix)) then
+        return handle_auto_transition(proc, ralph, buf, response_text, config)
+      end
     end
 
-    if reason and reason:match("^design_complete:") then
-      ralph.set_artifact("design", response_text)
-      ralph.transition_to_tasks()
-      vim.schedule(function()
-        show_phase_transition(buf, "design", "tasks", ralph)
-      end)
-
-      local tasks_prompt = ralph.get_tasks_prompt()
-      local analysis_mode = ralph.get_analysis_mode() or "summary"
-      local should_show_analysis = ralph.should_show_analysis(analysis_mode)
-      
-      vim.defer_fn(function()
-        if ralph.is_enabled() and not ralph.is_paused() then
-          proc:send_prompt(tasks_prompt, { silent = not should_show_analysis })
-        end
-      end, 500)
-      return true
-    end
-
-    if reason and reason:match("^tasks_complete:") then
+    if reason and (reason:match("^tasks_complete:") or reason == "awaiting_tasks_approval") then
       ralph.set_artifact("tasks", response_text)
       ralph.set_plan(response_text)
       ralph.update_draft_plan(response_text)
       local plan_status = ralph.get_status()
 
       ralph.set_awaiting_confirmation(true, function()
-        local execution_prompt = ralph.get_execution_prompt()
-        vim.defer_fn(function()
-          if ralph.is_enabled() and not ralph.is_paused() then
-            proc:send_prompt(execution_prompt, { silent = true })
-          end
-        end, 300)
+        deferred_send(proc, ralph.get_execution_prompt())
       end)
 
       vim.schedule(function()
@@ -944,38 +947,6 @@ function M.check_and_continue(proc, response_text)
         M.prompt_plan_confirmation(proc)
       end)
       return false
-    end
-
-    if reason and reason:match("^review_complete:") then
-      ralph.set_artifact("review_findings", response_text)
-      ralph.transition_to_testing()
-      vim.schedule(function()
-        show_phase_transition(buf, "review", "testing", ralph)
-      end)
-
-      local testing_prompt = ralph.get_testing_prompt()
-      vim.defer_fn(function()
-        if ralph.is_enabled() and not ralph.is_paused() then
-          proc:send_prompt(testing_prompt, { silent = true })
-        end
-      end, 500)
-      return true
-    end
-
-    if reason and reason:match("^testing_complete:") then
-      ralph.set_artifact("test_results", response_text)
-      ralph.transition_to_completion()
-      vim.schedule(function()
-        show_phase_transition(buf, "testing", "completion", ralph)
-      end)
-
-      local completion_prompt = ralph.get_completion_prompt()
-      vim.defer_fn(function()
-        if ralph.is_enabled() and not ralph.is_paused() then
-          proc:send_prompt(completion_prompt, { silent = true })
-        end
-      end, 500)
-      return true
     end
 
     if reason == "max_iterations" then
@@ -1019,19 +990,9 @@ function M.check_and_continue(proc, response_text)
   end
 
   if ralph.is_implementation_phase() and ralph.all_steps_passed() then
-    ralph.set_artifact("implementation_summary", response_text)
-    ralph.transition_to_review()
-    vim.schedule(function()
-      show_phase_transition(buf, "implementation", "review", ralph)
-    end)
-
-    local review_prompt = ralph.get_review_prompt()
-    vim.defer_fn(function()
-      if ralph.is_enabled() and not ralph.is_paused() then
-        proc:send_prompt(review_prompt, { silent = true })
-      end
-    end, 500)
-    return true
+    return handle_auto_transition(proc, ralph, buf, response_text, {
+      artifact = "implementation_summary", target = "review",
+    })
   end
 
   local status = ralph.get_status()
@@ -1096,11 +1057,7 @@ function M.check_and_continue(proc, response_text)
     continuation_prompt = ralph.get_continuation_prompt()
   end
 
-  vim.defer_fn(function()
-    if ralph.is_enabled() and not ralph.is_paused() then
-      proc:send_prompt(continuation_prompt, { silent = true })
-    end
-  end, delay)
+  deferred_send(proc, continuation_prompt, delay)
 
   return true
 end

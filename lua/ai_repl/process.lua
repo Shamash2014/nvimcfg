@@ -7,6 +7,8 @@ local CLIENT_INFO = {
   version = "2.0.0"
 }
 
+local EMPTY_ARRAY = setmetatable({}, { __is_list = true })
+
 function Process.new(session_id, opts)
   opts = opts or {}
   local self = setmetatable({}, Process)
@@ -199,6 +201,27 @@ function Process:_on_exit(code)
   end
 end
 
+function Process:_notify_status(status, data)
+  if self._on_status then
+    self:_on_status(status, data)
+  end
+end
+
+function Process:_extract_prompt_text(prompt)
+  if type(prompt) == "string" then
+    return prompt
+  elseif type(prompt) == "table" then
+    local parts = {}
+    for _, block in ipairs(prompt) do
+      if block.type == "text" then
+        parts[#parts + 1] = block.text or ""
+      end
+    end
+    return table.concat(parts)
+  end
+  return ""
+end
+
 function Process:set_handlers(handlers)
   self._on_method = handlers.on_method
   self._on_debug = handlers.on_debug
@@ -214,9 +237,7 @@ function Process:_acp_initialize()
     prompt = { text = true, embeddedContext = true, image = true, audio = false }
   }
 
-  if self._on_status then
-    self:_on_status("initializing")
-  end
+  self:_notify_status("initializing")
 
   self:send("initialize", {
     protocolVersion = 1,
@@ -224,9 +245,7 @@ function Process:_acp_initialize()
     clientCapabilities = self.state.client_capabilities
   }, function(result, err)
     if err then
-      if self._on_status then
-        self:_on_status("init_failed", err)
-      end
+      self:_notify_status("init_failed", err)
       return
     end
 
@@ -238,12 +257,49 @@ function Process:_acp_initialize()
       self.state.supports_load_session = true
     end
 
-    if self._on_status then
-      self:_on_status("initialized", result)
-    end
+    self.state.auth_methods = result.authMethods or {}
+    self:_notify_status("auth_methods_available", self.state.auth_methods)
+
+    self:_notify_status("initialized", result)
 
     self:_acp_create_or_load_session()
   end)
+end
+
+function Process:_acp_authenticate(method_id, on_success)
+  self:_notify_status("authenticating", { methodId = method_id })
+
+  local auth_done = false
+  local msg_id = self:send("authenticate", {
+    methodId = method_id
+  }, function(_, err)
+    auth_done = true
+    if err then
+      self:_notify_status("auth_failed", err)
+      return
+    end
+    self:_notify_status("authenticated")
+    if on_success then
+      on_success()
+    else
+      self:_acp_create_or_load_session()
+    end
+  end)
+
+  vim.defer_fn(function()
+    if not auth_done and msg_id then
+      self.conn.callbacks[msg_id] = nil
+      self:_notify_status("auth_timeout", {
+        message = "Auth timed out, retrying session...",
+        hint = self.config.cmd .. " auth login",
+      })
+      if on_success then
+        on_success()
+      else
+        self:_acp_create_or_load_session()
+      end
+    end
+  end, 30000)
 end
 
 function Process:_acp_create_or_load_session()
@@ -252,28 +308,21 @@ function Process:_acp_create_or_load_session()
   local cwd = self.data.cwd or vim.fn.getcwd()
 
   if self.config.load_session_id and self.state.supports_load_session then
-    if self._on_status then
-      self:_on_status("loading_session")
-    end
+    self:_notify_status("loading_session")
 
     self:send("session/load", {
       sessionId = self.config.load_session_id,
       cwd = cwd,
-      mcpServers = {}
+      mcpServers = EMPTY_ARRAY
     }, function(result, err)
       if err then
-        if self._on_status then
-          self:_on_status("session_load_failed", err)
-        end
+        self:_notify_status("session_load_failed", err)
         self:_acp_create_new_session(cwd)
         return
       end
 
       self:_handle_session_result(result)
-
-      if self._on_status then
-        self:_on_status("session_loaded", result)
-      end
+      self:_notify_status("session_loaded", result)
     end)
   else
     self:_acp_create_new_session(cwd)
@@ -281,26 +330,26 @@ function Process:_acp_create_or_load_session()
 end
 
 function Process:_acp_create_new_session(cwd)
-  if self._on_status then
-    self:_on_status("creating_session")
-  end
+  self:_notify_status("creating_session")
 
   self:send("session/new", {
     cwd = cwd,
-    mcpServers = {}
+    mcpServers = EMPTY_ARRAY
   }, function(result, err)
     if err then
-      if self._on_status then
-        self:_on_status("session_failed", err)
+      self:_notify_status("session_error_detail", err)
+      if err.code == -32000 and self.state.auth_methods and #self.state.auth_methods > 0 then
+        self:_acp_authenticate(self.state.auth_methods[1].id, function()
+          self:_acp_create_new_session(cwd)
+        end)
+        return
       end
+      self:_notify_status("session_failed", err)
       return
     end
 
     self:_handle_session_result(result)
-
-    if self._on_status then
-      self:_on_status("session_created", result)
-    end
+    self:_notify_status("session_created", result)
   end)
 end
 
@@ -336,16 +385,7 @@ function Process:send_prompt(prompt, opts)
     return nil
   end
   if self.state.busy then
-    local text = ""
-    if type(prompt) == "string" then
-      text = prompt
-    elseif type(prompt) == "table" then
-      for _, block in ipairs(prompt) do
-        if block.type == "text" then
-          text = text .. (block.text or "")
-        end
-      end
-    end
+    local text = self:_extract_prompt_text(prompt)
     table.insert(self.data.prompt_queue, { prompt = prompt, text = text, opts = opts })
     if self.config.debug and self._on_debug then
       self:_on_debug("send_prompt: busy, queued")
@@ -486,27 +526,20 @@ function Process:reset_session_with_context(injection_prompt, callback)
   self.ui.active_tools = {}
   self.ui.pending_tool_calls = {}
 
-  if self._on_status then
-    self:_on_status("resetting_session")
-  end
+  self:_notify_status("resetting_session")
 
   self:send("session/new", {
     cwd = cwd,
-    mcpServers = {}
+    mcpServers = EMPTY_ARRAY
   }, function(result, err)
     if err then
-      if self._on_status then
-        self:_on_status("session_reset_failed", err)
-      end
+      self:_notify_status("session_reset_failed", err)
       if callback then callback(false, err) end
       return
     end
 
     self:_handle_session_result(result)
-
-    if self._on_status then
-      self:_on_status("session_reset", { old_id = old_session_id, new_id = self.session_id })
-    end
+    self:_notify_status("session_reset", { old_id = old_session_id, new_id = self.session_id })
 
     if injection_prompt then
       vim.defer_fn(function()
@@ -536,16 +569,7 @@ function Process:_transform_ultrathink(prompt)
     "ultrathought:",
   }
 
-  local text = ""
-  if type(prompt) == "string" then
-    text = prompt
-  elseif type(prompt) == "table" then
-    for _, block in ipairs(prompt) do
-      if block.type == "text" then
-        text = text .. (block.text or "")
-      end
-    end
-  end
+  local text = self:_extract_prompt_text(prompt)
 
   local has_ultrathink = false
   local keyword_found = nil

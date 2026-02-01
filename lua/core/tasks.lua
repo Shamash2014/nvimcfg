@@ -830,7 +830,7 @@ function M.pick_buffers_tabs_tasks()
   M.running_tasks = active_tasks
 
   if #active_tasks > 0 then
-    for _, task in ipairs(active_tasks) do
+    for i, task in ipairs(active_tasks) do
       local runtime = os.difftime(os.time(), task.start_time)
       local runtime_str = string.format("%dm %ds", math.floor(runtime / 60), runtime % 60)
       local status = task.background and "BG" or "FG"
@@ -838,7 +838,7 @@ function M.pick_buffers_tabs_tasks()
         text = string.format("[%s] %s", status, task.name),
         desc = runtime_str,
         is_task = true,
-        task = task,
+        task_index = i,
       })
     end
     table.insert(items, { text = "── Tabs ──", is_separator = true })
@@ -895,10 +895,11 @@ function M.pick_buffers_tabs_tasks()
       picker:close()
       if not item or item.is_separator then return end
       if item.is_task then
-        if item.task.background then
-          item.task:attach()
-        elseif item.task.term then
-          item.task.term:focus()
+        local task = active_tasks[item.task_index]
+        if task.background then
+          task:attach()
+        elseif task.term then
+          task.term:focus()
         end
       elseif item.is_tab then
         vim.cmd("tabnext " .. item.tab_nr)

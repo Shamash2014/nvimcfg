@@ -43,6 +43,28 @@ local ui = {
   project_root = nil,
 }
 
+local function extract_labels(items)
+  return vim.tbl_map(function(item) return item.label end, items)
+end
+
+local function format_session_label(is_current, is_running, name_or_id, provider)
+  local status
+  if is_current then
+    status = "[*]"
+  elseif is_running then
+    status = "[~]"
+  else
+    status = "[ ]"
+  end
+  local provider_badge = provider and (" [" .. provider .. "]") or ""
+  return status .. " " .. name_or_id .. provider_badge
+end
+
+local function truncate(text, limit)
+  if #text > limit then return text:sub(1, limit - 3) .. "..." end
+  return text
+end
+
 local function get_tab_win()
   local tab = vim.api.nvim_get_current_tabpage()
   local win = ui.wins[tab]
@@ -657,6 +679,43 @@ local function handle_method(proc, method, params, msg_id)
       response.result = { terminalId = term_id }
     end
     vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
+
+  elseif msg_id then
+    local url = params and (params.url or params.uri)
+    local prompt_text = params and (params.prompt or params.message)
+
+    render.append_content(buf, {
+      "[*] Agent request: " .. method .. " " .. vim.inspect(params):sub(1, 200)
+    })
+
+    if url then
+      vim.ui.open(url)
+      render.append_content(buf, { "[*] Opened: " .. url })
+    end
+
+    if prompt_text then
+      render.append_content(buf, { "[?] Agent asks: " .. prompt_text })
+      vim.ui.input({ prompt = prompt_text .. " " }, function(input)
+        local result = {}
+        if input and input ~= "" then
+          result = { line = input, value = input, input = input }
+          render.append_content(buf, { "[+] Sent response" })
+        end
+        if proc.job_id then
+          vim.fn.chansend(proc.job_id, vim.json.encode({
+            jsonrpc = "2.0",
+            id = msg_id,
+            result = result,
+          }) .. "\n")
+        end
+      end)
+    else
+      vim.fn.chansend(proc.job_id, vim.json.encode({
+        jsonrpc = "2.0",
+        id = msg_id,
+        result = {},
+      }) .. "\n")
+    end
   end
 end
 
@@ -761,8 +820,35 @@ local function create_process(session_id, opts)
       elseif status == "session_load_failed" then
         render.append_content(buf, { "[!] Session load failed, creating new..." })
 
+      elseif status == "auth_methods_available" then
+        if type(data) == "table" and #data > 0 then
+          render.append_content(buf, { "[*] Auth methods: " .. vim.inspect(data):sub(1, 400) })
+        end
+
+      elseif status == "session_error_detail" then
+        local detail = type(data) == "table" and vim.inspect(data):sub(1, 300) or tostring(data)
+        render.append_content(buf, { "[!] session/new error: " .. detail })
+
+      elseif status == "authenticating" then
+        render.append_content(buf, { "[*] Authenticating... (check browser)" })
+
+      elseif status == "authenticated" then
+        render.append_content(buf, { "[+] Authenticated" })
+
+      elseif status == "auth_failed" then
+        local err_msg = type(data) == "table" and (data.message or vim.json.encode(data)) or tostring(data)
+        render.append_content(buf, { "[!] Auth failed: " .. err_msg })
+
+      elseif status == "auth_timeout" then
+        local hint = type(data) == "table" and data.hint or ""
+        render.append_content(buf, { "[!] Auth timed out, retrying session..." })
+        if hint ~= "" then
+          render.append_content(buf, { "[*] If auth is needed, run: " .. hint })
+        end
+
       elseif status == "init_failed" or status == "session_failed" then
-        render.append_content(buf, { "[!] Error: " .. tostring(data) })
+        local err_msg = type(data) == "table" and (data.message or vim.json.encode(data)) or tostring(data)
+        render.append_content(buf, { "[!] Error: " .. err_msg })
 
       elseif status == "resetting_session" then
         update_statusline()
@@ -1201,8 +1287,7 @@ function M.edit_queued(index)
   else
     local items = {}
     for i, item in ipairs(queue) do
-      local text = item.text or (type(item.prompt) == "string" and item.prompt or "")
-      if #text > 50 then text = text:sub(1, 47) .. "..." end
+      local text = truncate(item.text or (type(item.prompt) == "string" and item.prompt or ""), 50)
       table.insert(items, string.format("#%d: %s", i, text))
     end
 
@@ -1244,8 +1329,7 @@ function M.remove_queued(index)
   else
     local items = {}
     for i, item in ipairs(queue) do
-      local text = item.text or (type(item.prompt) == "string" and item.prompt or "")
-      if #text > 50 then text = text:sub(1, 47) .. "..." end
+      local text = truncate(item.text or (type(item.prompt) == "string" and item.prompt or ""), 50)
       table.insert(items, string.format("#%d: %s", i, text))
     end
 
@@ -1677,8 +1761,7 @@ function M.show_skill_picker()
 
   local lines = {}
   for i, skill in ipairs(skills) do
-    local desc = skill.description:sub(1, 100)
-    if #skill.description > 100 then desc = desc .. "..." end
+    local desc = truncate(skill.description, 100)
     table.insert(lines, string.format("%d. %s - %s", i, skill.name, desc))
   end
 
@@ -2244,28 +2327,14 @@ function M.open_session_picker()
   table.insert(items, { label = "+ New Session", action = "new" })
 
   for _, s in ipairs(disk_sessions) do
-    local prefix
-    if s.is_active then
-      prefix = "[*] "
-    elseif s.has_process then
-      prefix = "[~] "
-    else
-      prefix = "[ ] "
-    end
-    local provider_badge = s.provider and (" [" .. s.provider .. "]") or ""
     table.insert(items, {
-      label = prefix .. (s.name or s.session_id:sub(1, 8)) .. provider_badge,
+      label = format_session_label(s.is_active, s.has_process, s.name or s.session_id:sub(1, 8), s.provider),
       action = s.is_active and "current" or "load",
       id = s.session_id
     })
   end
 
-  local labels = {}
-  for _, item in ipairs(items) do
-    table.insert(labels, item.label)
-  end
-
-  vim.ui.select(labels, { prompt = "Select session:" }, function(choice, idx)
+  vim.ui.select(extract_labels(items), { prompt = "Select session:" }, function(choice, idx)
     if not choice or not idx then return end
     local item = items[idx]
     if item.action == "new" then
@@ -2287,21 +2356,14 @@ function M.pick_process()
   for _, r in ipairs(running) do
     local is_current = r.session_id == registry.active_session_id()
     local name = r.process.data.name or r.session_id:sub(1, 8)
-    local status = is_current and "[*]" or "[~]"
-    local provider_badge = r.process.data.provider and (" [" .. r.process.data.provider .. "]") or ""
     table.insert(items, {
-      label = status .. " " .. name .. provider_badge,
+      label = format_session_label(is_current, true, name, r.process.data.provider),
       session_id = r.session_id,
       is_current = is_current
     })
   end
 
-  local labels = {}
-  for _, item in ipairs(items) do
-    table.insert(labels, item.label)
-  end
-
-  vim.ui.select(labels, { prompt = "Select process:" }, function(choice, idx)
+  vim.ui.select(extract_labels(items), { prompt = "Select process:" }, function(choice, idx)
     if not choice or not idx then return end
     local item = items[idx]
     if not item.is_current then
@@ -2319,11 +2381,9 @@ function M.switch_to_buffer()
       local is_current = sid == registry.active_session_id()
       local has_process = proc:is_alive()
       local name = proc.data.name or sid:sub(1, 8)
-      local status = is_current and "[*]" or (has_process and "[~]" or "[ ]")
-      local provider_badge = proc.data.provider and (" [" .. proc.data.provider .. "]") or ""
 
       table.insert(items, {
-        label = status .. " " .. name .. provider_badge,
+        label = format_session_label(is_current, has_process, name, proc.data.provider),
         session_id = sid,
         buf = proc.data.buf,
         is_current = is_current
@@ -2342,12 +2402,7 @@ function M.switch_to_buffer()
     return a.label < b.label
   end)
 
-  local labels = {}
-  for _, item in ipairs(items) do
-    table.insert(labels, item.label)
-  end
-
-  vim.ui.select(labels, { prompt = "Switch to buffer:" }, function(choice, idx)
+  vim.ui.select(extract_labels(items), { prompt = "Switch to buffer:" }, function(choice, idx)
     if not choice or not idx then return end
     local item = items[idx]
     local win = get_tab_win()
@@ -2566,12 +2621,7 @@ function M.quick_action(action_index)
     return
   end
 
-  local labels = {}
-  for _, action in ipairs(QUICK_ACTIONS) do
-    table.insert(labels, action.label)
-  end
-
-  vim.ui.select(labels, { prompt = "Quick Action:" }, function(choice, idx)
+  vim.ui.select(extract_labels(QUICK_ACTIONS), { prompt = "Quick Action:" }, function(choice, idx)
     if not choice or not idx then return end
     execute_action(QUICK_ACTIONS[idx])
   end)
@@ -2601,12 +2651,16 @@ function M.setup(opts)
 
   registry.start_autosave()
 
-  vim.api.nvim_create_user_command("AIRepl", function() M.toggle() end, {})
-  vim.api.nvim_create_user_command("AIReplOpen", function() M.open() end, {})
-  vim.api.nvim_create_user_command("AIReplClose", function() M.close() end, {})
-  vim.api.nvim_create_user_command("AIReplNew", function() M.new_session() end, {})
-  vim.api.nvim_create_user_command("AIReplSessions", function() M.open_session_picker() end, {})
-  vim.api.nvim_create_user_command("AIReplPicker", function() M.pick_process() end, {})
+  for cmd_name, fn in pairs({
+    AIRepl = M.toggle,
+    AIReplOpen = M.open,
+    AIReplClose = M.close,
+    AIReplNew = M.new_session,
+    AIReplSessions = M.open_session_picker,
+    AIReplPicker = M.pick_process,
+  }) do
+    vim.api.nvim_create_user_command(cmd_name, fn, {})
+  end
 
   vim.api.nvim_set_hl(0, "AIReplPrompt", { fg = "#7aa2f7", bold = true })
   syntax.setup()

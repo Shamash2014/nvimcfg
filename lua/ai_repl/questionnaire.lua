@@ -151,29 +151,18 @@ function M.setup_keymaps()
 
   local opts = { buffer = state.buf, silent = true, nowait = true }
 
-  vim.keymap.set("n", "b", function()
-    if state.active then M.back() end
-  end, opts)
-
-  vim.keymap.set("n", "B", function()
-    if state.active then M.back() end
-  end, opts)
-
-  vim.keymap.set("n", "s", function()
-    if state.active then M.skip() end
-  end, opts)
-
-  vim.keymap.set("n", "S", function()
-    if state.active then M.skip() end
-  end, opts)
-
-  vim.keymap.set("n", "c", function()
-    if state.active then M.cancel() end
-  end, opts)
-
-  vim.keymap.set("n", "C", function()
-    if state.active then M.cancel() end
-  end, opts)
+  for _, binding in ipairs({
+    { "b", M.back },
+    { "s", M.skip },
+    { "c", M.cancel },
+  }) do
+    local key, fn = binding[1], binding[2]
+    for _, k in ipairs({ key, key:upper() }) do
+      vim.keymap.set("n", k, function()
+        if state.active then fn() end
+      end, opts)
+    end
+  end
 
   state.keymaps_set = true
 end

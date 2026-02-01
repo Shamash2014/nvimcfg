@@ -50,6 +50,22 @@ local function read_skill_file(skill_path)
   return content
 end
 
+local function load_directory_items(dir, glob_pattern, name_modifier)
+  local items = {}
+  if vim.fn.isdirectory(dir) == 1 then
+    local files = vim.fn.glob(dir .. glob_pattern, false, true)
+    for _, file in ipairs(files) do
+      if vim.fn.isdirectory(file) == 0 then
+        table.insert(items, {
+          name = vim.fn.fnamemodify(file, name_modifier),
+          path = file,
+        })
+      end
+    end
+  end
+  return items
+end
+
 function M.discover_skills(force_refresh)
   local now = vim.fn.localtime()
   if not force_refresh and skills_cache and (now - cache_time) < CACHE_TTL then
@@ -75,31 +91,8 @@ function M.discover_skills(force_refresh)
               if not seen_skills[metadata.name] then
                 seen_skills[metadata.name] = true
 
-                local references = {}
-                local refs_dir = skill_dir .. "/references"
-                if vim.fn.isdirectory(refs_dir) == 1 then
-                  local ref_files = vim.fn.glob(refs_dir .. "/*.md", false, true)
-                  for _, ref_file in ipairs(ref_files) do
-                    table.insert(references, {
-                      name = vim.fn.fnamemodify(ref_file, ":t:r"),
-                      path = ref_file,
-                    })
-                  end
-                end
-
-                local scripts = {}
-                local scripts_dir = skill_dir .. "/scripts"
-                if vim.fn.isdirectory(scripts_dir) == 1 then
-                  local script_files = vim.fn.glob(scripts_dir .. "/*", false, true)
-                  for _, script_file in ipairs(script_files) do
-                    if vim.fn.isdirectory(script_file) == 0 then
-                      table.insert(scripts, {
-                        name = vim.fn.fnamemodify(script_file, ":t"),
-                        path = script_file,
-                      })
-                    end
-                  end
-                end
+                local references = load_directory_items(skill_dir .. "/references", "/*.md", ":t:r")
+                local scripts = load_directory_items(skill_dir .. "/scripts", "/*", ":t")
 
                 skills[metadata.name] = {
                   name = metadata.name,

@@ -113,10 +113,9 @@ end
 
 function M.cleanup_buffer(buf)
   buffer_state[buf] = nil
-  pcall(vim.api.nvim_buf_clear_namespace, buf, NS, 0, -1)
-  pcall(vim.api.nvim_buf_clear_namespace, buf, NS_ANIM, 0, -1)
-  pcall(vim.api.nvim_buf_clear_namespace, buf, NS_DIFF, 0, -1)
-  pcall(vim.api.nvim_buf_clear_namespace, buf, NS_PROMPT, 0, -1)
+  for _, ns in ipairs({ NS, NS_ANIM, NS_DIFF, NS_PROMPT }) do
+    pcall(vim.api.nvim_buf_clear_namespace, buf, ns, 0, -1)
+  end
 end
 
 function M.get_prompt_line(buf)
@@ -578,6 +577,31 @@ function M.render_diff(buf, file_path, old_content, new_content)
     end)
   end
 
+  local function set_diff_extmark(b, line, col, end_col, hl_group)
+    pcall(vim.api.nvim_buf_set_extmark, b, NS_DIFF, line, col, {
+      end_col = end_col,
+      hl_group = hl_group
+    })
+  end
+
+  local function apply_word_diff_highlights(b, line_num, d, seg_type, full_type, word_hl, pos_key)
+    if not d.word_diffs then return end
+    local match_pos = d.text:find("%s%s")
+    if not match_pos then return end
+    local content_start = match_pos + 1
+    if d.word_diffs.type == full_type then
+      set_diff_extmark(b, line_num, content_start, #d.text, word_hl)
+    elseif d.word_diffs.type == "mixed" and d.word_diffs.segments then
+      for _, segment in ipairs(d.word_diffs.segments) do
+        if segment.type == seg_type then
+          local s_start = segment[pos_key .. "_start"]
+          local s_end = segment[pos_key .. "_end"]
+          set_diff_extmark(b, line_num, content_start + s_start - 1, content_start + s_end, word_hl)
+        end
+      end
+    end
+  end
+
   vim.schedule(function()
     if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
     vim.bo[buf].modifiable = true
@@ -590,87 +614,27 @@ function M.render_diff(buf, file_path, old_content, new_content)
     local diff_start = insert_at + 2
     for i, d in ipairs(diff_data) do
       local line_num = diff_start + i - 1
-      
+
       if d.type == "hunk_header" then
-        pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 0, {
-          end_col = #d.text,
-          hl_group = "AIReplDiffHunk"
-        })
+        set_diff_extmark(buf, line_num, 0, #d.text, "AIReplDiffHunk")
       elseif d.type == "add" then
-        pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 0, {
-          end_col = #d.text,
-          hl_group = "AIReplDiffAdd"
-        })
-        if d.word_diffs then
-          local match_pos = d.text:find("%s%s")
-          if match_pos then
-            local content_start = match_pos + 1
-            if d.word_diffs.type == "full_add" then
-              pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, content_start, {
-                end_col = #d.text,
-                hl_group = "AIReplDiffAddWord"
-              })
-            elseif d.word_diffs.type == "mixed" and d.word_diffs.segments then
-              for _, segment in ipairs(d.word_diffs.segments) do
-                if segment.type == "add" then
-                  local start_col = content_start + segment.new_start - 1
-                  local end_col = content_start + segment.new_end - 1
-                  pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, start_col, {
-                    end_col = end_col + 1,
-                    hl_group = "AIReplDiffAddWord"
-                  })
-                end
-              end
-            end
-          end
-        end
+        set_diff_extmark(buf, line_num, 0, #d.text, "AIReplDiffAdd")
+        apply_word_diff_highlights(buf, line_num, d, "add", "full_add", "AIReplDiffAddWord", "new")
       elseif d.type == "delete" then
-        pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 0, {
-          end_col = #d.text,
-          hl_group = "AIReplDiffDelete"
-        })
-        if d.word_diffs then
-          local match_pos = d.text:find("%s%s")
-          if match_pos then
-            local content_start = match_pos + 1
-            if d.word_diffs.type == "full_delete" then
-              pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, content_start, {
-                end_col = #d.text,
-                hl_group = "AIReplDiffDeleteWord"
-              })
-            elseif d.word_diffs.type == "mixed" and d.word_diffs.segments then
-              for _, segment in ipairs(d.word_diffs.segments) do
-                if segment.type == "delete" then
-                  local start_col = content_start + segment.old_start - 1
-                  local end_col = content_start + segment.old_end - 1
-                  pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, start_col, {
-                    end_col = end_col + 1,
-                    hl_group = "AIReplDiffDeleteWord"
-                  })
-                end
-              end
-            end
-          end
-        end
+        set_diff_extmark(buf, line_num, 0, #d.text, "AIReplDiffDelete")
+        apply_word_diff_highlights(buf, line_num, d, "delete", "full_delete", "AIReplDiffDeleteWord", "old")
       elseif d.type == "context" then
         local match_pos = d.text:find("%s%d+%s")
         if match_pos then
           local content_start = match_pos + 2
-          pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 0, {
-            end_col = content_start,
-            hl_group = "AIReplDiffContext"
-          })
+          set_diff_extmark(buf, line_num, 0, content_start, "AIReplDiffContext")
           local content = d.text:sub(content_start)
           apply_syntax_highlighting(buf, line_num, content, file_path)
         end
       end
     end
 
-    -- Highlight the header with stats
-    pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, diff_start - 1, 0, {
-      end_col = #header,
-      hl_group = "AIReplDiffHeader"
-    })
+    set_diff_extmark(buf, diff_start - 1, 0, #header, "AIReplDiffHeader")
 
     -- Store hunk locations for navigation
     local hunk_positions = {}
@@ -682,45 +646,32 @@ function M.render_diff(buf, file_path, old_content, new_content)
 
     if #hunk_positions > 0 then
       local opts = { buffer = buf, silent = true, nowait = true }
-      vim.keymap.set('n', '[h', function()
-        local current_line = vim.api.nvim_win_get_cursor(0)[1]
-        for j = #hunk_positions, 1, -1 do
-          if hunk_positions[j] < current_line then
-            vim.api.nvim_win_set_cursor(0, { hunk_positions[j], 0 })
-            break
+      local nav_bindings = {
+        { key = '[h', direction = 'prev', offset = 0 },
+        { key = ']h', direction = 'next', offset = 0 },
+        { key = '[c', direction = 'prev', offset = 1 },
+        { key = ']c', direction = 'next', offset = 1 },
+      }
+      for _, binding in ipairs(nav_bindings) do
+        vim.keymap.set('n', binding.key, function()
+          local current_line = vim.api.nvim_win_get_cursor(0)[1]
+          if binding.direction == 'prev' then
+            for j = #hunk_positions, 1, -1 do
+              if hunk_positions[j] < current_line then
+                vim.api.nvim_win_set_cursor(0, { hunk_positions[j] + binding.offset, 0 })
+                break
+              end
+            end
+          else
+            for _, pos in ipairs(hunk_positions) do
+              if pos > current_line then
+                vim.api.nvim_win_set_cursor(0, { pos + binding.offset, 0 })
+                break
+              end
+            end
           end
-        end
-      end, opts)
-
-      vim.keymap.set('n', ']h', function()
-        local current_line = vim.api.nvim_win_get_cursor(0)[1]
-        for _, pos in ipairs(hunk_positions) do
-          if pos > current_line then
-            vim.api.nvim_win_set_cursor(0, { pos, 0 })
-            break
-          end
-        end
-      end, opts)
-
-      vim.keymap.set('n', '[c', function()
-        local current_line = vim.api.nvim_win_get_cursor(0)[1]
-        for j = #hunk_positions, 1, -1 do
-          if hunk_positions[j] < current_line then
-            vim.api.nvim_win_set_cursor(0, { hunk_positions[j] + 1, 0 })
-            break
-          end
-        end
-      end, opts)
-
-      vim.keymap.set('n', ']c', function()
-        local current_line = vim.api.nvim_win_get_cursor(0)[1]
-        for _, pos in ipairs(hunk_positions) do
-          if pos > current_line then
-            vim.api.nvim_win_set_cursor(0, { pos + 1, 0 })
-            break
-          end
-        end
-      end, opts)
+        end, opts)
+      end
     end
   end)
 end
