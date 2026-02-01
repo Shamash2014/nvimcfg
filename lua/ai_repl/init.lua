@@ -821,30 +821,15 @@ local function create_process(session_id, opts)
         render.append_content(buf, { "[!] Session load failed, creating new..." })
 
       elseif status == "auth_methods_available" then
-        if type(data) == "table" and #data > 0 then
-          render.append_content(buf, { "[*] Auth methods: " .. vim.inspect(data):sub(1, 400) })
-        end
 
       elseif status == "session_error_detail" then
         local detail = type(data) == "table" and vim.inspect(data):sub(1, 300) or tostring(data)
         render.append_content(buf, { "[!] session/new error: " .. detail })
 
       elseif status == "authenticating" then
-        render.append_content(buf, { "[*] Authenticating... (check browser)" })
-
       elseif status == "authenticated" then
-        render.append_content(buf, { "[+] Authenticated" })
-
       elseif status == "auth_failed" then
-        local err_msg = type(data) == "table" and (data.message or vim.json.encode(data)) or tostring(data)
-        render.append_content(buf, { "[!] Auth failed: " .. err_msg })
-
       elseif status == "auth_timeout" then
-        local hint = type(data) == "table" and data.hint or ""
-        render.append_content(buf, { "[!] Auth timed out, retrying session..." })
-        if hint ~= "" then
-          render.append_content(buf, { "[*] If auth is needed, run: " .. hint })
-        end
 
       elseif status == "init_failed" or status == "session_failed" then
         local err_msg = type(data) == "table" and (data.message or vim.json.encode(data)) or tostring(data)

@@ -338,12 +338,6 @@ function Process:_acp_create_new_session(cwd)
   }, function(result, err)
     if err then
       self:_notify_status("session_error_detail", err)
-      if err.code == -32000 and self.state.auth_methods and #self.state.auth_methods > 0 then
-        self:_acp_authenticate(self.state.auth_methods[1].id, function()
-          self:_acp_create_new_session(cwd)
-        end)
-        return
-      end
       self:_notify_status("session_failed", err)
       return
     end
