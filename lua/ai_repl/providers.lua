@@ -11,14 +11,7 @@ local providers = {
     -- Background permissions: "allow_always", "allow_once", "respect_agent"
     background_permissions = "allow_once",
   },
-  cursor = {
-    name = "Cursor",
-    cmd = "cursor-agent-acp",
-    args = {},
-    env = {},
-    permission_mode = "default",
-    background_permissions = "allow_once",
-  },
+
   goose = {
     name = "Goose",
     cmd = "goose",

@@ -11,7 +11,7 @@ return {
       default_provider = "claude",
       providers = {
         claude = { name = "Claude", cmd = "claude-code-acp", args = {}, env = {} },
-        cursor = { name = "Cursor", cmd = "cursor-agent-acp", args = {}, env = {} },
+
         goose = { name = "Goose", cmd = "goose", args = {"acp"}, env = {} },
         opencode = { name = "OpenCode", cmd = "opencode", args = {"acp"}, env = {} },
         codex = { name = "Codex", cmd = "codex-acp", args = {}, env = {} },
