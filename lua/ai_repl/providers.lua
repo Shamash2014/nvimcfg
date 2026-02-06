@@ -35,14 +35,13 @@ local providers = {
     env = {},
     permission_mode = "default",
     background_permissions = "allow_once",
+    supports_profiles = true,
   },
-  stakpak = {
-    name = "StakPak",
-    cmd = "stakpak",
-    args = {"acp"},
-    env = {
-      STAKPAK_API_KEY = os.getenv("STAKPAK_API_KEY") or "",
-    },
+  droid = {
+    name = "Droid",
+    cmd = "droid",
+    args = {"exec", "--output-format", "acp"},
+    env = {},
     permission_mode = "default",
     background_permissions = "allow_once",
   },
@@ -79,6 +78,11 @@ end
 
 function M.register(id, provider)
   providers[id] = provider
+end
+
+function M.supports_profiles(id)
+  local provider = providers[id]
+  return provider and provider.supports_profiles == true
 end
 
 function M.set_providers(new_providers)

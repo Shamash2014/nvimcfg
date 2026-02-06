@@ -56,6 +56,8 @@ function Process.new(session_id, opts)
     active_tools = {},
     pending_tool_calls = {},
     current_plan = {},
+    permission_queue = {},
+    permission_active = false,
   }
   return self
 end

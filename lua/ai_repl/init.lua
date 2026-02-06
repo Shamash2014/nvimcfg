@@ -139,6 +139,10 @@ local function update_statusline()
   local provider_id = proc and proc.data.provider or config.default_provider
   local provider = config.providers[provider_id]
   local provider_name = provider and provider.name or provider_id
+  local profile_id = proc and proc.data.profile_id
+  if profile_id then
+    provider_name = provider_name .. ":" .. profile_id
+  end
   local agent_name = simplify_agent_name(proc and proc.state.agent_info and proc.state.agent_info.name)
   local mode = proc and proc.state.mode or "plan"
   local queue_count = proc and #proc.data.prompt_queue or 0
@@ -409,8 +413,7 @@ local function get_tool_description(title, input, locations)
   return tool_utils.get_tool_description(title, input, locations, { include_path = true, include_line = true })
 end
 
-local function handle_permission_request(proc, msg_id, params)
-  render.stop_animation()
+local function show_permission_prompt(proc, msg_id, params)
   local buf = proc.data.buf
 
   vim.schedule(function()
@@ -468,11 +471,10 @@ local function handle_permission_request(proc, msg_id, params)
       end
     end
 
-    -- Get provider-specific permission mode
     local provider_id = proc.data.provider or config.default_provider
     local provider_config = config.providers[provider_id] or {}
     local mode = provider_config.permission_mode or config.permission_mode
-    
+
     if mode == "bypassPermissions" or mode == "dontAsk" then
       local response = {
         jsonrpc = "2.0",
@@ -480,6 +482,13 @@ local function handle_permission_request(proc, msg_id, params)
         result = { outcome = { outcome = "selected", optionId = first_allow_id or "allow_always" } }
       }
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
+      proc.ui.permission_active = false
+      local queue = proc.ui.permission_queue
+      if #queue > 0 then
+        local next_req = table.remove(queue, 1)
+        proc.ui.permission_active = true
+        show_permission_prompt(proc, next_req.msg_id, next_req.params)
+      end
       return
     end
 
@@ -571,6 +580,14 @@ local function handle_permission_request(proc, msg_id, params)
         render.append_content(buf, { "[x] Cancelled" })
         send_cancelled()
       end
+
+      local queue = proc.ui.permission_queue
+      if #queue > 0 then
+        local next_req = table.remove(queue, 1)
+        show_permission_prompt(proc, next_req.msg_id, next_req.params)
+      else
+        proc.ui.permission_active = false
+      end
     end
 
     local opts = { buffer = buf, nowait = true }
@@ -579,6 +596,18 @@ local function handle_permission_request(proc, msg_id, params)
     vim.keymap.set("n", "n", function() handle_choice("n") end, opts)
     vim.keymap.set("n", "c", function() handle_choice("c") end, opts)
   end)
+end
+
+local function handle_permission_request(proc, msg_id, params)
+  render.stop_animation()
+
+  if proc.ui.permission_active then
+    table.insert(proc.ui.permission_queue, { msg_id = msg_id, params = params })
+    return
+  end
+
+  proc.ui.permission_active = true
+  show_permission_prompt(proc, msg_id, params)
 end
 
 local function handle_method(proc, method, params, msg_id)
@@ -733,16 +762,25 @@ local function create_process(session_id, opts)
     provider = config.providers[provider_id]
   end
 
+  local args = vim.deepcopy(provider.args or {})
+  if opts.extra_args then
+    for _, arg in ipairs(opts.extra_args) do
+      table.insert(args, arg)
+    end
+  end
+
   local proc = Process.new(session_id, {
     cmd = provider.cmd,
-    args = provider.args or {},
+    args = args,
     env = vim.tbl_extend("force", provider.env or {}, opts.env or {}),
     cwd = opts.cwd or get_current_project_root(),
     debug = config.debug,
     load_session_id = opts.load_session_id,
     provider = provider_id,
+    profile_id = opts.profile_id,
   })
   proc._created_at = os.time()
+  proc.data.profile_id = opts.profile_id
 
   proc:set_handlers({
     on_method = function(self, method, params, msg_id)
@@ -1095,10 +1133,19 @@ local function create_ui()
   setup_window_options(win)
 
   local provider_id = ui.pending_provider or config.default_provider
+  local profile_id = ui.pending_profile
+  local extra_args = ui.pending_extra_args
   ui.pending_provider = nil
+  ui.pending_profile = nil
+  ui.pending_extra_args = nil
 
   local temp_id = "temp_" .. os.time() .. "_" .. math.random(1000, 9999)
-  local proc = create_process(temp_id, { cwd = ui.project_root, provider = provider_id })
+  local proc = create_process(temp_id, {
+    cwd = ui.project_root,
+    provider = provider_id,
+    profile_id = profile_id,
+    extra_args = extra_args,
+  })
   local buf = create_buffer(proc, "New Session")
 
   registry.set(temp_id, proc)
@@ -1108,7 +1155,11 @@ local function create_ui()
   setup_buffer_keymaps(buf)
 
   local provider = config.providers[provider_id]
-  render.append_content(buf, { "AI REPL (" .. (provider and provider.name or provider_id) .. ") | /help for commands", "" })
+  local provider_display = provider and provider.name or provider_id
+  if profile_id then
+    provider_display = provider_display .. ":" .. profile_id
+  end
+  render.append_content(buf, { "AI REPL (" .. provider_display .. ") | /help for commands", "" })
 
   proc:start()
 
@@ -2210,7 +2261,7 @@ function M.pick_provider(callback)
   end)
 end
 
-function M.new_session(provider_id)
+function M.new_session(provider_id, profile_id)
   if not provider_id then
     M.pick_provider(function(id)
       M.new_session(id)
@@ -2225,10 +2276,22 @@ function M.new_session(provider_id)
   end
   ui.project_root = get_project_root(ui.source_buf or cur_buf)
 
+  local extra_args = nil
+  if providers.supports_profiles(provider_id) then
+    local codex_profiles = require("ai_repl.codex_profiles")
+    local effective_profile = profile_id or codex_profiles.get_last_profile()
+    if effective_profile then
+      extra_args = codex_profiles.build_args(effective_profile)
+      profile_id = effective_profile
+    end
+  end
+
   local win = get_tab_win()
   if not win then
     ui.active = true
     ui.pending_provider = provider_id
+    ui.pending_profile = profile_id
+    ui.pending_extra_args = extra_args
     create_ui()
     return
   end
@@ -2238,7 +2301,12 @@ function M.new_session(provider_id)
   setup_window_options(win)
 
   local temp_id = "temp_" .. os.time() .. "_" .. math.random(1000, 9999)
-  local new_proc = create_process(temp_id, { cwd = ui.project_root, provider = provider_id })
+  local new_proc = create_process(temp_id, {
+    cwd = ui.project_root,
+    provider = provider_id,
+    profile_id = profile_id,
+    extra_args = extra_args,
+  })
   local buf = create_buffer(new_proc, "New Session")
 
   registry.set(temp_id, new_proc)
@@ -2248,11 +2316,59 @@ function M.new_session(provider_id)
   setup_buffer_keymaps(buf)
 
   local provider = config.providers[provider_id]
-  render.append_content(buf, { "Creating new session with " .. (provider and provider.name or provider_id) .. "..." })
+  local provider_display = provider and provider.name or provider_id
+  if profile_id then
+    provider_display = provider_display .. ":" .. profile_id
+  end
+  render.append_content(buf, { "Creating new session with " .. provider_display .. "..." })
 
   new_proc:start()
 
   render.goto_prompt(buf, win)
+end
+
+function M.pick_codex_profile(callback)
+  local codex_profiles = require("ai_repl.codex_profiles")
+  local profiles = codex_profiles.list_profiles()
+
+  if #profiles == 0 then
+    vim.notify("No profiles found in ~/.codex/config.toml", vim.log.levels.WARN)
+    if callback then callback(nil) end
+    return
+  end
+
+  local items = {
+    { id = nil, label = "default (no profile override)" }
+  }
+  for _, p in ipairs(profiles) do
+    table.insert(items, {
+      id = p.id,
+      label = codex_profiles.format_profile_label(p)
+    })
+  end
+
+  local labels = {}
+  for _, item in ipairs(items) do
+    table.insert(labels, item.label)
+  end
+
+  vim.ui.select(labels, {
+    prompt = "Select Codex Profile:",
+  }, function(choice, idx)
+    if not choice then
+      if callback then callback(nil) end
+      return
+    end
+    local selected = items[idx]
+    codex_profiles.set_last_profile(selected.id)
+    if callback then callback(selected.id) end
+  end)
+end
+
+function M.pick_codex_profile_and_start()
+  M.pick_codex_profile(function(profile_id)
+    M.new_session("codex", profile_id)
+  end)
 end
 
 function M.load_session(session_id, opts)

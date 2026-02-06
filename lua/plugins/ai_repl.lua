@@ -15,7 +15,7 @@ return {
         goose = { name = "Goose", cmd = "goose", args = {"acp"}, env = {} },
         opencode = { name = "OpenCode", cmd = "opencode", args = {"acp"}, env = {} },
         codex = { name = "Codex", cmd = "codex-acp", args = {}, env = {} },
-        stakpak = { name = "StakPak", cmd = "stakpak", args = {"acp"}, env = {} },
+        droid = { name = "Droid", cmd = "droid", args = {"exec", "--output-format", "acp"}, env = {} },
       },
       history_size = 1000,
       permission_mode = "plan",
@@ -82,6 +82,12 @@ return {
       function() require("ai_repl").check_selection() end,
       mode = { "v" },
       desc = "Check selection for issues"
+    },
+    {
+      "<leader>acp",
+      function() require("ai_repl").pick_codex_profile_and_start() end,
+      mode = "n",
+      desc = "New Codex session (pick profile)"
     }
   },
   cmd = { "AIRepl", "AIReplOpen", "AIReplClose", "AIReplSessions", "AIReplNew", "AIReplAddFile", "AIReplAddSelection", "AIReplPicker" }
