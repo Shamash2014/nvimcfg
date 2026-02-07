@@ -23,7 +23,14 @@ local function setup_auto_root()
     callback = function()
       -- Skip special buffers
       local bt = vim.bo.buftype
+      local ft = vim.bo.filetype
       if bt ~= "" and bt ~= "acwrite" then
+        return
+      end
+
+      -- Skip Neogit buffers and other git-related special buffers
+      -- to prevent unwanted tab switching during git operations
+      if ft:match("^neogit") or ft:match("^git") or ft:match "^fugitive" then
         return
       end
 
