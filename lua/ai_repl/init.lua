@@ -221,7 +221,7 @@ local function handle_session_update(proc, params)
     elseif u.title == "ExitPlanMode" then
       render.append_content(buf, { "[>] Exiting plan mode..." })
       return
-    elseif u.title == "AskUserQuestion" or (u.rawInput and u.rawInput.questions) then
+    elseif u.title == "AskUser" or u.title == "AskUserQuestion" or (u.rawInput and u.rawInput.questions) then
       render.stop_animation()
       local questions = u.rawInput and u.rawInput.questions or {}
       if #questions > 0 then
@@ -299,7 +299,7 @@ local function handle_session_update(proc, params)
         end
       end
 
-      if tool.title ~= "AskUserQuestion" then
+      if tool.title ~= "AskUser" and tool.title ~= "AskUserQuestion" then
         render.render_tool(buf, tool)
       end
 

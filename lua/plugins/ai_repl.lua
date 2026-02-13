@@ -30,12 +30,6 @@ return {
       desc = "Toggle AI REPL"
     },
     {
-      "<leader>aa",
-      function() require("ai_repl").new_session() end,
-      mode = "n",
-      desc = "New AI REPL session"
-    },
-    {
       "<leader>as",
       function() require("ai_repl").send_selection() end,
       mode = { "v" },

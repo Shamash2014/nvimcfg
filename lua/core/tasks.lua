@@ -916,6 +916,18 @@ function M.pick_tasks_and_commands()
   local items = {}
 
   table.insert(items, {
+    text = "New AI Session",
+    desc = "Create a new AI REPL session",
+    is_ai = true,
+  })
+
+  table.insert(items, {
+    text = "Toggle REPL",
+    desc = "Toggle code REPL window",
+    is_repl = true,
+  })
+
+  table.insert(items, {
     text = "Enter custom command...",
     task = { cmd = "custom" },
     is_task = true,
@@ -983,7 +995,11 @@ function M.pick_tasks_and_commands()
       picker:close()
       if not item then return end
       if item.is_separator then return end
-      if item.is_task then
+      if item.is_ai then
+        require("ai_repl").new_session()
+      elseif item.is_repl then
+        require("code_repl").toggle_repl()
+      elseif item.is_task then
         if item.task.cmd == "custom" then
           M.run_custom_command()
         else

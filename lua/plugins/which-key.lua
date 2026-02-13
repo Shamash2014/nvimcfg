@@ -47,14 +47,6 @@ return {
       desc = "Buffer Keymaps",
     },
     {
-      "<leader>aa",
-      function()
-        require("ai_repl").new_session()
-      end,
-      mode = { "n", "v" },
-      desc = "New AI Session",
-    },
-    {
       "<leader>ar",
       function()
         require("ai_repl").toggle()
