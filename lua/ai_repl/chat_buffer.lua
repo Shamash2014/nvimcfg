@@ -410,6 +410,28 @@ function M.autosave_buffer(buf)
     return false
   end
 
+  -- Get the local cwd for this buffer (where it should be saved)
+  local local_cwd = vim.api.nvim_buf_call(buf, function()
+    return vim.fn.getcwd()
+  end)
+
+  -- Ensure buffer name is relative to local cwd or create proper path
+  local full_path = vim.fn.fnamemodify(buf_name, ":p")
+  local save_path = full_path
+
+  -- If the file doesn't have a proper directory yet, use local cwd
+  if vim.fn.isdirectory(vim.fn.fnamemodify(full_path, ":h")) == 0 then
+    local filename = vim.fn.fnamemodify(buf_name, ":t")
+    save_path = local_cwd .. "/" .. filename
+    vim.api.nvim_buf_set_name(buf, save_path)
+  end
+
+  -- Ensure directory exists before saving
+  local dir = vim.fn.fnamemodify(save_path, ":h")
+  if dir ~= "" and vim.fn.isdirectory(dir) == 0 then
+    vim.fn.mkdir(dir, "p")
+  end
+
   -- Save buffer to disk
   local ok, err = pcall(function()
     vim.api.nvim_buf_call(buf, function()
