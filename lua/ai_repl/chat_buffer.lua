@@ -433,11 +433,25 @@ function M.autosave_buffer(buf)
   end
 
   -- Save buffer to disk
+  -- Temporarily enable modifiable and readonly to allow write to succeed
+  local was_modifiable = vim.bo[buf].modifiable
+  local was_readonly = vim.bo[buf].readonly
+  local old_ei = vim.o.eventignore
+  vim.bo[buf].modifiable = true
+  vim.bo[buf].readonly = false
+  -- Ignore autocmds during autosave to prevent editorconfig issues
+  vim.o.eventignore = "BufWritePre,BufWritePost"
+
   local ok, err = pcall(function()
     vim.api.nvim_buf_call(buf, function()
       vim.cmd("silent write!")
     end)
   end)
+
+  -- Restore modifiable, readonly, and eventignore state
+  vim.bo[buf].modifiable = was_modifiable
+  vim.bo[buf].readonly = was_readonly
+  vim.o.eventignore = old_ei
 
   if ok then
     vim.notify("[.chat] Buffer autosaved: " .. vim.fn.fnamemodify(buf_name, ":~:."), vim.log.levels.DEBUG)
