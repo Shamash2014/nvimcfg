@@ -505,7 +505,7 @@ function M.setup_keymaps(buf)
     local ok, decorations = pcall(require, "ai_repl.chat_decorations")
     if ok then pcall(decorations.stop_spinner, buf) end
 
-    chat_buffer_events.append_to_chat_buffer(buf, { "", "[x] Cancelled" })
+    chat_buffer_events.append_to_chat_buffer(buf, { "", "[x] Cancelled", "", "@You:", "", "" })
   end, opts)
 
   -- Jump to next/previous message

@@ -363,7 +363,7 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
         M.append_to_chat_buffer(buf, { "[x] Denied" })
         send_selected(first_deny_id or "reject_once")
       else
-        M.append_to_chat_buffer(buf, { "[x] Cancelled" })
+        M.append_to_chat_buffer(buf, { "[x] Cancelled", "", "@You:", "", "" })
         send_cancelled()
       end
 

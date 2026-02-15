@@ -1108,7 +1108,7 @@ function M.cancel()
   if not proc then return end
   proc:cancel()
   render.stop_animation()
-  render.append_content(proc.data.buf, { "Cancelled" })
+  render.append_content(proc.data.buf, { "Cancelled", "", "@You:", "", "" })
 end
 
 function M.show_queue()

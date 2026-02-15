@@ -121,15 +121,18 @@ return {
     })
 
     -- Monkey-patch Treesitter to handle query errors gracefully
-    local original_get_query = vim.treesitter.query.get or vim.treesitter.query.get_query
-    vim.treesitter.query.get = function(lang, type_name)
-      local ok, query = pcall(original_get_query, lang, type_name)
-      if not ok then
-        -- Log the error but don't crash
-        vim.notify_once("Treesitter query error for " .. lang .. "/" .. type_name .. ": " .. tostring(query), vim.log.levels.WARN)
-        return nil
+    local ts_query = vim.treesitter.query
+    if ts_query.get then
+      local original_get = ts_query.get
+      ts_query.get = function(lang, type_name)
+        local ok, query = pcall(original_get, lang, type_name)
+        if not ok then
+          -- Log the error but don't crash
+          vim.notify_once("Treesitter query error for " .. lang .. "/" .. type_name .. ": " .. tostring(query), vim.log.levels.WARN)
+          return nil
+        end
+        return query
       end
-      return query
     end
 
     -- Treesitter context for showing current context in winbar
