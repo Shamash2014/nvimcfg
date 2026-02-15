@@ -2,6 +2,17 @@ local M = {}
 
 local chat_parser = require("ai_repl.chat_parser")
 
+-- Helper function to update folds for a buffer
+local function update_folds(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local win = vim.fn.bufwinid(buf)
+  if win ~= -1 then
+    pcall(vim.cmd, "silent! foldupdate")
+  end
+end
+
 local NS_ROLE = vim.api.nvim_create_namespace("chat_role")
 local NS_RULER = vim.api.nvim_create_namespace("chat_ruler")
 local NS_SPIN = vim.api.nvim_create_namespace("chat_spin")
@@ -423,6 +434,28 @@ function M.setup_buffer(buf)
     buffer = buf,
     callback = function()
       M.schedule_redecorate(buf)
+      -- Update folds after text changes
+      vim.schedule(function()
+        update_folds(buf)
+      end)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("TextChangedI", {
+    buffer = buf,
+    callback = function()
+      -- Update folds during insert mode changes
+      vim.schedule(function()
+        update_folds(buf)
+      end)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("WinEnter", {
+    buffer = buf,
+    callback = function()
+      -- Update folds when entering window
+      update_folds(buf)
     end,
   })
 
@@ -438,5 +471,8 @@ function M.setup_buffer(buf)
     end,
   })
 end
+
+-- Export update_folds for external use
+M.update_folds = update_folds
 
 return M
