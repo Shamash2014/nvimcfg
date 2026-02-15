@@ -90,28 +90,30 @@ function M.setup()
     highlight default link ChatLink Underlined
   ]])
 
-  -- Ensure Treesitter for markdown is enabled in .chat buffers
+  -- Setup optimized syntax for chat buffers
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "markdown",
     callback = function(ev)
       local buf = ev.buf
-      -- Check if this is a .chat buffer
       local buf_name = vim.api.nvim_buf_get_name(buf)
-      if buf_name:match("%.chat$") then
-        -- Enable Treesitter for enhanced markdown parsing
-        pcall(function()
-          vim.treesitter.start(buf, "markdown")
-          vim.treesitter.start(buf, "markdown_inline")
-        end)
 
-        -- Apply chat-specific syntax after Treesitter
-        vim.schedule(function()
-          if vim.api.nvim_buf_is_valid(buf) then
-            vim.cmd("syntax include @markdown syntax/markdown.vim")
-            vim.cmd("syntax cluster chatSyntax add=@markdown")
-          end
-        end)
+      -- Check if this is a .chat buffer
+      if buf_name:match("%.chat$") then
+        -- Set up custom folding for chat buffers
+        vim.bo[buf].foldmethod = "expr"
+        vim.bo[buf].foldexpr = "v:lua.require'ai_repl.chat_decorations'.foldexpr(v:lnum)"
+        vim.bo[buf].foldtext = "v:lua.require'ai_repl.chat_decorations'.foldtext()"
+
+        -- For chat buffers: use ONLY render-markdown, disable treesitter for speed
+        -- Treesitter markdown parsing is too slow for real-time chat
+        return
       end
+
+      -- For regular markdown files, enable treesitter
+      pcall(function()
+        vim.treesitter.start(buf, "markdown")
+        vim.treesitter.start(buf, "markdown_inline")
+      end)
     end,
   })
 end

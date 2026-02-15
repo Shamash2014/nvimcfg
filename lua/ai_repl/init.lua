@@ -127,6 +127,40 @@ local function count_background_busy()
   return count
 end
 
+-- Node mode icons mapping (matching Factory's mode system)
+local NODE_MODE_ICONS = {
+  plan = "📋",
+  spec = "📝",
+  auto = "🤖",
+  code = "💻",
+  chat = "💬",
+  execute = "▶️",
+}
+
+local function get_mode_display(mode_id)
+  if not mode_id then return "📋 plan" end
+  
+  -- Check if we have mode metadata from ACP
+  local proc = registry.active()
+  local mode_icon = NODE_MODE_ICONS[mode_id] or "•"
+  local mode_name = mode_id
+  
+  -- Try to get friendly name from available modes
+  if proc and proc.state.modes and #proc.state.modes > 0 then
+    for _, m in ipairs(proc.state.modes) do
+      if m.id == mode_id or m.modeId == mode_id then
+        mode_name = m.displayName or m.name or mode_id
+        if m.icon then
+          mode_icon = m.icon
+        end
+        break
+      end
+    end
+  end
+  
+  return mode_icon .. " " .. mode_name
+end
+
 local function update_statusline()
   local proc = registry.active()
   local win = get_tab_win()
@@ -140,13 +174,14 @@ local function update_statusline()
   end
   local agent_name = simplify_agent_name(proc and proc.state.agent_info and proc.state.agent_info.name)
   local mode = proc and proc.state.mode or "plan"
+  local mode_display = get_mode_display(mode)
   local queue_count = proc and #proc.data.prompt_queue or 0
   local queue_str = queue_count > 0 and (" Q:" .. queue_count) or ""
   local busy_str = proc and proc.state.busy and " ●" or ""
   local bg_count = count_background_busy()
   local bg_str = bg_count > 0 and (" [" .. bg_count .. " bg]") or ""
   local skill_str = proc and proc.data.active_skill and (" 🎯 " .. proc.data.active_skill) or ""
-  vim.wo[win].statusline = " " .. provider_name .. " | " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str .. bg_str .. skill_str
+  vim.wo[win].statusline = " " .. provider_name .. " | " .. agent_name .. " [" .. mode_display .. "]" .. busy_str .. queue_str .. bg_str .. skill_str
 end
 
 local session_state = require("ai_repl.session_state")
@@ -178,6 +213,9 @@ local function handle_session_update(proc, params)
     end
 
   elseif result.type == "current_mode_update" then
+    -- Show mode change notification
+    local mode_display = get_mode_display(proc.state.mode)
+    render.append_content(buf, { "", "[↻] Mode: " .. mode_display, "" })
     update_statusline()
 
   elseif result.type == "tool_call" then
@@ -185,7 +223,8 @@ local function handle_session_update(proc, params)
       render.render_plan(buf, result.plan_entries)
       return
     elseif result.is_exit_plan then
-      render.append_content(buf, { "[>] Exiting plan mode..." })
+      local mode_display = get_mode_display(proc.state.mode or "execute")
+      render.append_content(buf, { "", "[▶] " .. mode_display .. " mode: Starting execution...", "" })
       return
     elseif result.is_ask_user then
       render.stop_animation()
@@ -259,6 +298,18 @@ local function handle_session_update(proc, params)
     end, 200)
 
   elseif result.type == "modes" then
+    -- Show available modes when they're first received
+    if proc.state.modes and #proc.state.modes > 0 then
+      local mode_list = {}
+      for _, m in ipairs(proc.state.modes) do
+        local name = m.displayName or m.name or m.id or m.modeId
+        local icon = m.icon or NODE_MODE_ICONS[m.id or m.modeId] or "•"
+        table.insert(mode_list, icon .. " " .. name)
+      end
+      if #mode_list > 0 then
+        render.append_content(buf, { "", "[ℹ] Available modes: " .. table.concat(mode_list, ", "), "" })
+      end
+    end
     update_statusline()
 
   elseif result.type == "agent_thought_chunk" then
@@ -1326,6 +1377,8 @@ function M.handle_command(cmd)
       "  /sessions - List sessions",
       "  /mode [mode] - Show/switch mode (chat/spec)",
       "  /chat [file] - Open/create .chat buffer (Flemma-style UI)",
+      "  /restart-chat - Restart conversation in current .chat buffer",
+      "  /summarize - Summarize current conversation",
       "  /spec export - Export spec to markdown",
       "  /cwd [path] - Show/change working directory",
       "  /queue - Show queued messages",
@@ -1393,8 +1446,25 @@ function M.handle_command(cmd)
     end
   elseif command == "chat" or command == "mode-chat" then
     M.open_chat_buffer(args[1])
-  elseif command == "chat" or command == "mode-chat" then
-    M.open_chat_buffer(args[1])
+  elseif command == "restart-chat" then
+    -- Restart conversation in current chat buffer
+    local current_buf = vim.api.nvim_get_current_buf()
+    if chat_buffer.is_chat_buffer(current_buf) then
+      chat_buffer.restart_conversation(current_buf)
+    else
+      render.append_content(buf, { "[!] Not a .chat buffer" })
+    end
+  elseif command == "summarize" or command == "summary" then
+    -- Summarize current chat buffer
+    local current_buf = vim.api.nvim_get_current_buf()
+    if chat_buffer.is_chat_buffer(current_buf) then
+      local ok = chat_buffer.summarize_conversation(current_buf)
+      if not ok then
+        render.append_content(buf, { "[!] Failed to summarize conversation" })
+      end
+    else
+      render.append_content(buf, { "[!] Not a .chat buffer" })
+    end
   elseif command == "cwd" then
     if args[1] then
       local new_cwd = vim.fn.expand(args[1])

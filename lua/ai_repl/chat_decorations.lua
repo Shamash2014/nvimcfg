@@ -366,8 +366,27 @@ function M.show_tokens(buf, usage)
 end
 
 function M.foldexpr(lnum)
+  -- Validate line number
+  if not lnum or lnum < 1 then
+    return "="
+  end
+
   local buf = vim.api.nvim_get_current_buf()
-  local line = vim.api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)[1] or ""
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return "="
+  end
+
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  if lnum > line_count then
+    return "="
+  end
+
+  local lines = vim.api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)
+  if not lines or #lines == 0 then
+    return "="
+  end
+
+  local line = lines[1] or ""
 
   if chat_parser.parse_role_marker(line) then
     return ">1"
@@ -391,12 +410,33 @@ end
 function M.foldtext()
   local foldstart = vim.v.foldstart
   local foldend = vim.v.foldend
-  local line = vim.api.nvim_buf_get_lines(0, foldstart - 1, foldstart, false)[1] or ""
+
+  -- Validate fold bounds
+  if not foldstart or not foldend or foldstart < 1 or foldend < foldstart then
+    return "..."
+  end
+
+  local buf = vim.api.nvim_get_current_buf()
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return "..."
+  end
+
   local line_count = foldend - foldstart + 1
+
+  -- Safely get the fold start line
+  local lines = pcall(vim.api.nvim_buf_get_lines, buf, foldstart - 1, foldstart, false)
+  local line = ""
+  if lines then
+    line = lines[1] or ""
+  end
 
   local role = chat_parser.parse_role_marker(line)
   if role then
-    local preview_line = vim.api.nvim_buf_get_lines(0, foldstart, foldstart + 1, false)[1] or ""
+    local preview_lines = pcall(vim.api.nvim_buf_get_lines, buf, foldstart, foldstart + 1, false)
+    local preview_line = ""
+    if preview_lines then
+      preview_line = preview_lines[1] or ""
+    end
     local preview = preview_line:gsub("%s+", " "):sub(1, 72)
     if #preview_line > 72 then
       preview = preview .. "..."

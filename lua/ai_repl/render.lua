@@ -15,6 +15,56 @@ local buffer_state = {}
 local diff_cache = {}
 local CACHE_SIZE_LIMIT = 100
 
+-- Streaming performance optimization
+local streaming_state = {
+  pending_updates = {},
+  last_update_time = {},
+  update_timers = {},
+  throttle_ms = 16,  -- ~60fps
+  batch_size = 500,  -- Batch characters before forcing update
+}
+
+local function schedule_streaming_update(buf, callback)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  
+  -- Clear existing timer for this buffer
+  if streaming_state.update_timers[buf] then
+    pcall(vim.fn.timer_stop, streaming_state.update_timers[buf])
+  end
+  
+  -- Store callback
+  table.insert(streaming_state.pending_updates, callback)
+  
+  -- Schedule throttled update
+  streaming_state.update_timers[buf] = vim.fn.timer_start(streaming_state.throttle_ms, function()
+    vim.schedule(function()
+      if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+      
+      -- Execute all pending updates
+      for _, cb in ipairs(streaming_state.pending_updates) do
+        cb()
+      end
+      
+      -- Clear pending updates
+      streaming_state.pending_updates = {}
+      streaming_state.update_timers[buf] = nil
+    end)
+  end)
+end
+
+local function flush_streaming_updates(buf)
+  if streaming_state.update_timers[buf] then
+    pcall(vim.fn.timer_stop, streaming_state.update_timers[buf])
+    streaming_state.update_timers[buf] = nil
+  end
+  
+  for _, cb in ipairs(streaming_state.pending_updates) do
+    cb()
+  end
+  
+  streaming_state.pending_updates = {}
+end
+
 local function get_cache_key(old_content, new_content)
   if type(old_content) ~= "string" then old_content = "" end
   if type(new_content) ~= "string" then new_content = "" end
@@ -85,6 +135,15 @@ function M.init_buffer(buf)
   vim.bo[buf].modifiable = true
   vim.b[buf].ai_repl = true
 
+  -- Enable text wrapping to prevent overflow
+  vim.bo[buf].textwidth = 100
+
+  -- Set window-local options (need to get the window first)
+  vim.api.nvim_buf_call(buf, function()
+    vim.wo.wrap = true
+    vim.wo.linebreak = true
+  end)
+
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
 
   M.render_prompt(buf)
@@ -113,6 +172,13 @@ end
 
 function M.cleanup_buffer(buf)
   buffer_state[buf] = nil
+  
+  -- Clean up streaming state
+  if streaming_state.update_timers[buf] then
+    pcall(vim.fn.timer_stop, streaming_state.update_timers[buf])
+    streaming_state.update_timers[buf] = nil
+  end
+  
   for _, ns in ipairs({ NS, NS_ANIM, NS_DIFF, NS_PROMPT }) do
     pcall(vim.api.nvim_buf_clear_namespace, buf, ns, 0, -1)
   end
@@ -149,22 +215,37 @@ function M.append_content(buf, lines)
 
   if #to_append == 0 then return end
 
-  vim.schedule(function()
-    if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
-    vim.bo[buf].modifiable = true
+  -- Use fast path for single-line appends (no batching needed)
+  if #to_append <= 2 then
+    vim.schedule(function()
+      if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+      vim.bo[buf].modifiable = true
 
-    local prompt_ln = M.get_prompt_line(buf)
-    local insert_at = prompt_ln - 1
+      local prompt_ln = M.get_prompt_line(buf)
+      local insert_at = prompt_ln - 1
 
-    vim.api.nvim_buf_set_lines(buf, insert_at, insert_at, false, to_append)
-    M.render_prompt(buf)
-  end)
+      vim.api.nvim_buf_set_lines(buf, insert_at, insert_at, false, to_append)
+      M.render_prompt(buf)
+    end)
+  else
+    -- Batch multi-line appends
+    schedule_streaming_update(buf, function()
+      if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+      vim.bo[buf].modifiable = true
+
+      local prompt_ln = M.get_prompt_line(buf)
+      local insert_at = prompt_ln - 1
+
+      vim.api.nvim_buf_set_lines(buf, insert_at, insert_at, false, to_append)
+      M.render_prompt(buf)
+    end)
+  end
 end
 
 function M.update_streaming(buf, text, process_ui)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
 
-  vim.schedule(function()
+  schedule_streaming_update(buf, function()
     if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
     vim.bo[buf].modifiable = true
 
@@ -201,6 +282,8 @@ function M.update_streaming(buf, text, process_ui)
 end
 
 function M.finish_streaming(buf, process_ui)
+  -- Flush any pending updates immediately
+  flush_streaming_updates(buf)
   process_ui.streaming_response = ""
   process_ui.streaming_start_line = nil
 end
@@ -282,12 +365,61 @@ end
 
 function M.render_plan(buf, plan)
   if #plan == 0 then return end
-  local lines = { "", "━━━ Plan ━━━" }
+  
+  -- Detect if this is a spec mode plan (has structured metadata)
+  local is_spec_mode = false
+  local has_metadata = false
+  local plan_title = "Plan"
+  local plan_description = nil
+  
+  -- Check for spec mode metadata
+  for _, item in ipairs(plan) do
+    if type(item) == "table" then
+      if item.isSpecMode or item.spec_mode then
+        is_spec_mode = true
+      end
+      if item.title or item.name then
+        plan_title = item.title or item.name
+        has_metadata = true
+      end
+      if item.description then
+        plan_description = item.description
+      end
+    end
+  end
+  
+  local lines = { "" }
+  
+  -- Add header with appropriate icon
+  local header_icon = is_spec_mode and "📝" or "📋"
+  table.insert(lines, "━━━ " .. header_icon .. " " .. plan_title .. " ━━━")
+  
+  -- Add description if available
+  if plan_description then
+    table.insert(lines, " " .. plan_description)
+    table.insert(lines, "━━━━━━━━━━━━━━━━━━━━━━")
+  end
+  
   for i, item in ipairs(plan) do
     local icon = tool_utils.STATUS_ICONS[item.status] or "○"
     local pri = item.priority == "high" and "! " or ""
     local text = item.content or item.text or item.activeForm or item.description or tostring(item)
-    table.insert(lines, string.format(" %s %d. %s%s", icon, i, pri, text))
+    
+    -- Add special formatting for spec mode items
+    local prefix = ""
+    if is_spec_mode then
+      if item.type == "requirement" then
+        prefix = "📌 "
+      elseif item.type == "task" then
+        prefix = "✓ "
+      elseif item.type == "testing" then
+        prefix = "🧪 "
+      elseif item.type == "phase" then
+        prefix = "➤ "
+      end
+    end
+    
+    table.insert(lines, string.format(" %s %d.%s%s%s", icon, i, prefix, pri, text))
   end
   table.insert(lines, "━━━━━━━━━━━━")
   table.insert(lines, "")
@@ -296,29 +428,77 @@ end
 
 function M.parse_markdown_plan(text)
   local plan = {}
+  local in_spec_section = false
+  local spec_mode_keywords = {
+    ["specification"] = true,
+    ["acceptance criteria"] = true,
+    ["implementation plan"] = true,
+    ["technical details"] = true,
+    ["requirements"] = true,
+    ["testing strategy"] = true,
+  }
+  
   for line in text:gmatch("[^\r\n]+") do
+    local lower_line = line:lower()
+    
+    -- Detect spec mode sections
+    for keyword, _ in pairs(spec_mode_keywords) do
+      if lower_line:match("^%s*##?%s*" .. keyword) or lower_line:match("^%s*" .. keyword .. ":") then
+        in_spec_section = true
+        table.insert(plan, { 
+          content = line:gsub("^%s*##?%s*", ""), 
+          status = "pending",
+          type = "section"
+        })
+        break
+      end
+    end
+    
+    -- Parse checkbox items
     local checkbox, content = line:match("^%s*[%-*]%s*%[([%sx ])%]%s*(.+)")
     if checkbox and content then
       local status = "pending"
       if checkbox == "x" or checkbox == "X" then
         status = "completed"
       end
-      table.insert(plan, { content = content, status = status })
+      local item_type = in_spec_section and "task" or nil
+      table.insert(plan, { 
+        content = content, 
+        status = status,
+        type = item_type
+      })
     else
+      -- Parse numbered items
       local num, content2 = line:match("^%s*(%d+)[%.%)%s]+(.+)")
       if num and content2 and not content2:match("^%s*$") then
         local clean = content2:gsub("^%*%*(.-)%*%*", "%1"):gsub("^__(.-)__", "%1")
         if #clean > 0 and #clean < 200 then
-          table.insert(plan, { content = clean, status = "pending" })
+          local item_type = in_spec_section and "task" or nil
+          table.insert(plan, { 
+            content = clean, 
+            status = "pending",
+            type = item_type
+          })
         end
       end
     end
   end
+  
+  -- Mark as spec mode if we detected spec sections
+  if #plan > 0 and in_spec_section then
+    plan.isSpecMode = true
+  end
+  
   return plan
 end
 
 function M.render_diff(buf, file_path, old_content, new_content)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+
+  -- Skip if contents are identical
+  if old_content == new_content then
+    return
+  end
 
   -- Check cache first
   local cache_key = get_cache_key(old_content, new_content)
@@ -522,13 +702,31 @@ function M.render_diff(buf, file_path, old_content, new_content)
   table.insert(lines, "")
 
   local function apply_syntax_highlighting(buf, line_num, content_line, file_path)
+    -- Fast path: skip syntax highlighting for very large diffs or unknown filetypes
+    if #content_line > 500 then
+      return
+    end
+    
     -- Try to determine filetype from path
     local filetype = vim.filetype.match({ filename = file_path }) or "text"
+    
+    -- Skip expensive parsing for certain filetypes
+    local skip_syntax = {
+      ["text"] = true,
+      ["log"] = true,
+      ["markdown"] = true,
+    }
+    if skip_syntax[filetype] then
+      return
+    end
     
     -- Create temporary buffer for syntax highlighting
     local temp_buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(temp_buf, 0, -1, false, { content_line })
     vim.bo[temp_buf].filetype = filetype
+    -- Disable folds on temporary buffer to prevent treesitter errors
+    vim.bo[temp_buf].foldmethod = "manual"
+    vim.bo[temp_buf].foldenable = false
     
     vim.schedule(function()
       if not vim.api.nvim_buf_is_valid(temp_buf) then return end
@@ -536,43 +734,54 @@ function M.render_diff(buf, file_path, old_content, new_content)
       -- Try to start treesitter parsing
       local ok, parser = pcall(vim.treesitter.get_parser, temp_buf, filetype)
       if ok and parser then
-        parser:parse()
+        -- Safely parse with error handling
+        local parse_ok = pcall(function()
+          parser:parse()
+        end)
         
-        -- Get syntax highlights and apply them to diff buffer
-        local highlights = {}
-        local trees = parser:trees()
-        if trees and trees[1] then
-          local root = trees[1]:root()
-          if root then
-            for node in root:iter_children() do
-              if node and node:type() then
-                local start_row, start_col, _, end_col = node:range()
-                if start_row == 0 then
-                  table.insert(highlights, {
-                    start_col = start_col,
-                    end_col = end_col,
-                    hl_group = "@" .. node:type()
-                  })
+        if parse_ok then
+          -- Get syntax highlights and apply them to diff buffer
+          local highlights = {}
+          local trees = parser:trees()
+          if trees and trees[1] then
+            local root = trees[1]:root()
+            if root then
+              for node in root:iter_children() do
+                if node and node:type() then
+                  local start_row, start_col, _, end_col = node:range()
+                  if start_row == 0 then
+                    table.insert(highlights, {
+                      start_col = start_col,
+                      end_col = end_col,
+                      hl_group = "@" .. node:type()
+                    })
+                  end
                 end
               end
             end
           end
-        end
-        
-        -- Apply highlights to diff buffer with diff background
-        for _, hl in ipairs(highlights) do
-          local content_start = content_line:find("%s%s") + 1
-          pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 
-            content_start + hl.start_col, {
-              end_col = content_start + hl.end_col,
-              hl_group = hl.hl_group,
-              virt_text = { { "", "AIReplDiffContext" } },
-              virt_text_pos = "overlay"
-            })
+          
+          -- Apply highlights to diff buffer with diff background
+          for _, hl in ipairs(highlights) do
+            local content_start = content_line:find("%s%s")
+            if content_start then
+              content_start = content_start + 1
+              pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 
+                content_start + hl.start_col, {
+                  end_col = content_start + hl.end_col,
+                  hl_group = hl.hl_group,
+                  virt_text = { { "", "AIReplDiffContext" } },
+                  virt_text_pos = "overlay"
+                })
+            end
+          end
         end
       end
       
-      vim.api.nvim_buf_delete(temp_buf, { force = true })
+      -- Clean up temporary buffer
+      if vim.api.nvim_buf_is_valid(temp_buf) then
+        pcall(vim.api.nvim_buf_delete, temp_buf, { force = true })
+      end
     end)
   end
 
@@ -611,27 +820,45 @@ function M.render_diff(buf, file_path, old_content, new_content)
     vim.api.nvim_buf_set_lines(buf, insert_at, insert_at, false, lines)
 
     local diff_start = insert_at + 2
-    for i, d in ipairs(diff_data) do
-      local line_num = diff_start + i - 1
+    
+    -- Lazy render highlights to avoid blocking UI
+    local function render_highlights_batch(start_idx, batch_size)
+      local end_idx = math.min(start_idx + batch_size - 1, #diff_data)
+      
+      for i = start_idx, end_idx do
+        local d = diff_data[i]
+        local line_num = diff_start + i - 1
 
-      if d.type == "hunk_header" then
-        set_diff_extmark(buf, line_num, 0, #d.text, "AIReplDiffHunk")
-      elseif d.type == "add" then
-        set_diff_extmark(buf, line_num, 0, #d.text, "AIReplDiffAdd")
-        apply_word_diff_highlights(buf, line_num, d, "add", "full_add", "AIReplDiffAddWord", "new")
-      elseif d.type == "delete" then
-        set_diff_extmark(buf, line_num, 0, #d.text, "AIReplDiffDelete")
-        apply_word_diff_highlights(buf, line_num, d, "delete", "full_delete", "AIReplDiffDeleteWord", "old")
-      elseif d.type == "context" then
-        local match_pos = d.text:find("%s%d+%s")
-        if match_pos then
-          local content_start = match_pos + 2
-          set_diff_extmark(buf, line_num, 0, content_start, "AIReplDiffContext")
-          local content = d.text:sub(content_start)
-          apply_syntax_highlighting(buf, line_num, content, file_path)
+        if d.type == "hunk_header" then
+          set_diff_extmark(buf, line_num, 0, #d.text, "AIReplDiffHunk")
+        elseif d.type == "add" then
+          set_diff_extmark(buf, line_num, 0, #d.text, "AIReplDiffAdd")
+          apply_word_diff_highlights(buf, line_num, d, "add", "full_add", "AIReplDiffAddWord", "new")
+        elseif d.type == "delete" then
+          set_diff_extmark(buf, line_num, 0, #d.text, "AIReplDiffDelete")
+          apply_word_diff_highlights(buf, line_num, d, "delete", "full_delete", "AIReplDiffDeleteWord", "old")
+        elseif d.type == "context" then
+          local match_pos = d.text:find("%s%d+%s")
+          if match_pos then
+            local content_start = match_pos + 2
+            set_diff_extmark(buf, line_num, 0, content_start, "AIReplDiffContext")
+            local content = d.text:sub(content_start)
+            apply_syntax_highlighting(buf, line_num, content, file_path)
+          end
         end
       end
+      
+      -- Continue with next batch if there's more
+      if end_idx < #diff_data then
+        vim.defer_fn(function()
+          if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+          render_highlights_batch(end_idx + 1, batch_size)
+        end, 0)
+      end
     end
+    
+    -- Start batch rendering (50 lines at a time to avoid blocking)
+    render_highlights_batch(1, 50)
 
     set_diff_extmark(buf, diff_start - 1, 0, #header, "AIReplDiffHeader")
 

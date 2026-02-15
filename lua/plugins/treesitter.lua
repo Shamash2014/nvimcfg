@@ -47,6 +47,14 @@ return {
           if ok and stats and stats.size > max_file_size then
             return true
           end
+
+          -- Disable treesitter for .chat buffers for performance
+          -- They use render-markdown instead
+          local buf_name = vim.api.nvim_buf_get_name(buf)
+          if buf_name:match("%.chat$") then
+            return true
+          end
+
           return false
         end,
       },
@@ -167,8 +175,9 @@ return {
     -- Enable markdown injection for better syntax highlighting
     vim.treesitter.language.register("markdown", "md")
     vim.treesitter.language.register("markdown_inline", "md")
-    vim.treesitter.language.register("markdown", "chat")
-    vim.treesitter.language.register("markdown_inline", "chat")
+    -- Chat files use markdown but skip treesitter for performance
+    -- vim.treesitter.language.register("markdown", "chat")
+    -- vim.treesitter.language.register("markdown_inline", "chat")
 
     local group = vim.api.nvim_create_augroup('TreesitterFolds', { clear = true })
 

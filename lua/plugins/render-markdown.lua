@@ -4,20 +4,26 @@ return {
     "nvim-treesitter/nvim-treesitter",
     "nvim-treesitter/nvim-treesitter-textobjects",
   },
-  ft = { "markdown", "md", "chat" },
+  ft = { "markdown", "md" },
   config = function()
     require("render-markdown").setup({
-      -- Heading configuration
+      -- AGGRESSIVE performance optimizations for chat buffers
+      debounce = 500,  -- Even slower debounce (500ms) to drastically reduce CPU
+      max_file_size = 10.0,  -- Disable for files > 10MB
+      max_overlap_width = 50,
+      render_modes = { 'n' },  -- ONLY render in normal mode, skip insert/command mode
+      anti_conceal = {
+        enabled = false,  -- Disable for performance
+      },
+      -- Minimal heading configuration for performance
       heading = {
         enabled = true,
-        sign = true,
-        icons = { '󰲡 ', '󰲣 ', '󰲥 ', '󰲧 ', '󰲩 ', '󰲫 ' },
+        sign = false,  -- DISABLE signs for performance
+        icons = { '# ', '## ', '### ', '#### ', '##### ', '###### ' },  -- Simple text icons
         width = 'full',
-        left_pad = 2,
-        right_pad = 2,
-        min_width = 0,
-        border = true,
-        border_prefix = false,
+        left_pad = 0,  -- Reduce padding
+        right_pad = 0,
+        border = false,  -- DISABLE borders for performance
         backgrounds = {
           'RenderMarkdownH1Bg',
           'RenderMarkdownH2Bg',
@@ -35,55 +41,37 @@ return {
           'RenderMarkdownH6',
         },
       },
-      -- Code block configuration - enhanced for AI responses
+      -- Minimal code block configuration
       code = {
         enabled = true,
-        sign = true,
-        style = 'full',
+        sign = false,  -- DISABLE signs for performance
+        style = 'language',  -- Minimal style
         position = 'left',
-        language_pad = 2,
-        disable_background = { 'diff' },
+        language_pad = 0,  -- No padding
+        disable_background = {},  -- Show background for all
         width = 'full',
-        left_pad = 2,
-        right_pad = 2,
-        min_width = 80,
-        border = 'thick',
+        left_pad = 0,
+        right_pad = 0,
+        border = 'none',  -- DISABLE borders for performance
         highlight = 'RenderMarkdownCode',
         highlight_inline = 'RenderMarkdownCodeInline',
       },
-      -- List bullets - better visual hierarchy
+      -- Minimal list bullets
       bullet = {
         enabled = true,
-        icons = { '●', '○', '◆', '◇' },
-        left_pad = 2,
-        right_pad = 2,
+        icons = { '-', '-', '*', '*' },  -- Simple ASCII
+        left_pad = 0,  -- No padding
+        right_pad = 0,
         highlight = 'RenderMarkdownBullet',
       },
-      -- Checkboxes - better task management
+      -- Disable checkboxes for performance
       checkbox = {
-        enabled = true,
-        unchecked = {
-          icon = 'ↀ',
-          highlight = 'RenderMarkdownUnchecked',
-        },
-        checked = {
-          icon = '✓',
-          highlight = 'RenderMarkdownChecked',
-        },
-        custom = {
-          todo = { raw = '[-]', rendered = '⟳', highlight = 'RenderMarkdownTodo' },
-          important = { raw = '[!]', rendered = '⚠', highlight = 'DiagnosticWarn' },
-          in_progress = { raw = '[~]', rendered = '⟳', highlight = 'DiagnosticInfo' },
-          cancelled = { raw = '[x]', rendered = '✗', highlight = 'DiagnosticError' },
-        },
+        enabled = false,  -- DISABLE checkboxes entirely
       },
-      -- Tables - better formatting
+      -- Disable tables for performance (very expensive)
       pipe_table = {
-        enabled = true,
-        preset = 'heavy',
-        style = 'full',
-        cell = 'padded',
-        border = {
+        enabled = false,  -- DISABLE tables
+      },
           '┌', '┬', '┐',
           '├', '┼', '┤',
           '└', '┴', '┘',
@@ -105,51 +93,46 @@ return {
         quote = { raw = '[!QUOTE]', rendered = '󰆪 Quote', highlight = 'Comment' },
       },
       -- Links - enhanced with better visuals
+      -- Minimal links
       link = {
         enabled = true,
-        image = '󰥭 ',
-        email = '󰀓 ',
-        hyperlink = '󰌷 ',
+        image = '',  -- No icon for performance
+        email = '',
+        hyperlink = '',  -- No icon for performance
         highlight = 'RenderMarkdownLink',
         custom = {
-          youtube = { pattern = 'youtube%.com', icon = '󰗃 ', highlight = 'RenderMarkdownLink' },
-          github = { pattern = 'github%.com', icon = '󰊤 ', highlight = 'RenderMarkdownLink' },
+          -- Disable custom link patterns for performance
         },
       },
-      -- Quotes - better blockquote rendering
+      -- Minimal quotes
       quote = {
         enabled = true,
-        icon = '┃',
+        icon = '',  -- No icon for performance
         repeat_linebreak = false,
         highlight = 'RenderMarkdownQuote',
       },
-      -- Inline highlights
+      -- Disable inline highlights for performance
       inline_highlight = {
-        enabled = true,
-        icon = '󰠱 ',
-        highlight = 'RenderMarkdownInlineHighlight',
+        enabled = false,  -- DISABLE for performance
       },
-      -- Indent blankline integration
+      -- Disable indent blankline for performance
       indent = {
-        enabled = true,
-        per_level = 2,
+        enabled = false,  -- DISABLE for performance
       },
       -- Winbar integration
       winbar = {
         enabled = false,
       },
-      -- Enable all file types including .chat files
-      file_types = { 'markdown', 'chat' },
-      -- Disable for large files
+      -- Enable for markdown files (including .chat)
+      file_types = { 'markdown' },
+      -- Disable for large files (repeated for emphasis)
       max_file_size = 10.0,
-      -- Anti-conceal settings
+      -- Anti-conceal settings (overriding above)
       anti_conceal = {
-        enabled = true,
-        above = 2,
-        below = 2,
+        enabled = false,  -- CRITICAL: Disable for performance
       },
-      -- Enable in all modes
-      render_modes = { 'n', 'c', 't' },
+      -- Only render in normal mode
+      render_modes = { 'n' },
       -- Keybindings
       mappings = {
         enable = false,

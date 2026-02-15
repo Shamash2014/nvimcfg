@@ -143,12 +143,14 @@ function M.handle_session_update_in_chat(buf, update, proc)
         local tool_name = result.tool.title or result.tool.kind or "tool"
         M.append_to_chat_buffer(buf, { "[!] " .. tool_name .. " failed" })
       elseif result.is_edit_tool and result.diff then
+        -- Render the diff for edit tools
+        local render = require("ai_repl.render")
+        render.render_diff(buf, result.diff.path, result.diff.old, result.diff.new)
         M.append_to_chat_buffer(buf, {
           "[~] " .. vim.fn.fnamemodify(result.diff.path, ":~:."),
         })
       end
     end
-
   elseif result.type == "stop" then
     state.streaming = false
     flush_streaming_text(buf, state)
