@@ -3,6 +3,13 @@
 
 local M = {}
 
+-- Parser cache to avoid re-parsing unchanged buffers
+local parser_cache = {
+  buf = nil,
+  changedtick = nil,
+  result = nil,
+}
+
 -- Role markers
 local ROLES = {
   ["@You:"] = "user",
@@ -21,8 +28,34 @@ local ANNOTATION_PATTERNS = {
   code_block = "^%s*```(%w*)",
 }
 
--- Parse entire .chat buffer
-function M.parse_buffer(lines)
+-- Generate cache key from lines
+local function get_cache_key(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return nil
+  end
+  local changedtick = vim.api.nvim_buf_get_changedtick(buf)
+  return buf .. "_" .. changedtick
+end
+
+-- Invalidate parser cache for a buffer
+function M.invalidate_cache(buf)
+  if parser_cache.buf == buf then
+    parser_cache.buf = nil
+    parser_cache.changedtick = nil
+    parser_cache.result = nil
+  end
+end
+
+-- Parse entire .chat buffer with caching
+function M.parse_buffer(lines, buf)
+  -- Check cache if buffer provided
+  if buf then
+    local cache_key = get_cache_key(buf)
+    if cache_key and parser_cache.buf == buf and parser_cache.changedtick == vim.api.nvim_buf_get_changedtick(buf) then
+      return parser_cache.result
+    end
+  end
+
   local result = {
     frontmatter = {},
     messages = {},
@@ -173,6 +206,13 @@ function M.parse_buffer(lines)
   -- Extract session_id from frontmatter
   if result.frontmatter.session_id then
     result.session_id = result.frontmatter.session_id
+  end
+
+  -- Cache result if buffer provided
+  if buf then
+    parser_cache.buf = buf
+    parser_cache.changedtick = vim.api.nvim_buf_get_changedtick(buf)
+    parser_cache.result = result
   end
 
   return result

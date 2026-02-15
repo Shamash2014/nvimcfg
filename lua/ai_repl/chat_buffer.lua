@@ -82,7 +82,7 @@ function M.init_buffer(buf)
   local state = get_state(buf)
 
   -- Set buffer options
-  vim.bo[buf].filetype = "markdown"  -- Markdown for rendering
+  vim.bo[buf].filetype = "chat"  -- Dedicated chat filetype (not markdown to avoid expensive plugins)
   vim.bo[buf].buftype = ""
   vim.bo[buf].bufhidden = ""
   vim.bo[buf].swapfile = true
@@ -102,7 +102,7 @@ function M.init_buffer(buf)
 
   -- Parse existing content
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines)
+  local parsed = chat_parser.parse_buffer(lines, buf)
 
   -- Detect repository change
   local current_repo = get_repo_root(buf)
@@ -198,6 +198,14 @@ function M.init_buffer(buf)
 
   -- Setup autocmds for saving and tracking changes
   M.setup_autocmds(buf)
+
+  -- Invalidate parser cache on buffer changes
+  vim.api.nvim_create_autocmd("TextChanged", {
+    buffer = buf,
+    callback = function()
+      chat_parser.invalidate_cache(buf)
+    end,
+  })
 
   -- Setup decorations (role highlights, rulers, folding, spinner)
   local decorations_ok, decorations = pcall(require, "ai_repl.chat_decorations")
@@ -383,7 +391,7 @@ function M.send_to_process(buf)
 
   -- Parse buffer to get messages
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines)
+  local parsed = chat_parser.parse_buffer(lines, buf)
 
   -- Find last @You: or @User: message
   local last_user_msg = nil
@@ -522,7 +530,7 @@ function M.save_buffer(buf)
   end
 
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines)
+  local parsed = chat_parser.parse_buffer(lines, buf)
 
   -- Save messages to registry
   for _, msg in ipairs(parsed.messages) do
@@ -718,7 +726,7 @@ function M.hybrid_send(buf)
   end
 
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines)
+  local parsed = chat_parser.parse_buffer(lines, buf)
 
   -- Phase 0: Check for annotations to sync first
   if #parsed.annotations > 0 then
@@ -781,7 +789,7 @@ end
 -- Execute approved tools
 function M.execute_tools(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines)
+  local parsed = chat_parser.parse_buffer(lines, buf)
 
   -- Send tool calls to process
   local state = get_state(buf)
@@ -885,7 +893,7 @@ end
 -- Sync annotations from .chat buffer to annotation system
 function M.sync_annotations_from_buffer(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines)
+  local parsed = chat_parser.parse_buffer(lines, buf)
 
   if #parsed.annotations == 0 then
     return false, "No annotations found in buffer"

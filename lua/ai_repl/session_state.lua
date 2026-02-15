@@ -109,12 +109,14 @@ function M.apply_update(proc, update)
     if tool_finished and u.status == "completed" and is_edit_tool then
       local file_path, old_text, new_text
 
+      -- Try to get diff from tool.diff first
       if tool.diff then
         file_path = tool.diff.path
         old_text = tool.diff.oldText
         new_text = tool.diff.newText
       end
 
+      -- Fall back to rawInput if diff fields are missing
       if not file_path and tool.locations and #tool.locations > 0 then
         local loc = tool.locations[1]
         file_path = loc.path or loc.uri
@@ -135,8 +137,21 @@ function M.apply_update(proc, update)
         new_text = tool.rawInput.new_string or tool.rawInput.newString or tool.rawInput.content
       end
 
+      -- Create diff if we have a file path and at least one of old/new text
       if file_path and (old_text or new_text) then
-        diff = { path = file_path, old = old_text or "", new = new_text or "" }
+        diff = {
+          path = file_path,
+          old = old_text or "",
+          new = new_text or ""
+        }
+      end
+
+      -- Debug logging if diff was not created
+      if not diff then
+        vim.notify(string.format("[DEBUG] Edit tool diff not created: path=%s, old=%s, new=%s",
+          tostring(file_path),
+          tostring(old_text):sub(1, 50),
+          tostring(new_text):sub(1, 50)), vim.log.levels.DEBUG)
       end
     end
 

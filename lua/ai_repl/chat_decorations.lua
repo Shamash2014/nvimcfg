@@ -42,88 +42,17 @@ local spinner_state = {}
 local redecorate_timers = {}
 
 local function apply_role_highlights(buf)
-  vim.api.nvim_buf_clear_namespace(buf, NS_ROLE, 0, -1)
-  vim.api.nvim_buf_clear_namespace(buf, NS_LINE_HL, 0, -1)
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-
-  local current_role = nil
-  local role_start_line = 0
-
-  for i, line in ipairs(lines) do
-    local role = chat_parser.parse_role_marker(line)
-    if role then
-      -- Apply line highlighting to previous role block
-      if current_role and role_start_line > 0 then
-        local line_hl = ROLE_HL[current_role]
-        if line_hl then
-          for j = role_start_line, i - 1 do
-            vim.api.nvim_buf_set_extmark(buf, NS_LINE_HL, j - 1, 0, {
-              line_hl_group = line_hl,
-              priority = 45,
-            })
-          end
-        end
-      end
-
-      current_role = role
-      role_start_line = i
-
-      local hl = ROLE_HL[role]
-      if hl then
-        -- Apply sign to role marker line
-        vim.api.nvim_buf_set_extmark(buf, NS_ROLE, i - 1, 0, {
-          sign_text = ROLE_SIGN[role] or "",
-          sign_hl_group = hl,
-          priority = 50,
-        })
-
-        -- Add enhanced visual indicators based on role with better styling
-        if role == "user" then
-          -- Add right-aligned indicator for user with better styling
-          vim.api.nvim_buf_set_extmark(buf, NS_ROLE, i - 1, 0, {
-            virt_text = {
-              { " ", "ChatUserMarker" },
-              { "▌", "ChatUserMarker" },
-              { " USER", "ChatUserMarker" },
-            },
-            virt_text_pos = "right_align",
-            priority = 55,
-          })
-        elseif role == "djinni" then
-          -- Add left-aligned indicator for djinni with better styling
-          vim.api.nvim_buf_set_extmark(buf, NS_ROLE, i - 1, 0, {
-            virt_text = {
-              { "🧞 ", "ChatDjinniMarker" },
-              { "DJINNI", "ChatDjinniMarker" },
-              { " ▐", "ChatDjinniMarker" },
-            },
-            virt_text_pos = "left_align",
-            priority = 55,
-          })
-        end
-      end
-    end
-  end
-
-  -- Apply line highlighting to last role block
-  if current_role and role_start_line > 0 then
-    local line_hl = ROLE_HL[current_role]
-    if line_hl then
-      for j = role_start_line, #lines do
-        vim.api.nvim_buf_set_extmark(buf, NS_LINE_HL, j - 1, 0, {
-          line_hl_group = line_hl,
-          priority = 45,
-        })
-      end
-    end
-  end
+  -- DISABLED: Highlighting was causing 91% of processing time
+  -- This function was too expensive and has been disabled for performance
+  return
 end
 
 local function apply_rulers(buf)
-  vim.api.nvim_buf_clear_namespace(buf, NS_RULER, 0, -1)
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  -- DISABLED: Rulers were causing significant performance overhead
+  -- This function was creating multiple extmarks on every text change
+  return
+end
 
-  local win = vim.fn.bufwinid(buf)
   local width = 80
   if win ~= -1 then
     -- Account for signcolumn and number columns when calculating available width
@@ -145,6 +74,7 @@ local function apply_rulers(buf)
   local first_role = true
 
   for i, line in ipairs(lines) do
+    local actual_line = start_line + i
     local role = chat_parser.parse_role_marker(line)
     if role then
       if first_role then
@@ -170,21 +100,21 @@ local function apply_rulers(buf)
           }
         end
 
-        vim.api.nvim_buf_set_extmark(buf, NS_RULER, i - 1, 0, {
+        vim.api.nvim_buf_set_extmark(buf, NS_RULER, actual_line - 1, 0, {
           virt_lines_above = { virt_text },
           priority = 40,
         })
 
         -- Add virtual text label for role
         if role == "user" then
-          vim.api.nvim_buf_set_extmark(buf, NS_RULER, i - 1, 0, {
+          vim.api.nvim_buf_set_extmark(buf, NS_RULER, actual_line - 1, 0, {
             virt_text = { { "  📝 USER", "ChatUserMarker" } },
             virt_text_pos = "right_align",
             virt_lines_above = { virt_text },
             priority = 45,
           })
         elseif role == "djinni" then
-          vim.api.nvim_buf_set_extmark(buf, NS_RULER, i - 1, 0, {
+          vim.api.nvim_buf_set_extmark(buf, NS_RULER, actual_line - 1, 0, {
             virt_text = { { "🧞 DJINNI  ", "ChatDjinniMarker" } },
             virt_text_pos = "right_align",
             virt_lines_above = { virt_text },
@@ -203,13 +133,28 @@ function M.redecorate(buf)
 end
 
 function M.schedule_redecorate(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+
+  -- Skip redecoration for very large buffers (>1000 lines) during active editing
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  if line_count > 1000 then
+    local mode = vim.api.nvim_get_mode().mode
+    if mode:match("i") or mode:match("R") then
+      -- Skip redecoration in insert/replace mode for large buffers
+      return
+    end
+  end
+
   if redecorate_timers[buf] then
     redecorate_timers[buf]:stop()
   end
 
+  -- Use longer debounce for large buffers
+  local debounce = line_count > 1000 and 1000 or 200
+
   local timer = vim.uv.new_timer()
   redecorate_timers[buf] = timer
-  timer:start(200, 0, vim.schedule_wrap(function()
+  timer:start(debounce, 0, vim.schedule_wrap(function()
     timer:stop()
     timer:close()
     redecorate_timers[buf] = nil
@@ -462,32 +407,37 @@ function M.setup_buffer(buf)
   local win = vim.fn.bufwinid(buf)
   if win == -1 then return end
 
+  local line_count = vim.api.nvim_buf_line_count(buf)
+
   vim.wo[win].foldmethod = "expr"
   vim.wo[win].foldexpr = "v:lua.require'ai_repl.chat_decorations'.foldexpr(v:lnum)"
   vim.wo[win].foldtext = "v:lua.require'ai_repl.chat_decorations'.foldtext()"
   vim.wo[win].foldlevel = 99
   vim.wo[win].signcolumn = "yes:1"
 
-  M.redecorate(buf)
+  -- For very large buffers, only do minimal setup
+  if line_count > 1000 then
+    -- Skip initial redecoration for large buffers
+    vim.schedule(function()
+      M.redecorate(buf)
+    end)
+  else
+    M.redecorate(buf)
+  end
 
   vim.api.nvim_create_autocmd("TextChanged", {
     buffer = buf,
     callback = function()
       M.schedule_redecorate(buf)
-      -- Update folds after text changes
-      vim.schedule(function()
-        update_folds(buf)
-      end)
+      -- DISABLED: Fold updates on every text change were too expensive
+      -- Folds will only update on WinEnter and InsertLeave
     end,
   })
 
   vim.api.nvim_create_autocmd("TextChangedI", {
     buffer = buf,
     callback = function()
-      -- Update folds during insert mode changes
-      vim.schedule(function()
-        update_folds(buf)
-      end)
+      -- DISABLED: Fold updates in insert mode were too expensive
     end,
   })
 
@@ -496,6 +446,16 @@ function M.setup_buffer(buf)
     callback = function()
       -- Update folds when entering window
       update_folds(buf)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("InsertLeave", {
+    buffer = buf,
+    callback = function()
+      -- Update folds when leaving insert mode (important for large buffers)
+      vim.schedule(function()
+        update_folds(buf)
+      end)
     end,
   })
 

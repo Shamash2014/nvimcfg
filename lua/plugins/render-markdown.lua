@@ -7,13 +7,20 @@ return {
   ft = { "markdown", "md" },
   config = function()
     require("render-markdown").setup({
+      -- DISABLE render-markdown for chat buffers for performance
+      -- Chat buffers have their own decoration system
+      exclude = { 'chat' },
       -- AGGRESSIVE performance optimizations for chat buffers
-      debounce = 500,  -- Even slower debounce (500ms) to drastically reduce CPU
-      max_file_size = 10.0,  -- Disable for files > 10MB
+      debounce = 1000,  -- Very slow debounce (1s) for large chat buffers
+      max_file_size = 0.5,  -- Disable for files > 500KB (was 10MB)
       max_overlap_width = 50,
       render_modes = { 'n' },  -- ONLY render in normal mode, skip insert/command mode
       anti_conceal = {
         enabled = false,  -- Disable for performance
+      },
+      -- Lazy rendering - only render visible area
+      lazy = {
+        enabled = true,  -- Enable lazy rendering
       },
       -- Minimal heading configuration for performance
       heading = {
@@ -71,15 +78,6 @@ return {
       -- Disable tables for performance (very expensive)
       pipe_table = {
         enabled = false,  -- DISABLE tables
-      },
-          '┌', '┬', '┐',
-          '├', '┼', '┤',
-          '└', '┴', '┘',
-          '│', '─',
-        },
-        head = 'RenderMarkdownTableHead',
-        row = 'RenderMarkdownTableRow',
-        filler = 'RenderMarkdownTableFill',
       },
       -- Callouts / Blockquotes - enhanced
       callout = {

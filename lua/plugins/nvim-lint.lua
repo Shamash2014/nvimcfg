@@ -25,6 +25,15 @@ return {
       vue = js_linters,
     }
 
+    -- Remove eslint/eslint_d linters if commands don't exist
+    if not command_exists("eslint") and not command_exists("eslint_d") then
+      lint.linters_by_ft.javascript = nil
+      lint.linters_by_ft.typescript = nil
+      lint.linters_by_ft.javascriptreact = nil
+      lint.linters_by_ft.typescriptreact = nil
+      lint.linters_by_ft.vue = nil
+    end
+
     -- Only add linters if they exist
     if command_exists("ruff") then
       lint.linters_by_ft.python = { "ruff" }
@@ -82,7 +91,23 @@ return {
     vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost", "InsertLeave" }, {
       group = lint_augroup,
       callback = function()
-        lint.try_lint()
+        -- Only try to lint if linters are configured for this filetype
+        local ft = vim.bo.filetype
+        local linters = lint.linters_by_ft[ft]
+        if linters and #linters > 0 then
+          -- Check if at least one linter command exists
+          local linter_available = false
+          for _, linter_name in ipairs(linters) do
+            if command_exists(linter_name) or command_exists(linter_name:gsub("_", "-")) then
+              linter_available = true
+              break
+            end
+          end
+
+          if linter_available then
+            pcall(lint.try_lint)
+          end
+        end
       end,
     })
 

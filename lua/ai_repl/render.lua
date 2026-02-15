@@ -724,9 +724,8 @@ function M.render_diff(buf, file_path, old_content, new_content)
     local temp_buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(temp_buf, 0, -1, false, { content_line })
     vim.bo[temp_buf].filetype = filetype
-    -- Disable folds on temporary buffer to prevent treesitter errors
-    vim.bo[temp_buf].foldmethod = "manual"
-    vim.bo[temp_buf].foldenable = false
+    -- Note: foldmethod is window-local, can't set on unlisted buffer
+    -- Treesitter will work fine without it
     
     vim.schedule(function()
       if not vim.api.nvim_buf_is_valid(temp_buf) then return end

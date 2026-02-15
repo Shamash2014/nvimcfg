@@ -130,7 +130,7 @@ return {
 
     -- Monkey-patch Treesitter to handle query errors gracefully
     local ts_query = vim.treesitter.query
-    if ts_query.get then
+    if type(ts_query) == "table" and type(ts_query.get) == "function" then
       local original_get = ts_query.get
       ts_query.get = function(lang, type_name)
         local ok, query = pcall(original_get, lang, type_name)

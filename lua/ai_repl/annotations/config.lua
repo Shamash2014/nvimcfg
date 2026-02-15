@@ -5,13 +5,6 @@ M.defaults = {
   capture_mode = "snippet", -- "location" or "snippet"
   auto_open_panel = true,
   notify = true,
-  keys = {
-    start_session = "<leader>as",
-    stop_session = "<leader>aq",
-    annotate = "<leader>aa",
-    toggle_window = "<leader>aw",
-    send_to_ai = "<leader>af",
-  },
   window = {
     width = 0.3,
   },

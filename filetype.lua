@@ -2,12 +2,12 @@
 
 vim.filetype.add({
   extension = {
-    chat = 'markdown',  -- Keep markdown for rendering
+    chat = 'chat',  -- Use dedicated chat filetype
   },
   filename = {
-    ['.chat'] = 'markdown',  -- Keep markdown for rendering
+    ['.chat'] = 'chat',  -- Use dedicated chat filetype
   },
   pattern = {
-    ['.*%.chat'] = 'markdown',  -- Keep markdown for rendering
+    ['.*%.chat'] = 'chat',  -- Use dedicated chat filetype
   },
 })
