@@ -2,13 +2,158 @@ return {
   "nvim-treesitter/nvim-treesitter",
   build = ":TSUpdate",
   event = { "BufReadPost", "BufNewFile" },
+  dependencies = {
+    "nvim-treesitter/nvim-treesitter-textobjects",
+    "nvim-treesitter/nvim-treesitter-context",
+  },
   config = function()
     local supported_filetypes = {
       'lua', 'python', 'javascript', 'typescript', 'jsx', 'tsx',
       'go', 'rust', 'elixir', 'heex', 'eex', 'bash', 'json',
-      'html', 'css', 'markdown', 'vim', 'yaml', 'toml',
-      'dart', 'swift', 'kotlin', 'java', 'astro', 'vue'
+      'html', 'css', 'markdown', 'markdown_inline', 'vim', 'yaml', 'toml',
+      'dart', 'swift', 'kotlin', 'java', 'astro', 'vue', 'chat'
     }
+
+    require("nvim-treesitter.configs").setup({
+      ensure_installed = {
+        "lua",
+        "vim",
+        "vimdoc",
+        "query",
+        "markdown",
+        "markdown_inline",
+        "json",
+        "yaml",
+        "toml",
+        "bash",
+        "python",
+        "javascript",
+        "typescript",
+        "tsx",
+        "css",
+        "html",
+        "regex",
+        "diff",
+      },
+      sync_install = false,
+      auto_install = true,
+      highlight = {
+        enable = true,
+        additional_vim_regex_highlighting = { "markdown" },
+        disable = function(lang, buf)
+          -- Disable for very large files
+          local max_file_size = 1024 * 1024 -- 1MB
+          local ok, stats = pcall(vim.loop.fs_stat, vim.api.nvim_buf_get_name(buf))
+          if ok and stats and stats.size > max_file_size then
+            return true
+          end
+          return false
+        end,
+      },
+      indent = {
+        enable = true,
+        disable = { "markdown" },
+      },
+      incremental_selection = {
+        enable = true,
+        keymaps = {
+          init_selection = "<CR>",
+          node_incremental = "<CR>",
+          scope_incremental = "<TAB>",
+          node_decremental = "<S-TAB>",
+        },
+      },
+      textobjects = {
+        select = {
+          enable = true,
+          lookahead = true,
+          keymaps = {
+            ["af"] = "@function.outer",
+            ["if"] = "@function.inner",
+            ["ac"] = "@class.outer",
+            ["ic"] = "@class.inner",
+            ["ab"] = "@block.outer",
+            ["ib"] = "@block.inner",
+            ["al"] = "@call.outer",
+            ["il"] = "@call.inner",
+            ["aa"] = "@parameter.outer",
+            ["ia"] = "@parameter.inner",
+          },
+        },
+        swap = {
+          enable = true,
+          swap_next = {
+            ["<leader>a"] = "@parameter.inner",
+          },
+          swap_previous = {
+            ["<leader>A"] = "@parameter.inner",
+          },
+        },
+        move = {
+          enable = true,
+          set_jumps = true,
+          goto_next_start = {
+            ["]f"] = "@function.outer",
+            ["]c"] = "@class.outer",
+            ["]b"] = "@block.outer",
+            ["]a"] = "@parameter.outer",
+          },
+          goto_next_end = {
+            ["]F"] = "@function.outer",
+            ["]C"] = "@class.outer",
+            ["]B"] = "@block.outer",
+            ["]A"] = "@parameter.outer",
+          },
+          goto_previous_start = {
+            ["[f"] = "@function.outer",
+            ["[c"] = "@class.outer",
+            ["[b"] = "@block.outer",
+            ["[a"] = "@parameter.outer",
+          },
+          goto_previous_end = {
+            ["[F"] = "@function.outer",
+            ["[C"] = "@class.outer",
+            ["[B"] = "@block.outer",
+            ["[A"] = "@parameter.outer",
+          },
+        },
+      },
+    })
+
+    -- Treesitter context for showing current context in winbar
+    require("treesitter-context").setup({
+      enable = true,
+      max_lines = 3,
+      min_window_height = 0,
+      line_timeout = 200,
+      trim_scope = "outer",
+      patterns = {
+        default = {
+          "class",
+          "function",
+          "method",
+          "for",
+          "while",
+          "if",
+          "switch",
+          "case",
+        },
+        markdown = {
+          "section",
+          "atx_heading",
+          "list_item",
+        },
+      },
+      exact_patterns = {},
+      zindex = 20,
+      mode = "cursor",
+    })
+
+    -- Enable markdown injection for better syntax highlighting
+    vim.treesitter.language.register("markdown", "md")
+    vim.treesitter.language.register("markdown_inline", "md")
+    vim.treesitter.language.register("markdown", "chat")
+    vim.treesitter.language.register("markdown_inline", "chat")
 
     local group = vim.api.nvim_create_augroup('TreesitterFolds', { clear = true })
 

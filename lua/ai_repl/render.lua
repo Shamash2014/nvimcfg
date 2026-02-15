@@ -164,8 +164,6 @@ end
 function M.update_streaming(buf, text, process_ui)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
 
-  process_ui.streaming_response = process_ui.streaming_response .. text
-
   vim.schedule(function()
     if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
     vim.bo[buf].modifiable = true

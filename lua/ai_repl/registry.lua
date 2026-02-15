@@ -250,12 +250,27 @@ function M.get_sessions_for_project(cwd)
   return result
 end
 
+function M.export_chat(session_id, output_path)
+  local chat_serializer = require("ai_repl.chat_serializer")
+  return chat_serializer.save_chat_file(session_id, output_path)
+end
+
+function M.import_chat(file_path)
+  local chat_serializer = require("ai_repl.chat_serializer")
+  return chat_serializer.load_chat_file(file_path)
+end
+
 vim.api.nvim_create_autocmd("VimLeavePre", {
   callback = function()
     M.stop_autosave()
     M.save_to_disk()
     for sid, proc in pairs(processes) do
       M.save_messages(sid, proc.data.messages)
+      -- Also export to .chat format for archival
+      local chat_dir = vim.fn.stdpath("data") .. "/ai_repl_chats"
+      vim.fn.mkdir(chat_dir, "p")
+      chat_serializer = require("ai_repl.chat_serializer")
+      chat_serializer.save_chat_file(sid, chat_dir .. "/" .. sid .. ".chat")
     end
     M.kill_all()
   end

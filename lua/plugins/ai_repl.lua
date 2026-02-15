@@ -3,15 +3,9 @@ return {
   dir = vim.fn.stdpath("config") .. "/lua/ai_repl",
   config = function()
     require("ai_repl").setup({
-      window = {
-        width = 0.3,
-        border = "rounded",
-        title = "AI REPL"
-      },
       default_provider = "claude",
       providers = {
         claude = { name = "Claude", cmd = "claude-code-acp", args = {}, env = {} },
-
         goose = { name = "Goose", cmd = "goose", args = {"acp"}, env = {} },
         opencode = { name = "OpenCode", cmd = "opencode", args = {"acp"}, env = {} },
         codex = { name = "Codex", cmd = "codex-acp", args = {}, env = {} },
@@ -19,18 +13,31 @@ return {
       },
       history_size = 1000,
       permission_mode = "plan",
-      show_tool_calls = true
+      show_tool_calls = true,
+      annotations = {
+        enabled = true,
+        session_dir = vim.fn.stdpath("data") .. "/annotations",
+        capture_mode = "snippet",
+        auto_open_panel = true,
+        keys = {
+          start_session = "<leader>as",
+          stop_session = "<leader>aq",
+          annotate = "<leader>aa",
+          toggle_window = "<leader>aw",
+          send_to_ai = "<leader>af",
+        },
+      }
     })
   end,
   keys = {
     {
-      "<leader>ar",
-      function() require("ai_repl").toggle() end,
+      "<leader>ac",
+      function() require("ai_repl").open_chat_buffer() end,
       mode = "n",
-      desc = "Toggle AI REPL"
+      desc = "Open .chat buffer"
     },
     {
-      "<leader>as",
+      "<leader>ai",
       function() require("ai_repl").send_selection() end,
       mode = { "v" },
       desc = "Send selection to AI"
@@ -39,31 +46,7 @@ return {
       "<leader>av",
       function() require("ai_repl").add_selection_to_prompt() end,
       mode = { "v" },
-      desc = "Add selection to AI REPL prompt"
-    },
-    {
-      "<leader>ap",
-      function() require("ai_repl").pick_process() end,
-      mode = { "n" },
-      desc = "Pick AI process/session"
-    },
-    {
-      "<leader>ab",
-      function() require("ai_repl").switch_to_buffer() end,
-      mode = { "n" },
-      desc = "Switch AI session buffer"
-    },
-    {
-      "<leader>ak",
-      function() require("ai_repl").kill_current_session() end,
-      mode = { "n" },
-      desc = "Kill current AI session"
-    },
-    {
-      "<leader>aq",
-      function() require("ai_repl").quick_action() end,
-      mode = { "v" },
-      desc = "Quick AI action on selection"
+      desc = "Add selection to .chat buffer"
     },
     {
       "<leader>ae",
@@ -78,11 +61,11 @@ return {
       desc = "Check selection for issues"
     },
     {
-      "<leader>acp",
-      function() require("ai_repl").pick_codex_profile_and_start() end,
+      "<leader>af",
+      function() require("ai_repl.annotations").send_annotation_to_ai() end,
       mode = "n",
-      desc = "New Codex session (pick profile)"
+      desc = "Send annotation to AI"
     }
   },
-  cmd = { "AIRepl", "AIReplOpen", "AIReplClose", "AIReplSessions", "AIReplNew", "AIReplAddFile", "AIReplAddSelection", "AIReplPicker" }
+  cmd = { "AIReplChat", "AIReplAddAnnotation", "AIReplSyncAnnotations" }
 }

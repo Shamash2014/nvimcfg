@@ -8,6 +8,7 @@ local ralph_helper = require("ai_repl.ralph_helper")
 local tool_utils = require("ai_repl.tool_utils")
 local questionnaire = require("ai_repl.questionnaire")
 local syntax = require("ai_repl.syntax")
+local chat_buffer = require("ai_repl.chat_buffer")
 
 local config = setmetatable({
   window = {
@@ -23,7 +24,24 @@ local config = setmetatable({
   reconnect = true,
   max_reconnect_attempts = 3,
   sessions_file = vim.fn.stdpath("data") .. "/ai_repl_sessions.json",
-  max_sessions_per_project = 20
+  max_sessions_per_project = 20,
+  chat = {
+    split_width = 0.8,
+    split_direction = "right",  -- "right", "left", "above", "below"
+  },
+  annotations = {
+    enabled = false,
+    session_dir = vim.fn.stdpath("data") .. "/annotations",
+    capture_mode = "snippet",
+    auto_open_panel = true,
+    keys = {
+      start_session = "<leader>as",
+      stop_session = "<leader>aq",
+      annotate = "<leader>aa",
+      toggle_window = "<leader>aw",
+      send_to_ai = "<leader>af",
+    },
+  }
 }, {
   __index = function(_, key)
     if key == "providers" then
@@ -37,9 +55,6 @@ local config = setmetatable({
 })
 
 local ui = {
-  wins = {},  -- per-tab windows: { [tabpage] = win }
-  active = false,
-  source_buf = nil,
   project_root = nil,
 }
 
@@ -63,26 +78,6 @@ end
 local function truncate(text, limit)
   if #text > limit then return text:sub(1, limit - 3) .. "..." end
   return text
-end
-
-local function get_tab_win()
-  local tab = vim.api.nvim_get_current_tabpage()
-  local win = ui.wins[tab]
-  if win and vim.api.nvim_win_is_valid(win) then
-    return win
-  end
-  ui.wins[tab] = nil
-  return nil
-end
-
-local function set_tab_win(win)
-  local tab = vim.api.nvim_get_current_tabpage()
-  ui.wins[tab] = win
-end
-
-local function clear_tab_win()
-  local tab = vim.api.nvim_get_current_tabpage()
-  ui.wins[tab] = nil
 end
 
 local function get_project_root(buf)
@@ -154,201 +149,92 @@ local function update_statusline()
   vim.wo[win].statusline = " " .. provider_name .. " | " .. agent_name .. " [" .. mode .. "]" .. busy_str .. queue_str .. bg_str .. skill_str
 end
 
-local function setup_window_options(win)
-  vim.wo[win].wrap = true
-  vim.wo[win].cursorline = true
-  vim.wo[win].number = false
-  vim.wo[win].relativenumber = false
-  vim.wo[win].signcolumn = "no"
-end
+local session_state = require("ai_repl.session_state")
 
 local function handle_session_update(proc, params)
-  local u = params.update
-  if not u then return end
+  local result = session_state.apply_update(proc, params.update)
+  if not result then return end
 
   local buf = proc.data.buf
-  local update_type = u.sessionUpdate
+  local u = result.update
 
-  if u.type == "system" and u.subtype == "compact_boundary" then
+  if config.debug and result.type ~= "agent_message_chunk" then
+    render.append_content(buf, { "[debug] " .. (result.type or "unknown") })
+  end
+
+  if result.type == "compact_boundary" then
     render.stop_animation()
-    local tokens = u.compactMetadata and u.compactMetadata.preTokens
-    local trigger = u.compactMetadata and u.compactMetadata.trigger or "auto"
-    local info = tokens and string.format(" (%s, %dk tokens)", trigger, math.floor(tokens / 1000)) or ""
-    render.append_content(buf, { "", "[~] Context compacted" .. info, "" })
-    return
-  end
+    render.append_content(buf, { "", "[~] Context compacted" .. (result.compact_info or ""), "" })
 
-  if config.debug and update_type ~= "agent_message_chunk" then
-    render.append_content(buf, { "[debug] " .. (update_type or "unknown") })
-  end
-
-  if update_type == "agent_message_chunk" then
+  elseif result.type == "agent_message_chunk" then
     render.start_animation(buf, "generating")
-    ralph_helper.record_activity()
-    local content = u.content
-    if content and content.text then
-      if content.text:match("%[compact%]") or content.text:match("Conversation compacted") then
+    if result.text then
+      if result.text:match("%[compact%]") or result.text:match("Conversation compacted") then
         render.stop_animation()
         render.append_content(buf, { "", "[~] Context compacted", "" })
         return
       end
-      render.update_streaming(buf, content.text, proc.ui)
+      render.update_streaming(buf, result.text, proc.ui)
     end
 
-  elseif update_type == "current_mode_update" then
-    proc.state.mode = u.modeId or u.currentModeId
+  elseif result.type == "current_mode_update" then
     update_statusline()
 
-  elseif update_type == "tool_call" then
-    local tool = {
-      id = u.toolCallId,
-      title = u.title,
-      kind = u.kind,
-      status = u.status or "pending",
-      locations = u.locations,
-      rawInput = u.rawInput,
-      content = u.content
-    }
-    proc.ui.active_tools[u.toolCallId] = tool
-    table.insert(proc.ui.pending_tool_calls, {
-      id = u.toolCallId, title = u.title, kind = u.kind, input = u.rawInput
-    })
-
-    if u.title == "TodoWrite" and u.rawInput and u.rawInput.todos then
-      proc.ui.current_plan = u.rawInput.todos
-      render.render_plan(buf, proc.ui.current_plan)
+  elseif result.type == "tool_call" then
+    if result.is_plan_tool then
+      render.render_plan(buf, result.plan_entries)
       return
-    elseif u.title == "ExitPlanMode" then
+    elseif result.is_exit_plan then
       render.append_content(buf, { "[>] Exiting plan mode..." })
       return
-    elseif u.title == "AskUser" or u.title == "AskUserQuestion" or (u.rawInput and u.rawInput.questions) then
+    elseif result.is_ask_user then
       render.stop_animation()
-      local questions = u.rawInput and u.rawInput.questions or {}
-      if #questions > 0 then
-        questionnaire.start(proc, questions, function(response)
+      if #result.questions > 0 then
+        questionnaire.start(proc, result.questions, function(response)
           M.send_prompt(response)
         end)
       end
     else
       render.start_animation(buf, "executing")
-      render.render_tool(buf, tool)
+      render.render_tool(buf, result.tool)
     end
 
-  elseif update_type == "tool_call_update" then
-    local tool = proc.ui.active_tools[u.toolCallId] or {}
-    tool.status = u.status or tool.status
-    tool.title = u.title or tool.title
-    tool.kind = u.kind or tool.kind
-    tool.locations = u.locations or tool.locations
-    tool.rawOutput = u.rawOutput or tool.rawOutput
-    tool.rawInput = tool.rawInput or u.rawInput
-
-    if u.content and type(u.content) == "table" then
-      for _, block in ipairs(u.content) do
-        if block.type == "diff" then
-          tool.diff = {
-            path = block.path,
-            oldText = block.oldText,
-            newText = block.newText,
-          }
-          break
-        end
-      end
-      tool.content = u.content
-    end
-
-    proc.ui.active_tools[u.toolCallId] = tool
-
-    if u.status == "completed" or u.status == "failed" then
+  elseif result.type == "tool_call_update" then
+    if result.tool_finished then
       render.stop_animation()
 
-      local is_edit_tool = tool.kind == "edit" or tool.kind == "write"
-        or tool.title == "Edit" or tool.title == "Write"
-
-      if u.status == "completed" and is_edit_tool then
-        local file_path, old_text, new_text
-
-        if tool.diff then
-          file_path = tool.diff.path
-          old_text = tool.diff.oldText
-          new_text = tool.diff.newText
-        end
-
-        if not file_path and tool.locations and #tool.locations > 0 then
-          local loc = tool.locations[1]
-          file_path = loc.path or loc.uri
-          if file_path then
-            file_path = file_path:gsub("^file://", "")
-          end
-        end
-
-        if not file_path and tool.rawInput then
-          file_path = tool.rawInput.file_path or tool.rawInput.path
-        end
-
-        if not old_text and tool.rawInput then
-          old_text = tool.rawInput.old_string or tool.rawInput.oldString
-        end
-
-        if not new_text and tool.rawInput then
-          new_text = tool.rawInput.new_string or tool.rawInput.newString or tool.rawInput.content
-        end
-
-        if file_path and (old_text or new_text) then
-          render.render_diff(buf, file_path, old_text or "", new_text or "")
-        end
+      if result.diff then
+        render.render_diff(buf, result.diff.path, result.diff.old, result.diff.new)
       end
 
-      if tool.title ~= "AskUser" and tool.title ~= "AskUserQuestion" then
-        render.render_tool(buf, tool)
+      if result.tool.title ~= "AskUser" and result.tool.title ~= "AskUserQuestion" then
+        render.render_tool(buf, result.tool)
       end
 
-      if tool.title == "ExitPlanMode" and u.status == "completed" then
+      if result.is_exit_plan_complete then
         render.append_content(buf, { "[>] Starting execution..." })
         vim.defer_fn(function()
           M.send_prompt("proceed with the plan", { silent = true })
         end, 200)
       end
-
-      proc.ui.active_tools[u.toolCallId] = nil
     end
 
-  elseif update_type == "plan" then
-    proc.ui.current_plan = u.entries or u.plan or {}
-    if type(proc.ui.current_plan) == "table" and proc.ui.current_plan.entries then
-      proc.ui.current_plan = proc.ui.current_plan.entries
-    end
-    render.render_plan(buf, proc.ui.current_plan)
+  elseif result.type == "plan" then
+    render.render_plan(buf, result.plan_entries)
 
-  elseif update_type == "available_commands_update" then
-    proc.data.slash_commands = u.availableCommands or {}
-
-  elseif update_type == "stop" then
+  elseif result.type == "stop" then
     render.stop_animation()
-    proc.state.busy = false
 
-    if proc.ui.streaming_response and proc.ui.streaming_response ~= "" then
-      local tool_calls_to_save = nil
-      if #proc.ui.pending_tool_calls > 0 then
-        tool_calls_to_save = vim.deepcopy(proc.ui.pending_tool_calls)
-      end
-      registry.append_message(proc.session_id, "assistant", proc.ui.streaming_response, tool_calls_to_save)
-
-      if #proc.ui.current_plan == 0 then
-        local md_plan = render.parse_markdown_plan(proc.ui.streaming_response)
-        if #md_plan >= 3 then
-          proc.ui.current_plan = md_plan
-          render.render_plan(buf, md_plan)
-        end
+    if result.response_text ~= "" and not result.had_plan then
+      local md_plan = render.parse_markdown_plan(result.response_text)
+      if #md_plan >= 3 then
+        proc.ui.current_plan = md_plan
+        render.render_plan(buf, md_plan)
       end
     end
 
-    proc.ui.current_plan = {}
-    proc.ui.active_tools = {}
-    proc.ui.pending_tool_calls = {}
     render.finish_streaming(buf, proc.ui)
 
-    local reason = u.stopReason or "end_turn"
     local reason_msgs = {
       end_turn = "---",
       max_tokens = "[!] Stopped: token limit",
@@ -359,21 +245,10 @@ local function handle_session_update(proc, params)
     local mode_str = proc.state.mode and (" [" .. proc.state.mode .. "]") or ""
     local queue_count = #proc.data.prompt_queue
     local queue_info = queue_count > 0 and (" [" .. queue_count .. " queued]") or ""
-    render.append_content(buf, { "", (reason_msgs[reason] or "---") .. mode_str .. queue_info, "" })
+    render.append_content(buf, { "", (reason_msgs[result.stop_reason] or "---") .. mode_str .. queue_info, "" })
 
-    -- Ralph Loop: Simple re-injection loop (takes priority)
-    local response_text = proc.ui.streaming_response or ""
-    if ralph_helper.is_loop_enabled() then
-      local loop_continuing = ralph_helper.on_agent_stop(proc, response_text)
-      if loop_continuing then
-        return -- Ralph Loop is re-injecting prompt
-      end
-    end
-
-    -- Ralph Wiggum mode: Check if we should continue looping
-    local ralph_continuing = ralph_helper.check_and_continue(proc, response_text)
-    if ralph_continuing then
-      return -- Don't process queued prompts, Ralph is handling it
+    if result.ralph_continuing then
+      return
     end
 
     update_statusline()
@@ -383,12 +258,10 @@ local function handle_session_update(proc, params)
       update_statusline()
     end, 200)
 
-  elseif update_type == "modes" then
-    proc.state.modes = u.modes or {}
-    proc.state.mode = u.currentModeId
+  elseif result.type == "modes" then
     update_statusline()
 
-  elseif update_type == "agent_thought_chunk" then
+  elseif result.type == "agent_thought_chunk" then
     render.start_animation(buf, "thinking")
   end
 end
@@ -835,7 +708,17 @@ local function create_process(session_id, opts)
         if vim.api.nvim_buf_is_valid(buf) then
           pcall(vim.api.nvim_buf_set_name, buf, buf_name)
         end
-        render.append_content(buf, { "Project: " .. self.data.cwd, "[+] Session ready", "" })
+        render.append_content(buf, {
+          "",
+          "==================================================================",
+          "[ACP SESSION READY]",
+          "==================================================================",
+          "Working Directory: " .. self.data.cwd,
+          "Session ID: " .. self.session_id,
+          "Provider: " .. (self.data.provider or "unknown"),
+          "==================================================================",
+          "",
+        })
         update_statusline()
 
       elseif status == "session_loaded" then
@@ -847,11 +730,20 @@ local function create_process(session_id, opts)
             pcall(vim.api.nvim_buf_set_name, buf, buf_name)
           end
         end
+        render.append_content(buf, {
+          "",
+          "==================================================================",
+          "[ACP SESSION LOADED]",
+          "==================================================================",
+          "Working Directory: " .. self.data.cwd,
+          "Session ID: " .. self.session_id,
+          "Provider: " .. (self.data.provider or "unknown"),
+          "==================================================================",
+          "",
+        })
         local messages = registry.load_messages(self.session_id)
         if messages and #messages > 0 then
           render.render_history(buf, messages)
-        else
-          render.append_content(buf, { "[+] Session loaded: " .. self.session_id:sub(1, 8) .. "...", "" })
         end
         update_statusline()
 
@@ -1121,49 +1013,6 @@ local function setup_buffer_keymaps(buf)
       render.cleanup_buffer(buf)
     end
   })
-end
-
-local function create_ui()
-  local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
-
-  vim.cmd("botright vsplit")
-  local win = vim.api.nvim_get_current_win()
-  set_tab_win(win)
-  vim.api.nvim_win_set_width(win, width)
-  setup_window_options(win)
-
-  local provider_id = ui.pending_provider or config.default_provider
-  local profile_id = ui.pending_profile
-  local extra_args = ui.pending_extra_args
-  ui.pending_provider = nil
-  ui.pending_profile = nil
-  ui.pending_extra_args = nil
-
-  local temp_id = "temp_" .. os.time() .. "_" .. math.random(1000, 9999)
-  local proc = create_process(temp_id, {
-    cwd = ui.project_root,
-    provider = provider_id,
-    profile_id = profile_id,
-    extra_args = extra_args,
-  })
-  local buf = create_buffer(proc, "New Session")
-
-  registry.set(temp_id, proc)
-  registry.set_active(temp_id)
-
-  vim.api.nvim_win_set_buf(win, buf)
-  setup_buffer_keymaps(buf)
-
-  local provider = config.providers[provider_id]
-  local provider_display = provider and provider.name or provider_id
-  if profile_id then
-    provider_display = provider_display .. ":" .. profile_id
-  end
-  render.append_content(buf, { "AI REPL (" .. provider_display .. ") | /help for commands", "" })
-
-  proc:start()
-
-  render.goto_prompt(buf, win)
 end
 
 function M.send_prompt(content, opts)
@@ -1476,6 +1325,7 @@ function M.handle_command(cmd)
       "  /new - New session",
       "  /sessions - List sessions",
       "  /mode [mode] - Show/switch mode (chat/spec)",
+      "  /chat [file] - Open/create .chat buffer (Flemma-style UI)",
       "  /spec export - Export spec to markdown",
       "  /cwd [path] - Show/change working directory",
       "  /queue - Show queued messages",
@@ -1495,6 +1345,12 @@ function M.handle_command(cmd)
       "  /ralph status  - Show current status",
       "  /ralph history - Show iteration history",
       "  /ralph max N   - Set max iterations",
+      "",
+      "Chat Buffer Annotations:",
+      "  In .chat buffer, select code and press <leader>aa to add annotation",
+      "  Annotations sync to annotation system automatically on send",
+      "  /add-ann - Add selection as annotation (visual mode in .chat)",
+      "  /sync-ann - Sync annotations from .chat buffer to system",
       "",
       "Ralph Loop (simple re-injection):",
       "  /ralph-loop <prompt> - Start loop that re-injects same prompt",
@@ -1516,6 +1372,13 @@ function M.handle_command(cmd)
       "  💬 Chat - Free-form conversation (default)",
       "  📋 Spec - Spec-driven development (Requirements→Design→Tasks→Implementation)",
       "  🔄 Ralph Wiggum - Persistent looping until task completion (works with ALL providers)",
+      "  💾 .chat - Flemma-style buffer-as-state UI (use /chat)",
+      "",
+      "Chat Buffer Annotations:",
+      "  In .chat buffer, select code and press <leader>aa to add annotation",
+      "  Annotations sync to annotation system automatically on send",
+      "  /sync-ann - Sync annotations from .chat buffer to system",
+      "  /add-ann - Add selection as annotation (visual mode)",
       ""
     })
   elseif command == "new" then
@@ -1528,6 +1391,10 @@ function M.handle_command(cmd)
     else
       M.show_mode_status()
     end
+  elseif command == "chat" or command == "mode-chat" then
+    M.open_chat_buffer(args[1])
+  elseif command == "chat" or command == "mode-chat" then
+    M.open_chat_buffer(args[1])
   elseif command == "cwd" then
     if args[1] then
       local new_cwd = vim.fn.expand(args[1])
@@ -1549,6 +1416,72 @@ function M.handle_command(cmd)
     if buf then
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
       render.init_buffer(buf)
+    end
+  elseif command == "export-chat" then
+    local proc = registry.active()
+    if not proc then
+      render.append_content(buf, { "", "[!] No active session" })
+      return
+    end
+
+    local output_path = args[1]
+    local path, err = registry.export_chat(proc.session_id, output_path)
+    if err then
+      render.append_content(buf, { "", "[!] Export failed: " .. err })
+    else
+      render.append_content(buf, { "", "[+] Chat exported to: " .. path })
+    end
+  elseif command == "import-chat" then
+    local path = args[1]
+    if not path then
+      render.append_content(buf, { "", "[!] Usage: /import-chat <path>" })
+      return
+    end
+
+    local data, err = registry.import_chat(path)
+    if err then
+      render.append_content(buf, { "", "[!] Import failed: " .. err })
+      return
+    end
+
+    local imported_count = 0
+
+    if data.messages and #data.messages > 0 then
+      for _, msg in ipairs(data.messages) do
+        registry.append_message(proc.session_id, msg.role, msg.content, msg.tool_calls)
+        imported_count = imported_count + 1
+      end
+    end
+
+    local annotation_imported = false
+    if data.annotations and #data.annotations > 0 then
+      -- Try to restore annotations
+      local annotation_session = require("ai_repl.annotations.session")
+      if not annotation_session.is_active() then
+        annotation_session.start(require("ai_repl.annotations.config").config)
+      end
+
+      local bufnr = annotation_session.get_bufnr()
+      if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+        local writer = require("ai_repl.annotations.writer")
+        local session_state = annotation_session.get_state()
+
+        for _, ann in ipairs(data.annotations) do
+          writer.append(session_state, "snippet", ann, ann.note or "")
+        end
+
+        annotation_imported = true
+      end
+    end
+
+    if annotation_imported then
+      render.append_content(buf, {
+        "",
+        "[+] Imported " .. imported_count .. " messages from " .. path,
+        "[+] Restored " .. #data.annotations .. " annotations to annotation session",
+      })
+    else
+      render.append_content(buf, { "", "[+] Imported " .. imported_count .. " messages from " .. path })
     end
   elseif command == "cancel" then
     M.cancel()
@@ -2181,66 +2114,197 @@ function M.show_mode_picker()
 end
 
 function M.open()
-  local win = get_tab_win()
-  if win then
-    M.show()
-    return
-  end
-  ui.active = true
-  ui.source_buf = vim.api.nvim_get_current_buf()
-  ui.project_root = get_project_root(ui.source_buf)
-  create_ui()
+  -- Redirect to chat buffer
+  M.open_chat_buffer()
 end
 
 function M.close()
-  local win = get_tab_win()
-  if win then
-    vim.api.nvim_win_close(win, true)
+  -- Close current chat buffer if any
+  local buf = vim.api.nvim_get_current_buf()
+  if chat_buffer.is_chat_buffer(buf) then
+    vim.cmd("close")
   end
-  clear_tab_win()
-  ui.active = false
 end
 
 function M.hide()
-  local win = get_tab_win()
-  if win then
-    vim.api.nvim_win_hide(win)
-  end
+  -- No-op for chat buffers (they're regular buffers)
+  -- Kept for backward compatibility
 end
 
 function M.show()
-  local proc = registry.active()
-  if not proc or not proc.data.buf then
-    M.open()
-    return
-  end
-
-  local win = get_tab_win()
-  if not win then
-    local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
-    vim.cmd("botright vsplit")
-    win = vim.api.nvim_get_current_win()
-    set_tab_win(win)
-    vim.api.nvim_win_set_width(win, width)
-    setup_window_options(win)
-  end
-
-  vim.api.nvim_win_set_buf(win, proc.data.buf)
-  update_statusline()
-  vim.api.nvim_set_current_win(win)
+  -- Redirect to chat buffer
+  M.open_chat_buffer()
 end
 
 function M.toggle()
-  local win = get_tab_win()
-  if win then
-    M.hide()
-  else
-    local proc = registry.active()
-    if proc and proc.data.buf and vim.api.nvim_buf_is_valid(proc.data.buf) then
-      M.show()
-    else
-      M.open()
+  -- Toggle chat buffer: open if none exists, or switch to existing one
+  local current_buf = vim.api.nvim_get_current_buf()
+  local current_name = vim.api.nvim_buf_get_name(current_buf)
+
+  -- If already in a chat buffer, close it
+  if chat_buffer.is_chat_buffer(current_buf) then
+    vim.cmd("close")
+    return
+  end
+
+  -- Otherwise, open or switch to a chat buffer
+  M.open_chat_buffer()
+end
+
+-- Open or create .chat buffer
+-- Open or create .chat buffer
+function M.open_chat_buffer(file_path)
+  -- Ensure we have an active ACP session first
+  local proc = registry.active()
+  if not proc or not proc:is_alive() then
+    -- Create new session first
+    M.new_session()
+    proc = registry.active()
+
+    if not proc then
+      vim.notify("[.chat] Failed to create ACP session", vim.log.levels.ERROR)
+      return
     end
+
+    -- Wait for session to be ready (with timeout)
+    local timeout = 50
+    local waited = 0
+    while not proc:is_ready() and waited < timeout do
+      vim.cmd("sleep 10m")
+      waited = waited + 1
+    end
+
+    if not proc:is_ready() then
+      vim.notify("[.chat] ACP session not ready", vim.log.levels.ERROR)
+      return
+    end
+  end
+
+  local chat_parser = require("ai_repl.chat_parser")
+
+  file_path = file_path or vim.fn.expand("%:p")
+
+  -- If current buffer is .chat, use it
+  local buf = vim.api.nvim_get_current_buf()
+  local buf_name = vim.api.nvim_buf_get_name(buf)
+
+  if not buf_name:match("%.chat$") then
+    -- Generate unique ID for chat file
+    local timestamp = os.time()
+    local random = math.floor(math.random() * 10000)
+    local chat_id = string.format("%s-%d-%04d.chat",
+      proc.data.name or "chat",
+      timestamp,
+      random
+    )
+
+    -- Create new .chat buffer
+    local template = chat_parser.generate_template({
+      session_id = proc.session_id or "chat_" .. os.time(),
+      provider = proc.data.provider or config.default_provider,
+    })
+
+    buf = vim.api.nvim_create_buf(true, false)
+    local new_path = vim.fn.getcwd() .. "/" .. chat_id
+    vim.api.nvim_buf_set_name(buf, new_path)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(template, "\n"))
+  end
+
+  -- Initialize chat buffer
+  local ok, err = chat_buffer.init_buffer(buf)
+  if not ok then
+    vim.notify("[.chat] Failed to initialize: " .. tostring(err), vim.log.levels.ERROR)
+    return
+  end
+
+  -- Open in configured split direction (default: right vertical)
+  local win = vim.fn.bufwinid(buf)
+  if win == -1 then
+    local split_direction = config.chat.split_direction or "right"
+    local split_cmd
+
+    if split_direction == "right" then
+      split_cmd = "vsplit"
+    elseif split_direction == "left" then
+      vim.cmd("noautocmd wincmd h")
+      split_cmd = "vsplit"
+    elseif split_direction == "above" then
+      split_cmd = "split"
+    elseif split_direction == "below" then
+      split_cmd = "split"
+    else
+      split_cmd = "vsplit"
+    end
+
+    vim.cmd(split_cmd)
+    win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(win, buf)
+
+    -- Set window width/height
+    local split_width = config.chat.split_width or 0.4
+    if split_direction == "right" or split_direction == "left" then
+      local current_width = vim.api.nvim_win_get_width(0)
+      local new_width = math.floor(current_width * split_width)
+      vim.api.nvim_win_set_width(win, new_width)
+    elseif split_direction == "above" or split_direction == "below" then
+      local current_height = vim.api.nvim_win_get_height(0)
+      local new_height = math.floor(current_height * split_height)
+      vim.api.nvim_win_set_height(win, new_height)
+    end
+
+    -- Enable wrapping and prevent text overflow
+    vim.wo[win].wrap = true
+    vim.wo[win].linebreak = true
+    vim.wo[win].breakindent = true
+    vim.wo[win].breakindentopt = "shift:2,sbr"
+  else
+    -- Just switch to existing window
+    vim.api.nvim_set_current_win(win)
+
+    -- Ensure wrapping is enabled on existing window
+    vim.wo[win].wrap = true
+    vim.wo[win].linebreak = true
+    vim.wo[win].breakindent = true
+    vim.wo[win].breakindentopt = "shift:2,sbr"
+  end
+
+  -- Switch to buffer
+  vim.api.nvim_set_current_buf(buf)
+
+  vim.notify("[.chat] Buffer ready - press C-] to send", vim.log.levels.INFO)
+end
+
+-- Add annotation to current .chat buffer
+function M.add_annotation_to_chat()
+  local buf = vim.api.nvim_get_current_buf()
+
+  if not chat_buffer.is_chat_buffer(buf) then
+    vim.notify("Not a .chat buffer", vim.log.levels.WARN)
+    return
+  end
+
+  if vim.fn.mode() ~= "v" and vim.fn.mode() ~= "V" then
+    vim.notify("Visual selection required", vim.log.levels.WARN)
+    return
+  end
+
+  chat_buffer.add_annotation_from_selection(buf)
+end
+
+-- Sync annotations from .chat buffer to annotation system
+function M.sync_chat_annotations()
+  local buf = vim.api.nvim_get_current_buf()
+
+  if not chat_buffer.is_chat_buffer(buf) then
+    vim.notify("Not a .chat buffer", vim.log.levels.WARN)
+    return
+  end
+
+  local ok, msg = chat_buffer.sync_annotations_from_buffer(buf)
+  if ok then
+    vim.notify(msg, vim.log.levels.INFO)
+  else
+    vim.notify("Sync failed: " .. tostring(msg), vim.log.levels.ERROR)
   end
 end
 
@@ -2286,45 +2350,37 @@ function M.new_session(provider_id, profile_id)
     end
   end
 
-  local win = get_tab_win()
-  if not win then
-    ui.active = true
-    ui.pending_provider = provider_id
-    ui.pending_profile = profile_id
-    ui.pending_extra_args = extra_args
-    create_ui()
-    return
-  end
-
-  local width = config.window.width < 1 and math.floor(vim.o.columns * config.window.width) or config.window.width
-  vim.api.nvim_win_set_width(win, width)
-  setup_window_options(win)
-
-  local temp_id = "temp_" .. os.time() .. "_" .. math.random(1000, 9999)
-  local new_proc = create_process(temp_id, {
-    cwd = ui.project_root,
+  -- Create actual ACP process
+  local session_id = "session_" .. os.time()
+  proc = create_process(session_id, {
     provider = provider_id,
-    profile_id = profile_id,
     extra_args = extra_args,
+    profile_id = profile_id,
   })
-  local buf = create_buffer(new_proc, "New Session")
 
-  registry.set(temp_id, new_proc)
-  registry.set_active(temp_id)
+  local buf = create_buffer(proc, nil)
 
-  vim.api.nvim_win_set_buf(win, buf)
+  -- Show initialization message
+  render.append_content(buf, {
+    "",
+    "==================================================================",
+    "[INITIALIZING ACP SESSION...]",
+    "==================================================================",
+    "Working Directory: " .. proc.data.cwd,
+    "Provider: " .. provider_id,
+    "Waiting for connection...",
+    "==================================================================",
+    "",
+  })
+
+  registry.set(session_id, proc)
+  registry.set_active(session_id)
+
   setup_buffer_keymaps(buf)
+  proc:start()
 
-  local provider = config.providers[provider_id]
-  local provider_display = provider and provider.name or provider_id
-  if profile_id then
-    provider_display = provider_display .. ":" .. profile_id
-  end
-  render.append_content(buf, { "Creating new session with " .. provider_display .. "..." })
-
-  new_proc:start()
-
-  render.goto_prompt(buf, win)
+  -- Now open chat buffer which will attach to this session
+  M.open_chat_buffer()
 end
 
 function M.pick_codex_profile(callback)
@@ -2421,29 +2477,126 @@ function M.load_session(session_id, opts)
 end
 
 function M.open_session_picker()
-  local root = get_current_project_root()
-  local disk_sessions = registry.get_sessions_for_project(root)
+  local chat_dir = vim.fn.stdpath("data") .. "/ai_repl_chats"
   local items = {}
 
-  table.insert(items, { label = "+ New Session", action = "new" })
+  -- List .chat files
+  if vim.fn.isdirectory(chat_dir) == 1 then
+    local chat_files = vim.fn.glob(chat_dir .. "/*.chat", true, true)
+    
+    -- Sort by modification time (newest first)
+    table.sort(chat_files, function(a, b)
+      local stat_a = vim.loop.fs_stat(a)
+      local stat_b = vim.loop.fs_stat(b)
+      return (stat_a and stat_b) and stat_a.mtime.sec > stat_b.mtime.sec or false
+    end)
 
-  for _, s in ipairs(disk_sessions) do
-    table.insert(items, {
-      label = format_session_label(s.is_active, s.has_process, s.name or s.session_id:sub(1, 8), s.provider),
-      action = s.is_active and "current" or "load",
-      id = s.session_id
-    })
+    for _, file_path in ipairs(chat_files) do
+      local filename = vim.fn.fnamemodify(file_path, ":t")
+      local session_id = vim.fn.fnamemodify(filename, ":r")
+      
+      -- Try to get session info from the file
+      local stat = vim.loop.fs_stat(file_path)
+      local mtime = stat and os.date("%Y-%m-%d %H:%M", stat.mtime.sec) or "Unknown"
+      
+      table.insert(items, {
+        label = string.format("%s (%s)", session_id:sub(1, 8), mtime),
+        action = "import_chat",
+        file_path = file_path,
+        session_id = session_id
+      })
+    end
   end
 
-  vim.ui.select(extract_labels(items), { prompt = "Select session:" }, function(choice, idx)
+  -- Add "New Session" option
+  table.insert(items, 1, { label = "+ New Session", action = "new" })
+
+  if #items == 1 then
+    vim.notify("No .chat files found. Creating new session.", vim.log.levels.INFO)
+    M.new_session()
+    return
+  end
+
+  vim.ui.select(extract_labels(items), { prompt = "Select .chat file:" }, function(choice, idx)
     if not choice or not idx then return end
     local item = items[idx]
     if item.action == "new" then
       M.new_session()
-    elseif item.action == "load" then
-      M.load_session(item.id)
+    elseif item.action == "import_chat" then
+      M.import_chat_from_picker(item.file_path, item.session_id)
     end
   end)
+end
+
+function M.import_chat_from_picker(file_path, session_id)
+  -- Import the .chat file
+  local data, err = registry.import_chat(file_path)
+  if err then
+    vim.notify("Failed to import .chat file: " .. err, vim.log.levels.ERROR)
+    return
+  end
+
+  -- Create a new session with the imported data
+  local temp_id = "import_" .. os.time() .. "_" .. math.random(1000, 9999)
+  local proc = create_process(temp_id, {
+    cwd = get_current_project_root(),
+  })
+  
+  local buf = create_buffer(proc, "Imported: " .. session_id:sub(1, 8))
+  
+  registry.set(temp_id, proc)
+  registry.set_active(temp_id)
+  
+  -- Load messages into the session
+  if data.messages and #data.messages > 0 then
+    for _, msg in ipairs(data.messages) do
+      registry.append_message(temp_id, msg.role, msg.content, msg.tool_calls)
+    end
+    -- Render the imported messages
+    render.render_history(buf, data.messages)
+  end
+  
+  -- Handle annotations if present
+  if data.annotations and #data.annotations > 0 then
+    local annotation_session = require("ai_repl.annotations.session")
+    if not annotation_session.is_active() then
+      local annotations_config = require("ai_repl.annotations.config")
+      annotation_session.start(annotations_config.config)
+    end
+    
+    local ann_bufnr = annotation_session.get_bufnr()
+    if ann_bufnr and vim.api.nvim_buf_is_valid(ann_bufnr) then
+      local writer = require("ai_repl.annotations.writer")
+      local session_state = annotation_session.get_state()
+      
+      for _, ann in ipairs(data.annotations) do
+        writer.append(session_state, "location", ann, ann.note or "")
+      end
+    end
+  end
+  
+  -- Show the buffer
+  local win = get_tab_win()
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    M.show()
+    win = get_tab_win()
+  end
+  
+  if win and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_win_set_buf(win, buf)
+  end
+  
+  setup_buffer_keymaps(buf)
+  proc:start()
+  
+  render.append_content(buf, { 
+    "", 
+    "[+] Imported .chat file: " .. vim.fn.fnamemodify(file_path, ":t"),
+    "[+] Session ready",
+    "" 
+  })
+  
+  update_statusline()
 end
 
 function M.pick_process()
@@ -2579,56 +2732,65 @@ function M.add_file_as_link(file, message)
 end
 
 function M.add_selection_to_prompt()
-  local mode = vim.fn.mode()
-  if mode:match("[vV\22]") then
-    vim.cmd('normal! "vy')
+  -- Add selection to active chat buffer or create new one
+  local buf = vim.api.nvim_get_current_buf()
+  local start_pos = vim.api.nvim_buf_get_mark(buf, "<")
+  local end_pos = vim.api.nvim_buf_get_mark(buf, ">")
+
+  if not start_pos or not end_pos then
+    vim.notify("No visual selection", vim.log.levels.WARN)
+    return
   end
 
-  local text = vim.fn.getreg("v")
-  if not text or text == "" then
-    local start_pos = vim.fn.getpos("'<")
-    local end_pos = vim.fn.getpos("'>")
-    local lines = vim.fn.getline(start_pos[2], end_pos[2])
-    if #lines == 0 then return end
+  local lines = vim.api.nvim_buf_get_lines(buf, start_pos[1] - 1, end_pos[1], false)
+  local text = table.concat(lines, "\n")
 
-    if #lines == 1 then
-      lines[1] = lines[1]:sub(start_pos[3], end_pos[3])
-    else
-      lines[1] = lines[1]:sub(start_pos[3])
-      lines[#lines] = lines[#lines]:sub(1, end_pos[3])
+  local file_path = vim.api.nvim_buf_get_name(buf)
+  local rel_path = vim.fn.fnamemodify(file_path, ":~:.")
+
+  -- Check if current buffer is a chat buffer
+  if chat_buffer.is_chat_buffer(buf) then
+    -- Append to current chat buffer
+    local chat_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local insert_pos = #chat_lines
+
+    -- Find last @You: or @Djinni: to insert after
+    for i = #chat_lines, 1, -1 do
+      if chat_lines[i]:match("^@You:") or chat_lines[i]:match("^@Djinni:") then
+        insert_pos = i + 1
+        break
+      end
     end
-    text = table.concat(lines, "\n")
-  end
 
-  if not text or text == "" then return end
+    -- Insert blank line, file reference, and content
+    vim.api.nvim_buf_set_lines(buf, insert_pos, insert_pos, false, {
+      "",
+      string.format("@%s:%d-%d", rel_path, start_pos[1], end_pos[1]),
+      "",
+      text,
+      "",
+    })
 
-  local function add_to_prompt()
-    local proc = registry.active()
-    if not proc or not proc.data.buf then return end
-
-    local current = render.get_prompt_input(proc.data.buf)
-    local separator = current ~= "" and "\n" or ""
-    render.set_prompt_input(proc.data.buf, current .. separator .. "```\n" .. text .. "\n```\n")
-
-    local win = get_tab_win()
-    if not win then
-      win = vim.fn.bufwinid(proc.data.buf)
-    end
-    if win and win ~= -1 and vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_set_current_win(win)
-      render.goto_prompt(proc.data.buf, win)
-    end
-  end
-
-  if not ui.active then
-    M.open()
-    vim.defer_fn(add_to_prompt, 500)
+    vim.notify("[.chat] Added selection to buffer", vim.log.levels.INFO)
   else
-    add_to_prompt()
+    -- Check for active chat buffer
+    local chat_buf = chat_buffer.get_active_chat_buffer()
+    if chat_buf and vim.api.nvim_buf_is_valid(chat_buf) then
+      -- Switch to chat buffer and add selection
+      vim.api.nvim_set_current_buf(chat_buf)
+      M.add_selection_to_prompt()
+    else
+      -- Create new chat buffer with selection
+      M.open_chat_buffer()
+      vim.schedule(function()
+        M.add_selection_to_prompt()
+      end)
+    end
   end
 end
 
 function M.send_selection()
+  -- Send selection to chat buffer
   local mode = vim.fn.mode()
   if mode:match("[vV\22]") then
     vim.cmd('normal! "vy')
@@ -2652,13 +2814,21 @@ function M.send_selection()
 
   if not text or text == "" then return end
 
-  if not ui.active then
-    M.open()
-    vim.defer_fn(function()
-      M.send_prompt("```\n" .. text .. "\n```")
-    end, 500)
+  -- Check if current buffer is a chat buffer
+  local buf = vim.api.nvim_get_current_buf()
+  if chat_buffer.is_chat_buffer(buf) then
+    -- Add selection to current chat buffer and send
+    M.add_selection_to_prompt()
+    vim.schedule(function()
+      -- Trigger send (C-] keybinding)
+      vim.fn.feedkeys(vim.api.nvim_replace_termcodes("<C-]>", true, false, true), "n")
+    end)
   else
-    M.send_prompt("```\n" .. text .. "\n```")
+    -- Open chat buffer and send selection
+    M.open_chat_buffer()
+    vim.schedule(function()
+      M.send_selection()
+    end)
   end
 end
 
@@ -2707,14 +2877,39 @@ function M.quick_action(action_index)
 
   local function execute_action(action)
     local prompt = string.format(action.prompt, text)
-    if not ui.active then
-      M.open()
-      vim.defer_fn(function()
-        M.send_prompt(prompt)
-      end, 500)
-    else
-      M.send_prompt(prompt)
+
+    -- Open or switch to chat buffer
+    local buf = vim.api.nvim_get_current_buf()
+    if not chat_buffer.is_chat_buffer(buf) then
+      M.open_chat_buffer()
+      vim.schedule(function()
+        execute_action(action)
+      end)
+      return
     end
+
+    -- Append to chat buffer
+    local chat_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local insert_pos = #chat_lines
+
+    -- Find last @You: to insert after
+    for i = #chat_lines, 1, -1 do
+      if chat_lines[i]:match("^@You:") then
+        insert_pos = i + 1
+        break
+      end
+    end
+
+    -- Insert prompt and trigger send
+    vim.api.nvim_buf_set_lines(buf, insert_pos, insert_pos, false, {
+      "",
+      prompt,
+      "",
+    })
+
+    vim.schedule(function()
+      vim.fn.feedkeys(vim.api.nvim_replace_termcodes("<C-]>", true, false, true), "n")
+    end)
   end
 
   if action_index and QUICK_ACTIONS[action_index] then
@@ -2752,6 +2947,37 @@ function M.setup(opts)
 
   registry.start_autosave()
 
+  -- Auto-initialize .chat buffers
+  vim.api.nvim_create_autocmd("BufReadPost", {
+    pattern = "*.chat",
+    callback = function()
+      local buf = vim.api.nvim_get_current_buf()
+      if chat_buffer.is_chat_buffer(buf) then
+        chat_buffer.init_buffer(buf)
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("BufNewFile", {
+    pattern = "*.chat",
+    callback = function()
+      local buf = vim.api.nvim_get_current_buf()
+      local chat_parser = require("ai_repl.chat_parser")
+      local template = chat_parser.generate_template({
+        session_id = "chat_" .. os.time(),
+        provider = config.default_provider,
+      })
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(template, "\n"))
+    end,
+  })
+
+  -- Initialize existing .chat buffers
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if chat_buffer.is_chat_buffer(buf) then
+      chat_buffer.init_buffer(buf)
+    end
+  end
+
   for cmd_name, fn in pairs({
     AIRepl = M.toggle,
     AIReplOpen = M.open,
@@ -2759,12 +2985,22 @@ function M.setup(opts)
     AIReplNew = M.new_session,
     AIReplSessions = M.open_session_picker,
     AIReplPicker = M.pick_process,
+    AIReplChat = M.open_chat_buffer,
+    AIReplAddAnnotation = M.add_annotation_to_chat,
+    AIReplSyncAnnotations = M.sync_chat_annotations,
   }) do
     vim.api.nvim_create_user_command(cmd_name, fn, {})
   end
 
   vim.api.nvim_set_hl(0, "AIReplPrompt", { fg = "#7aa2f7", bold = true })
   syntax.setup()
+
+  -- Setup .chat syntax highlighting
+  require("ai_repl.chat_syntax").setup()
+
+  if config.annotations and config.annotations.enabled then
+    require("ai_repl.annotations").setup(config.annotations)
+  end
 end
 
 return M
