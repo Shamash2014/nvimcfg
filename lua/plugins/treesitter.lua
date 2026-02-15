@@ -120,6 +120,18 @@ return {
       },
     })
 
+    -- Monkey-patch Treesitter to handle query errors gracefully
+    local original_get_query = vim.treesitter.query.get or vim.treesitter.query.get_query
+    vim.treesitter.query.get = function(lang, type_name)
+      local ok, query = pcall(original_get_query, lang, type_name)
+      if not ok then
+        -- Log the error but don't crash
+        vim.notify_once("Treesitter query error for " .. lang .. "/" .. type_name .. ": " .. tostring(query), vim.log.levels.WARN)
+        return nil
+      end
+      return query
+    end
+
     -- Treesitter context for showing current context in winbar
     require("treesitter-context").setup({
       enable = true,
@@ -161,12 +173,23 @@ return {
       group = group,
       pattern = supported_filetypes,
       callback = function()
-        pcall(vim.treesitter.start)
+        -- Safely start Treesitter with error handling
+        local ok, err = pcall(vim.treesitter.start)
+        if not ok then
+          vim.notify("Treesitter start error: " .. tostring(err), vim.log.levels.DEBUG)
+          -- Don't set up folding if Treesitter failed
+          return
+        end
+
         vim.schedule(function()
-          vim.wo.foldmethod = 'expr'
-          vim.wo.foldexpr = 'v:lua.vim.treesitter.foldexpr()'
-          vim.wo.foldlevel = 99
-          vim.wo.foldenable = true
+          -- Only set up folding if Treesitter is actually working
+          local has_ts_lang, ts_lang = pcall(vim.treesitter.language.get_lang, vim.bo.filetype)
+          if has_ts_lang and ts_lang then
+            vim.wo.foldmethod = 'expr'
+            vim.wo.foldexpr = 'v:lua.vim.treesitter.foldexpr()'
+            vim.wo.foldlevel = 99
+            vim.wo.foldenable = true
+          end
         end)
       end,
     })
