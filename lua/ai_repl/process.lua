@@ -442,12 +442,25 @@ function Process:cancel()
   if not self:is_alive() then return end
   self:notify("session/cancel", { sessionId = self.session_id })
   -- Ensure state is properly reset after cancel
+  -- Note: We DON'T clear prompt_queue here - queued messages should be preserved
+  -- The queue will be processed when the agent sends the 'stop' update
+  -- If we want to clear the queue, it should be done at a higher level
   self.state.busy = false
-  self.data.prompt_queue = {}
   -- Keep session_ready as true to allow sending new messages
   -- If it was already true, keep it that way
   if not self.state.session_ready then
     -- Try to restore session_ready if the session was initialized
+    self.state.session_ready = self.state.initialized or false
+  end
+end
+
+function Process:cancel_and_clear_queue()
+  if not self:is_alive() then return end
+  self:notify("session/cancel", { sessionId = self.session_id })
+  -- Cancel current operation AND clear the queue
+  self.state.busy = false
+  self.data.prompt_queue = {}
+  if not self.state.session_ready then
     self.state.session_ready = self.state.initialized or false
   end
 end

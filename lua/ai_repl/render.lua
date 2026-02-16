@@ -723,13 +723,17 @@ function M.render_diff(buf, file_path, old_content, new_content)
     -- Create temporary buffer for syntax highlighting
     local temp_buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(temp_buf, 0, -1, false, { content_line })
+    
+    -- Temporarily ignore FileType events to prevent autocmds that try to set
+    -- window-local options on unlisted buffers (e.g., foldmethod)
+    local eventignore = vim.opt.eventignore:get()
+    vim.opt.eventignore:append("FileType")
     vim.bo[temp_buf].filetype = filetype
-    -- Note: foldmethod is window-local, can't set on unlisted buffer
-    -- Treesitter will work fine without it
+    vim.opt.eventignore = eventignore
     
     vim.schedule(function()
       if not vim.api.nvim_buf_is_valid(temp_buf) then return end
-      
+
       -- Try to start treesitter parsing
       local ok, parser = pcall(vim.treesitter.get_parser, temp_buf, filetype)
       if ok and parser then
@@ -737,46 +741,54 @@ function M.render_diff(buf, file_path, old_content, new_content)
         local parse_ok = pcall(function()
           parser:parse()
         end)
-        
+
         if parse_ok then
-          -- Get syntax highlights and apply them to diff buffer
-          local highlights = {}
-          local trees = parser:trees()
-          if trees and trees[1] then
-            local root = trees[1]:root()
-            if root then
-              for node in root:iter_children() do
-                if node and node:type() then
-                  local start_row, start_col, _, end_col = node:range()
-                  if start_row == 0 then
-                    table.insert(highlights, {
-                      start_col = start_col,
-                      end_col = end_col,
-                      hl_group = "@" .. node:type()
-                    })
+          -- Use treesitter highlighter to get proper highlights
+          local highlight_ok, highlighter = pcall(vim.treesitter.highlighter.new, parser)
+          if highlight_ok and highlighter then
+            local highlights = {}
+            local query = highlighter:get_query(filetype)
+
+            if query then
+              local root = parser:trees()[1]:root()
+              local start_row, end_row = root:range()
+
+              -- Iterate through captures
+              for pattern, match, metadata in query:iter_matches(root, temp_buf, start_row, end_row + 1) do
+                for id, node in pairs(match) do
+                  if node then
+                    local start_row_, start_col, end_row_, end_col = node:range()
+                    if start_row_ == 0 then
+                      local capture = query.captures[id]
+                      local hl_group = "@" .. capture
+                      table.insert(highlights, {
+                        start_col = start_col,
+                        end_col = end_col,
+                        hl_group = hl_group
+                      })
+                    end
                   end
                 end
               end
             end
-          end
-          
-          -- Apply highlights to diff buffer with diff background
-          for _, hl in ipairs(highlights) do
+
+            -- Apply highlights to diff buffer
             local content_start = content_line:find("%s%s")
             if content_start then
               content_start = content_start + 1
-              pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num, 
-                content_start + hl.start_col, {
-                  end_col = content_start + hl.end_col,
-                  hl_group = hl.hl_group,
-                  virt_text = { { "", "AIReplDiffContext" } },
-                  virt_text_pos = "overlay"
+              for _, hl in ipairs(highlights) do
+                pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num,
+                  content_start + hl.start_col, {
+                    end_col = content_start + hl.end_col,
+                    hl_group = hl.hl_group,
+                    priority = 90
                 })
+              end
             end
           end
         end
       end
-      
+
       -- Clean up temporary buffer
       if vim.api.nvim_buf_is_valid(temp_buf) then
         pcall(vim.api.nvim_buf_delete, temp_buf, { force = true })
@@ -787,7 +799,8 @@ function M.render_diff(buf, file_path, old_content, new_content)
   local function set_diff_extmark(b, line, col, end_col, hl_group)
     pcall(vim.api.nvim_buf_set_extmark, b, NS_DIFF, line, col, {
       end_col = end_col,
-      hl_group = hl_group
+      hl_group = hl_group,
+      priority = 100
     })
   end
 

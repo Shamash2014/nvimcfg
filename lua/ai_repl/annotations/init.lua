@@ -158,6 +158,25 @@ function M.send_annotation_to_ai()
     return
   end
 
+  local chat_buffer = require("ai_repl.chat_buffer")
+
+  -- If using a .chat buffer, use its built-in send function
+  if chat_buffer.is_chat_buffer(bufnr) then
+    -- Switch to the chat buffer
+    local win = vim.fn.bufwinid(bufnr)
+    if win == -1 then
+      -- Buffer is not visible, open it
+      vim.cmd("split " .. vim.api.nvim_buf_get_name(bufnr))
+    else
+      vim.api.nvim_set_current_win(win)
+    end
+
+    -- Send using chat buffer's send function
+    chat_buffer.send_to_process(bufnr)
+    return
+  end
+
+  -- Fall back to original behavior for non-chat buffers
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local content = table.concat(lines, "\n")
 

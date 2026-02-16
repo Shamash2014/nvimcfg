@@ -68,5 +68,41 @@ return {
       end,
       desc = "List Session Buffers",
     },
+    {
+      "<leader>aa",
+      function()
+        require("ai_repl.annotations").annotate()
+      end,
+      mode = "v",
+      desc = "Add Annotation",
+    },
+    {
+      "<leader>as",
+      function()
+        require("ai_repl.annotations").start_session()
+      end,
+      desc = "Start Annotation Session",
+    },
+    {
+      "<leader>aq",
+      function()
+        require("ai_repl.annotations").stop_session()
+      end,
+      desc = "Stop Annotation Session",
+    },
+    {
+      "<leader>aw",
+      function()
+        require("ai_repl.annotations").toggle_window()
+      end,
+      desc = "Toggle Annotation Window",
+    },
+    {
+      "<leader>af",
+      function()
+        require("ai_repl.annotations").send_annotation_to_ai()
+      end,
+      desc = "Send Annotations to AI",
+    },
   },
 }

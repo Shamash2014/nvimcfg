@@ -194,13 +194,26 @@ return {
         end
 
         vim.schedule(function()
-          -- Only set up folding if Treesitter is actually working
+          -- Only set up folding if Treesitter is actually working and buffer is in a window
           local has_ts_lang, ts_lang = pcall(vim.treesitter.language.get_lang, vim.bo.filetype)
           if has_ts_lang and ts_lang then
-            vim.wo.foldmethod = 'expr'
-            vim.wo.foldexpr = 'v:lua.vim.treesitter.foldexpr()'
-            vim.wo.foldlevel = 99
-            vim.wo.foldenable = true
+            -- Check if the current buffer is displayed in any window
+            local bufnr = vim.api.nvim_get_current_buf()
+            local has_window = false
+            for _, win in ipairs(vim.api.nvim_list_wins()) do
+              if vim.api.nvim_win_get_buf(win) == bufnr then
+                has_window = true
+                break
+              end
+            end
+            
+            -- Only set window-local options if buffer is displayed in a window
+            if has_window then
+              vim.wo.foldmethod = 'expr'
+              vim.wo.foldexpr = 'v:lua.vim.treesitter.foldexpr()'
+              vim.wo.foldlevel = 99
+              vim.wo.foldenable = true
+            end
           end
         end)
       end,

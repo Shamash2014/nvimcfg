@@ -389,6 +389,12 @@ function M.send_to_process(buf)
     return false
   end
 
+  -- Reset streaming state in case it was stuck from a previous cancel
+  if state.streaming and not state.process.state.busy then
+    state.streaming = false
+    chat_buffer_events.stop_streaming(buf)
+  end
+
   -- Parse buffer to get messages
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local parsed = chat_parser.parse_buffer(lines, buf)
@@ -650,15 +656,36 @@ function M.setup_keymaps(buf)
       local q_ok, questionnaire = pcall(require, "ai_repl.questionnaire")
       if q_ok then pcall(questionnaire.cancel) end
 
+      -- Cancel current operation but keep the process alive and preserve queue
+      -- This allows sending new messages immediately after cancel
       proc:cancel()
     end
 
+    -- Reset streaming state but keep process alive
     state.streaming = false
     chat_buffer_events.stop_streaming(buf)
     local ok, decorations = pcall(require, "ai_repl.chat_decorations")
     if ok then pcall(decorations.stop_spinner, buf) end
 
+    -- Add cancelled marker but ensure cursor is ready for new input
     chat_buffer_events.append_to_chat_buffer(buf, { "", "[x] Cancelled", "", "@You:", "", "" })
+
+    -- Ensure buffer is ready for new input
+    vim.schedule(function()
+      if vim.api.nvim_buf_is_valid(buf) then
+        -- Move cursor to the last line to enable immediate input
+        local line_count = vim.api.nvim_buf_line_count(buf)
+        local win = vim.fn.bufwinid(buf)
+        if win ~= -1 then
+          vim.api.nvim_win_set_cursor(win, { line_count, 0 })
+        end
+        -- Ensure insert mode if we were in insert mode
+        local mode = vim.api.nvim_get_mode().mode
+        if mode == "i" then
+          vim.cmd("startinsert!")
+        end
+      end
+    end)
   end, opts)
 
   -- Jump to next/previous message

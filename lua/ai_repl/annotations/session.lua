@@ -27,6 +27,28 @@ function M.start(config)
     return false
   end
 
+  -- Check if there's an active .chat buffer to reuse
+  local chat_buffer = require("ai_repl.chat_buffer")
+  local existing_chat_buf = chat_buffer.get_active_chat_buffer()
+
+  if existing_chat_buf and vim.api.nvim_buf_is_valid(existing_chat_buf) then
+    -- Reuse existing .chat buffer
+    M.state = {
+      active = true,
+      file_path = vim.api.nvim_buf_get_name(existing_chat_buf),
+      bufnr = existing_chat_buf,
+      name = vim.fn.fnamemodify(existing_chat_buf, ":t"),
+    }
+
+    if config.auto_open_panel then
+      require("ai_repl.annotations.window").open(config, existing_chat_buf)
+    end
+
+    notify(config, "Annotation session started (using .chat buffer)", vim.log.levels.INFO)
+    return true
+  end
+
+  -- Fall back to creating new annotation session
   vim.fn.mkdir(config.session_dir, "p")
 
   local name = get_session_name(config.session_name)

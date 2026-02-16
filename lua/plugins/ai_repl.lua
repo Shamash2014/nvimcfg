@@ -19,6 +19,13 @@ return {
         session_dir = vim.fn.stdpath("data") .. "/annotations",
         capture_mode = "snippet",
         auto_open_panel = true,
+        keys = {
+          start_session = "<leader>as",
+          stop_session = "<leader>aq",
+          annotate = "<leader>aa",
+          toggle_window = "<leader>aw",
+          send_to_ai = "<leader>af",
+        },
       }
     })
   end,
