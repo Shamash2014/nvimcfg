@@ -73,27 +73,50 @@ function M.setup_event_forwarding(buf, proc)
     }
   end
 
+  -- Store the buffer reference for later use
+  state.proc = proc
+  state.buf = buf
+
   proc:set_handlers({
     on_method = function(self, method, params, msg_id)
-      if method == "session/request_permission" and vim.api.nvim_buf_is_valid(buf) then
-        pcall(M.handle_permission_in_chat, buf, self, msg_id, params)
+      local buf_valid = vim.api.nvim_buf_is_valid(buf)
+
+      if method == "session/request_permission" then
+        if buf_valid then
+          pcall(M.handle_permission_in_chat, buf, self, msg_id, params)
+        else
+          -- Buffer closed, use original handler
+          if state.original_handlers and state.original_handlers.on_method then
+            pcall(state.original_handlers.on_method, self, method, params, msg_id)
+          end
+        end
         return
       end
 
-      if method == "session/update" and vim.api.nvim_buf_is_valid(buf) then
-        pcall(M.handle_session_update_in_chat, buf, params.update, self)
+      if method == "session/update" then
+        if buf_valid then
+          pcall(M.handle_session_update_in_chat, buf, params.update, self)
+        else
+          -- Buffer closed but we still need to process updates
+          -- Just update internal state, don't try to write to buffer
+          local session_state = require("ai_repl.session_state")
+          session_state.apply_update(self, params.update)
+        end
         return
       end
 
+      -- For all other methods, use original handler
       if state.original_handlers and state.original_handlers.on_method then
         pcall(state.original_handlers.on_method, self, method, params, msg_id)
       end
     end,
     on_status = function(self, status, data)
+      -- Always call original handler first
       if state.original_handlers and state.original_handlers.on_status then
         pcall(state.original_handlers.on_status, self, status, data)
       end
 
+      -- Only update chat buffer if it's valid
       if vim.api.nvim_buf_is_valid(buf) then
         pcall(M.handle_status_in_chat, buf, status, data, self)
       end
@@ -104,6 +127,13 @@ function M.setup_event_forwarding(buf, proc)
 end
 
 function M.handle_session_update_in_chat(buf, update, proc)
+  -- Check if buffer is still valid, if not, just process the update internally
+  if not vim.api.nvim_buf_is_valid(buf) then
+    local session_state = require("ai_repl.session_state")
+    session_state.apply_update(proc, update)
+    return
+  end
+
   local session_state = require("ai_repl.session_state")
   local result = session_state.apply_update(proc, update)
   if not result then return end
@@ -179,6 +209,7 @@ function M.handle_session_update_in_chat(buf, update, proc)
 end
 
 function M.append_new_user_marker(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
   M.ensure_you_marker(buf)
 end
 
@@ -466,7 +497,13 @@ function M.stream_to_chat_buffer(buf, text)
   state.streaming_text = state.streaming_text .. text
 
   vim.schedule(function()
-    if not vim.api.nvim_buf_is_valid(buf) then return end
+    if not vim.api.nvim_buf_is_valid(buf) then
+      -- Buffer was closed, just clear the streaming state
+      state.streaming_text = ""
+      state.streaming = false
+      return
+    end
+
     if not state.streaming then return end
 
     local was_modifiable = vim.bo[buf].modifiable
@@ -492,7 +529,10 @@ function M.stream_to_chat_buffer(buf, text)
 end
 
 function M.append_to_chat_buffer(buf, new_lines)
-  if not vim.api.nvim_buf_is_valid(buf) then return end
+  if not vim.api.nvim_buf_is_valid(buf) then
+    -- Buffer is closed, silently skip
+    return
+  end
 
   local was_modifiable = vim.bo[buf].modifiable
   vim.bo[buf].modifiable = true
