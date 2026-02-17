@@ -896,7 +896,11 @@ local function create_buffer(proc, name)
   local buf_name = "AI: " .. session_name
   pcall(vim.api.nvim_buf_set_name, buf, buf_name)
 
-  -- Minimal buffer setup for internal process output (hidden from user)
+  -- Hide this internal buffer from the user's buffer list
+  vim.bo[buf].buflisted = false
+  vim.bo[buf].bufhidden = "hide"
+  vim.bo[buf].swapfile = false
+
   proc.data.buf = buf
   proc.data.name = session_name
 
