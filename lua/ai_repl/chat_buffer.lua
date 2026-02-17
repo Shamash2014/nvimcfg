@@ -142,6 +142,37 @@ function M.init_buffer(buf)
       state.session_id = parsed.session_id
       state.process = proc
       state.last_role = parsed.last_role
+
+      -- Sync conversation history from buffer to process
+      -- This ensures the AI has full context of the conversation
+      if #parsed.messages > 0 then
+        local proc_messages = proc.data.messages or {}
+
+        -- Only sync if process doesn't have messages or buffer has different content
+        local needs_sync = #proc_messages == 0
+
+        if not needs_sync then
+          -- Check if the last messages match
+          local last_proc_msg = proc_messages[#proc_messages]
+          local last_parsed_msg = parsed.messages[#parsed.messages]
+          if not last_proc_msg or not last_parsed_msg or
+             last_proc_msg.role ~= last_parsed_msg.role or
+             last_proc_msg.content ~= last_parsed_msg.content then
+            needs_sync = true
+          end
+        end
+
+        if needs_sync then
+          -- Sync messages from buffer to process
+          proc.data.messages = {}
+          for _, msg in ipairs(parsed.messages) do
+            if msg.role == "user" or msg.role == "djinni" then
+              registry.append_message(state.session_id, msg.role, msg.content, msg.tool_calls)
+            end
+          end
+        end
+      end
+
       -- Show session status in buffer (without render.append_content)
       vim.schedule(function()
         local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
@@ -152,6 +183,7 @@ function M.init_buffer(buf)
         table.insert(lines, "Working Directory: " .. proc.data.cwd)
         table.insert(lines, "Session ID: " .. proc.session_id)
         table.insert(lines, "Provider: " .. (proc.data.provider or "unknown"))
+        table.insert(lines, "Messages synced: " .. #parsed.messages)
         table.insert(lines, "==================================================================")
         table.insert(lines, "")
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
