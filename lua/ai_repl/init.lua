@@ -286,6 +286,17 @@ local function handle_session_update(proc, params)
     local queue_info = queue_count > 0 and (" [" .. queue_count .. " queued]") or ""
     render.append_content(buf, { "", (reason_msgs[result.stop_reason] or "---") .. mode_str .. queue_info, "" })
 
+    -- Add @You: marker after agent completes
+    local chat_buffer = require("ai_repl.chat_buffer")
+    if not chat_buffer.is_chat_buffer(buf) then
+      -- For non-chat buffers, append @You: directly
+      render.append_content(buf, { "", "@You:", "", "" })
+    else
+      -- For chat buffers, ensure @You: marker exists
+      local chat_buffer_events = require("ai_repl.chat_buffer_events")
+      chat_buffer_events.ensure_you_marker(buf)
+    end
+
     if result.ralph_continuing then
       return
     end
@@ -1159,7 +1170,19 @@ function M.cancel()
   if not proc then return end
   proc:cancel()
   render.stop_animation()
-  render.append_content(proc.data.buf, { "Cancelled", "", "@You:", "", "" })
+
+  local buf = proc.data.buf
+  local chat_buffer = require("ai_repl.chat_buffer")
+
+  if not chat_buffer.is_chat_buffer(buf) then
+    -- For non-chat buffers, append cancelled and @You:
+    render.append_content(buf, { "Cancelled", "", "@You:", "", "" })
+  else
+    -- For chat buffers, append cancelled and ensure @You: marker exists
+    local chat_buffer_events = require("ai_repl.chat_buffer_events")
+    chat_buffer_events.append_to_chat_buffer(buf, { "Cancelled" })
+    chat_buffer_events.ensure_you_marker(buf)
+  end
 end
 
 function M.show_queue()

@@ -17,6 +17,7 @@ function Process.new(session_id, opts)
   self.conn = {
     message_id = 1,
     callbacks = {},
+    callback_timeouts = {},
   }
   self.config = {
     cmd = opts.cmd or "claude-code-acp",
@@ -125,6 +126,11 @@ function Process:send(method, params, callback)
 
   if callback then
     self.conn.callbacks[id] = callback
+    -- Track callback creation time for timeout monitoring
+    self.conn.callback_timeouts[id] = {
+      created_at = os.time(),
+      method = method
+    }
   end
 
   vim.fn.chansend(self.job_id, vim.json.encode(msg) .. "\n")
@@ -187,8 +193,14 @@ function Process:_handle_message(line)
       if not cb_ok and self._on_debug then
         self:_on_debug("Callback error: " .. tostring(err))
       end
+      -- Log ACP protocol errors if present
+      if msg.error and self._on_debug then
+        self:_on_debug("ACP error response: " .. vim.inspect(msg.error))
+      end
     end
+    -- Clean up both callback and timeout tracking
     self.conn.callbacks[msg.id] = nil
+    self.conn.callback_timeouts[msg.id] = nil
   end
 end
 
@@ -513,6 +525,37 @@ function Process:remove_queued_item(index)
     return nil
   end
   return table.remove(self.data.prompt_queue, index)
+end
+
+function Process:cleanup_stale_callbacks(max_age_seconds)
+  max_age_seconds = max_age_seconds or 300 -- Default 5 minutes
+  local now = os.time()
+  local stale_ids = {}
+
+  for id, timeout_info in pairs(self.conn.callback_timeouts) do
+    if now - timeout_info.created_at > max_age_seconds then
+      table.insert(stale_ids, id)
+    end
+  end
+
+  for _, id in ipairs(stale_ids) do
+    if self._on_debug and self.config.debug then
+      local timeout_info = self.conn.callback_timeouts[id]
+      self:_on_debug("Cleaning up stale callback " .. id .. " for " .. timeout_info.method)
+    end
+    self.conn.callbacks[id] = nil
+    self.conn.callback_timeouts[id] = nil
+  end
+
+  return #stale_ids
+end
+
+function Process:get_pending_callback_count()
+  local count = 0
+  for _ in pairs(self.conn.callbacks) do
+    count = count + 1
+  end
+  return count
 end
 
 function Process:clear_queue()

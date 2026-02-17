@@ -129,17 +129,17 @@ return {
     })
 
     -- Monkey-patch Treesitter to handle query errors gracefully
-    local ts_query = vim.treesitter.query
-    if type(ts_query) == "table" and type(ts_query.get) == "function" then
-      local original_get = ts_query.get
-      ts_query.get = function(lang, type_name)
-        local ok, query = pcall(original_get, lang, type_name)
+    local ts_highlighter = require("vim.treesitter.highlighter")
+    if type(ts_highlighter) == "table" and type(ts_highlighter.new) == "function" then
+      local original_new = ts_highlighter.new
+      ts_highlighter.new = function(bufnr, lang)
+        local ok, result = pcall(original_new, bufnr, lang)
         if not ok then
           -- Log the error but don't crash
-          vim.notify_once("Treesitter query error for " .. lang .. "/" .. type_name .. ": " .. tostring(query), vim.log.levels.WARN)
+          vim.notify_once("Treesitter highlighter error for " .. tostring(lang) .. ": " .. tostring(result), vim.log.levels.WARN)
           return nil
         end
-        return query
+        return result
       end
     end
 
