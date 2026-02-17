@@ -1331,7 +1331,9 @@ function M.handle_command(cmd)
       "  /kill - Kill current session (terminate process)",
       "  /restart - Restart session (kill and create fresh)",
       "  /mode [mode] - Show mode picker or switch to specific mode",
-      "  /chat [file] - Open/create .chat buffer (Flemma-style UI)",
+      "  /chat [file] - Open/create .chat buffer (creates session if needed)",
+      "  /start - Start AI session for current .chat buffer",
+      "  /chat-new - Start chat in current buffer (if .chat file) or create new one (session starts on C-])",
       "  /restart-chat - Restart conversation in current .chat buffer",
       "  /summarize - Summarize current conversation",
       "  /spec export - Export spec to markdown",
@@ -1390,7 +1392,7 @@ function M.handle_command(cmd)
       ""
     })
   elseif command == "new" then
-    M.new_session()
+    M.new_session(config.default_provider)
   elseif command == "sessions" then
     M.open_session_picker()
   elseif command == "mode" then
@@ -1401,6 +1403,26 @@ function M.handle_command(cmd)
     end
   elseif command == "chat" or command == "mode-chat" then
     M.open_chat_buffer(args[1])
+  elseif command == "chat-new" then
+    M.open_chat_buffer_new()
+  elseif command == "start" then
+    local current_buf = vim.api.nvim_get_current_buf()
+    if chat_buffer.is_chat_buffer(current_buf) then
+      vim.notify("[.chat] Starting session...", vim.log.levels.INFO)
+      M.new_session(config.default_provider)
+      local proc = registry.active()
+      if proc then
+        chat_buffer_events.setup_event_forwarding(current_buf, proc)
+        chat_buffer.attach_session(current_buf, proc.session_id)
+        vim.notify("[.chat] Session started! Press C-] to send.", vim.log.levels.INFO)
+      end
+    else
+      if buf then
+        render.append_content(buf, { "[!] Not a .chat buffer" })
+      else
+        vim.notify("[!] Not a .chat buffer", vim.log.levels.ERROR)
+      end
+    end
   elseif command == "restart-chat" then
     -- Restart conversation in current chat buffer
     local current_buf = vim.api.nvim_get_current_buf()
@@ -2256,8 +2278,7 @@ function M.open_chat_buffer(file_path)
   -- Ensure we have an active ACP session first
   local proc = registry.active()
   if not proc or not proc:is_alive() then
-    -- Create new session first
-    M.new_session()
+    M.new_session(config.default_provider)
     proc = registry.active()
 
     if not proc then
@@ -2373,6 +2394,101 @@ function M.open_chat_buffer(file_path)
   vim.notify("[.chat] Buffer ready - press C-] to send", vim.log.levels.INFO)
 end
 
+--- Open a new .chat buffer for the current file without requiring a running process
+--- This allows you to start drafting a conversation before starting the AI
+function M.open_chat_buffer_new()
+  local chat_parser = require("ai_repl.chat_parser")
+  local chat_buffer = require("ai_repl.chat_buffer")
+
+  -- Check if current buffer is already a .chat file
+  local buf = vim.api.nvim_get_current_buf()
+  local buf_name = vim.api.nvim_buf_get_name(buf)
+
+  if buf_name:match("%.chat$") then
+    -- Current buffer is already a .chat file, just initialize it
+    vim.notify("[.chat] Initializing existing chat buffer...", vim.log.levels.INFO)
+
+    -- Initialize chat buffer (will create session when needed)
+    local ok, err = chat_buffer.init_buffer(buf)
+    if not ok then
+      vim.notify("[.chat] Failed to initialize: " .. tostring(err), vim.log.levels.ERROR)
+      return
+    end
+
+    vim.notify("[.chat] Buffer ready - press C-] to send (session will start automatically)", vim.log.levels.INFO)
+    return
+  end
+
+  -- Not a .chat file, create new one
+  local current_file = vim.fn.expand("%:t")
+  local file_basename = vim.fn.fnamemodify(current_file, ":r")
+
+  -- Generate chat file name based on current file
+  local timestamp = os.time()
+  local random = math.floor(math.random() * 10000)
+  local chat_id = string.format("%s-%d-%04d.chat", file_basename or "chat", timestamp, random)
+
+  -- Create new .chat buffer without session
+  local template = chat_parser.generate_template()
+
+  buf = vim.api.nvim_create_buf(true, false)
+  local new_path = vim.fn.getcwd() .. "/" .. chat_id
+
+  vim.api.nvim_buf_set_name(buf, new_path)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(template, "\n"))
+
+  -- Initialize chat buffer (will handle session creation when needed)
+  local ok, err = chat_buffer.init_buffer(buf)
+  if not ok then
+    vim.notify("[.chat] Failed to initialize: " .. tostring(err), vim.log.levels.ERROR)
+    return
+  end
+
+  -- Open in configured split direction
+  local split_direction = config.chat.split_direction or "right"
+  local split_cmd
+
+  if split_direction == "right" then
+    split_cmd = "vsplit"
+  elseif split_direction == "left" then
+    vim.cmd("noautocmd wincmd h")
+    split_cmd = "vsplit"
+  elseif split_direction == "above" then
+    split_cmd = "split"
+  elseif split_direction == "below" then
+    split_cmd = "split"
+  else
+    split_cmd = "vsplit"
+  end
+
+  vim.cmd(split_cmd)
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, buf)
+
+  -- Set window size
+  local split_width = config.chat.split_width or 0.4
+  if split_direction == "right" or split_direction == "left" then
+    local current_width = vim.api.nvim_win_get_width(0)
+    local new_width = math.floor(current_width * split_width)
+    vim.api.nvim_win_set_width(win, new_width)
+  elseif split_direction == "above" or split_direction == "below" then
+    local current_height = vim.api.nvim_win_get_height(0)
+    local new_height = math.floor(current_height * split_height)
+    vim.api.nvim_win_set_height(win, new_height)
+  end
+
+  -- Enable wrapping
+  vim.wo[win].wrap = true
+  vim.wo[win].linebreak = true
+  vim.wo[win].breakindent = true
+  vim.wo[win].breakindentopt = "shift:2,sbr"
+
+  -- Switch to buffer
+  vim.api.nvim_set_current_buf(buf)
+
+  vim.notify("[.chat] New buffer ready - start typing, session will be created when you press C-]", vim.log.levels.INFO)
+end
+
 -- Add annotation to current .chat buffer
 function M.add_annotation_to_chat()
   local buf = vim.api.nvim_get_current_buf()
@@ -2478,7 +2594,6 @@ function M.new_session(provider_id, profile_id)
 
   proc:start()
 
-  -- Open chat buffer which will attach to this session
   M.open_chat_buffer()
 end
 

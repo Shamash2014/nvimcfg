@@ -37,6 +37,7 @@ local function get_state(buf)
       tool_approvals = {},  -- Pending tool approvals
       modified = false,
       repo_root = nil,  -- Track repository root for restart detection
+      creating_session = false,  -- Flag to prevent duplicate session creation
     }
   end
   return buffer_state[buf]
@@ -134,6 +135,11 @@ function M.init_buffer(buf)
     state.repo_root = current_repo
   end
 
+  -- Skip session setup if a session is being created
+  if state.creating_session then
+    return true
+  end
+
   -- Create or attach ACP session
   if parsed.session_id and not state.session_id then
     -- Try to load existing session
@@ -189,35 +195,47 @@ function M.init_buffer(buf)
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
       end)
     else
-      -- Try to attach to active session
-      local ok, err = M.attach_session(buf, parsed.session_id)
-      if not ok then
-        -- No active session, will prompt user
-        vim.schedule(function()
-          vim.notify("[.chat] " .. err .. ". Creating new session...", vim.log.levels.WARN)
-          local ai_repl = require("ai_repl.init")
-          ai_repl.new_session()
-          -- Try attaching again after session is created
-          vim.defer_fn(function()
-            M.attach_session(buf, parsed.session_id)
-          end, 500)
-        end)
-      end
+      -- No active session exists, user must manually start with /start
+      vim.notify("[.chat] No active session. Type /start to begin.", vim.log.levels.INFO)
     end
   elseif not state.session_id then
-    -- Create new session for this buffer
-    local session_id = "chat_" .. vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t:r")
-    local ok, err = M.attach_session(buf, session_id)
-    if not ok then
-      vim.schedule(function()
-        vim.notify("[.chat] " .. err .. ". Creating new session...", vim.log.levels.WARN)
-        local ai_repl = require("ai_repl.init")
-        ai_repl.new_session()
+    state.creating_session = true
+    
+    local function create_and_attach_session()
+      local ai_repl = require("ai_repl.init")
+      local proc = registry.active()
+      
+      if proc and proc:is_alive() then
+        -- Use existing active session instead of creating new one
+        M.attach_session(buf, proc.session_id)
+        chat_buffer_events.setup_event_forwarding(buf, proc)
+        vim.notify("[.chat] Attached to active session. Press C-] to send.", vim.log.levels.INFO)
+        state.creating_session = false
+        return
+      end
+      
+      ai_repl.pick_provider(function(provider_id)
+        if not provider_id then
+          state.creating_session = false
+          return
+        end
+        
+        vim.notify("[.chat] Creating session...", vim.log.levels.INFO)
+        ai_repl.new_session(provider_id)
+        
         vim.defer_fn(function()
-          M.attach_session(buf, session_id)
-        end, 500)
+          local proc = registry.active()
+          if proc and proc:is_ready() and vim.api.nvim_buf_is_valid(buf) then
+            chat_buffer_events.setup_event_forwarding(buf, proc)
+            M.attach_session(buf, proc.session_id)
+            vim.notify("[.chat] Session created and ready! Press C-] to send.", vim.log.levels.INFO)
+          end
+          state.creating_session = false
+        end, 100)
       end)
     end
+    
+    vim.schedule(create_and_attach_session)
   end
 
   -- Setup event forwarding from process to chat buffer
@@ -282,6 +300,9 @@ function M.attach_session(buf, session_id)
   state.session_id = proc.session_id
   state.process = proc
   state.modified = false
+
+  -- Setup event forwarding to ensure AI responses appear in chat buffer
+  chat_buffer_events.setup_event_forwarding(buf, proc)
 
   -- Update buffer name if needed
   local buf_name = vim.api.nvim_buf_get_name(buf)
@@ -412,7 +433,35 @@ function M.send_to_process(buf)
   local state = get_state(buf)
 
   if not state.process then
-    vim.notify("[.chat] No active session", vim.log.levels.ERROR)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local parsed = chat_parser.parse_buffer(lines, buf)
+    local last_user_msg = nil
+    for i = #parsed.messages, 1, -1 do
+      if parsed.messages[i].role == "user" then
+        last_user_msg = parsed.messages[i]
+        break
+      end
+    end
+    if last_user_msg then
+      local trimmed = last_user_msg.content:gsub("^%s*(.-)%s*$", "%1")
+      if trimmed:sub(1, 1) == "/" then
+        local cmd = trimmed:sub(2):match("^(%S+)")
+        if cmd == "start" or cmd == "new" then
+          local ai_repl = require("ai_repl")
+          if parsed.last_role ~= "djinni" then
+            M.append_djinni_marker(buf)
+          end
+          ai_repl.handle_command(trimmed:sub(2))
+          vim.schedule(function()
+            if vim.api.nvim_buf_is_valid(buf) then
+              chat_buffer_events.ensure_you_marker(buf)
+            end
+          end)
+          return true
+        end
+      end
+    end
+    vim.notify("[.chat] No active session. Type /start to begin.", vim.log.levels.ERROR)
     return false
   end
 
@@ -888,9 +937,36 @@ end
 function M.hybrid_send(buf)
   local state = get_state(buf)
 
-  -- Check if process exists
   if not state.process then
-    vim.notify("[.chat] No active session. Please create one first.", vim.log.levels.ERROR)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local parsed = chat_parser.parse_buffer(lines, buf)
+    local last_user_msg = nil
+    for i = #parsed.messages, 1, -1 do
+      if parsed.messages[i].role == "user" then
+        last_user_msg = parsed.messages[i]
+        break
+      end
+    end
+    if last_user_msg then
+      local trimmed = last_user_msg.content:gsub("^%s*(.-)%s*$", "%1")
+      if trimmed:sub(1, 1) == "/" then
+        local cmd = trimmed:sub(2):match("^(%S+)")
+        if cmd == "start" or cmd == "new" then
+          local ai_repl = require("ai_repl")
+          if parsed.last_role ~= "djinni" then
+            M.append_djinni_marker(buf)
+          end
+          ai_repl.handle_command(trimmed:sub(2))
+          vim.schedule(function()
+            if vim.api.nvim_buf_is_valid(buf) then
+              chat_buffer_events.ensure_you_marker(buf)
+            end
+          end)
+          return true
+        end
+      end
+    end
+    vim.notify("[.chat] No active session. Type /start to begin.", vim.log.levels.ERROR)
     return false
   end
 
