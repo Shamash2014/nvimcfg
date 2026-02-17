@@ -117,7 +117,8 @@ function M.handle_session_update_in_chat(buf, update, proc)
   elseif result.type == "agent_message_chunk" then
     if not state.streaming then
       state.streaming = true
-      vim.bo[buf].modifiable = false
+      -- Don't set modifiable = false - keep it true for voice input
+      -- The streaming will update at the @Djinni: marker line
       if decorations_ok then pcall(decorations.start_spinner, buf, "generating") end
     end
     M.stream_to_chat_buffer(buf, result.text)
@@ -184,18 +185,33 @@ end
 function M.stop_streaming(buf)
   local state = get_state(buf)
   if not state.streaming then return end
+  
+  -- Reset streaming state
   state.streaming = false
+  
+  -- Flush any pending text
   flush_streaming_text(buf, state)
+  
+  -- Clear all streaming state
   state.streaming_text = ""
   state.streaming_insert_line = nil
+  
+  -- Ensure buffer is modifiable
   if vim.api.nvim_buf_is_valid(buf) then
     vim.bo[buf].modifiable = true
+  end
+  
+  -- Stop any active spinner
+  local decorations_ok, decorations = pcall(require, "ai_repl.chat_decorations")
+  if decorations_ok then
+    pcall(decorations.stop_spinner, buf)
   end
 end
 
 function M.ensure_you_marker(buf)
   if not vim.api.nvim_buf_is_valid(buf) then return end
 
+  local was_modifiable = vim.bo[buf].modifiable
   vim.bo[buf].modifiable = true
 
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
@@ -203,7 +219,11 @@ function M.ensure_you_marker(buf)
   for i = #lines, 1, -1 do
     local role = chat_parser.parse_role_marker(lines[i])
     if role then
-      if role == "user" then return end
+      if role == "user" then
+        -- Already have @You: marker, keep buffer modifiable for input
+        vim.bo[buf].modifiable = true
+        return
+      end
       break
     end
   end
@@ -220,6 +240,9 @@ function M.ensure_you_marker(buf)
   if win ~= -1 then
     vim.api.nvim_win_set_cursor(win, { line_count + 2, 0 })
   end
+
+  -- Keep buffer modifiable to allow voice input after @You:
+  vim.bo[buf].modifiable = true
 end
 
 function M.handle_permission_in_chat(buf, proc, msg_id, params)
@@ -318,9 +341,9 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
       "  [y] Allow  [a] Always  [n] Deny  [c] Cancel",
     })
 
-    if not was_modifiable then
-      vim.bo[buf].modifiable = false
-    end
+    -- Don't set modifiable back to false - keep it true for voice input
+    -- The permission keymaps will handle preventing editing elsewhere
+    vim.bo[buf].modifiable = true
 
     if proc.ui then proc.ui.permission_active = true end
 
@@ -432,9 +455,8 @@ function M.handle_status_in_chat(buf, status, data, proc)
     vim.api.nvim_buf_set_lines(buf, line_count, -1, false, banner)
   end
 
-  if not was_modifiable then
-    vim.bo[buf].modifiable = false
-  end
+  -- Keep buffer modifiable for voice input
+  vim.bo[buf].modifiable = true
 end
 
 function M.stream_to_chat_buffer(buf, text)
@@ -455,9 +477,8 @@ function M.stream_to_chat_buffer(buf, text)
     local response_lines = vim.split(state.streaming_text, "\n", { trimempty = false })
     vim.api.nvim_buf_set_lines(buf, state.streaming_insert_line, -1, false, response_lines)
 
-    if not was_modifiable then
-      vim.bo[buf].modifiable = false
-    end
+    -- Keep buffer modifiable during streaming for voice input
+    vim.bo[buf].modifiable = true
 
     local win = vim.fn.bufwinid(buf)
     if win ~= -1 then
@@ -490,9 +511,8 @@ function M.append_to_chat_buffer(buf, new_lines)
 
   vim.api.nvim_buf_set_lines(buf, line_count, -1, false, to_append)
 
-  if not was_modifiable then
-    vim.bo[buf].modifiable = false
-  end
+  -- Keep buffer modifiable for voice input
+  vim.bo[buf].modifiable = true
 
   local win = vim.fn.bufwinid(buf)
   if win ~= -1 then

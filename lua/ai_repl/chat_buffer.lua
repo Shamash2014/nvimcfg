@@ -384,11 +384,6 @@ function M.send_to_process(buf)
     return false
   end
 
-  if not state.process:is_ready() then
-    vim.notify("[.chat] Session not ready", vim.log.levels.WARN)
-    return false
-  end
-
   -- Reset streaming state in case it was stuck from a previous cancel
   if state.streaming and not state.process.state.busy then
     state.streaming = false
@@ -420,12 +415,75 @@ function M.send_to_process(buf)
 
   -- Send to process
   local proc = state.process
+
+  -- Check if process is alive BEFORE checking ready
+  if not proc:is_alive() then
+    vim.notify("[.chat] Process is not alive. Cannot send message.", vim.log.levels.ERROR)
+    return false
+  end
+
+  -- Ensure session_ready is set if initialized (handles post-cancel state)
+  if proc.state.initialized and not proc.state.session_ready then
+    proc.state.session_ready = true
+  end
+
+  -- Now check if ready (should pass after above fix)
+  if not proc:is_ready() then
+    vim.notify("[.chat] Session not ready. Please wait...", vim.log.levels.WARN)
+    return false
+  end
+
   local content = last_user_msg.content
 
   -- Check if content is empty or just whitespace
   if content:match("^%s*$") then
     vim.notify("[.chat] Message is empty. Type something after @You:", vim.log.levels.WARN)
     return false
+  end
+
+  -- Trim leading/trailing whitespace for command detection
+  local trimmed_content = content:gsub("^%s*(.-)%s*$", "%1")
+
+  -- Check if this is a slash command
+  if trimmed_content:sub(1, 1) == "/" then
+    -- Extract command (remove leading /)
+    local cmd_with_args = trimmed_content:sub(2)
+    
+    -- Import handle_command from ai_repl
+    local ai_repl = require("ai_repl")
+    
+    -- Inject @Djinni: marker if not present before executing command
+    if parsed.last_role ~= "djinni" then
+      M.append_djinni_marker(buf)
+    end
+    
+    -- Clear the slash command from the buffer by removing the user message
+    -- Find the last @You: or @User: marker and remove everything after it until the next marker
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local last_you_line = -1
+    for i = #lines, 1, -1 do
+      if lines[i]:match("^@You:%s*$") or lines[i]:match("^@User:%s*$") then
+        last_you_line = i
+        break
+      end
+    end
+    
+    if last_you_line ~= -1 then
+      -- Remove content after @You: marker (keep the marker itself)
+      vim.api.nvim_buf_set_lines(buf, last_you_line + 1, -1, false, {})
+    end
+    
+    -- Handle the slash command
+    ai_repl.handle_command(cmd_with_args)
+    
+    -- Ensure @You: marker is added after command execution
+    vim.schedule(function()
+      if vim.api.nvim_buf_is_valid(buf) then
+        chat_buffer_events.ensure_you_marker(buf)
+      end
+    end)
+    
+    return true
   end
 
   -- Handle @file references
@@ -659,6 +717,24 @@ function M.setup_keymaps(buf)
       -- Cancel current operation but keep the process alive and preserve queue
       -- This allows sending new messages immediately after cancel
       proc:cancel()
+      
+      -- Immediately ensure clean state for faster recovery
+      proc.state.busy = false
+      if proc.state.initialized then
+        proc.state.session_ready = true
+      end
+      
+      -- Wait a bit for the cancellation to take effect and verify
+      vim.defer_fn(function()
+        -- Ensure process is in a clean state
+        if proc and proc:is_alive() then
+          proc.state.busy = false
+          -- Always set session_ready if initialized, regardless of current state
+          if proc.state.initialized then
+            proc.state.session_ready = true
+          end
+        end
+      end, 100)
     end
 
     -- Reset streaming state but keep process alive
@@ -729,6 +805,45 @@ function M.setup_keymaps(buf)
     desc = "Restart conversation in .chat buffer"
   }))
 
+  -- Kill session
+  vim.keymap.set("n", "<leader>ak", function()
+    local state = get_state(buf)
+    if state.process and state.process:is_alive() then
+      vim.ui.select({
+        "Yes, kill session",
+        "No, keep session",
+      }, {
+        prompt = "Kill the current session? This will terminate the AI process.",
+      }, function(choice, idx)
+        if idx == 1 then
+          local ai_repl = require("ai_repl")
+          ai_repl.kill_session()
+        end
+      end)
+    else
+      vim.notify("[.chat] No active session to kill", vim.log.levels.WARN)
+    end
+  end, vim.tbl_extend("force", opts, {
+    desc = "Kill current AI session"
+  }))
+
+  -- Restart session (kill and create fresh)
+  vim.keymap.set("n", "<leader>aR", function()
+    vim.ui.select({
+      "Yes, restart session",
+      "No, keep session",
+    }, {
+      prompt = "Restart session? This will kill the current session and create a new one.",
+    }, function(choice, idx)
+      if idx == 1 then
+        local ai_repl = require("ai_repl")
+        ai_repl.restart_session()
+      end
+    end)
+  end, vim.tbl_extend("force", opts, {
+    desc = "Restart session (kill and create fresh)"
+  }))
+
   -- Summarize conversation
   vim.keymap.set("n", "<leader>as", function()
     M.summarize_conversation(buf)
@@ -741,12 +856,24 @@ end
 function M.hybrid_send(buf)
   local state = get_state(buf)
 
-  -- Check if process exists and is ready
+  -- Check if process exists
   if not state.process then
     vim.notify("[.chat] No active session. Please create one first.", vim.log.levels.ERROR)
     return false
   end
 
+  -- Check if process is alive
+  if not state.process:is_alive() then
+    vim.notify("[.chat] Process is not alive. Cannot send message.", vim.log.levels.ERROR)
+    return false
+  end
+
+  -- Ensure session_ready is set if initialized (handles post-cancel state)
+  if state.process.state.initialized and not state.process.state.session_ready then
+    state.process.state.session_ready = true
+  end
+
+  -- Double-check readiness after fixing session_ready
   if not state.process:is_ready() then
     vim.notify("[.chat] Session not ready. Please wait...", vim.log.levels.WARN)
     return false

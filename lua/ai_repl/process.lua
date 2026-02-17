@@ -133,7 +133,22 @@ function Process:send(method, params, callback)
     }
   end
 
-  vim.fn.chansend(self.job_id, vim.json.encode(msg) .. "\n")
+  -- Add error handling for chansend
+  local ok, err = pcall(function()
+    vim.fn.chansend(self.job_id, vim.json.encode(msg) .. "\n")
+  end)
+
+  if not ok then
+    if self._on_debug and self.config.debug then
+      self:_on_debug("chansend failed: " .. tostring(err))
+    end
+    -- Channel might be closed, mark job as invalid
+    if err:match("channel") or err:match("job") then
+      self:_on_exit(1)
+    end
+    return nil
+  end
+
   return id
 end
 
@@ -146,7 +161,20 @@ function Process:notify(method, params)
     params = params or {},
   }
 
-  vim.fn.chansend(self.job_id, vim.json.encode(msg) .. "\n")
+  -- Add error handling for chansend
+  local ok, err = pcall(function()
+    vim.fn.chansend(self.job_id, vim.json.encode(msg) .. "\n")
+  end)
+
+  if not ok then
+    if self._on_debug and self.config.debug then
+      self:_on_debug("notify chansend failed: " .. tostring(err))
+    end
+    -- Channel might be closed, mark job as invalid
+    if err:match("channel") or err:match("job") then
+      self:_on_exit(1)
+    end
+  end
 end
 
 function Process:kill()
@@ -160,10 +188,54 @@ function Process:kill()
   end
   self.state.initialized = false
   self.state.session_ready = false
+  self.state.busy = false
+  self.state.mode = "plan"
+  self.data.prompt_queue = {}
+  self.ui.streaming_response = ""
+  self.ui.streaming_start_line = nil
+  self.ui.pending_tool_calls = {}
+  self.ui.active_tools = {}
+  self.ui.current_plan = {}
+end
+
+function Process:cleanup()
+  -- Full cleanup before process is destroyed
+  self:kill()
+
+  -- Clear all callbacks
+  self.conn.callbacks = {}
+  self.conn.callback_timeouts = {}
+
+  -- Clear all data
+  self.data.messages = {}
+  self.data.context_files = {}
+  self.data.terminals = {}
+  self.data.slash_commands = {}
+  self.data.prompt_queue = {}
 end
 
 function Process:is_alive()
-  return self.job_id ~= nil
+  if not self.job_id then return false end
+
+  -- Verify the job is actually still running
+  -- Use jobwait() with timeout=0 to check without blocking
+  local pid = vim.fn.jobpid(self.job_id)
+  if pid and pid > 0 then
+    -- Job exists, verify it's running
+    local info = vim.fn.jobwait({self.job_id}, 0)
+    -- jobwait returns: -1 if still running, -2 if invalid, 0+ if exited
+    if info and info[1] == -1 then
+      return true
+    end
+    -- Job has exited or is invalid
+    if info and (info[1] >= 0 or info[1] == -2) then
+      self.job_id = nil
+      return false
+    end
+  end
+
+  -- Fallback: if we can't check, assume alive if job_id is set
+  return true
 end
 
 function Process:is_ready()
@@ -386,12 +458,24 @@ end
 function Process:send_prompt(prompt, opts)
   opts = opts or {}
 
-  if not self:is_ready() then
+  -- Check if process is alive (has job_id)
+  if not self:is_alive() then
     if self.config.debug and self._on_debug then
-      self:_on_debug("send_prompt: not ready")
+      self:_on_debug("send_prompt: not alive")
     end
     return nil
   end
+
+  -- Check if session is ready (initialized)
+  -- Note: After cancellation, session_ready should remain true if we've initialized
+  if not self.state.session_ready and not self.state.initialized then
+    if self.config.debug and self._on_debug then
+      self:_on_debug("send_prompt: not ready (not initialized)")
+    end
+    return nil
+  end
+
+  -- Queue if busy
   if self.state.busy then
     local text = self:_extract_prompt_text(prompt)
     table.insert(self.data.prompt_queue, { prompt = prompt, text = text, opts = opts })
@@ -401,6 +485,7 @@ function Process:send_prompt(prompt, opts)
     return nil
   end
 
+  -- Mark as busy before sending
   self.state.busy = true
   self.ui.streaming_response = ""
   self.ui.streaming_start_line = nil
@@ -430,40 +515,59 @@ function Process:send_prompt(prompt, opts)
     prompt = formatted_prompt
   }
 
-  return self:send("session/prompt", request_params, function(result, err)
-    if err then
-      if self._on_debug then
-        self:_on_debug("Prompt error: " .. vim.inspect(err))
-      end
-      self.state.busy = false
-      vim.schedule(function()
-        self:process_queued_prompts()
-      end)
-    elseif result and result.stopReason then
-      vim.schedule(function()
-        if self.state.busy then
-          self.state.busy = false
-          self:process_queued_prompts()
+  -- Wrap the send in pcall to catch any errors during send
+  local ok, result_id = pcall(function()
+    return self:send("session/prompt", request_params, function(result, err)
+      if err then
+        if self._on_debug then
+          self:_on_debug("Prompt error: " .. vim.inspect(err))
         end
-      end)
-    end
+        self.state.busy = false
+        vim.schedule(function()
+          self:process_queued_prompts()
+        end)
+      elseif result and result.stopReason then
+        vim.schedule(function()
+          if self.state.busy then
+            self.state.busy = false
+            self:process_queued_prompts()
+          end
+        end)
+      end
+    end)
   end)
+
+  if not ok then
+    -- Send failed, reset state
+    if self._on_debug then
+      self:_on_debug("send_prompt failed: " .. tostring(result_id))
+    end
+    self.state.busy = false
+    return nil
+  end
+
+  return result_id
 end
 
 function Process:cancel()
   if not self:is_alive() then return end
+  
+  -- Send cancellation notification
   self:notify("session/cancel", { sessionId = self.session_id })
-  -- Ensure state is properly reset after cancel
-  -- Note: We DON'T clear prompt_queue here - queued messages should be preserved
-  -- The queue will be processed when the agent sends the 'stop' update
-  -- If we want to clear the queue, it should be done at a higher level
+  
+  -- Reset streaming and UI state
+  self.ui.streaming_response = ""
+  self.ui.streaming_start_line = nil
+  self.ui.pending_tool_calls = {}
+  self.ui.active_tools = {}
+  
+  -- Mark as not busy to allow new operations
+  -- The agent will send a 'stop' update when it actually cancels
   self.state.busy = false
-  -- Keep session_ready as true to allow sending new messages
-  -- If it was already true, keep it that way
-  if not self.state.session_ready then
-    -- Try to restore session_ready if the session was initialized
-    self.state.session_ready = self.state.initialized or false
-  end
+  
+  -- Ensure session_ready is true to allow new messages
+  -- If we've initialized once, we should be ready to send new messages
+  self.state.session_ready = true
 end
 
 function Process:cancel_and_clear_queue()

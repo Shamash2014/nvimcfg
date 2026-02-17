@@ -1,5 +1,18 @@
 local M = {}
 
+-- AI REPL - Chat Buffer Only Architecture
+-- =======================================
+-- This module manages AI agent sessions through .chat buffers only.
+-- The traditional REPL interface has been removed in favor of the more
+-- powerful chat buffer system (Flemma-style UI with @You:, @Djinni: markers).
+--
+-- Key changes:
+-- - M.new_session() creates a process and opens a chat buffer
+-- - M.show() redirects to M.open_chat_buffer()
+-- - setup_buffer_keymaps() is minimal (chat buffers have their own setup)
+-- - Process buffers are hidden/internal only
+-- =======================================
+
 local Process = require("ai_repl.process")
 local registry = require("ai_repl.registry")
 local render = require("ai_repl.render")
@@ -57,6 +70,16 @@ local config = setmetatable({
 local ui = {
   project_root = nil,
 }
+
+-- Get the REPL window (deprecated - returns nil since we use chat buffers only)
+local function get_tab_win()
+  -- No REPL window anymore - all interaction is through chat buffers
+  return nil
+end
+
+local function setup_window_options(win)
+  -- Deprecated - no-op since we use chat buffers
+end
 
 local function extract_labels(items)
   return vim.tbl_map(function(item) return item.label end, items)
@@ -209,6 +232,16 @@ local function handle_session_update(proc, params)
         render.append_content(buf, { "", "[~] Context compacted", "" })
         return
       end
+
+      -- Check if this is a response to a slash command
+      if proc.data.pending_slash_command then
+        -- First message chunk for slash command response - add @System: marker
+        if not proc.data.slash_command_response_started then
+          proc.data.slash_command_response_started = true
+          render.append_content(buf, { "", "@System:" })
+        end
+      end
+
       render.update_streaming(buf, result.text, proc.ui)
     end
 
@@ -285,6 +318,12 @@ local function handle_session_update(proc, params)
     local queue_count = #proc.data.prompt_queue
     local queue_info = queue_count > 0 and (" [" .. queue_count .. " queued]") or ""
     render.append_content(buf, { "", (reason_msgs[result.stop_reason] or "---") .. mode_str .. queue_info, "" })
+
+    -- Clear slash command state if this was a response to a slash command
+    if proc.data.pending_slash_command then
+      proc.data.pending_slash_command = nil
+      proc.data.slash_command_response_started = nil
+    end
 
     -- Add @You: marker after agent completes
     local chat_buffer = require("ai_repl.chat_buffer")
@@ -857,7 +896,7 @@ local function create_buffer(proc, name)
   local buf_name = "AI: " .. session_name
   pcall(vim.api.nvim_buf_set_name, buf, buf_name)
 
-  render.init_buffer(buf)
+  -- Minimal buffer setup for internal process output (hidden from user)
   proc.data.buf = buf
   proc.data.name = session_name
 
@@ -942,121 +981,8 @@ local function parse_file_references(text)
 end
 
 local function setup_buffer_keymaps(buf)
-  local function submit()
-    local raw_text = render.get_prompt_input(buf)
-    local text = raw_text:gsub("^%s*(.-)%s*$", "%1")
-
-    if questionnaire.is_awaiting_input() then
-      render.clear_prompt_input(buf)
-      questionnaire.handle_text_input(text)
-      return
-    end
-
-    if text == "" then
-      vim.notify("AI REPL: Empty prompt", vim.log.levels.DEBUG)
-      return
-    end
-    render.clear_prompt_input(buf)
-
-    if text:sub(1, 1) == "/" then
-      M.handle_command(text:sub(2))
-    else
-      local proc = registry.active()
-      local prompt, has_files = parse_file_references(text)
-
-      if proc and #proc.data.context_files > 0 then
-        for _, file_path in ipairs(proc.data.context_files) do
-          local mime_type, is_image = get_mime_type(file_path)
-          local file_content = read_file_content(file_path, is_image)
-          if file_content then
-            local resource = {
-              uri = "file://" .. file_path,
-              name = vim.fn.fnamemodify(file_path, ":t"),
-              mimeType = mime_type,
-            }
-            if is_image then
-              resource.blob = file_content
-            else
-              resource.text = file_content
-            end
-            table.insert(prompt, 1, { type = "resource", resource = resource })
-          end
-        end
-        proc.data.context_files = {}
-      end
-
-      if has_files or #prompt > 1 then
-        M.send_prompt(prompt)
-      else
-        M.send_prompt(text)
-      end
-    end
-  end
-
-  render.setup_cursor_lock(buf)
-
-  local opts = { buffer = buf, silent = true }
-  vim.keymap.set("i", "<CR>", submit, opts)
-  vim.keymap.set("n", "<CR>", submit, opts)
-  vim.keymap.set("n", "q", M.hide, opts)
-  vim.keymap.set("n", "<Esc>", M.hide, opts)
-  vim.keymap.set("n", "<C-c>", M.cancel, opts)
-  vim.keymap.set("i", "<C-c>", M.cancel, opts)
-  vim.keymap.set({ "n", "i" }, "<S-Tab>", function() M.show_mode_picker() end, opts)
-  vim.keymap.set("n", "<C-q>", M.show_queue, opts)
-  vim.keymap.set("n", "<C-e>", M.edit_queued, opts)
-  vim.keymap.set("n", "i", function()
-    local win = vim.fn.bufwinid(buf)
-    if win ~= -1 then render.goto_prompt(buf, win) end
-  end, opts)
-  vim.keymap.set("n", "a", function()
-    local win = vim.fn.bufwinid(buf)
-    if win ~= -1 then render.goto_prompt(buf, win) end
-  end, opts)
-  vim.keymap.set("n", "G", function()
-    local win = vim.fn.bufwinid(buf)
-    if win ~= -1 then render.goto_prompt(buf, win) end
-  end, opts)
-
-  vim.keymap.set("i", "@", function()
-    local ok, snacks = pcall(require, "snacks")
-    if ok and snacks.picker then
-      local root = get_current_project_root()
-      local target_buf = buf
-      local target_win = vim.api.nvim_get_current_win()
-      snacks.picker.files({
-        layout = { preset = "vscode" },
-        cwd = root,
-        confirm = function(picker, item)
-          picker:close()
-          if item then
-            local file_path = item.file or item[1]
-            if file_path then
-              local rel_path = vim.fn.fnamemodify(file_path, ":.")
-              vim.schedule(function()
-                if vim.api.nvim_buf_is_valid(target_buf) and vim.api.nvim_win_is_valid(target_win) then
-                  vim.api.nvim_set_current_win(target_win)
-                  vim.api.nvim_win_set_buf(target_win, target_buf)
-                  vim.cmd("startinsert")
-                  vim.api.nvim_put({ "@" .. rel_path .. " " }, "c", false, true)
-                end
-              end)
-            end
-          end
-        end,
-        on_close = function()
-          vim.schedule(function()
-            if vim.api.nvim_buf_is_valid(target_buf) and vim.api.nvim_win_is_valid(target_win) then
-              vim.api.nvim_set_current_win(target_win)
-              vim.cmd("startinsert")
-            end
-          end)
-        end,
-      })
-    else
-      vim.api.nvim_put({ "@" }, "c", false, true)
-    end
-  end, opts)
+  -- Minimal setup for internal process buffer (hidden, not used for interaction)
+  -- Chat buffers have their own keymap setup in chat_buffer.lua
 
   vim.api.nvim_create_autocmd("BufEnter", {
     buffer = buf,
@@ -1398,7 +1324,9 @@ function M.handle_command(cmd)
       "  /skill verify - Verify all skills for current provider",
       "  /new - New session",
       "  /sessions - List sessions",
-      "  /mode [mode] - Show/switch mode (chat/spec)",
+      "  /kill - Kill current session (terminate process)",
+      "  /restart - Restart session (kill and create fresh)",
+      "  /mode [mode] - Show mode picker or switch to specific mode",
       "  /chat [file] - Open/create .chat buffer (Flemma-style UI)",
       "  /restart-chat - Restart conversation in current .chat buffer",
       "  /summarize - Summarize current conversation",
@@ -1465,7 +1393,7 @@ function M.handle_command(cmd)
     if args[1] then
       M.switch_to_mode(args[1])
     else
-      M.show_mode_status()
+      M.show_mode_picker()
     end
   elseif command == "chat" or command == "mode-chat" then
     M.open_chat_buffer(args[1])
@@ -1594,6 +1522,10 @@ function M.handle_command(cmd)
     M.revoke_permission()
   elseif command == "quit" or command == "close" then
     M.close()
+  elseif command == "kill" then
+    M.kill_session()
+  elseif command == "restart" then
+    M.restart_session()
   elseif command == "debug" then
     config.debug = not config.debug
     if proc then
@@ -1799,6 +1731,20 @@ function M.handle_command(cmd)
     if proc and proc.data.slash_commands then
       for _, sc in ipairs(proc.data.slash_commands) do
         if sc.name == command or sc.name == "/" .. command then
+          -- Mark that we're expecting a response to a slash command
+          proc.data.pending_slash_command = {
+            name = sc.name,
+            args = args
+          }
+
+          -- Provide feedback that command is being executed
+          local cmd_display = sc.name:gsub("^/", "")
+          if buf then
+            render.append_content(buf, { "", "[⚡] " .. cmd_display .. (args[1] and (" " .. table.concat(args, " ")) or "") })
+          else
+            vim.notify("Executing: " .. cmd_display, vim.log.levels.INFO)
+          end
+
           proc:notify("session/slash_command", {
             sessionId = proc.session_id,
             commandName = sc.name,
@@ -2219,6 +2165,62 @@ function M.close()
   end
 end
 
+function M.kill_session()
+  -- Kill the current session/process
+  local proc = registry.active()
+  if not proc then
+    vim.notify("No active session to kill", vim.log.levels.WARN)
+    return
+  end
+
+  local session_id = proc.session_id
+  local session_name = proc.data.name or "Session"
+
+  -- Kill the process
+  proc:kill()
+
+  -- Remove from registry
+  registry.unregister(session_id)
+
+  vim.notify("Killed session: " .. session_name, vim.log.levels.INFO)
+end
+
+function M.restart_session()
+  -- Kill current session and create a fresh one
+  local proc = registry.active()
+  local cwd
+
+  if proc then
+    -- Save current working directory
+    cwd = proc.data.cwd
+
+    -- Get current chat buffer if any
+    local current_buf = vim.api.nvim_get_current_buf()
+    local is_chat = chat_buffer.is_chat_buffer(current_buf)
+
+    -- Kill the current session
+    proc:kill()
+    registry.unregister(proc.session_id)
+
+    vim.notify("Restarting session...", vim.log.levels.INFO)
+
+    -- If in a chat buffer, restart the conversation
+    if is_chat then
+      vim.defer_fn(function()
+        chat_buffer.restart_conversation(current_buf)
+      end, 100)
+      return
+    end
+  else
+    cwd = get_current_project_root()
+  end
+
+  -- Create new session
+  vim.defer_fn(function()
+    M.new_session({ cwd = cwd })
+  end, 100)
+end
+
 function M.hide()
   -- No-op for chat buffers (they're regular buffers)
   -- Kept for backward compatibility
@@ -2451,6 +2453,7 @@ function M.new_session(provider_id, profile_id)
     profile_id = profile_id,
   })
 
+  -- Create a minimal hidden buffer for the process (used for internal output only)
   local buf = create_buffer(proc, nil)
 
   -- Show initialization message
@@ -2469,10 +2472,9 @@ function M.new_session(provider_id, profile_id)
   registry.set(session_id, proc)
   registry.set_active(session_id)
 
-  setup_buffer_keymaps(buf)
   proc:start()
 
-  -- Now open chat buffer which will attach to this session
+  -- Open chat buffer which will attach to this session
   M.open_chat_buffer()
 end
 
@@ -2526,12 +2528,9 @@ function M.load_session(session_id, opts)
   local existing = registry.get(session_id)
   if existing and existing:is_ready() then
     registry.set_active(session_id)
-    local win = get_tab_win()
-    if win then
-      vim.api.nvim_win_set_buf(win, existing.data.buf)
-    end
     update_statusline()
     render.append_content(existing.data.buf, { "[+] Switched to session: " .. session_id:sub(1, 8) .. "...", "" })
+    M.open_chat_buffer()
     return
   end
 
@@ -2550,23 +2549,13 @@ function M.load_session(session_id, opts)
   registry.set(session_id, proc)
   registry.set_active(session_id)
 
-  local win = get_tab_win()
-  if win then
-    vim.api.nvim_win_set_buf(win, buf)
-    setup_window_options(win)
-  end
-
   setup_buffer_keymaps(buf)
   render.append_content(buf, { "Loading session " .. session_id:sub(1, 8) .. "..." })
 
   proc:start()
 
-  if not win then
-    win = vim.fn.bufwinid(buf)
-  end
-  if win and win ~= -1 and vim.api.nvim_win_is_valid(win) then
-    render.goto_prompt(buf, win)
-  end
+  -- Open chat buffer instead of showing REPL buffer
+  M.open_chat_buffer()
 end
 
 function M.open_session_picker()
