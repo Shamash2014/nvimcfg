@@ -743,13 +743,10 @@ function M.render_diff(buf, file_path, old_content, new_content)
         end)
 
         if parse_ok then
-          -- Use treesitter highlighter to get proper highlights
-          local highlight_ok, highlighter = pcall(vim.treesitter.highlighter.new, parser)
-          if highlight_ok and highlighter then
-            local highlights = {}
-            local query = highlighter:get_query(filetype)
+          local highlights = {}
+          local query = vim.treesitter.query.get(filetype, "highlights")
 
-            if query then
+          if query and query.iter_matches then
               local root = parser:trees()[1]:root()
               local start_row, end_row = root:range()
 
@@ -770,24 +767,23 @@ function M.render_diff(buf, file_path, old_content, new_content)
                   end
                 end
               end
-            end
 
-            -- Apply highlights to diff buffer
-            local content_start = content_line:find("%s%s")
-            if content_start then
-              content_start = content_start + 1
-              for _, hl in ipairs(highlights) do
-                pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num,
-                  content_start + hl.start_col, {
-                    end_col = content_start + hl.end_col,
-                    hl_group = hl.hl_group,
-                    priority = 90
-                })
+              -- Apply highlights to diff buffer
+              local content_start = content_line:find("%s%s")
+              if content_start then
+                content_start = content_start + 1
+                for _, hl in ipairs(highlights) do
+                  pcall(vim.api.nvim_buf_set_extmark, buf, NS_DIFF, line_num,
+                    content_start + hl.start_col, {
+                      end_col = content_start + hl.end_col,
+                      hl_group = hl.hl_group,
+                      priority = 90
+                  })
+                end
               end
             end
           end
         end
-      end
 
       -- Clean up temporary buffer
       if vim.api.nvim_buf_is_valid(temp_buf) then

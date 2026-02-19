@@ -142,10 +142,9 @@ function Process:send(method, params, callback)
     if self._on_debug and self.config.debug then
       self:_on_debug("chansend failed: " .. tostring(err))
     end
-    -- Channel might be closed, mark job as invalid
-    if err:match("channel") or err:match("job") then
-      self:_on_exit(1)
-    end
+    -- Don't call _on_exit here - the process might still be alive
+    -- Just return nil to indicate failure
+    -- The actual job exit will be detected by jobwait in is_alive()
     return nil
   end
 
@@ -170,10 +169,9 @@ function Process:notify(method, params)
     if self._on_debug and self.config.debug then
       self:_on_debug("notify chansend failed: " .. tostring(err))
     end
-    -- Channel might be closed, mark job as invalid
-    if err:match("channel") or err:match("job") then
-      self:_on_exit(1)
-    end
+    -- Don't call _on_exit for notify errors - the process is still alive
+    -- We just failed to send this one notification
+    -- The job will be cleaned up properly when it actually exits
   end
 end
 
@@ -551,22 +549,20 @@ end
 
 function Process:cancel()
   if not self:is_alive() then return end
-  
+
   -- Send cancellation notification
   self:notify("session/cancel", { sessionId = self.session_id })
-  
+
   -- Reset streaming and UI state
   self.ui.streaming_response = ""
   self.ui.streaming_start_line = nil
   self.ui.pending_tool_calls = {}
   self.ui.active_tools = {}
-  
+
   -- Mark as not busy to allow new operations
-  -- The agent will send a 'stop' update when it actually cancels
   self.state.busy = false
-  
+
   -- Ensure session_ready is true to allow new messages
-  -- If we've initialized once, we should be ready to send new messages
   self.state.session_ready = true
 end
 
