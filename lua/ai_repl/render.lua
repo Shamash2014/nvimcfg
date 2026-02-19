@@ -746,27 +746,30 @@ function M.render_diff(buf, file_path, old_content, new_content)
           local highlights = {}
           local query = vim.treesitter.query.get(filetype, "highlights")
 
-          if query and query.iter_matches then
-              local root = parser:trees()[1]:root()
-              local start_row, end_row = root:range()
-
-              -- Iterate through captures
-              for pattern, match, metadata in query:iter_matches(root, temp_buf, start_row, end_row + 1) do
-                for id, node in pairs(match) do
-                  if node then
-                    local start_row_, start_col, end_row_, end_col = node:range()
-                    if start_row_ == 0 then
-                      local capture = query.captures[id]
-                      local hl_group = "@" .. capture
-                      table.insert(highlights, {
-                        start_col = start_col,
-                        end_col = end_col,
-                        hl_group = hl_group
-                      })
+          if query then
+              pcall(function()
+                local trees = parser:trees()
+                if not trees or not trees[1] then return end
+                local root = trees[1]:root()
+                if not root then return end
+                local start_row, end_row = root:range()
+                for pattern, match, metadata in query:iter_matches(root, temp_buf, start_row, end_row + 1) do
+                    for id, node in pairs(match) do
+                      if node then
+                        local start_row_, start_col, end_row_, end_col = node:range()
+                        if start_row_ == 0 then
+                          local capture = query.captures[id]
+                          local hl_group = "@" .. capture
+                          table.insert(highlights, {
+                            start_col = start_col,
+                            end_col = end_col,
+                            hl_group = hl_group
+                          })
+                        end
+                      end
                     end
                   end
-                end
-              end
+              end)
 
               -- Apply highlights to diff buffer
               local content_start = content_line:find("%s%s")

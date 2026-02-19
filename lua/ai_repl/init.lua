@@ -1542,13 +1542,46 @@ function M.handle_command(cmd)
     local current_buf = vim.api.nvim_get_current_buf()
     if chat_buffer.is_chat_buffer(current_buf) then
       vim.notify("[.chat] Starting session...", vim.log.levels.INFO)
+
+      local lines = vim.api.nvim_buf_get_lines(current_buf, 0, -1, false)
+      local chat_parser = require("ai_repl.chat_parser")
+      local parsed = chat_parser.parse_buffer(lines, current_buf)
+      local old_messages = parsed.messages or {}
+
       M.new_session(config.default_provider)
-      local proc = registry.active()
-      if proc then
+
+      local chat_buffer_events = require("ai_repl.chat_buffer_events")
+      local function attach_and_sync()
+        local proc = registry.active()
+        if not proc then return end
+
         chat_buffer_events.setup_event_forwarding(current_buf, proc)
         chat_buffer.attach_session(current_buf, proc.session_id)
-        vim.notify("[.chat] Session started! Press C-] to send.", vim.log.levels.INFO)
+
+        if #old_messages > 0 then
+          proc.data.messages = {}
+          for _, msg in ipairs(old_messages) do
+            if msg.role == "user" or msg.role == "djinni" then
+              registry.append_message(proc.session_id, msg.role, msg.content, msg.tool_calls)
+            end
+          end
+          vim.notify("[.chat] Session started with " .. #old_messages .. " messages synced. Press C-] to send.", vim.log.levels.INFO)
+        else
+          vim.notify("[.chat] Session started! Press C-] to send.", vim.log.levels.INFO)
+        end
       end
+
+      local attempts = 0
+      local timer = vim.uv.new_timer()
+      timer:start(100, 200, vim.schedule_wrap(function()
+        attempts = attempts + 1
+        local proc = registry.active()
+        if (proc and proc:is_ready()) or attempts > 50 then
+          timer:stop()
+          timer:close()
+          attach_and_sync()
+        end
+      end))
     else
       if buf then
         render.append_content(buf, { "[!] Not a .chat buffer" })
