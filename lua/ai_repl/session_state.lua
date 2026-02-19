@@ -189,6 +189,14 @@ function M.apply_update(proc, update)
       update = u,
     }
 
+  elseif update_type == "config_options_update" then
+    proc.state.config_options = u.configOptions or {}
+    return {
+      type = "config_options_update",
+      update = u,
+      config_options = proc.state.config_options,
+    }
+
   elseif update_type == "stop" then
     proc.state.busy = false
 

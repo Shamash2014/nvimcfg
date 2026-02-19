@@ -10,6 +10,25 @@ local TOOL_NAMES = {
   NotebookEdit = "Notebook", LSP = "LSP", KillShell = "Kill Process",
 }
 
+local MODE_ICONS = {
+  plan = "📋", spec = "📝", auto = "🤖", code = "💻",
+  chat = "💬", execute = "▶️",
+}
+
+local function render_plan_in_chat(buf, entries)
+  if not entries or #entries == 0 then return end
+  local lines = { "", "━━━ 📋 Plan ━━━" }
+  for i, item in ipairs(entries) do
+    local icon = tool_utils.STATUS_ICONS[item.status] or "○"
+    local pri = item.priority == "high" and "! " or ""
+    local text = item.content or item.text or item.activeForm or item.description or tostring(item)
+    table.insert(lines, string.format(" %s %d. %s%s", icon, i, pri, text))
+  end
+  table.insert(lines, "━━━━━━━━━━━━")
+  table.insert(lines, "")
+  M.append_to_chat_buffer(buf, lines)
+end
+
 local function get_state(buf)
   if not buffer_state[buf] then
     buffer_state[buf] = {
@@ -154,6 +173,26 @@ function M.handle_session_update_in_chat(buf, update, proc)
     M.stream_to_chat_buffer(buf, result.text)
 
   elseif result.type == "tool_call" then
+    if result.is_plan_tool then
+      render_plan_in_chat(buf, result.plan_entries)
+      return
+    elseif result.is_exit_plan then
+      local mode_icon = MODE_ICONS[proc.state.mode or "execute"] or "▶️"
+      M.append_to_chat_buffer(buf, { "", "[▶] " .. mode_icon .. " Starting execution..." })
+      return
+    elseif result.is_ask_user then
+      if decorations_ok then pcall(decorations.stop_spinner, buf) end
+      if result.questions and #result.questions > 0 then
+        local q_ok, questionnaire = pcall(require, "ai_repl.questionnaire")
+        if q_ok then
+          questionnaire.start(proc, result.questions, function(response)
+            proc:send_prompt(response)
+          end)
+        end
+      end
+      return
+    end
+
     if decorations_ok then pcall(decorations.start_spinner, buf, "executing") end
     local u = result.update
     local raw_title = u.title or u.kind or "tool"
@@ -174,14 +213,32 @@ function M.handle_session_update_in_chat(buf, update, proc)
         local tool_name = result.tool.title or result.tool.kind or "tool"
         M.append_to_chat_buffer(buf, { "[!] " .. tool_name .. " failed" })
       elseif result.is_edit_tool and result.diff then
-        -- Render the diff for edit tools
         local render = require("ai_repl.render")
         render.render_diff(buf, result.diff.path, result.diff.old, result.diff.new)
         M.append_to_chat_buffer(buf, {
           "[~] " .. vim.fn.fnamemodify(result.diff.path, ":~:."),
         })
       end
+
+      if result.is_exit_plan_complete then
+        M.append_to_chat_buffer(buf, { "[>] Starting execution..." })
+        vim.defer_fn(function()
+          proc:send_prompt("proceed with the plan", { silent = true })
+        end, 200)
+      end
     end
+
+  elseif result.type == "plan" then
+    render_plan_in_chat(buf, result.plan_entries)
+
+  elseif result.type == "current_mode_update" then
+    local mode_id = result.update.modeId or result.update.currentModeId
+    local icon = MODE_ICONS[mode_id] or "↻"
+    M.append_to_chat_buffer(buf, { "[" .. icon .. "] Mode: " .. (mode_id or "unknown") })
+
+  elseif result.type == "modes" then
+    -- Silently track available modes (no UI output needed)
+
   elseif result.type == "stop" then
     state.streaming = false
     flush_streaming_text(buf, state)
@@ -190,6 +247,16 @@ function M.handle_session_update_in_chat(buf, update, proc)
     proc.ui.streaming_response = ""
     proc.ui.streaming_start_line = nil
     vim.bo[buf].modifiable = true
+
+    if result.response_text ~= "" and not result.had_plan then
+      local render = require("ai_repl.render")
+      local md_plan = render.parse_markdown_plan(result.response_text)
+      if #md_plan >= 3 then
+        proc.ui.current_plan = md_plan
+        render_plan_in_chat(buf, md_plan)
+      end
+    end
+
     M.append_new_user_marker(buf)
     if decorations_ok then
       pcall(decorations.stop_spinner, buf)

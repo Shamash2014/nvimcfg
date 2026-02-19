@@ -45,6 +45,14 @@ local providers = {
     permission_mode = "default",
     background_permissions = "allow_once",
   },
+  stakpak = {
+    name = "Stakpak",
+    cmd = "stakpak",
+    args = {"acp"},
+    env = {},
+    permission_mode = "default",
+    background_permissions = "allow_once",
+  },
 }
 
 -- Helper to get provider config with fallback to defaults

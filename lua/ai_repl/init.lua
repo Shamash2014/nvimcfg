@@ -670,17 +670,150 @@ local function handle_method(proc, method, params, msg_id)
       render.append_content(buf, { "[debug] system: " .. vim.inspect(params):sub(1, 200) })
     end
 
+  elseif method == "fs/read_text_file" then
+    local path = params.path
+    local response = { jsonrpc = "2.0", id = msg_id }
+    if not path or path == "" then
+      response.error = { code = -32602, message = "Missing path parameter" }
+    else
+      local ok, lines_or_err = pcall(vim.fn.readfile, path)
+      if ok then
+        local all_lines = lines_or_err
+        if params.line or params.limit then
+          local start = (params.line or 1) - 1
+          local count = params.limit or #all_lines
+          all_lines = vim.list_slice(lines_or_err, start + 1, start + count)
+        end
+        response.result = { content = table.concat(all_lines, "\n") }
+      else
+        response.error = { code = -32002, message = "File not found: " .. path }
+      end
+    end
+    vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
+
+  elseif method == "fs/write_text_file" then
+    local path = params.path
+    local content = params.content or ""
+    local response = { jsonrpc = "2.0", id = msg_id }
+    if not path or path == "" then
+      response.error = { code = -32602, message = "Missing path parameter" }
+    else
+      local dir = vim.fn.fnamemodify(path, ":h")
+      if dir ~= "" and vim.fn.isdirectory(dir) == 0 then
+        vim.fn.mkdir(dir, "p")
+      end
+      local lines = vim.split(content, "\n", { plain = true })
+      local ok, err = pcall(vim.fn.writefile, lines, path)
+      if ok then
+        response.result = vim.NIL
+      else
+        response.error = { code = -32603, message = "Write failed: " .. tostring(err) }
+      end
+    end
+    vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
+
   elseif method:match("^terminal/") then
-    local response = {
-      jsonrpc = "2.0",
-      id = msg_id,
-      result = {}
-    }
+    local response = { jsonrpc = "2.0", id = msg_id }
+
     if method == "terminal/create" then
       local term_id = "term_" .. os.time() .. "_" .. math.random(1000, 9999)
-      proc.data.terminals[term_id] = { id = term_id, buf = nil }
+      local cmd_args = { params.command }
+      if params.args then
+        for _, a in ipairs(params.args) do table.insert(cmd_args, a) end
+      end
+      local term_env = nil
+      if params.env then
+        term_env = vim.tbl_extend("force", vim.fn.environ(), {})
+        for _, ev in ipairs(params.env) do
+          term_env[ev.name] = ev.value
+        end
+      end
+      local output_lines = {}
+      local exit_status = nil
+      local job_id = vim.fn.jobstart(cmd_args, {
+        cwd = params.cwd or proc.data.cwd,
+        env = term_env,
+        stdout_buffered = false,
+        on_stdout = function(_, data)
+          for _, line in ipairs(data or {}) do
+            if line ~= "" then table.insert(output_lines, line) end
+          end
+        end,
+        on_stderr = function(_, data)
+          for _, line in ipairs(data or {}) do
+            if line ~= "" then table.insert(output_lines, line) end
+          end
+        end,
+        on_exit = function(_, code, signal)
+          exit_status = { exitCode = code }
+          if signal and signal ~= "" then
+            exit_status.signal = signal
+          end
+        end,
+      })
+      proc.data.terminals[term_id] = {
+        id = term_id, job_id = job_id, output = output_lines, exit_status = exit_status,
+        byte_limit = params.outputByteLimit,
+      }
       response.result = { terminalId = term_id }
+
+    elseif method == "terminal/output" then
+      local term = proc.data.terminals[params.terminalId]
+      if not term then
+        response.error = { code = -32002, message = "Terminal not found" }
+      else
+        local text = table.concat(term.output, "\n")
+        local truncated = false
+        if term.byte_limit and #text > term.byte_limit then
+          text = text:sub(1, term.byte_limit)
+          truncated = true
+        end
+        response.result = { output = text, truncated = truncated }
+        if term.exit_status then
+          response.result.exitStatus = term.exit_status
+        end
+      end
+
+    elseif method == "terminal/wait_for_exit" then
+      local term = proc.data.terminals[params.terminalId]
+      if not term or not term.job_id then
+        response.error = { code = -32002, message = "Terminal not found" }
+      else
+        local results = vim.fn.jobwait({ term.job_id }, 30000)
+        local code = results[1]
+        if code == -1 then
+          response.result = { exitCode = nil, signal = "timeout" }
+        elseif code == -2 then
+          response.result = { exitCode = nil, signal = "invalid" }
+        else
+          response.result = { exitCode = code }
+        end
+        if term.exit_status and term.exit_status.signal then
+          response.result.signal = term.exit_status.signal
+        end
+      end
+
+    elseif method == "terminal/kill" then
+      local term = proc.data.terminals[params.terminalId]
+      if not term or not term.job_id then
+        response.error = { code = -32002, message = "Terminal not found" }
+      else
+        pcall(vim.fn.jobstop, term.job_id)
+        response.result = vim.NIL
+      end
+
+    elseif method == "terminal/release" then
+      local term = proc.data.terminals[params.terminalId]
+      if term then
+        if term.job_id then pcall(vim.fn.jobstop, term.job_id) end
+        proc.data.terminals[params.terminalId] = nil
+      end
+      response.result = vim.NIL
+
+    else
+      response.result = {}
     end
+
     vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
 
   elseif msg_id then

@@ -318,7 +318,8 @@ function Process:_acp_initialize()
   if not self.job_id then return end
 
   self.state.client_capabilities = {
-    prompt = { text = true, embeddedContext = true, image = true, audio = false }
+    fs = { readTextFile = true, writeTextFile = true },
+    terminal = true,
   }
 
   self:_notify_status("initializing")
@@ -444,6 +445,14 @@ function Process:_handle_session_result(result)
   if result.modes then
     self.state.modes = result.modes.availableModes or {}
     self.state.mode = result.modes.currentModeId or self.state.mode
+  end
+
+  if result.configOptions then
+    self.state.config_options = result.configOptions
+  end
+
+  if result.availableCommands then
+    self.data.slash_commands = result.availableCommands
   end
 
   self.state.session_ready = true
@@ -584,6 +593,20 @@ function Process:set_mode(mode_id)
     modeId = mode_id
   })
   self.state.mode = mode_id
+end
+
+function Process:set_config_option(config_id, value, callback)
+  if not self:is_ready() then return end
+  self:send("session/set_config_option", {
+    sessionId = self.session_id,
+    configId = config_id,
+    value = value,
+  }, function(result, err)
+    if result and result.configOptions then
+      self.state.config_options = result.configOptions
+    end
+    if callback then callback(result, err) end
+  end)
 end
 
 function Process:process_queued_prompts()
