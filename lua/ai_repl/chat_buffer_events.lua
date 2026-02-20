@@ -117,9 +117,14 @@ function M.setup_event_forwarding(buf, proc)
           pcall(M.handle_session_update_in_chat, buf, params.update, self)
         else
           -- Buffer closed but we still need to process updates
-          -- Just update internal state, don't try to write to buffer
           local session_state = require("ai_repl.session_state")
-          session_state.apply_update(self, params.update)
+          local result = session_state.apply_update(self, params.update)
+          -- Ensure queue keeps flowing even without a visible buffer
+          if result and result.should_process_queue then
+            vim.defer_fn(function()
+              self:process_queued_prompts()
+            end, 200)
+          end
         end
         return
       end

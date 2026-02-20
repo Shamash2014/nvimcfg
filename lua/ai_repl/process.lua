@@ -108,7 +108,38 @@ function Process:start()
     end, 50)
   end
 
+  self:_start_stale_callback_timer()
+
   return true
+end
+
+function Process:_start_stale_callback_timer()
+  self:_stop_stale_callback_timer()
+  self._stale_timer = vim.uv.new_timer()
+  local captured_self = self
+  self._stale_timer:start(60000, 60000, vim.schedule_wrap(function()
+    if not captured_self.job_id then return end
+    local cleaned = captured_self:cleanup_stale_callbacks(120)
+    if cleaned > 0 and captured_self.state.busy then
+      local has_pending = false
+      for _ in pairs(captured_self.conn.callbacks) do
+        has_pending = true
+        break
+      end
+      if not has_pending then
+        captured_self.state.busy = false
+        captured_self:process_queued_prompts()
+      end
+    end
+  end))
+end
+
+function Process:_stop_stale_callback_timer()
+  if self._stale_timer then
+    self._stale_timer:stop()
+    self._stale_timer:close()
+    self._stale_timer = nil
+  end
 end
 
 function Process:send(method, params, callback)
@@ -176,6 +207,7 @@ function Process:notify(method, params)
 end
 
 function Process:kill()
+  self:_stop_stale_callback_timer()
   if self.job_id then
     local pid = vim.fn.jobpid(self.job_id)
     if pid and pid > 0 then
@@ -279,6 +311,18 @@ function Process:_on_exit(code)
   self.job_id = nil
   self.state.initialized = false
   self.state.session_ready = false
+  self.state.busy = false
+
+  self.conn.callbacks = {}
+  self.conn.callback_timeouts = {}
+
+  -- Clear UI state that gates queue processing to prevent stuck agents
+  self.ui.permission_active = false
+  self.ui.permission_queue = {}
+  self.ui.active_tools = {}
+  self.ui.pending_tool_calls = {}
+  self.ui.streaming_response = ""
+  self.ui.streaming_start_line = nil
 
   if self._on_process_exit then
     self:_on_process_exit(code, was_alive)
@@ -533,14 +577,10 @@ function Process:send_prompt(prompt, opts)
         vim.schedule(function()
           self:process_queued_prompts()
         end)
-      elseif result and result.stopReason then
-        vim.schedule(function()
-          if self.state.busy then
-            self.state.busy = false
-            self:process_queued_prompts()
-          end
-        end)
       end
+      -- Note: busy=false on normal completion is handled by the "stop"
+      -- session update in session_state.apply_update, not here.
+      -- The callback response just signals the RPC round-trip is done.
     end)
   end)
 
@@ -549,6 +589,12 @@ function Process:send_prompt(prompt, opts)
     if self._on_debug then
       self:_on_debug("send_prompt failed: " .. tostring(result_id))
     end
+    self.state.busy = false
+    return nil
+  end
+
+  -- send() returned nil means chansend failed — reset busy
+  if not result_id then
     self.state.busy = false
     return nil
   end
@@ -611,6 +657,10 @@ end
 
 function Process:process_queued_prompts()
   if self.state.busy then return end
+  local q_ok, questionnaire = pcall(require, "ai_repl.questionnaire")
+  if (q_ok and questionnaire.is_active()) or (self.ui and self.ui.permission_active) then
+    return
+  end
   if #self.data.prompt_queue > 0 then
     local next_prompt = table.remove(self.data.prompt_queue, 1)
     if type(next_prompt) == "table" and next_prompt.prompt then

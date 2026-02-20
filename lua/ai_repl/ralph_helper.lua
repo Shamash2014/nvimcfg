@@ -64,6 +64,7 @@ local ralph_loop = {
 local function deferred_send(proc, prompt, delay)
   local ralph = require("ai_repl.modes.ralph_wiggum")
   vim.defer_fn(function()
+    if ralph_loop.enabled then return end
     if ralph.is_enabled() and not ralph.is_paused() then
       proc:send_prompt(prompt, { silent = true })
     end
@@ -86,24 +87,27 @@ function M.start_response_monitoring(proc)
 
   ralph_loop.response_timer:start(ralph_loop.response_timeout_ms, 0, function()
     vim.schedule(function()
-      if ralph_loop.enabled and proc and proc.job_id then
-        local buf = proc.data.buf
+      if not ralph_loop.enabled then return end
+      if not proc or not proc.job_id then return end
+      -- Only re-inject if the agent is NOT busy (truly stalled, not mid-response)
+      if proc.state.busy then return end
 
-        if ralph_loop.phase == LOOP_PHASE.PLANNING then
-          render.append_content(buf, {
-            "",
-            string.format("[⏰ Ralph Loop: Response timeout (%ds) - continuing planning]",
-              ralph_loop.response_timeout_ms / 1000)
-          })
-          M.continue_planning(proc)
-        elseif ralph_loop.phase == LOOP_PHASE.EXECUTING then
-          render.append_content(buf, {
-            "",
-            string.format("[⏰ Ralph Loop: Response timeout (%ds) - re-injecting prompt]",
-              ralph_loop.response_timeout_ms / 1000)
-          })
-          M.continue_loop(proc)
-        end
+      local buf = proc.data.buf
+
+      if ralph_loop.phase == LOOP_PHASE.PLANNING then
+        render.append_content(buf, {
+          "",
+          string.format("[Ralph Loop: Response timeout (%ds) - continuing planning]",
+            ralph_loop.response_timeout_ms / 1000)
+        })
+        M.continue_planning(proc)
+      elseif ralph_loop.phase == LOOP_PHASE.EXECUTING then
+        render.append_content(buf, {
+          "",
+          string.format("[Ralph Loop: Response timeout (%ds) - re-injecting prompt]",
+            ralph_loop.response_timeout_ms / 1000)
+        })
+        M.continue_loop(proc)
       end
     end)
   end)
@@ -120,15 +124,16 @@ function M.record_activity()
     ralph_loop.response_timer:stop()
     ralph_loop.response_timer:start(ralph_loop.response_timeout_ms, 0, function()
       vim.schedule(function()
-        if ralph_loop.enabled then
-          local proc = require("ai_repl.registry").active()
-          if proc and proc.job_id then
-            if ralph_loop.phase == LOOP_PHASE.PLANNING then
-              M.continue_planning(proc)
-            elseif ralph_loop.phase == LOOP_PHASE.EXECUTING then
-              M.continue_loop(proc)
-            end
-          end
+        if not ralph_loop.enabled then return end
+        local proc = require("ai_repl.registry").active()
+        if not proc or not proc.job_id then return end
+        -- Only re-inject if truly stalled (not busy, not already being handled)
+        if proc.state.busy then return end
+
+        if ralph_loop.phase == LOOP_PHASE.PLANNING then
+          M.continue_planning(proc)
+        elseif ralph_loop.phase == LOOP_PHASE.EXECUTING then
+          M.continue_loop(proc)
         end
       end)
     end)
@@ -172,7 +177,8 @@ function M.continue_loop(proc)
   end)
 
   vim.defer_fn(function()
-    if ralph_loop.enabled and ralph_loop.phase == LOOP_PHASE.EXECUTING and proc and proc.job_id then
+    if ralph_loop.enabled and ralph_loop.phase == LOOP_PHASE.EXECUTING
+        and proc and proc.job_id and not proc.state.busy then
       proc:send_prompt(prompt_to_send, { silent = true })
       M.start_response_monitoring(proc)
     end
@@ -332,12 +338,7 @@ function M.prompt_loop_confirmation(proc, _plan_text)
       },
       function(choice, idx)
         if not choice then
-          vim.schedule(function()
-            render.append_content(buf, {
-              "",
-              "[⏸️ Ralph Loop: Confirmation pending. Use /cancel-ralph to abort]",
-            })
-          end)
+          M.cancel_loop(proc)
           return
         end
 
@@ -557,8 +558,10 @@ function M.prompt_plan_confirmation(proc)
     { prompt = "Confirm plan?" },
     function(choice, idx)
       if not choice then
+        ralph.set_awaiting_confirmation(false)
+        ralph.disable()
         vim.schedule(function()
-          render.append_content(buf, { "[⏸ Awaiting confirmation - /ralph confirm or /ralph reject]" })
+          render.append_content(buf, { "[❌ Ralph Wiggum: Cancelled (confirmation dismissed)]" })
         end)
         return
       end

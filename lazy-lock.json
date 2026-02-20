@@ -15,7 +15,7 @@
   "lazy.nvim": { "branch": "main", "commit": "306a05526ada86a7b30af95c5cc81ffba93fef97" },
   "leap.nvim": { "branch": "main", "commit": "eda0138a408a5600c45e324c69fe73c9df30939c" },
   "mini.bracketed": { "branch": "main", "commit": "e50e3abcf6a3a5d234f58e4a247dfb3035f30a65" },
-  "neogit": { "branch": "master", "commit": "df323856553d4c5e5c41117606c63f628b24a3b0" },
+  "neogit": { "branch": "master", "commit": "22433eae87236c217e0810c836fa5e529c043d4c" },
   "nvim-dap": { "branch": "master", "commit": "db321947bb289a2d4d76a32e76e4d2bd6103d7df" },
   "nvim-dap-view": { "branch": "main", "commit": "4b2bd1773bbb0e2fa740ed6101dfeb50bd98ac38" },
   "nvim-dap-virtual-text": { "branch": "master", "commit": "fbdb48c2ed45f4a8293d0d483f7730d24467ccb6" },

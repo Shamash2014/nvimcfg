@@ -211,19 +211,20 @@ function M.apply_update(proc, update)
       registry.append_message(proc.session_id, "djinni", response_text, tool_calls_to_save)
     end
 
+    local q_ok, questionnaire = pcall(require, "ai_repl.questionnaire")
+    local user_input_pending = (q_ok and questionnaire.is_active())
+      or (proc.ui and proc.ui.permission_active)
+
     local ralph_continuing = false
-    if ralph_helper.is_loop_enabled() then
-      local loop_continuing = ralph_helper.on_agent_stop(proc, response_text)
-      if loop_continuing then
-        ralph_continuing = true
+    if not user_input_pending then
+      if ralph_helper.is_loop_enabled() then
+        ralph_continuing = ralph_helper.on_agent_stop(proc, response_text)
+      else
+        ralph_continuing = ralph_helper.check_and_continue(proc, response_text)
       end
     end
 
-    if not ralph_continuing then
-      ralph_continuing = ralph_helper.check_and_continue(proc, response_text)
-    end
-
-    local should_process_queue = not ralph_continuing
+    local should_process_queue = not ralph_continuing and not user_input_pending
 
     local stop_reason = u.stopReason or "end_turn"
     local usage = u.usage
