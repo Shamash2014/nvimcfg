@@ -225,6 +225,20 @@ function M.handle_session_update_in_chat(buf, update, proc)
         })
       end
 
+      if result.images and #result.images > 0 then
+        for _, img in ipairs(result.images) do
+          local ext = (img.mimeType or ""):match("/(%w+)") or "png"
+          local tmp = vim.fn.tempname() .. "." .. ext
+          local raw = vim.base64.decode(img.data)
+          local f = io.open(tmp, "wb")
+          if f then
+            f:write(raw)
+            f:close()
+            M.append_to_chat_buffer(buf, { "[image] " .. tmp })
+          end
+        end
+      end
+
       if result.is_exit_plan_complete then
         M.append_to_chat_buffer(buf, { "[>] Starting execution..." })
         vim.defer_fn(function()

@@ -361,10 +361,7 @@ end
 function Process:_acp_initialize()
   if not self.job_id then return end
 
-  self.state.client_capabilities = {
-    fs = { readTextFile = true, writeTextFile = true },
-    terminal = true,
-  }
+  self.state.client_capabilities = vim.empty_dict()
 
   self:_notify_status("initializing")
 

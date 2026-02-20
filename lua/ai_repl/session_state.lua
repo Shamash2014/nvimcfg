@@ -85,6 +85,7 @@ function M.apply_update(proc, update)
     tool.rawOutput = u.rawOutput or tool.rawOutput
     tool.rawInput = tool.rawInput or u.rawInput
 
+    local images = {}
     if u.content and type(u.content) == "table" then
       for _, block in ipairs(u.content) do
         if block.type == "diff" then
@@ -93,11 +94,16 @@ function M.apply_update(proc, update)
             oldText = block.oldText,
             newText = block.newText,
           }
-          break
+        elseif block.type == "image" then
+          table.insert(images, {
+            mimeType = block.mimeType,
+            data = block.data,
+          })
         end
       end
       tool.content = u.content
     end
+    tool.images = #images > 0 and images or nil
 
     proc.ui.active_tools[u.toolCallId] = tool
 
@@ -168,6 +174,7 @@ function M.apply_update(proc, update)
       tool_finished = tool_finished,
       is_edit_tool = is_edit_tool,
       diff = diff,
+      images = tool.images,
       is_exit_plan_complete = is_exit_plan_complete,
     }
 
