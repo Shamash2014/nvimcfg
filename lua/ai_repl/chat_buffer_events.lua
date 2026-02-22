@@ -608,9 +608,17 @@ end
 function M.handle_status_in_chat(buf, status, data, proc)
   local label
   if status == "session_created" then
-    label = "[ACP SESSION READY]"
+    local provider_id = proc.data.provider or "unknown"
+    local providers = require("ai_repl.providers")
+    local provider_cfg = providers.get(provider_id) or {}
+    local provider_name = provider_cfg.name or provider_id
+    label = "[ACP SESSION READY] " .. provider_name
   elseif status == "session_loaded" then
-    label = "[ACP SESSION LOADED]"
+    local provider_id = proc.data.provider or "unknown"
+    local providers = require("ai_repl.providers")
+    local provider_cfg = providers.get(provider_id) or {}
+    local provider_name = provider_cfg.name or provider_id
+    label = "[ACP SESSION LOADED] " .. provider_name
   end
   if not label then return end
 

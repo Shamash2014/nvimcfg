@@ -35,18 +35,18 @@ local function get_repo_root(buf)
   if buf_name == "" then
     return nil
   end
-  
+
   local dir = vim.fn.fnamemodify(buf_name, ":h")
   if dir == "." then
     dir = vim.fn.getcwd()
   end
-  
+
   -- Try to get git root
   local git_root = vim.fn.systemlist("git -C " .. vim.fn.shellescape(dir) .. " rev-parse --show-toplevel 2>/dev/null")[1]
   if vim.v.shell_error == 0 and git_root and git_root ~= "" then
     return git_root
   end
-  
+
   -- Fallback to directory
   return dir
 end
@@ -93,7 +93,7 @@ function M.init_buffer(buf)
   -- Detect repository change
   local current_repo = get_repo_root(buf)
   local repo_changed = state.repo_root and current_repo and state.repo_root ~= current_repo
-  
+
   if repo_changed then
     -- Repository changed, prompt user to restart conversation
     vim.schedule(function()
@@ -114,7 +114,7 @@ function M.init_buffer(buf)
     end)
     return true
   end
-  
+
   -- Update repo root if not set
   if not state.repo_root then
     state.repo_root = current_repo
@@ -171,9 +171,6 @@ function M.init_buffer(buf)
         local provider_cfg = providers.get(provider_id) or {}
         local provider_name = provider_cfg.name or provider_id
         table.insert(lines, "")
-        table.insert(lines, "==================================================================")
-        table.insert(lines, "[ACP SESSION READY] " .. provider_name)
-        table.insert(lines, "==================================================================")
         table.insert(lines, "Working Directory: " .. proc.data.cwd)
         table.insert(lines, "Session ID: " .. proc.session_id)
         table.insert(lines, "Messages synced: " .. #parsed.messages)
@@ -188,11 +185,11 @@ function M.init_buffer(buf)
     end
   elseif not state.session_id then
     state.creating_session = true
-    
+
     local function create_and_attach_session()
       local ai_repl = require("ai_repl.init")
       local proc = registry.active()
-      
+
       if proc and proc:is_alive() then
         -- Use existing active session instead of creating new one
         M.attach_session(buf, proc.session_id)
@@ -201,27 +198,18 @@ function M.init_buffer(buf)
         local providers = require("ai_repl.providers")
         local provider_cfg = providers.get(provider_id) or {}
         local provider_name = provider_cfg.name or provider_id
-        vim.schedule(function()
-          local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-          table.insert(lines, "")
-          table.insert(lines, "==================================================================")
-          table.insert(lines, "[ACP SESSION READY] " .. provider_name)
-          table.insert(lines, "==================================================================")
-          table.insert(lines, "")
-          vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-        end)
         vim.notify("[.chat] Attached to active session. Press C-] to send.", vim.log.levels.INFO)
         state.creating_session = false
         require("ai_repl.init").update_statusline()
         return
       end
-      
+
       ai_repl.pick_provider(function(provider_id)
         if not provider_id then
           state.creating_session = false
           return
         end
-        
+
         vim.notify("[.chat] Creating session...", vim.log.levels.INFO)
         ai_repl.new_session(provider_id)
 
@@ -245,15 +233,6 @@ function M.init_buffer(buf)
               local providers = require("ai_repl.providers")
               local provider_cfg = providers.get(provider_id) or {}
               local provider_name = provider_cfg.name or provider_id
-              vim.schedule(function()
-                local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-                table.insert(lines, "")
-                table.insert(lines, "==================================================================")
-                table.insert(lines, "[ACP SESSION READY] " .. provider_name)
-                table.insert(lines, "==================================================================")
-                table.insert(lines, "")
-                vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-              end)
               vim.notify("[.chat] Session created and ready! Press C-] to send.", vim.log.levels.INFO)
               state.creating_session = false
               require("ai_repl.init").update_statusline()
@@ -281,7 +260,7 @@ function M.init_buffer(buf)
         end, 100)
       end)
     end
-    
+
     vim.schedule(create_and_attach_session)
   end
 
@@ -351,7 +330,7 @@ function M.attach_session(buf, session_id)
   if not proc then
     -- Check if there's an active process we can use
     proc = registry.active()
-    
+
     if not proc or not proc:is_alive() then
       -- No active process, return error
       -- The caller should create a session first
@@ -452,15 +431,6 @@ function M.restart_conversation(buf, provider_id)
         local providers = require("ai_repl.providers")
         local provider_cfg = providers.get(provider_id) or {}
         local provider_name = provider_cfg.name or provider_id
-        vim.schedule(function()
-          local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-          table.insert(lines, "")
-          table.insert(lines, "==================================================================")
-          table.insert(lines, "[ACP SESSION READY] " .. provider_name)
-          table.insert(lines, "==================================================================")
-          table.insert(lines, "")
-          vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-        end)
         vim.notify("[.chat] Conversation restarted with " .. provider, vim.log.levels.INFO)
         require("ai_repl.init").update_statusline()
       else
@@ -633,15 +603,15 @@ function M.send_to_process(buf)
   if trimmed_content:sub(1, 1) == "/" then
     -- Extract command (remove leading /)
     local cmd_with_args = trimmed_content:sub(2)
-    
+
     -- Import handle_command from ai_repl
     local ai_repl = require("ai_repl")
-    
+
     -- Inject @Djinni: marker if not present before executing command
     if parsed.last_role ~= "djinni" then
       M.append_djinni_marker(buf)
     end
-    
+
     -- Clear the slash command from the buffer by removing the user message
     -- Find the last @You: or @User: marker and remove everything after it until the next marker
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
@@ -652,22 +622,22 @@ function M.send_to_process(buf)
         break
       end
     end
-    
+
     if last_you_line ~= -1 then
       -- Remove content after @You: marker (keep the marker itself)
       vim.api.nvim_buf_set_lines(buf, last_you_line + 1, -1, false, {})
     end
-    
+
     -- Handle the slash command
     ai_repl.handle_command(cmd_with_args)
-    
+
     -- Ensure @You: marker is added after command execution
     vim.schedule(function()
       if vim.api.nvim_buf_is_valid(buf) then
         chat_buffer_events.ensure_you_marker(buf)
       end
     end)
-    
+
     return true
   end
 

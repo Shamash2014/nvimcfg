@@ -237,12 +237,20 @@ local function update_statusline()
   local mode_display = get_mode_display(mode)
   local queue_count = proc and #proc.data.prompt_queue or 0
   local queue_str = queue_count > 0 and (" Q:" .. queue_count) or ""
-  local busy_str = proc and proc.state.busy and " ●" or ""
-  local bg_count = count_background_busy()
-  local bg_str = bg_count > 0 and (" [" .. bg_count .. " bg]") or ""
-  local skill_str = proc and proc.data.active_skill and (" 🎯 " .. proc.data.active_skill) or ""
-  vim.wo[win].statusline = " " .. provider_name .. " | " .. agent_name .. " [" .. mode_display .. "]" .. busy_str .. queue_str .. bg_str .. skill_str
+
+  local ok, sp = pcall(vim.fn.winlayout)
+  if ok and sp and sp[1] == "leaf" then
+    vim.wo[win].statusline = string.format(
+      "%%#StatusLine# %s | %%#Title#%s%s %%#Comment#%s",
+      mode_display,
+      agent_name,
+      queue_str,
+      provider_name
+    )
+  end
 end
+
+M.update_statusline = update_statusline
 
 local session_state = require("ai_repl.session_state")
 
@@ -1125,12 +1133,6 @@ local function create_process(session_id, opts)
         local provider_id = self.data.provider or config.default_provider
         local provider_cfg = config.providers[provider_id] or {}
         local provider_name = provider_cfg.name or provider_id
-        -- Don't rename buffer - keep .chat filename for clarity
-        append_to_buffer(buf, {
-          "",
-          "[ACP SESSION READY] " .. provider_name,
-          "",
-        })
         update_statusline()
 
       elseif status == "session_loaded" then
@@ -1141,11 +1143,6 @@ local function create_process(session_id, opts)
         local provider_id = self.data.provider or config.default_provider
         local provider_cfg = config.providers[provider_id] or {}
         local provider_name = provider_cfg.name or provider_id
-        append_to_buffer(buf, {
-          "",
-          "[ACP SESSION LOADED] " .. provider_name,
-          "",
-        }, { type = "silent" })
         local messages = registry.load_messages(self.session_id)
         if messages and #messages > 0 then
           render.render_history(buf, messages)
