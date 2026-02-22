@@ -3,12 +3,7 @@
 
 local M = {}
 
--- Parser cache to avoid re-parsing unchanged buffers
-local parser_cache = {
-  buf = nil,
-  changedtick = nil,
-  result = nil,
-}
+local chat_state = require("ai_repl.chat_state")
 
 -- Role markers
 local ROLES = {
@@ -28,33 +23,37 @@ local ANNOTATION_PATTERNS = {
   code_block = "^%s*```(%w*)",
 }
 
--- Generate cache key from lines
-local function get_cache_key(buf)
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then
-    return nil
-  end
-  local changedtick = vim.api.nvim_buf_get_changedtick(buf)
-  return buf .. "_" .. changedtick
-end
-
 -- Invalidate parser cache for a buffer
 function M.invalidate_cache(buf)
-  if parser_cache.buf == buf then
-    parser_cache.buf = nil
-    parser_cache.changedtick = nil
-    parser_cache.result = nil
-  end
+  local state = chat_state.get_buffer_state(buf)
+  state.ast_cache = nil
+  state.ast_changedtick = -1
 end
 
--- Parse entire .chat buffer with caching
-function M.parse_buffer(lines, buf)
-  -- Check cache if buffer provided
-  if buf then
-    local cache_key = get_cache_key(buf)
-    if cache_key and parser_cache.buf == buf and parser_cache.changedtick == vim.api.nvim_buf_get_changedtick(buf) then
-      return parser_cache.result
-    end
+-- Parse entire .chat buffer with caching using changedtick
+function M.parse_buffer_cached(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return M.parse_buffer({}, nil)
   end
+
+  local state = chat_state.get_buffer_state(buf)
+  local current_tick = vim.api.nvim_buf_get_changedtick(buf)
+
+  if state.ast_cache and state.ast_changedtick == current_tick then
+    return state.ast_cache
+  end
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local parsed = M.parse_buffer(lines, buf)
+
+  state.ast_cache = parsed
+  state.ast_changedtick = current_tick
+
+  return parsed
+end
+
+-- Parse entire .chat buffer (non-cached, used by parse_buffer_cached)
+function M.parse_buffer(lines, buf)
 
   local result = {
     frontmatter = {},
@@ -206,13 +205,6 @@ function M.parse_buffer(lines, buf)
   -- Extract session_id from frontmatter
   if result.frontmatter.session_id then
     result.session_id = result.frontmatter.session_id
-  end
-
-  -- Cache result if buffer provided
-  if buf then
-    parser_cache.buf = buf
-    parser_cache.changedtick = vim.api.nvim_buf_get_changedtick(buf)
-    parser_cache.result = result
   end
 
   return result

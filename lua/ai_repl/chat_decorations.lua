@@ -1,6 +1,7 @@
 local M = {}
 
 local chat_parser = require("ai_repl.chat_parser")
+local chat_state = require("ai_repl.chat_state")
 
 -- Helper function to update folds for a buffer
 local function update_folds(buf)
@@ -18,6 +19,7 @@ local NS_RULER = vim.api.nvim_create_namespace("chat_ruler")
 local NS_SPIN = vim.api.nvim_create_namespace("chat_spin")
 local NS_TOKENS = vim.api.nvim_create_namespace("chat_tokens")
 local NS_LINE_HL = vim.api.nvim_create_namespace("chat_line_hl")
+local NS_TOOL_STATUS = vim.api.nvim_create_namespace("chat_tool_status")
 
 local SPINNERS = {
   generating = { "|", "/", "-", "\\" },
@@ -48,82 +50,9 @@ local function apply_role_highlights(buf)
 end
 
 local function apply_rulers(buf)
-  -- DISABLED: Rulers were causing significant performance overhead
-  -- This function was creating multiple extmarks on every text change
+  -- Rulers disabled by default for performance - re-enable with config
+  -- Use schedule_redecorate() for throttled updates
   return
-end
-
-  local width = 80
-  if win ~= -1 then
-    -- Account for signcolumn and number columns when calculating available width
-    local win_width = vim.api.nvim_win_get_width(win)
-    local signcolumn_width = vim.wo[win].signcolumn == "yes:1" and 2
-      or vim.wo[win].signcolumn == "yes:2" and 4
-      or vim.wo[win].signcolumn == "yes" and 2
-      or 0
-    local number_width = (vim.wo[win].number or vim.wo[win].relativenumber) and vim.wo[win].numberwidth or 0
-    -- Add small margin for foldcolumn and other UI elements
-    local margin = 2
-    width = win_width - signcolumn_width - number_width - margin
-    -- Ensure minimum width
-    width = math.max(width, 20)
-  end
-
-  local ruler_text = string.rep("─", width)
-  local border_ruler = "╾" .. string.rep("─", width - 2) .. "╼"
-  local first_role = true
-
-  for i, line in ipairs(lines) do
-    local actual_line = start_line + i
-    local role = chat_parser.parse_role_marker(line)
-    if role then
-      if first_role then
-        first_role = false
-      else
-        -- Use different ruler styles for different roles
-        local ruler_hl = "ChatRuler"
-        local virt_text = { { ruler_text, ruler_hl } }
-
-        if role == "user" then
-          ruler_hl = "ChatRulerYou"
-          virt_text = {
-            { "┌", ruler_hl },
-            { string.rep("─", width - 2), ruler_hl },
-            { "┐", ruler_hl },
-          }
-        elseif role == "djinni" then
-          ruler_hl = "ChatRulerDjinni"
-          virt_text = {
-            { "├", ruler_hl },
-            { string.rep("─", width - 2), ruler_hl },
-            { "┤", ruler_hl },
-          }
-        end
-
-        vim.api.nvim_buf_set_extmark(buf, NS_RULER, actual_line - 1, 0, {
-          virt_lines_above = { virt_text },
-          priority = 40,
-        })
-
-        -- Add virtual text label for role
-        if role == "user" then
-          vim.api.nvim_buf_set_extmark(buf, NS_RULER, actual_line - 1, 0, {
-            virt_text = { { "  📝 USER", "ChatUserMarker" } },
-            virt_text_pos = "right_align",
-            virt_lines_above = { virt_text },
-            priority = 45,
-          })
-        elseif role == "djinni" then
-          vim.api.nvim_buf_set_extmark(buf, NS_RULER, actual_line - 1, 0, {
-            virt_text = { { "🧞 DJINNI  ", "ChatDjinniMarker" } },
-            virt_text_pos = "right_align",
-            virt_lines_above = { virt_text },
-            priority = 45,
-          })
-        end
-      end
-    end
-  end
 end
 
 function M.redecorate(buf)
@@ -399,6 +328,84 @@ function M.foldtext()
   end
 
   return line .. " [" .. line_count .. " lines]"
+end
+
+function M.show_tool_spinner(buf, tool_id, line)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+
+  local state = chat_state.get_buffer_state(buf)
+
+  if not state.tool_indicators then
+    state.tool_indicators = {}
+  end
+
+  local frames = { "◐", "◓", "◑", "◒" }
+  local frame_idx = 1
+
+  local extmark_id = vim.api.nvim_buf_set_extmark(buf, NS_TOOL_STATUS, line - 1, 0, {
+    virt_text = { { frames[frame_idx] .. " Executing...", "Comment" } },
+    virt_text_pos = "eol",
+    priority = 250,
+  })
+
+  local timer = vim.uv.new_timer()
+  timer:start(0, 100, vim.schedule_wrap(function()
+    if not vim.api.nvim_buf_is_valid(buf) then
+      timer:stop()
+      timer:close()
+      return
+    end
+
+    frame_idx = (frame_idx % #frames) + 1
+    pcall(vim.api.nvim_buf_set_extmark, buf, NS_TOOL_STATUS, line - 1, 0, {
+      id = extmark_id,
+      virt_text = { { frames[frame_idx] .. " Executing...", "Comment" } },
+      virt_text_pos = "eol",
+      priority = 250,
+    })
+  end))
+
+  state.tool_indicators[tool_id] = {
+    extmark_id = extmark_id,
+    timer = timer,
+    line = line,
+  }
+end
+
+function M.complete_tool_spinner(buf, tool_id, success)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+
+  local state = chat_state.get_buffer_state(buf)
+  local indicator = state.tool_indicators and state.tool_indicators[tool_id]
+
+  if not indicator then
+    return
+  end
+
+  indicator.timer:stop()
+  indicator.timer:close()
+
+  local symbol = success and "✓ Complete" or "✗ Failed"
+  local hl = success and "DiagnosticOk" or "DiagnosticError"
+
+  pcall(vim.api.nvim_buf_set_extmark, buf, NS_TOOL_STATUS, indicator.line - 1, 0, {
+    id = indicator.extmark_id,
+    virt_text = { { symbol, hl } },
+    virt_text_pos = "eol",
+    priority = 250,
+  })
+
+  vim.defer_fn(function()
+    if vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_del_extmark, buf, NS_TOOL_STATUS, indicator.extmark_id)
+    end
+  end, 2000)
+
+  state.tool_indicators[tool_id] = nil
 end
 
 function M.setup_buffer(buf)

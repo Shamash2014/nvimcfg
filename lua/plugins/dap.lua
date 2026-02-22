@@ -10,6 +10,96 @@ return {
     },
     lazy = true,
     keys = {
+      -- Debugging controls
+      { "<leader>dd", function() require("dap").continue() end, desc = "Debug: Continue" },
+      { "<leader>do", function() require("dap").step_over() end, desc = "Debug: Step Over" },
+      { "<leader>di", function() require("dap").step_into() end, desc = "Debug: Step Into" },
+      { "<leader>dO", function() require("dap").step_out() end, desc = "Debug: Step Out" },
+      { "<leader>db", function() require("dap").toggle_breakpoint() end, desc = "Toggle Breakpoint" },
+      { "<leader>dB", function() require("dap").set_breakpoint(vim.fn.input("Breakpoint condition: ")) end, desc = "Conditional Breakpoint" },
+      { "<leader>dl", function() require("dap").set_breakpoint(nil, nil, vim.fn.input("Log point message: ")) end, desc = "Log Point" },
+      { "<leader>dr", function() require("dap").repl.open() end, desc = "Open REPL" },
+      { "<leader>dR", function() require("dap").run_last() end, desc = "Run Last" },
+      { "<leader>dx", function() require("dap").terminate() end, desc = "Terminate Debug" },
+
+      -- DAP View control
+      { "<leader>dv", function() require("dap-view").toggle() end, desc = "Toggle DAP View" },
+      { "<leader>de", function() require("dap-view").eval() end, desc = "Evaluate Expression", mode = { "n", "v" } },
+
+      -- Flutter DAP controls
+      { "<localleader>ds", "<cmd>FlutterSelectDevice<cr>", desc = "Select Flutter Device", ft = "dart" },
+      { "<localleader>hr", function()
+        local dap = require("dap")
+        if dap.session() then
+          -- Send custom hot restart request to Flutter DAP
+          dap.session():request("hotRestart", function(err, response)
+            if err then
+              vim.notify("Hot restart failed: " .. vim.inspect(err), vim.log.levels.ERROR)
+            else
+              vim.notify("Flutter hot restart complete", vim.log.levels.INFO)
+            end
+          end)
+        else
+          -- Send 'R' to existing Flutter process for hot restart
+          local Job = require('plenary.job')
+          Job:new({
+            command = 'sh',
+            args = { '-c', "echo 'R' | nc localhost 8181 2>/dev/null || pkill -USR2 -f 'flutter.*run'" },
+            on_exit = function(j, return_val)
+              vim.schedule(function()
+                if return_val == 0 then
+                  vim.notify("Flutter hot restart sent", vim.log.levels.INFO)
+                else
+                  vim.notify("No Flutter process found", vim.log.levels.WARN)
+                end
+              end)
+            end,
+          }):start()
+        end
+      end, desc = "Flutter Hot Restart", ft = "dart" },
+      { "<localleader>hl", function()
+        local dap = require("dap")
+        if dap.session() then
+          -- Send custom hot reload request to Flutter DAP
+          dap.session():request("hotReload", function(err, response)
+            if err then
+              vim.notify("Hot reload failed: " .. vim.inspect(err), vim.log.levels.ERROR)
+            else
+              vim.notify("Flutter hot reload complete", vim.log.levels.INFO)
+            end
+          end)
+        else
+          -- Send 'r' to existing Flutter process for hot reload
+          local Job = require('plenary.job')
+          Job:new({
+            command = 'sh',
+            args = { '-c', "echo 'r' | nc localhost 8181 2>/dev/null || pkill -USR1 -f 'flutter.*run'" },
+            on_exit = function(j, return_val)
+              vim.schedule(function()
+                if return_val == 0 then
+                  vim.notify("Flutter hot reload sent", vim.log.levels.INFO)
+                else
+                  vim.notify("No Flutter process found", vim.log.levels.WARN)
+                end
+              end)
+            end,
+          }):start()
+        end
+      end, desc = "Flutter Hot Reload", ft = "dart" },
+
+      -- Widgets
+      { "<leader>dh", function() require("dap.ui.widgets").hover() end, desc = "Hover Variables" },
+      { "<leader>dp", function() require("dap.ui.widgets").preview() end, desc = "Preview" },
+      { "<leader>ds", function()
+        local widgets = require("dap.ui.widgets")
+        widgets.centered_float(widgets.scopes)
+      end, desc = "Scopes" },
+      { "<leader>dS", function()
+        local widgets = require("dap.ui.widgets")
+        widgets.centered_float(widgets.frames)
+      end, desc = "Stack Frames" },
+    },
+    config = function()
       local dap = require("dap")
 
       -- Fix for Snacks ui_select compatibility with DAP
@@ -580,95 +670,5 @@ return {
       vim.api.nvim_set_hl(0, "DapStoppedLine", { bg = "#2A2A2A" })
       vim.api.nvim_set_hl(0, "DapBreakpointRejected", { fg = "#666666" })
     end,
-    keys = {
-      -- Debugging controls
-      { "<leader>dd", function() require("dap").continue() end, desc = "Debug: Continue" },
-      { "<leader>do", function() require("dap").step_over() end, desc = "Debug: Step Over" },
-      { "<leader>di", function() require("dap").step_into() end, desc = "Debug: Step Into" },
-      { "<leader>dO", function() require("dap").step_out() end, desc = "Debug: Step Out" },
-      { "<leader>db", function() require("dap").toggle_breakpoint() end, desc = "Toggle Breakpoint" },
-      { "<leader>dB", function() require("dap").set_breakpoint(vim.fn.input("Breakpoint condition: ")) end, desc = "Conditional Breakpoint" },
-      { "<leader>dl", function() require("dap").set_breakpoint(nil, nil, vim.fn.input("Log point message: ")) end, desc = "Log Point" },
-      { "<leader>dr", function() require("dap").repl.open() end, desc = "Open REPL" },
-      { "<leader>dR", function() require("dap").run_last() end, desc = "Run Last" },
-      { "<leader>dx", function() require("dap").terminate() end, desc = "Terminate Debug" },
-
-      -- DAP View control
-      { "<leader>dv", function() require("dap-view").toggle() end, desc = "Toggle DAP View" },
-      { "<leader>de", function() require("dap-view").eval() end, desc = "Evaluate Expression", mode = { "n", "v" } },
-
-      -- Flutter DAP controls
-      { "<localleader>ds", "<cmd>FlutterSelectDevice<cr>", desc = "Select Flutter Device", ft = "dart" },
-      { "<localleader>hr", function()
-        local dap = require("dap")
-        if dap.session() then
-          -- Send custom hot restart request to Flutter DAP
-          dap.session():request("hotRestart", function(err, response)
-            if err then
-              vim.notify("Hot restart failed: " .. vim.inspect(err), vim.log.levels.ERROR)
-            else
-              vim.notify("Flutter hot restart complete", vim.log.levels.INFO)
-            end
-          end)
-        else
-          -- Send 'R' to existing Flutter process for hot restart
-          local Job = require('plenary.job')
-          Job:new({
-            command = 'sh',
-            args = { '-c', "echo 'R' | nc localhost 8181 2>/dev/null || pkill -USR2 -f 'flutter.*run'" },
-            on_exit = function(j, return_val)
-              vim.schedule(function()
-                if return_val == 0 then
-                  vim.notify("Flutter hot restart sent", vim.log.levels.INFO)
-                else
-                  vim.notify("No Flutter process found", vim.log.levels.WARN)
-                end
-              end)
-            end,
-          }):start()
-        end
-      end, desc = "Flutter Hot Restart", ft = "dart" },
-      { "<localleader>hl", function()
-        local dap = require("dap")
-        if dap.session() then
-          -- Send custom hot reload request to Flutter DAP
-          dap.session():request("hotReload", function(err, response)
-            if err then
-              vim.notify("Hot reload failed: " .. vim.inspect(err), vim.log.levels.ERROR)
-            else
-              vim.notify("Flutter hot reload complete", vim.log.levels.INFO)
-            end
-          end)
-        else
-          -- Send 'r' to existing Flutter process for hot reload
-          local Job = require('plenary.job')
-          Job:new({
-            command = 'sh',
-            args = { '-c', "echo 'r' | nc localhost 8181 2>/dev/null || pkill -USR1 -f 'flutter.*run'" },
-            on_exit = function(j, return_val)
-              vim.schedule(function()
-                if return_val == 0 then
-                  vim.notify("Flutter hot reload sent", vim.log.levels.INFO)
-                else
-                  vim.notify("No Flutter process found", vim.log.levels.WARN)
-                end
-              end)
-            end,
-          }):start()
-        end
-      end, desc = "Flutter Hot Reload", ft = "dart" },
-
-      -- Widgets
-      { "<leader>dh", function() require("dap.ui.widgets").hover() end, desc = "Hover Variables" },
-      { "<leader>dp", function() require("dap.ui.widgets").preview() end, desc = "Preview" },
-      { "<leader>ds", function()
-        local widgets = require("dap.ui.widgets")
-        widgets.centered_float(widgets.scopes)
-      end, desc = "Scopes" },
-      { "<leader>dS", function()
-        local widgets = require("dap.ui.widgets")
-        widgets.centered_float(widgets.frames)
-      end, desc = "Stack Frames" },
-    },
   },
 }

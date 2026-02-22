@@ -8,6 +8,7 @@ local chat_parser = require("ai_repl.chat_parser")
 local render = require("ai_repl.render")
 local annotations = require("ai_repl.annotations")
 local chat_buffer_events = require("ai_repl.chat_buffer_events")
+local chat_state = require("ai_repl.chat_state")
 
 local config = {
   -- Keybindings for .chat buffers
@@ -24,23 +25,8 @@ local config = {
   show_statusline = true,
 }
 
-local buffer_state = {}
-
--- Get state for a .chat buffer
 local function get_state(buf)
-  if not buffer_state[buf] then
-    buffer_state[buf] = {
-      session_id = nil,
-      process = nil,
-      last_role = nil,
-      streaming = false,
-      tool_approvals = {},  -- Pending tool approvals
-      modified = false,
-      repo_root = nil,  -- Track repository root for restart detection
-      creating_session = false,  -- Flag to prevent duplicate session creation
-    }
-  end
-  return buffer_state[buf]
+  return chat_state.get_buffer_state(buf)
 end
 
 -- Get repository root from a buffer path
@@ -101,9 +87,8 @@ function M.init_buffer(buf)
     vim.wo.linebreak = true  -- Break lines at word boundaries
   end)
 
-  -- Parse existing content
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines, buf)
+  -- Parse existing content with caching
+  local parsed = chat_parser.parse_buffer_cached(buf)
 
   -- Detect repository change
   local current_repo = get_repo_root(buf)
@@ -181,17 +166,21 @@ function M.init_buffer(buf)
       -- Show session status in buffer (without render.append_content)
       vim.schedule(function()
         local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        local provider_id = proc.data.provider or "unknown"
+        local providers = require("ai_repl.providers")
+        local provider_cfg = providers.get(provider_id) or {}
+        local provider_name = provider_cfg.name or provider_id
         table.insert(lines, "")
         table.insert(lines, "==================================================================")
-        table.insert(lines, "[.CHAT BUFFER ATTACHED TO ACP SESSION]")
+        table.insert(lines, "[ACP SESSION READY] " .. provider_name)
         table.insert(lines, "==================================================================")
         table.insert(lines, "Working Directory: " .. proc.data.cwd)
         table.insert(lines, "Session ID: " .. proc.session_id)
-        table.insert(lines, "Provider: " .. (proc.data.provider or "unknown"))
         table.insert(lines, "Messages synced: " .. #parsed.messages)
         table.insert(lines, "==================================================================")
         table.insert(lines, "")
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        require("ai_repl.init").update_statusline()
       end)
     else
       -- No active session exists, user must manually start with /start
@@ -208,8 +197,22 @@ function M.init_buffer(buf)
         -- Use existing active session instead of creating new one
         M.attach_session(buf, proc.session_id)
         chat_buffer_events.setup_event_forwarding(buf, proc)
+        local provider_id = proc.data.provider or "unknown"
+        local providers = require("ai_repl.providers")
+        local provider_cfg = providers.get(provider_id) or {}
+        local provider_name = provider_cfg.name or provider_id
+        vim.schedule(function()
+          local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+          table.insert(lines, "")
+          table.insert(lines, "==================================================================")
+          table.insert(lines, "[ACP SESSION READY] " .. provider_name)
+          table.insert(lines, "==================================================================")
+          table.insert(lines, "")
+          vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        end)
         vim.notify("[.chat] Attached to active session. Press C-] to send.", vim.log.levels.INFO)
         state.creating_session = false
+        require("ai_repl.init").update_statusline()
         return
       end
       
@@ -238,8 +241,22 @@ function M.init_buffer(buf)
             if proc:is_ready() then
               chat_buffer_events.setup_event_forwarding(buf, proc)
               M.attach_session(buf, proc.session_id)
+              local provider_id = proc.data.provider or "unknown"
+              local providers = require("ai_repl.providers")
+              local provider_cfg = providers.get(provider_id) or {}
+              local provider_name = provider_cfg.name or provider_id
+              vim.schedule(function()
+                local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+                table.insert(lines, "")
+                table.insert(lines, "==================================================================")
+                table.insert(lines, "[ACP SESSION READY] " .. provider_name)
+                table.insert(lines, "==================================================================")
+                table.insert(lines, "")
+                vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+              end)
               vim.notify("[.chat] Session created and ready! Press C-] to send.", vim.log.levels.INFO)
               state.creating_session = false
+              require("ai_repl.init").update_statusline()
             else
               local attempts = 0
               local max_attempts = 100
@@ -284,6 +301,21 @@ function M.init_buffer(buf)
     buffer = buf,
     callback = function()
       chat_parser.invalidate_cache(buf)
+    end,
+  })
+
+  -- Optimize updatetime when chat buffer is active
+  vim.api.nvim_create_autocmd("BufEnter", {
+    buffer = buf,
+    callback = function()
+      chat_state.increment_active_buffers()
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("BufLeave", {
+    buffer = buf,
+    callback = function()
+      chat_state.decrement_active_buffers()
     end,
   })
 
@@ -416,7 +448,21 @@ function M.restart_conversation(buf, provider_id)
       if proc:is_ready() then
         chat_buffer_events.setup_event_forwarding(buf, proc)
         M.attach_session(buf, proc.session_id)
+        local provider_id = proc.data.provider or "unknown"
+        local providers = require("ai_repl.providers")
+        local provider_cfg = providers.get(provider_id) or {}
+        local provider_name = provider_cfg.name or provider_id
+        vim.schedule(function()
+          local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+          table.insert(lines, "")
+          table.insert(lines, "==================================================================")
+          table.insert(lines, "[ACP SESSION READY] " .. provider_name)
+          table.insert(lines, "==================================================================")
+          table.insert(lines, "")
+          vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        end)
         vim.notify("[.chat] Conversation restarted with " .. provider, vim.log.levels.INFO)
+        require("ai_repl.init").update_statusline()
       else
         vim.defer_fn(attach_when_ready, 100)
       end
@@ -493,8 +539,7 @@ function M.send_to_process(buf)
   local state = get_state(buf)
 
   if not state.process then
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    local parsed = chat_parser.parse_buffer(lines, buf)
+    local parsed = chat_parser.parse_buffer_cached(buf)
     local last_user_msg = nil
     for i = #parsed.messages, 1, -1 do
       if parsed.messages[i].role == "user" then
@@ -532,8 +577,7 @@ function M.send_to_process(buf)
   end
 
   -- Parse buffer to get messages
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines, buf)
+  local parsed = chat_parser.parse_buffer_cached(buf)
 
   -- Find last @You: or @User: message
   local last_user_msg = nil
@@ -756,7 +800,7 @@ function M.save_buffer(buf)
   end
 
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines, buf)
+  local parsed = chat_parser.parse_buffer_cached(buf)
 
   -- Save messages to registry
   for _, msg in ipairs(parsed.messages) do
@@ -988,8 +1032,7 @@ function M.hybrid_send(buf)
   local state = get_state(buf)
 
   if not state.process then
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    local parsed = chat_parser.parse_buffer(lines, buf)
+    local parsed = chat_parser.parse_buffer_cached(buf)
     local last_user_msg = nil
     for i = #parsed.messages, 1, -1 do
       if parsed.messages[i].role == "user" then
@@ -1037,8 +1080,12 @@ function M.hybrid_send(buf)
     return false
   end
 
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines, buf)
+  if state.process.ui and state.process.ui.permission_active then
+    vim.notify("[.chat] Waiting for tool permission response. Use [y/a/n/c].", vim.log.levels.WARN)
+    return false
+  end
+
+  local parsed = chat_parser.parse_buffer_cached(buf)
 
   -- Phase 0: Check for annotations to sync first
   if #parsed.annotations > 0 then
@@ -1048,19 +1095,6 @@ function M.hybrid_send(buf)
     end
   end
 
-  -- Phase 1: Check for pending tool approvals
-  if #parsed.pending_tools > 0 then
-    -- Inject placeholders for review
-    M.inject_tool_placeholders(buf, parsed.pending_tools)
-    return true
-  end
-
-  -- Phase 2: Check for tool placeholders to execute
-  if M.has_tool_placeholders(lines) then
-    M.execute_tools(buf)
-    return true
-  end
-
   -- Phase 3: Autosave before sending
   if config.save_on_send and config.auto_save then
     M.autosave_buffer(buf)
@@ -1068,63 +1102,6 @@ function M.hybrid_send(buf)
 
   -- Phase 4: Send to process
   return M.send_to_process(buf)
-end
-
--- Inject placeholders for pending tools
-function M.inject_tool_placeholders(buf, tools)
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-
-  for _, tool in ipairs(tools) do
-    local placeholder = string.format(
-      "\n\n**Tool Use:** `%s` (`%s`)\n```json\n%s\n```\n",
-      tool.id,
-      tool.title or tool.kind,
-      vim.json.encode(tool.input or {})
-    )
-    table.insert(lines, placeholder)
-  end
-
-  vim.api.nvim_buf_set_lines(buf, #lines, #lines, false, lines)
-  vim.notify("[.chat] Tools injected - review and press C-] to execute", vim.log.levels.INFO)
-end
-
--- Check if buffer has tool placeholders
-function M.has_tool_placeholders(lines)
-  for _, line in ipairs(lines) do
-    if line:match("^%*%*Tool Use:%*%*") then
-      return true
-    end
-  end
-  return false
-end
-
--- Execute approved tools
-function M.execute_tools(buf)
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines, buf)
-
-  -- Send tool calls to process
-  local state = get_state(buf)
-  if not state.process then
-    return
-  end
-
-  -- Autosave before executing tools
-  if config.auto_save then
-    M.autosave_buffer(buf)
-  end
-
-  for _, tool in ipairs(parsed.tools) do
-    -- Execute tool via process
-    -- This will trigger process callbacks which update buffer
-  end
-
-  -- Autosave after executing tools
-  if config.auto_save then
-    M.autosave_buffer(buf)
-  end
-
-  vim.notify("[.chat] Tools executed - press C-] to send", vim.log.levels.INFO)
 end
 
 -- Setup autocmds for buffer lifecycle
@@ -1175,7 +1152,7 @@ function M.setup_autocmds(buf)
         M.autosave_buffer(buf)
       end
       M.detach_session(buf)
-      buffer_state[buf] = nil
+      chat_state.cleanup_buffer_state(buf)
     end,
   })
 
@@ -1204,8 +1181,7 @@ end
 
 -- Sync annotations from .chat buffer to annotation system
 function M.sync_annotations_from_buffer(buf)
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = chat_parser.parse_buffer(lines, buf)
+  local parsed = chat_parser.parse_buffer_cached(buf)
 
   if #parsed.annotations == 0 then
     return false, "No annotations found in buffer"
@@ -1330,7 +1306,7 @@ end
 
 -- Get active .chat buffer for current session
 function M.get_active_chat_buffer()
-  for buf, _ in pairs(buffer_state) do
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_valid(buf) and M.is_chat_buffer(buf) then
       return buf
     end

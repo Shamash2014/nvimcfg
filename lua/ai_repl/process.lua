@@ -592,6 +592,16 @@ function Process:send_prompt(prompt, opts)
     return nil
   end
 
+  -- Queue if ACP is awaiting a permission response
+  if self.ui and self.ui.permission_active then
+    local text = self:_extract_prompt_text(prompt)
+    table.insert(self.data.prompt_queue, { prompt = prompt, text = text, opts = opts })
+    if self.config.debug and self._on_debug then
+      self:_on_debug("send_prompt: permission_active, queued")
+    end
+    return nil
+  end
+
   -- Queue if busy
   if self.state.busy then
     local text = self:_extract_prompt_text(prompt)

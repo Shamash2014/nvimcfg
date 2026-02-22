@@ -5,7 +5,7 @@ local M = {}
 
 function M.setup()
   -- Define enhanced highlight groups for chat-specific syntax
-  vim.cmd([[
+  vim.cmd([=[
     " Role markers (@You:, @Djinni:, @User:, etc.)
     syntax match ChatRoleMarker /^@\w\+:/
     syntax match ChatRoleName contained /\w\+/
@@ -88,7 +88,7 @@ function M.setup()
     highlight default link ChatItalic Underlined
     highlight default link ChatBoldItalic SpecialBold
     highlight default link ChatLink Underlined
-  ]])
+  ]=])
 
   -- Setup optimized syntax for chat buffers
   vim.api.nvim_create_autocmd("FileType", {

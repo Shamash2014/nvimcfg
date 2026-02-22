@@ -1,6 +1,7 @@
 return {
   name = "ai_repl",
   dir = vim.fn.stdpath("config") .. "/lua/ai_repl",
+  event = "VeryLazy",
   config = function()
     require("ai_repl").setup({
       default_provider = "claude",

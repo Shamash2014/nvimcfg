@@ -434,6 +434,35 @@ local function handle_session_update(proc, params)
     local queue_info = queue_count > 0 and (" [" .. queue_count .. " queued]") or ""
     append_to_buffer(buf, { "", (reason_msgs[result.stop_reason] or "---") .. mode_str .. queue_info, "" }, { type = "silent" })
 
+    -- Show usage/cost notification (Flemma-style)
+    if result.usage or result.total_tokens then
+      local usage = result.usage or {}
+      local input_tokens = usage.inputTokens or usage.input_tokens or result.usage and result.usage.input or 0
+      local output_tokens = usage.outputTokens or usage.output_tokens or result.usage and result.usage.output or 0
+      local total = input_tokens + output_tokens
+      local thoughts_tokens = usage.thinkingTokens or usage.thinking_tokens or 0
+      
+      local function fmt(n)
+        if n >= 1000 then return string.format("%.1fk", n / 1000) end
+        return tostring(n)
+      end
+      
+      local usage_parts = {}
+      table.insert(usage_parts, "In: " .. fmt(input_tokens))
+      table.insert(usage_parts, "Out: " .. fmt(output_tokens))
+      if thoughts_tokens > 0 then
+        table.insert(usage_parts, "Thoughts: " .. fmt(thoughts_tokens))
+      end
+      table.insert(usage_parts, "Total: " .. fmt(total))
+      
+      -- Show floating notification with cost if available
+      local notification_text = table.concat(usage_parts, " | ")
+      vim.notify(notification_text, vim.log.levels.INFO, {
+        title = "AI Response",
+        timeout = 5000,
+      })
+    end
+
     -- Clear slash command state if this was a response to a slash command
     if proc.data.pending_slash_command then
       proc.data.pending_slash_command = nil
@@ -802,6 +831,145 @@ local function handle_method(proc, method, params, msg_id)
       append_to_buffer(buf, { "[debug] system: " .. vim.inspect(params):sub(1, 200) }, { type = "silent" })
     end
 
+  elseif method == "fs/read_text_file" and msg_id then
+    local file_path = params and params.path
+    if not file_path then
+      vim.fn.chansend(proc.job_id, vim.json.encode({
+        jsonrpc = "2.0",
+        id = msg_id,
+        error = { code = -32602, message = "Missing required parameter: path" }
+      }) .. "\n")
+      return
+    end
+    local f = io.open(file_path, "r")
+    local result = {}
+    if f then
+      result.content = f:read("*all")
+      f:close()
+    else
+      vim.fn.chansend(proc.job_id, vim.json.encode({
+        jsonrpc = "2.0",
+        id = msg_id,
+        error = { code = -32603, message = "Failed to read file: " .. file_path }
+      }) .. "\n")
+      return
+    end
+    vim.fn.chansend(proc.job_id, vim.json.encode({
+      jsonrpc = "2.0",
+      id = msg_id,
+      result = result
+    }) .. "\n")
+
+  elseif method == "fs/write_text_file" and msg_id then
+    local file_path = params and params.path
+    local content = params and params.content
+    if not file_path or content == nil then
+      vim.fn.chansend(proc.job_id, vim.json.encode({
+        jsonrpc = "2.0",
+        id = msg_id,
+        error = { code = -32602, message = "Missing required parameters: path and content" }
+      }) .. "\n")
+      return
+    end
+    local f = io.open(file_path, "w")
+    if not f then
+      vim.fn.chansend(proc.job_id, vim.json.encode({
+        jsonrpc = "2.0",
+        id = msg_id,
+        error = { code = -32603, message = "Failed to write file: " .. file_path }
+      }) .. "\n")
+      return
+    end
+    f:write(content)
+    f:close()
+    vim.fn.chansend(proc.job_id, vim.json.encode({
+      jsonrpc = "2.0",
+      id = msg_id,
+      result = { success = true }
+    }) .. "\n")
+
+  elseif method == "terminal/create" and msg_id then
+    local terminal_id = vim.fn.str2nr(vim.fn.reltimestr(vim.fn.reltime()):gsub("[^%d]", ""))
+    local term_opts = {
+      cwd = params and params.cwd or proc.data.cwd or vim.fn.getcwd(),
+      env = proc.data.env or {},
+    }
+    local term = require("snacks").terminal(nil, term_opts)
+    proc.data.terminals[terminal_id] = {
+      snacks_term = term,
+      term_id = terminal_id,
+      created_at = os.time(),
+    }
+    vim.fn.chansend(proc.job_id, vim.json.encode({
+      jsonrpc = "2.0",
+      id = msg_id,
+      result = { terminalId = terminal_id }
+    }) .. "\n")
+
+  elseif method == "terminal/output" and msg_id then
+    local terminal_id = params and params.terminalId
+    local term_data = proc.data.terminals[terminal_id]
+    if not term_data or not term_data.snacks_term then
+      vim.fn.chansend(proc.job_id, vim.json.encode({
+        jsonrpc = "2.0",
+        id = msg_id,
+        error = { code = -32602, message = "Terminal not found: " .. tostring(terminal_id) }
+      }) .. "\n")
+      return
+    end
+    local exit_code = term_data.snacks_term.job and term_data.snacks_term.job.code or -1
+    vim.fn.chansend(proc.job_id, vim.json.encode({
+      jsonrpc = "2.0",
+      id = msg_id,
+      result = { exitCode = exit_code }
+    }) .. "\n")
+
+  elseif method == "terminal/release" and msg_id then
+    local terminal_id = params and params.terminalId
+    local term_data = proc.data.terminals[terminal_id]
+    if term_data and term_data.snacks_term then
+      term_data.snacks_term:close()
+      proc.data.terminals[terminal_id] = nil
+    end
+    vim.fn.chansend(proc.job_id, vim.json.encode({
+      jsonrpc = "2.0",
+      id = msg_id,
+      result = { success = true }
+    }) .. "\n")
+
+  elseif method == "terminal/wait_for_exit" and msg_id then
+    local terminal_id = params and params.terminalId
+    local term_data = proc.data.terminals[terminal_id]
+    if not term_data or not term_data.snacks_term then
+      vim.fn.chansend(proc.job_id, vim.json.encode({
+        jsonrpc = "2.0",
+        id = msg_id,
+        error = { code = -32602, message = "Terminal not found: " .. tostring(terminal_id) }
+      }) .. "\n")
+      return
+    end
+    vim.defer_fn(function()
+      local exit_code = term_data.snacks_term.job and term_data.snacks_term.job.code or 0
+      vim.fn.chansend(proc.job_id, vim.json.encode({
+        jsonrpc = "2.0",
+        id = msg_id,
+        result = { exitCode = exit_code }
+      }) .. "\n")
+    end, 100)
+
+  elseif method == "terminal/kill" and msg_id then
+    local terminal_id = params and params.terminalId
+    local term_data = proc.data.terminals[terminal_id]
+    if term_data and term_data.snacks_term then
+      term_data.snacks_term:close()
+      proc.data.terminals[terminal_id] = nil
+    end
+    vim.fn.chansend(proc.job_id, vim.json.encode({
+      jsonrpc = "2.0",
+      id = msg_id,
+      result = { success = true }
+    }) .. "\n")
+
   elseif msg_id then
     local url = params and (params.url or params.uri)
     local prompt_text = params and (params.prompt or params.message)
@@ -954,10 +1122,13 @@ local function create_process(session_id, opts)
       elseif status == "session_created" then
         local session_name = get_session_name(self.data.cwd)
         self.data.name = session_name
+        local provider_id = self.data.provider or config.default_provider
+        local provider_cfg = config.providers[provider_id] or {}
+        local provider_name = provider_cfg.name or provider_id
         -- Don't rename buffer - keep .chat filename for clarity
         append_to_buffer(buf, {
           "",
-          "[ACP SESSION READY]",
+          "[ACP SESSION READY] " .. provider_name,
           "",
         })
         update_statusline()
@@ -966,11 +1137,13 @@ local function create_process(session_id, opts)
         if not self.data.name or self.data.name == "New Session" then
           local session_name = get_session_name(self.data.cwd)
           self.data.name = session_name
-          -- Don't rename buffer - keep .chat filename for clarity
         end
+        local provider_id = self.data.provider or config.default_provider
+        local provider_cfg = config.providers[provider_id] or {}
+        local provider_name = provider_cfg.name or provider_id
         append_to_buffer(buf, {
           "",
-          "[ACP SESSION LOADED]",
+          "[ACP SESSION LOADED] " .. provider_name,
           "",
         }, { type = "silent" })
         local messages = registry.load_messages(self.session_id)
@@ -3442,6 +3615,9 @@ function M.setup(opts)
     AIReplChat = M.open_chat_buffer,
     AIReplAddAnnotation = M.add_annotation_to_chat,
     AIReplSyncAnnotations = M.sync_chat_annotations,
+    AIReplSwitch = function()
+      vim.cmd("AIReplSessions")
+    end,
   }) do
     vim.api.nvim_create_user_command(cmd_name, fn, {})
   end

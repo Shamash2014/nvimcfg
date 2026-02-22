@@ -346,16 +346,11 @@ function M.handle_session_update_in_chat(buf, update, proc)
 
     if not result.ralph_continuing then
       vim.defer_fn(function()
-        if vim.api.nvim_buf_is_valid(buf) then
-          M.ensure_you_marker(buf)
-        end
-      end, 100)
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        if proc.state.busy then return end
+        M.ensure_you_marker(buf)
+      end, 700)
     end
-
-    vim.defer_fn(function()
-      if not vim.api.nvim_buf_is_valid(buf) then return end
-      M.ensure_you_marker(buf)
-    end, 700)
     if decorations_ok then
       pcall(decorations.stop_spinner, buf)
       pcall(decorations.redecorate, buf)
@@ -408,49 +403,35 @@ function M.ensure_you_marker(buf)
   vim.bo[buf].modifiable = true
 
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local line_count = #lines
 
-  local last_user_line = nil
-  local last_djinni_line = nil
+  local last_marker_line = 0
+
   for i = #lines, 1, -1 do
     local role = chat_parser.parse_role_marker(lines[i])
-    if role == "user" and not last_user_line then
-      last_user_line = i
-    elseif role == "djinni" and not last_djinni_line then
-      last_djinni_line = i
-    end
-    if last_user_line and last_djinni_line then break end
-  end
-
-  if last_user_line and (not last_djinni_line or last_user_line > last_djinni_line) then
-    -- Check if there's non-empty content after the last @You: (tool output, etc.)
-    -- If so, the agent responded without a @Djinni: marker and we still need a new @You:
-    local has_content_after = false
-    for i = last_user_line + 1, #lines do
-      if lines[i] ~= "" then
-        has_content_after = true
-        break
-      end
-    end
-    if not has_content_after then
-      vim.bo[buf].modifiable = true
-      return
+    if role then
+      last_marker_line = i
+      break
     end
   end
 
-  local line_count = #lines
-  vim.api.nvim_buf_set_lines(buf, line_count, -1, false, {
-    "",
-    "@You:",
-    "",
-    "",
-  })
+  local ends_with_you = last_marker_line > 0 and lines[last_marker_line] and lines[last_marker_line]:match("^@You:")
 
-  local win = vim.fn.bufwinid(buf)
-  if win ~= -1 then
-    vim.api.nvim_win_set_cursor(win, { line_count + 2, 0 })
-    vim.api.nvim_win_call(win, function()
-      vim.cmd("normal! zb")
-    end)
+  if not ends_with_you then
+    vim.api.nvim_buf_set_lines(buf, line_count, -1, false, {
+      "",
+      "@You:",
+      "",
+      "",
+    })
+
+    local win = vim.fn.bufwinid(buf)
+    if win ~= -1 then
+      vim.api.nvim_win_set_cursor(win, { line_count + 2, 0 })
+      vim.api.nvim_win_call(win, function()
+        vim.cmd("normal! zb")
+      end)
+    end
   end
 
   vim.bo[buf].modifiable = true
