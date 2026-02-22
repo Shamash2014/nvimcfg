@@ -922,6 +922,12 @@ function M.pick_tasks_and_commands()
   })
 
   table.insert(items, {
+    text = "Restart AI Session",
+    desc = "Restart current AI REPL session in .chat buffer",
+    is_ai_restart = true,
+  })
+
+  table.insert(items, {
     text = "Toggle REPL",
     desc = "Toggle code REPL window",
     is_repl = true,
@@ -998,6 +1004,10 @@ function M.pick_tasks_and_commands()
       if item.is_ai then
         vim.schedule(function()
           require("ai_repl").new_session()
+        end)
+      elseif item.is_ai_restart then
+        vim.schedule(function()
+          require("ai_repl").restart_session()
         end)
       elseif item.is_repl then
         require("code_repl").toggle_repl()

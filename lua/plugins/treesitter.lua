@@ -14,11 +14,17 @@ return {
       'dart', 'swift', 'kotlin', 'java', 'astro', 'vue', 'chat'
     }
 
-    local orig_query_get = vim.treesitter.query.get
-    vim.treesitter.query.get = function(lang, query_name)
-      local ok, result = pcall(orig_query_get, lang, query_name)
-      if ok then return result end
+    local function patch_query_get()
+      local query = vim.treesitter.query
+      if type(query) ~= "table" then return end
+      local orig = query.get
+      if type(orig) ~= "function" then return end
+      query.get = function(lang, query_name)
+        local ok, result = pcall(orig, lang, query_name)
+        if ok then return result end
+      end
     end
+    patch_query_get()
 
     require("nvim-treesitter.configs").setup({
       ensure_installed = {

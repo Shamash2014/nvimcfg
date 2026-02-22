@@ -8,7 +8,8 @@ return {
       "igorlfs/nvim-dap-view",
       "nvim-lua/plenary.nvim",
     },
-    config = function()
+    lazy = true,
+    keys = {
       local dap = require("dap")
 
       -- Fix for Snacks ui_select compatibility with DAP

@@ -374,7 +374,7 @@ function M.detach_session(buf)
 end
 
 -- Restart conversation in chat buffer
-function M.restart_conversation(buf)
+function M.restart_conversation(buf, provider_id)
   if not M.is_chat_buffer(buf) then
     return false, "Not a .chat buffer"
   end
@@ -387,28 +387,57 @@ function M.restart_conversation(buf)
   end
 
   -- Clear buffer content and reset to empty template
-  local template = chat_parser.generate_empty_template()
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, template)
+  local template = chat_parser.generate_template()
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(template, "\n"))
 
   -- Update repo root to current
   state.repo_root = get_repo_root(buf)
 
-  -- Create new session
-  local session_id = "chat_" .. vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t:r")
-  local ok, err = M.attach_session(buf, session_id)
-  
-  if not ok then
-    vim.schedule(function()
-      vim.notify("[.chat] " .. err .. ". Creating new session...", vim.log.levels.WARN)
-      local ai_repl = require("ai_repl.init")
-      ai_repl.new_session()
-      vim.defer_fn(function()
-        M.attach_session(buf, session_id)
-      end, 500)
+  local function create_session_with_provider(provider)
+    local ai_repl = require("ai_repl.init")
+
+    vim.notify("[.chat] Creating new session with " .. provider .. "...", vim.log.levels.INFO)
+
+    local session_id = "session_" .. os.time()
+    local proc = ai_repl._create_process(session_id, {
+      provider = provider,
+    })
+
+    ai_repl._registry_set(session_id, proc)
+    ai_repl._registry_set_active(session_id)
+
+    proc:start()
+
+    local function attach_when_ready()
+      if not vim.api.nvim_buf_is_valid(buf) then
+        return
+      end
+
+      if proc:is_ready() then
+        chat_buffer_events.setup_event_forwarding(buf, proc)
+        M.attach_session(buf, proc.session_id)
+        vim.notify("[.chat] Conversation restarted with " .. provider, vim.log.levels.INFO)
+      else
+        vim.defer_fn(attach_when_ready, 100)
+      end
+    end
+
+    attach_when_ready()
+  end
+
+  if provider_id then
+    create_session_with_provider(provider_id)
+  else
+    local ai_repl = require("ai_repl.init")
+    ai_repl.pick_provider(function(selected_provider)
+      if not selected_provider then
+        vim.notify("[.chat] Restart cancelled", vim.log.levels.INFO)
+        return
+      end
+      create_session_with_provider(selected_provider)
     end)
   end
 
-  vim.notify("[.chat] Conversation restarted", vim.log.levels.INFO)
   return true
 end
 
@@ -638,8 +667,11 @@ function M.send_to_process(buf)
 
   -- Poll for completion and append @You: when done
   local poll_timer = vim.uv.new_timer()
+  local timer_closed = false
   poll_timer:start(500, 300, vim.schedule_wrap(function()
+    if timer_closed then return end
     if proc.state.busy then return end
+    timer_closed = true
     poll_timer:stop()
     poll_timer:close()
     if not vim.api.nvim_buf_is_valid(buf) then return end

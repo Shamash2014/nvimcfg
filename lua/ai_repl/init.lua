@@ -284,7 +284,12 @@ local function append_to_buffer(buf, lines, opts)
 end
 
 local function handle_session_update(proc, params)
-  local result = session_state.apply_update(proc, params.update)
+  local apply_ok, result = pcall(session_state.apply_update, proc, params.update)
+  if not apply_ok then
+    -- Ensure busy is cleared if apply_update fails
+    proc.state.busy = false
+    return
+  end
   if not result then return end
 
   local buf = get_output_buf(proc)
@@ -2828,6 +2833,18 @@ function M.new_session(provider_id, profile_id)
   proc:start()
 
   M.open_chat_buffer()
+end
+
+function M._create_process(session_id, opts)
+  return create_process(session_id, opts)
+end
+
+function M._registry_set(session_id, proc)
+  registry.set(session_id, proc)
+end
+
+function M._registry_set_active(session_id)
+  registry.set_active(session_id)
 end
 
 function M.pick_codex_profile(callback)

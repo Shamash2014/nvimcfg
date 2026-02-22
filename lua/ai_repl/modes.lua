@@ -5,7 +5,7 @@ local MODE_INFO = {
   ralph_wiggum = { name = "Ralph Wiggum", icon = "🔄", description = "Persistent looping until task completion" },
 }
 
-local current_mode = "ralph_wiggum"
+local current_mode = "chat"
 
 function M.get_current_mode()
   return current_mode

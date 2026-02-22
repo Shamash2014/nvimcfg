@@ -202,7 +202,7 @@ function M.handle_session_update_in_chat(buf, update, proc)
   -- Check if buffer is still valid, if not, just process the update internally
   if not vim.api.nvim_buf_is_valid(buf) then
     local session_state = require("ai_repl.session_state")
-    session_state.apply_update(proc, update)
+    pcall(session_state.apply_update, proc, update)
     return
   end
 
@@ -212,6 +212,8 @@ function M.handle_session_update_in_chat(buf, update, proc)
   local apply_ok, result = pcall(session_state.apply_update, proc, update)
   if not apply_ok then
     if is_stop_update then
+      -- Ensure busy is cleared even if apply_update fails
+      proc.state.busy = false
       vim.defer_fn(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
         M.ensure_you_marker(buf)
@@ -634,6 +636,8 @@ function M.handle_status_in_chat(buf, status, data, proc)
   local banner = {
     "",
     label,
+    "  /restart - Restart session",
+    "  /restart-chat - Restart conversation in current .chat buffer",
     "",
   }
 
