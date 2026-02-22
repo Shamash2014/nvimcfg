@@ -53,6 +53,14 @@ local providers = {
     permission_mode = "default",
     background_permissions = "allow_once",
   },
+  fastagent = {
+    name = "Fast Agent",
+    cmd = "uvx",
+    args = {"fast-agent-acp@latest", "--model", "kimi"},
+    env = {},
+    permission_mode = "default",
+    background_permissions = "allow_once",
+  },
 }
 
 -- Helper to get provider config with fallback to defaults

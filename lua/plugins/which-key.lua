@@ -33,6 +33,7 @@ return {
       { "<leader>d", group = "debug/diagnostics" },
       { "<leader>s", group = "search" },
       { "<leader>a", group = "ai" },
+      { "<leader>n", group = "android" },
       { "[", group = "prev" },
       { "]", group = "next" },
       { "g", group = "goto" },

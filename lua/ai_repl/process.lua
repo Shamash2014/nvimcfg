@@ -9,6 +9,28 @@ local CLIENT_INFO = {
 
 local EMPTY_ARRAY = setmetatable({}, { __is_list = true })
 
+local function obj_to_name_value_array(t)
+  if type(t) ~= "table" then return setmetatable({}, { __is_list = true }) end
+  if #t > 0 then return t end
+  local arr = setmetatable({}, { __is_list = true })
+  for k, v in pairs(t) do
+    table.insert(arr, { name = k, value = v })
+  end
+  return arr
+end
+
+local function normalize_mcp_servers(servers)
+  if type(servers) ~= "table" then return EMPTY_ARRAY end
+  local normalized = setmetatable({}, { __is_list = true })
+  for _, srv in ipairs(servers) do
+    table.insert(normalized, vim.tbl_extend("force", srv, {
+      env = obj_to_name_value_array(srv.env),
+      headers = obj_to_name_value_array(srv.headers),
+    }))
+  end
+  return normalized
+end
+
 function Process.new(session_id, opts)
   opts = opts or {}
   local self = setmetatable({}, Process)
@@ -27,6 +49,7 @@ function Process.new(session_id, opts)
     debug = opts.debug or false,
     auto_init = opts.auto_init ~= false,
     load_session_id = opts.load_session_id,
+    mcp_servers = normalize_mcp_servers(opts.mcp_servers or EMPTY_ARRAY),
   }
   self.state = {
     initialized = false,
@@ -439,7 +462,7 @@ function Process:_acp_create_or_load_session()
     self:send("session/load", {
       sessionId = self.config.load_session_id,
       cwd = cwd,
-      mcpServers = EMPTY_ARRAY
+      mcpServers = self.config.mcp_servers
     }, function(result, err)
       if err then
         self:_notify_status("session_load_failed", err)
@@ -460,7 +483,7 @@ function Process:_acp_create_new_session(cwd)
 
   self:send("session/new", {
     cwd = cwd,
-    mcpServers = EMPTY_ARRAY
+    mcpServers = self.config.mcp_servers
   }, function(result, err)
     if err then
       self:_notify_status("session_error_detail", err)
@@ -759,7 +782,7 @@ function Process:reset_session_with_context(injection_prompt, callback)
 
   self:send("session/new", {
     cwd = cwd,
-    mcpServers = EMPTY_ARRAY
+    mcpServers = self.config.mcp_servers
   }, function(result, err)
     if err then
       self:_notify_status("session_reset_failed", err)

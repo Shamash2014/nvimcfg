@@ -44,6 +44,11 @@ function M.get_tool_description(title, input, locations, opts)
     return input.operation or ""
   elseif title == "KillShell" then
     return input.shell_id or ""
+  elseif title == "Skill" then
+    return input.skill or input.name or ""
+  elseif title and title:match("^mcp__") then
+    local tool_name = title:match("^mcp__[^_]+__(.+)$") or title
+    return tool_name
   end
 
   if locations and #locations > 0 then

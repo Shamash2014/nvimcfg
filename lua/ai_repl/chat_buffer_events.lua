@@ -8,6 +8,7 @@ local TOOL_NAMES = {
   Glob = "Find Files", Grep = "Search", Task = "Agent",
   WebFetch = "Fetch", WebSearch = "Web Search", TodoWrite = "Plan",
   NotebookEdit = "Notebook", LSP = "LSP", KillShell = "Kill Process",
+  Skill = "Skill",
 }
 
 local MODE_ICONS = {
@@ -38,6 +39,7 @@ local function get_state(buf)
       streaming = false,
       streaming_text = "",
       streaming_insert_line = nil,
+      render_scheduled = false,
       tool_approvals = {},
       modified = false,
       original_handlers = nil,
@@ -64,7 +66,19 @@ local function find_or_create_insert_line(buf, state)
     vim.api.nvim_buf_set_lines(buf, line_count, -1, false, { "", "@Djinni:" })
     state.streaming_insert_line = line_count + 2
   else
-    state.streaming_insert_line = djinni_line
+    local has_content_after = false
+    for j = djinni_line + 1, #lines do
+      if lines[j] ~= "" then
+        has_content_after = true
+        break
+      end
+    end
+    if has_content_after then
+      vim.api.nvim_buf_set_lines(buf, line_count, -1, false, { "", "@Djinni:" })
+      state.streaming_insert_line = line_count + 2
+    else
+      state.streaming_insert_line = djinni_line
+    end
   end
 end
 
@@ -89,6 +103,9 @@ function M.setup_event_forwarding(buf, proc)
     state.original_handlers = {
       on_method = proc._on_method,
       on_status = proc._on_status,
+      on_debug = proc._on_debug,
+      on_exit = proc._on_process_exit,
+      on_ready = proc._on_ready,
     }
   end
 
@@ -145,6 +162,9 @@ function M.setup_event_forwarding(buf, proc)
         pcall(M.handle_status_in_chat, buf, status, data, self)
       end
     end,
+    on_debug = state.original_handlers.on_debug,
+    on_exit = state.original_handlers.on_exit,
+    on_ready = state.original_handlers.on_ready,
   })
 
   return true
@@ -158,8 +178,20 @@ function M.handle_session_update_in_chat(buf, update, proc)
     return
   end
 
+  local is_stop_update = update and update.sessionUpdate == "stop"
+
   local session_state = require("ai_repl.session_state")
-  local result = session_state.apply_update(proc, update)
+  local apply_ok, result = pcall(session_state.apply_update, proc, update)
+  if not apply_ok then
+    if is_stop_update then
+      vim.defer_fn(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        if proc and proc.state and proc.state.busy then return end
+        M.ensure_you_marker(buf)
+      end, 700)
+    end
+    return
+  end
   if not result then return end
 
   local state = get_state(buf)
@@ -202,6 +234,10 @@ function M.handle_session_update_in_chat(buf, update, proc)
     local u = result.update
     local raw_title = u.title or u.kind or "tool"
     local friendly = TOOL_NAMES[raw_title] or raw_title
+    if not TOOL_NAMES[raw_title] and raw_title:match("^mcp__") then
+      local provider = raw_title:match("^mcp__([^_]+)__") or "mcp"
+      friendly = "MCP [" .. provider .. "]"
+    end
     local input = u.rawInput or {}
     if type(input) == "string" then
       local ok, parsed = pcall(vim.json.decode, input)
@@ -260,23 +296,37 @@ function M.handle_session_update_in_chat(buf, update, proc)
 
   elseif result.type == "stop" then
     state.streaming = false
-    flush_streaming_text(buf, state)
+    pcall(flush_streaming_text, buf, state)
     state.streaming_text = ""
     state.streaming_insert_line = nil
     proc.ui.streaming_response = ""
     proc.ui.streaming_start_line = nil
     vim.bo[buf].modifiable = true
 
-    if result.response_text ~= "" and not result.had_plan then
-      local render = require("ai_repl.render")
-      local md_plan = render.parse_markdown_plan(result.response_text)
-      if #md_plan >= 3 then
-        proc.ui.current_plan = md_plan
-        render_plan_in_chat(buf, md_plan)
+    pcall(function()
+      if result.response_text ~= "" and not result.had_plan then
+        local render = require("ai_repl.render")
+        local md_plan = render.parse_markdown_plan(result.response_text)
+        if #md_plan >= 3 then
+          proc.ui.current_plan = md_plan
+          render_plan_in_chat(buf, md_plan)
+        end
       end
+    end)
+
+    if not result.ralph_continuing then
+      vim.defer_fn(function()
+        if vim.api.nvim_buf_is_valid(buf) then
+          M.ensure_you_marker(buf)
+        end
+      end, 100)
     end
 
-    M.append_new_user_marker(buf)
+    vim.defer_fn(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      if proc and proc.state and proc.state.busy then return end
+      M.ensure_you_marker(buf)
+    end, 700)
     if decorations_ok then
       pcall(decorations.stop_spinner, buf)
       pcall(decorations.redecorate, buf)
@@ -328,21 +378,25 @@ end
 function M.ensure_you_marker(buf)
   if not vim.api.nvim_buf_is_valid(buf) then return end
 
-  local was_modifiable = vim.bo[buf].modifiable
   vim.bo[buf].modifiable = true
 
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 
+  local last_user_line = nil
+  local last_djinni_line = nil
   for i = #lines, 1, -1 do
     local role = chat_parser.parse_role_marker(lines[i])
-    if role then
-      if role == "user" then
-        -- Already have @You: marker, keep buffer modifiable for input
-        vim.bo[buf].modifiable = true
-        return
-      end
-      break
+    if role == "user" and not last_user_line then
+      last_user_line = i
+    elseif role == "djinni" and not last_djinni_line then
+      last_djinni_line = i
     end
+    if last_user_line and last_djinni_line then break end
+  end
+
+  if last_user_line and (not last_djinni_line or last_user_line > last_djinni_line) then
+    vim.bo[buf].modifiable = true
+    return
   end
 
   local line_count = #lines
@@ -356,9 +410,11 @@ function M.ensure_you_marker(buf)
   local win = vim.fn.bufwinid(buf)
   if win ~= -1 then
     vim.api.nvim_win_set_cursor(win, { line_count + 2, 0 })
+    vim.api.nvim_win_call(win, function()
+      vim.cmd("normal! zb")
+    end)
   end
 
-  -- Keep buffer modifiable to allow voice input after @You:
   vim.bo[buf].modifiable = true
 end
 
@@ -582,36 +638,36 @@ function M.stream_to_chat_buffer(buf, text)
   local state = get_state(buf)
   state.streaming_text = state.streaming_text .. text
 
-  vim.schedule(function()
-    if not vim.api.nvim_buf_is_valid(buf) then
-      -- Buffer was closed, just clear the streaming state
-      state.streaming_text = ""
-      state.streaming = false
-      return
-    end
+  if not state.render_scheduled then
+    state.render_scheduled = true
+    vim.schedule(function()
+      state.render_scheduled = false
+      if not vim.api.nvim_buf_is_valid(buf) then
+        state.streaming_text = ""
+        state.streaming = false
+        return
+      end
 
-    if not state.streaming then return end
+      if not state.streaming then return end
 
-    local was_modifiable = vim.bo[buf].modifiable
-    vim.bo[buf].modifiable = true
+      vim.bo[buf].modifiable = true
+      find_or_create_insert_line(buf, state)
 
-    find_or_create_insert_line(buf, state)
+      local response_lines = vim.split(state.streaming_text, "\n", { trimempty = false })
+      vim.api.nvim_buf_set_lines(buf, state.streaming_insert_line, -1, false, response_lines)
 
-    local response_lines = vim.split(state.streaming_text, "\n", { trimempty = false })
-    vim.api.nvim_buf_set_lines(buf, state.streaming_insert_line, -1, false, response_lines)
+      vim.bo[buf].modifiable = true
 
-    -- Keep buffer modifiable during streaming for voice input
-    vim.bo[buf].modifiable = true
-
-    local win = vim.fn.bufwinid(buf)
-    if win ~= -1 then
-      local new_count = vim.api.nvim_buf_line_count(buf)
-      vim.api.nvim_win_set_cursor(win, { new_count, 0 })
-      vim.api.nvim_win_call(win, function()
-        vim.cmd("normal! zb")
-      end)
-    end
-  end)
+      local win = vim.fn.bufwinid(buf)
+      if win ~= -1 then
+        local new_count = vim.api.nvim_buf_line_count(buf)
+        vim.api.nvim_win_set_cursor(win, { new_count, 0 })
+        vim.api.nvim_win_call(win, function()
+          vim.cmd("normal! zb")
+        end)
+      end
+    end)
+  end
 end
 
 function M.append_to_chat_buffer(buf, new_lines)

@@ -42,6 +42,7 @@ local config = setmetatable({
     split_width = 0.8,
     split_direction = "right",  -- "right", "left", "above", "below"
   },
+  mcp_servers = {},
   annotations = {
     enabled = false,
     session_dir = vim.fn.stdpath("data") .. "/annotations",
@@ -728,6 +729,29 @@ local function get_provider(provider_id)
   return provider_id, config.providers[provider_id]
 end
 
+local function read_provider_mcp_servers(provider_id)
+  if provider_id == "claude" then
+    local path = vim.fn.expand("~/.claude.json")
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local content = f:read("*all")
+    f:close()
+    local ok, json = pcall(vim.json.decode, content)
+    if not ok or type(json.mcpServers) ~= "table" then return nil end
+    local servers = setmetatable({}, { __is_list = true })
+    for name, cfg in pairs(json.mcpServers) do
+      table.insert(servers, {
+        name = name,
+        command = cfg.command,
+        args = cfg.args or setmetatable({}, { __is_list = true }),
+        env = cfg.env or {},
+      })
+    end
+    return #servers > 0 and servers or nil
+  end
+  return nil
+end
+
 local function create_process(session_id, opts)
   opts = opts or {}
 
@@ -744,6 +768,12 @@ local function create_process(session_id, opts)
     end
   end
 
+  local EMPTY_ARRAY_LOCAL = setmetatable({}, { __is_list = true })
+  local mcp_servers = (#config.mcp_servers > 0)
+    and config.mcp_servers
+    or read_provider_mcp_servers(provider_id)
+    or EMPTY_ARRAY_LOCAL
+
   local proc = Process.new(session_id, {
     cmd = provider.cmd,
     args = args,
@@ -753,6 +783,7 @@ local function create_process(session_id, opts)
     load_session_id = opts.load_session_id,
     provider = provider_id,
     profile_id = opts.profile_id,
+    mcp_servers = mcp_servers,
   })
   proc._created_at = os.time()
   proc.data.profile_id = opts.profile_id

@@ -14,17 +14,10 @@ return {
       'dart', 'swift', 'kotlin', 'java', 'astro', 'vue', 'chat'
     }
 
-    local ts_highlighter = require("vim.treesitter.highlighter")
-    if type(ts_highlighter) == "table" and type(ts_highlighter.new) == "function" then
-      local original_new = ts_highlighter.new
-      ts_highlighter.new = function(bufnr, lang)
-        local ok, result = pcall(original_new, bufnr, lang)
-        if not ok then
-          vim.notify_once("Treesitter highlighter error for " .. tostring(lang) .. ": " .. tostring(result), vim.log.levels.WARN)
-          return nil
-        end
-        return result
-      end
+    local orig_query_get = vim.treesitter.query.get
+    vim.treesitter.query.get = function(lang, query_name)
+      local ok, result = pcall(orig_query_get, lang, query_name)
+      if ok then return result end
     end
 
     require("nvim-treesitter.configs").setup({

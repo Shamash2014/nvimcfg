@@ -1307,49 +1307,7 @@ return {
     }))
   end,
 
-  -- Global logcat keybinding
   vim.keymap.set("n", "<localleader>ol", function()
-    local Job = require('plenary.job')
-    
-    -- Check if adb is available
-    Job:new({
-      command = 'which',
-      args = { 'adb' },
-      on_exit = function(j, return_val)
-        if return_val ~= 0 then
-          vim.schedule(function()
-            vim.notify("ADB not found. Please install Android SDK platform-tools.", vim.log.levels.ERROR)
-          end)
-          return
-        end
-        
-        -- Check if device is connected
-        Job:new({
-          command = 'adb',
-          args = { 'devices' },
-          on_exit = function(j, return_val)
-            local output = table.concat(j:result(), '\n')
-            vim.schedule(function()
-              if return_val == 0 and output:match("\tdevice") then
-                -- Device found, start logcat
-                require("snacks").terminal.open("adb logcat", {
-                  cwd = vim.fn.getcwd(),
-                  env = { PATH = vim.env.PATH },
-                  interactive = true,
-                  win = {
-                    position = "bottom",
-                    height = 0.4,
-                    border = "rounded",
-                  },
-                })
-                vim.notify("Logcat started", vim.log.levels.INFO)
-              else
-                vim.notify("No Android device connected. Please connect a device and enable USB debugging.", vim.log.levels.WARN)
-              end
-            end)
-          end,
-        }):start()
-      end,
-    }):start()
-  end, { desc = "Start Android logcat" })
+    require("android.logcat").toggle()
+  end, { desc = "Toggle Android logcat" })
 }
