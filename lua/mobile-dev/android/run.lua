@@ -1,8 +1,8 @@
-local state = require("android.state")
-local sdk = require("android.sdk")
-local devices = require("android.devices")
-local build = require("android.build")
-local logcat = require("android.logcat")
+local state = require("mobile-dev.android.state")
+local sdk = require("mobile-dev.android.sdk")
+local devices = require("mobile-dev.android.devices")
+local build = require("mobile-dev.android.build")
+local logcat = require("mobile-dev.android.logcat")
 
 local M = {}
 

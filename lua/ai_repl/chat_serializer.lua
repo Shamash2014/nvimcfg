@@ -180,10 +180,8 @@ function M.serialize_to_chat(session_id, proc)
   local has_system = false
   for _, msg in ipairs(messages) do
     if msg.role == "system" then
-      if not has_system then
-        table.insert(lines, message_to_chat(msg, 0))
-        has_system = true
-      end
+      table.insert(lines, message_to_chat(msg, 0))
+      has_system = true
     end
   end
 

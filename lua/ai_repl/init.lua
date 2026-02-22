@@ -17,11 +17,47 @@ local Process = require("ai_repl.process")
 local registry = require("ai_repl.registry")
 local render = require("ai_repl.render")
 local providers = require("ai_repl.providers")
-local ralph_helper = require("ai_repl.ralph_helper")
-local tool_utils = require("ai_repl.tool_utils")
-local questionnaire = require("ai_repl.questionnaire")
-local syntax = require("ai_repl.syntax")
-local chat_buffer = require("ai_repl.chat_buffer")
+
+local ralph_helper
+local tool_utils
+local questionnaire
+local syntax
+local chat_buffer
+
+local function lazy_load_ralph_helper()
+  if not ralph_helper then
+    ralph_helper = require("ai_repl.ralph_helper")
+  end
+  return ralph_helper
+end
+
+local function lazy_load_tool_utils()
+  if not tool_utils then
+    tool_utils = require("ai_repl.tool_utils")
+  end
+  return tool_utils
+end
+
+local function lazy_load_questionnaire()
+  if not questionnaire then
+    questionnaire = require("ai_repl.questionnaire")
+  end
+  return questionnaire
+end
+
+local function lazy_load_syntax()
+  if not syntax then
+    syntax = require("ai_repl.syntax")
+  end
+  return syntax
+end
+
+local function lazy_load_chat_buffer()
+  if not chat_buffer then
+    chat_buffer = require("ai_repl.chat_buffer")
+  end
+  return chat_buffer
+end
 
 local config = setmetatable({
   window = {
@@ -214,7 +250,25 @@ local function handle_session_update(proc, params)
   local result = session_state.apply_update(proc, params.update)
   if not result then return end
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
+
+  local chat_buf = require("ai_repl.chat_buffer")
+  if chat_buf.is_chat_buffer(buf) then
+    if result.type == "stop" then
+      update_statusline()
+      if result.ralph_continuing then return end
+      local chat_buffer_events = require("ai_repl.chat_buffer_events")
+      chat_buffer_events.ensure_you_marker(buf)
+      vim.defer_fn(function()
+        proc:process_queued_prompts()
+        update_statusline()
+      end, 200)
+    elseif result.type == "current_mode_update" or result.type == "modes" then
+      update_statusline()
+    end
+    return
+  end
+
   local u = result.update
 
   if config.debug and result.type ~= "agent_message_chunk" then
@@ -263,7 +317,7 @@ local function handle_session_update(proc, params)
     elseif result.is_ask_user then
       render.stop_animation()
       if #result.questions > 0 then
-        questionnaire.start(proc, result.questions, function(response)
+        lazy_load_questionnaire().start(proc, result.questions, function(response)
           M.send_prompt(response)
         end)
       end
@@ -341,8 +395,7 @@ local function handle_session_update(proc, params)
     end
 
     -- Add @You: marker after agent completes
-    local chat_buffer = require("ai_repl.chat_buffer")
-    if not chat_buffer.is_chat_buffer(buf) then
+    if not lazy_load_chat_buffer().is_chat_buffer(buf) then
       -- For non-chat buffers, append @You: directly
       render.append_content(buf, { "", "@You:", "", "" })
     else
@@ -399,11 +452,11 @@ local TOOL_NAMES = {
 }
 
 local function get_tool_description(title, input, locations)
-  return tool_utils.get_tool_description(title, input, locations, { include_path = true, include_line = true })
+  return lazy_load_tool_utils().get_tool_description(title, input, locations, { include_path = true, include_line = true })
 end
 
 local function show_permission_prompt(proc, msg_id, params)
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
 
   vim.schedule(function()
     local tool = params.toolCall or {}
@@ -600,7 +653,7 @@ local function handle_permission_request(proc, msg_id, params)
 end
 
 local function handle_method(proc, method, params, msg_id)
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   local is_active = proc.session_id == registry.active_session_id()
 
   if method == "session/update" then
@@ -793,17 +846,19 @@ local function create_process(session_id, opts)
       handle_method(self, method, params, msg_id)
     end,
     on_debug = function(self, line)
-      if self.data.buf then
-        render.append_content(self.data.buf, { "[debug] " .. line })
+      local buf = get_output_buf(self)
+      if buf then
+        render.append_content(buf, { "[debug] " .. line })
       end
     end,
     on_exit = function(self, code, was_alive)
       render.stop_animation()
-      if code ~= 0 and self.data.buf and was_alive then
-        render.append_content(self.data.buf, { "Process exited with code: " .. code })
+      local buf = get_output_buf(self)
+      if code ~= 0 and buf and was_alive then
+        render.append_content(buf, { "Process exited with code: " .. code })
         if config.reconnect and ui.active and self.state.reconnect_count < config.max_reconnect_attempts then
           self.state.reconnect_count = self.state.reconnect_count + 1
-          render.append_content(self.data.buf, { "Reconnecting... (" .. self.state.reconnect_count .. "/" .. config.max_reconnect_attempts .. ")" })
+          render.append_content(buf, { "Reconnecting... (" .. self.state.reconnect_count .. "/" .. config.max_reconnect_attempts .. ")" })
           vim.defer_fn(function()
             if ui.active and self.session_id == registry.active_session_id() then
               self:restart()
@@ -818,7 +873,7 @@ local function create_process(session_id, opts)
       update_statusline()
     end,
     on_status = function(self, status, data)
-      local buf = self.data.buf
+      local buf = get_output_buf(self)
       if not buf then return end
 
       if status == "initialized" then
@@ -829,18 +884,14 @@ local function create_process(session_id, opts)
         local agent_name = self:get_agent_name()
         local caps_str = #caps > 0 and " [" .. table.concat(caps, ", ") .. "]" or ""
 
-        if vim.api.nvim_buf_is_valid(buf) then
-          pcall(vim.api.nvim_buf_set_name, buf, agent_name)
-        end
+        pcall(vim.api.nvim_buf_set_name, buf, agent_name)
         render.append_content(buf, { "Connected: " .. agent_name .. caps_str })
 
       elseif status == "session_created" then
         local session_name = get_session_name(self.data.cwd)
         self.data.name = session_name
         local buf_name = "AI: " .. session_name
-        if vim.api.nvim_buf_is_valid(buf) then
-          pcall(vim.api.nvim_buf_set_name, buf, buf_name)
-        end
+        pcall(vim.api.nvim_buf_set_name, buf, buf_name)
         render.append_content(buf, {
           "",
           "==================================================================",
@@ -859,9 +910,7 @@ local function create_process(session_id, opts)
           local session_name = get_session_name(self.data.cwd)
           self.data.name = session_name
           local buf_name = "AI: " .. session_name
-          if vim.api.nvim_buf_is_valid(buf) then
-            pcall(vim.api.nvim_buf_set_name, buf, buf_name)
-          end
+          pcall(vim.api.nvim_buf_set_name, buf, buf_name)
         end
         render.append_content(buf, {
           "",
@@ -923,20 +972,20 @@ local function create_process(session_id, opts)
 end
 
 local function create_buffer(proc, name)
-  local buf = vim.api.nvim_create_buf(true, false)
   local session_name = name or get_session_name(proc.data.cwd)
-  local buf_name = "AI: " .. session_name
-  pcall(vim.api.nvim_buf_set_name, buf, buf_name)
-
-  -- Hide this internal buffer from the user's buffer list
-  vim.bo[buf].buflisted = false
-  vim.bo[buf].bufhidden = "hide"
-  vim.bo[buf].swapfile = false
-
-  proc.data.buf = buf
   proc.data.name = session_name
 
-  return buf
+  return nil
+end
+
+local function get_output_buf(proc)
+  if proc and proc.ui and proc.ui.chat_buf then
+    local buf = proc.ui.chat_buf
+    if vim.api.nvim_buf_is_valid(buf) then
+      return buf
+    end
+  end
+  return nil
 end
 
 local IMAGE_EXTENSIONS = {
@@ -1018,7 +1067,7 @@ end
 
 local function setup_buffer_keymaps(buf)
   -- Minimal setup for internal process buffer (hidden, not used for interaction)
-  -- Chat buffers have their own keymap setup in chat_buffer.lua
+  -- Chat buffers have their own keymap setup in lazy_load_chat_buffer().lua
 
   vim.api.nvim_create_autocmd("BufEnter", {
     buffer = buf,
@@ -1048,12 +1097,12 @@ function M.send_prompt(content, opts)
   end
 
   if not proc:is_alive() then
-    render.append_content(proc.data.buf, { "Error: Agent not running" })
+    render.append_content(get_output_buf(proc), { "Error: Agent not running" })
     return
   end
 
   if not proc:is_ready() then
-    render.append_content(proc.data.buf, { "Error: Session not ready yet, please wait..." })
+    render.append_content(get_output_buf(proc), { "Error: Session not ready yet, please wait..." })
     return
   end
 
@@ -1089,7 +1138,7 @@ function M.send_prompt(content, opts)
     if ralph.get_iteration_count() == 0 and ralph.is_planning_phase() then
       ralph.set_original_prompt(user_message_text)
       local planning_prompt = ralph.get_planning_prompt(user_message_text)
-      render.append_content(proc.data.buf, {
+      render.append_content(get_output_buf(proc), {
         "",
         "┌─ Ralph Wiggum Mode ─────────────────────────",
         "│ Phase 1: PLANNING (research & docs)",
@@ -1105,9 +1154,9 @@ function M.send_prompt(content, opts)
   if not opts.silent then
     if is_queued then
       local queue_pos = #proc.data.prompt_queue + 1
-      render.append_content(proc.data.buf, { "", "> " .. user_message_text:sub(1, 100) .. " [queued #" .. queue_pos .. "]" })
+      render.append_content(get_output_buf(proc), { "", "> " .. user_message_text:sub(1, 100) .. " [queued #" .. queue_pos .. "]" })
     else
-      render.append_content(proc.data.buf, { "", "> " .. user_message_text:sub(1, 100) })
+      render.append_content(get_output_buf(proc), { "", "> " .. user_message_text:sub(1, 100) })
     end
   end
 
@@ -1124,7 +1173,7 @@ function M.set_mode(mode_id)
   if not proc or not proc:is_ready() then return end
   proc:set_mode(mode_id)
   update_statusline()
-  render.append_content(proc.data.buf, { "Mode set to: " .. mode_id })
+  render.append_content(get_output_buf(proc), { "Mode set to: " .. mode_id })
 end
 
 function M.cancel()
@@ -1133,10 +1182,9 @@ function M.cancel()
   proc:cancel()
   render.stop_animation()
 
-  local buf = proc.data.buf
-  local chat_buffer = require("ai_repl.chat_buffer")
+  local buf = get_output_buf(proc)
 
-  if not chat_buffer.is_chat_buffer(buf) then
+  if not lazy_load_chat_buffer().is_chat_buffer(buf) then
     -- For non-chat buffers, append cancelled and @You:
     render.append_content(buf, { "Cancelled", "", "@You:", "", "" })
   else
@@ -1156,7 +1204,7 @@ function M.show_queue()
 
   local queue = proc:get_queue()
   if #queue == 0 then
-    render.append_content(proc.data.buf, { "[i] Queue is empty" })
+    render.append_content(get_output_buf(proc), { "[i] Queue is empty" })
     return
   end
 
@@ -1168,7 +1216,7 @@ function M.show_queue()
   end
   table.insert(lines, "━━━━━━━━━━━━")
   table.insert(lines, "")
-  render.append_content(proc.data.buf, lines)
+  render.append_content(get_output_buf(proc), lines)
 end
 
 function M.edit_queued(index)
@@ -1195,7 +1243,7 @@ function M.edit_queued(index)
     vim.ui.input({ prompt = "Edit queued #" .. idx .. ": ", default = current_text }, function(new_text)
       if new_text and new_text ~= "" then
         proc:update_queued_item(idx, new_text)
-        render.append_content(proc.data.buf, { "[+] Updated queued #" .. idx })
+        render.append_content(get_output_buf(proc), { "[+] Updated queued #" .. idx })
         update_statusline()
       end
     end)
@@ -1236,7 +1284,7 @@ function M.remove_queued(index)
   local function do_remove(idx)
     local removed = proc:remove_queued_item(idx)
     if removed then
-      render.append_content(proc.data.buf, { "[x] Removed queued #" .. idx })
+      render.append_content(get_output_buf(proc), { "[x] Removed queued #" .. idx })
       update_statusline()
     else
       vim.notify("Invalid queue index: " .. idx, vim.log.levels.ERROR)
@@ -1276,7 +1324,7 @@ function M.clear_queue()
   end
 
   proc:clear_queue()
-  render.append_content(proc.data.buf, { "[x] Cleared " .. count .. " queued messages" })
+  render.append_content(get_output_buf(proc), { "[x] Cleared " .. count .. " queued messages" })
   update_statusline()
 end
 
@@ -1307,7 +1355,7 @@ function M.show_permissions()
   local allow = data and data.permissions and data.permissions.allow or {}
 
   if #allow == 0 then
-    render.append_content(proc.data.buf, { "[i] No allow rules" })
+    render.append_content(get_output_buf(proc), { "[i] No allow rules" })
     return
   end
 
@@ -1316,7 +1364,7 @@ function M.show_permissions()
     table.insert(lines, string.format("  %d. %s", i, rule))
   end
   table.insert(lines, "━━━━━━━━━━━━━━━")
-  render.append_content(proc.data.buf, lines)
+  render.append_content(get_output_buf(proc), lines)
 end
 
 function M.revoke_permission()
@@ -1335,13 +1383,13 @@ function M.revoke_permission()
     if not choice then return end
     table.remove(data.permissions.allow, idx)
     write_settings(data)
-    render.append_content(proc.data.buf, { "[x] Revoked: " .. choice })
+    render.append_content(get_output_buf(proc), { "[x] Revoked: " .. choice })
   end)
 end
 
 function M.handle_command(cmd)
   local proc = registry.active()
-  local buf = proc and proc.data.buf
+  local buf = proc and get_output_buf(proc)
 
   local parts = vim.split(cmd, "%s+", { trimempty = true })
   local command = parts[1] or ""
@@ -1442,7 +1490,7 @@ function M.handle_command(cmd)
     M.open_chat_buffer_new()
   elseif command == "start" then
     local current_buf = vim.api.nvim_get_current_buf()
-    if chat_buffer.is_chat_buffer(current_buf) then
+    if lazy_load_chat_buffer().is_chat_buffer(current_buf) then
       vim.notify("[.chat] Starting session...", vim.log.levels.INFO)
 
       local lines = vim.api.nvim_buf_get_lines(current_buf, 0, -1, false)
@@ -1458,7 +1506,7 @@ function M.handle_command(cmd)
         if not proc then return end
 
         chat_buffer_events.setup_event_forwarding(current_buf, proc)
-        chat_buffer.attach_session(current_buf, proc.session_id)
+        lazy_load_chat_buffer().attach_session(current_buf, proc.session_id)
 
         if #old_messages > 0 then
           proc.data.messages = {}
@@ -1494,16 +1542,16 @@ function M.handle_command(cmd)
   elseif command == "restart-chat" then
     -- Restart conversation in current chat buffer
     local current_buf = vim.api.nvim_get_current_buf()
-    if chat_buffer.is_chat_buffer(current_buf) then
-      chat_buffer.restart_conversation(current_buf)
+    if lazy_load_chat_buffer().is_chat_buffer(current_buf) then
+      lazy_load_chat_buffer().restart_conversation(current_buf)
     else
       render.append_content(buf, { "[!] Not a .chat buffer" })
     end
   elseif command == "summarize" or command == "summary" then
     -- Summarize current chat buffer
     local current_buf = vim.api.nvim_get_current_buf()
-    if chat_buffer.is_chat_buffer(current_buf) then
-      local ok = chat_buffer.summarize_conversation(current_buf)
+    if lazy_load_chat_buffer().is_chat_buffer(current_buf) then
+      local ok = lazy_load_chat_buffer().summarize_conversation(current_buf)
       if not ok then
         render.append_content(buf, { "[!] Failed to summarize conversation" })
       end
@@ -1784,7 +1832,7 @@ function M.handle_command(cmd)
       return
     end
 
-    ralph_helper.start_loop(proc, prompt, {
+    lazy_load_ralph_helper().start_loop(proc, prompt, {
       max_iterations = max_iterations,
       completion_promise = completion_promise,
       response_timeout_ms = response_timeout_ms,
@@ -1797,14 +1845,14 @@ function M.handle_command(cmd)
       return
     end
 
-    if ralph_helper.is_loop_enabled() then
-      ralph_helper.cancel_loop(proc)
+    if lazy_load_ralph_helper().is_loop_enabled() then
+      lazy_load_ralph_helper().cancel_loop(proc)
     else
       render.append_content(buf, { "", "[!] Ralph Loop not active" })
     end
 
   elseif command == "ralph-loop-status" then
-    local status = ralph_helper.get_loop_status()
+    local status = lazy_load_ralph_helper().get_loop_status()
     if status.enabled then
       render.append_content(buf, {
         "",
@@ -1895,7 +1943,7 @@ function M.activate_skill(skill_name)
 
   local is_accessible, path = skills_module.verify_skill_accessible(skill_name, provider_id)
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   if buf then
     local status_msg = ""
     if status == "linked" then
@@ -1942,7 +1990,7 @@ function M.deactivate_skill()
 
   proc.data.active_skill = nil
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   if buf then
     local msg = "[Skill tracking stopped: " .. skill_name .. "]"
     if success then
@@ -1981,7 +2029,7 @@ function M.show_skill_info(skill_name)
   local provider_id = proc.data.provider or config.default_provider
   local is_accessible, path = skills_module.verify_skill_accessible(skill_name, provider_id)
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   if buf then
     local lines = {
       "",
@@ -2023,7 +2071,7 @@ function M.verify_all_skills()
     return
   end
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   if buf then
     local lines = {
       "",
@@ -2089,7 +2137,7 @@ function M.show_extensions_picker(category_filter)
       end,
     })
   else
-    local buf = proc.data.buf
+    local buf = get_output_buf(proc)
     if buf then
       local lines = { "", "Available Extensions:" }
 
@@ -2124,7 +2172,7 @@ function M.show_agent_commands_only()
   end
 
   if not proc.data.slash_commands or #proc.data.slash_commands == 0 then
-    local buf = proc.data.buf
+    local buf = get_output_buf(proc)
     if buf then
       render.append_content(buf, { "", "[!] No agent commands available", "" })
     end
@@ -2152,14 +2200,14 @@ function M.show_agent_commands_only()
         if item and item.command then
           vim.schedule(function()
             local cmd_text = "/" .. item.command.name
-            render.append_content(proc.data.buf, { "", "> " .. cmd_text, "" })
+            render.append_content(get_output_buf(proc), { "", "> " .. cmd_text, "" })
             proc:send_prompt(cmd_text)
           end)
         end
       end,
     })
   else
-    local buf = proc.data.buf
+    local buf = get_output_buf(proc)
     if buf then
       local lines = { "", "Agent Commands:" }
       for _, sc in ipairs(proc.data.slash_commands) do
@@ -2176,9 +2224,9 @@ function M.execute_extension(extension)
     M.activate_skill(extension.name)
   elseif extension.type == "command" then
     local proc = registry.active()
-    if proc and proc.data.buf then
+    if proc and get_output_buf(proc) then
       local cmd_text = "/" .. extension.name
-      render.append_content(proc.data.buf, { "", "> " .. cmd_text, "" })
+      render.append_content(get_output_buf(proc), { "", "> " .. cmd_text, "" })
       proc:send_prompt(cmd_text)
     end
   elseif extension.type == "local" then
@@ -2201,7 +2249,7 @@ function M.show_mode_status()
     table.insert(lines, marker .. " " .. mode.icon .. " " .. mode.name)
   end
 
-  render.append_content(proc.data.buf, lines)
+  render.append_content(get_output_buf(proc), lines)
 end
 
 function M.switch_to_mode(mode_id)
@@ -2212,7 +2260,7 @@ function M.switch_to_mode(mode_id)
   local success, result = modes_module.switch_mode(mode_id)
 
   if not success then
-    render.append_content(proc.data.buf, { result })
+    render.append_content(get_output_buf(proc), { result })
     return
   end
 
@@ -2221,7 +2269,7 @@ function M.switch_to_mode(mode_id)
   end
 
   local info = result.info
-  render.append_content(proc.data.buf, { "", info.icon .. " " .. info.name .. " mode" })
+  render.append_content(get_output_buf(proc), { "", info.icon .. " " .. info.name .. " mode" })
 end
 
 function M.show_mode_picker()
@@ -2330,7 +2378,7 @@ end
 function M.close()
   -- Close current chat buffer if any
   local buf = vim.api.nvim_get_current_buf()
-  if chat_buffer.is_chat_buffer(buf) then
+  if lazy_load_chat_buffer().is_chat_buffer(buf) then
     vim.cmd("close")
   end
 end
@@ -2366,7 +2414,7 @@ function M.restart_session()
 
     -- Get current chat buffer if any
     local current_buf = vim.api.nvim_get_current_buf()
-    local is_chat = chat_buffer.is_chat_buffer(current_buf)
+    local is_chat = lazy_load_chat_buffer().is_chat_buffer(current_buf)
 
     -- Kill the current session
     proc:kill()
@@ -2377,7 +2425,7 @@ function M.restart_session()
     -- If in a chat buffer, restart the conversation
     if is_chat then
       vim.defer_fn(function()
-        chat_buffer.restart_conversation(current_buf)
+        lazy_load_chat_buffer().restart_conversation(current_buf)
       end, 100)
       return
     end
@@ -2407,7 +2455,7 @@ function M.toggle()
   local current_name = vim.api.nvim_buf_get_name(current_buf)
 
   -- If already in a chat buffer, close it
-  if chat_buffer.is_chat_buffer(current_buf) then
+  if lazy_load_chat_buffer().is_chat_buffer(current_buf) then
     vim.cmd("close")
     return
   end
@@ -2475,10 +2523,15 @@ function M.open_chat_buffer(file_path)
   end
 
   -- Initialize chat buffer
-  local ok, err = chat_buffer.init_buffer(buf)
+  local ok, err = lazy_load_chat_buffer().init_buffer(buf)
   if not ok then
     vim.notify("[.chat] Failed to initialize: " .. tostring(err), vim.log.levels.ERROR)
     return
+  end
+
+  -- Store chat buffer reference in process for rendering
+  if proc then
+    proc.ui.chat_buf = buf
   end
 
   -- Open in configured split direction (default: right vertical)
@@ -2542,7 +2595,6 @@ end
 --- This allows you to start drafting a conversation before starting the AI
 function M.open_chat_buffer_new()
   local chat_parser = require("ai_repl.chat_parser")
-  local chat_buffer = require("ai_repl.chat_buffer")
 
   -- Check if current buffer is already a .chat file
   local buf = vim.api.nvim_get_current_buf()
@@ -2553,7 +2605,7 @@ function M.open_chat_buffer_new()
     vim.notify("[.chat] Initializing existing chat buffer...", vim.log.levels.INFO)
 
     -- Initialize chat buffer (will create session when needed)
-    local ok, err = chat_buffer.init_buffer(buf)
+    local ok, err = lazy_load_chat_buffer().init_buffer(buf)
     if not ok then
       vim.notify("[.chat] Failed to initialize: " .. tostring(err), vim.log.levels.ERROR)
       return
@@ -2582,7 +2634,7 @@ function M.open_chat_buffer_new()
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(template, "\n"))
 
   -- Initialize chat buffer (will handle session creation when needed)
-  local ok, err = chat_buffer.init_buffer(buf)
+  local ok, err = lazy_load_chat_buffer().init_buffer(buf)
   if not ok then
     vim.notify("[.chat] Failed to initialize: " .. tostring(err), vim.log.levels.ERROR)
     return
@@ -2637,7 +2689,7 @@ end
 function M.add_annotation_to_chat()
   local buf = vim.api.nvim_get_current_buf()
 
-  if not chat_buffer.is_chat_buffer(buf) then
+  if not lazy_load_chat_buffer().is_chat_buffer(buf) then
     vim.notify("Not a .chat buffer", vim.log.levels.WARN)
     return
   end
@@ -2647,19 +2699,19 @@ function M.add_annotation_to_chat()
     return
   end
 
-  chat_buffer.add_annotation_from_selection(buf)
+  lazy_load_chat_buffer().add_annotation_from_selection(buf)
 end
 
 -- Sync annotations from .chat buffer to annotation system
 function M.sync_chat_annotations()
   local buf = vim.api.nvim_get_current_buf()
 
-  if not chat_buffer.is_chat_buffer(buf) then
+  if not lazy_load_chat_buffer().is_chat_buffer(buf) then
     vim.notify("Not a .chat buffer", vim.log.levels.WARN)
     return
   end
 
-  local ok, msg = chat_buffer.sync_annotations_from_buffer(buf)
+  local ok, msg = lazy_load_chat_buffer().sync_annotations_from_buffer(buf)
   if ok then
     vim.notify(msg, vim.log.levels.INFO)
   else
@@ -2694,7 +2746,7 @@ function M.new_session(provider_id, profile_id)
 
   local cur_buf = vim.api.nvim_get_current_buf()
   local proc = registry.active()
-  if not (proc and proc.data.buf and cur_buf == proc.data.buf) then
+  if not (proc and get_output_buf(proc) and cur_buf == get_output_buf(proc)) then
     ui.source_buf = cur_buf
   end
   ui.project_root = get_project_root(ui.source_buf or cur_buf)
@@ -2717,21 +2769,7 @@ function M.new_session(provider_id, profile_id)
     profile_id = profile_id,
   })
 
-  -- Create a minimal hidden buffer for the process (used for internal output only)
-  local buf = create_buffer(proc, nil)
-
-  -- Show initialization message
-  render.append_content(buf, {
-    "",
-    "==================================================================",
-    "[INITIALIZING ACP SESSION...]",
-    "==================================================================",
-    "Working Directory: " .. proc.data.cwd,
-    "Provider: " .. provider_id,
-    "Waiting for connection...",
-    "==================================================================",
-    "",
-  })
+  create_buffer(proc, nil)
 
   registry.set(session_id, proc)
   registry.set_active(session_id)
@@ -2792,7 +2830,10 @@ function M.load_session(session_id, opts)
   if existing and existing:is_ready() then
     registry.set_active(session_id)
     update_statusline()
-    render.append_content(existing.data.buf, { "[+] Switched to session: " .. session_id:sub(1, 8) .. "...", "" })
+    local existing_buf = get_output_buf(existing)
+    if existing_buf then
+      render.append_content(existing_buf, { "[+] Switched to session: " .. session_id:sub(1, 8) .. "...", "" })
+    end
     M.open_chat_buffer()
     return
   end
@@ -2976,7 +3017,7 @@ function M.switch_to_buffer()
   local items = {}
 
   for sid, proc in pairs(all) do
-    if proc.data.buf and vim.api.nvim_buf_is_valid(proc.data.buf) then
+    if get_output_buf(proc) and vim.api.nvim_buf_is_valid(get_output_buf(proc)) then
       local is_current = sid == registry.active_session_id()
       local has_process = proc:is_alive()
       local name = proc.data.name or sid:sub(1, 8)
@@ -2984,7 +3025,7 @@ function M.switch_to_buffer()
       table.insert(items, {
         label = format_session_label(is_current, has_process, name, proc.data.provider),
         session_id = sid,
-        buf = proc.data.buf,
+        buf = get_output_buf(proc),
         is_current = is_current
       })
     end
@@ -3027,7 +3068,7 @@ function M.kill_current_session()
   end
 
   local session_id = proc.session_id
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
 
   registry.save_messages(session_id, proc.data.messages)
   registry.delete_session(session_id)
@@ -3094,7 +3135,7 @@ function M.add_selection_to_prompt()
   local rel_path = vim.fn.fnamemodify(file_path, ":~:.")
 
   -- Check if current buffer is a chat buffer
-  if chat_buffer.is_chat_buffer(buf) then
+  if lazy_load_chat_buffer().is_chat_buffer(buf) then
     -- Append to current chat buffer
     local chat_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     local insert_pos = #chat_lines
@@ -3119,7 +3160,7 @@ function M.add_selection_to_prompt()
     vim.notify("[.chat] Added selection to buffer", vim.log.levels.INFO)
   else
     -- Check for active chat buffer
-    local chat_buf = chat_buffer.get_active_chat_buffer()
+    local chat_buf = lazy_load_chat_buffer().get_active_chat_buffer()
     if chat_buf and vim.api.nvim_buf_is_valid(chat_buf) then
       -- Switch to chat buffer and add selection
       vim.api.nvim_set_current_buf(chat_buf)
@@ -3161,7 +3202,7 @@ function M.send_selection()
 
   -- Check if current buffer is a chat buffer
   local buf = vim.api.nvim_get_current_buf()
-  if chat_buffer.is_chat_buffer(buf) then
+  if lazy_load_chat_buffer().is_chat_buffer(buf) then
     -- Add selection to current chat buffer and send
     M.add_selection_to_prompt()
     vim.schedule(function()
@@ -3225,7 +3266,7 @@ function M.quick_action(action_index)
 
     -- Open or switch to chat buffer
     local buf = vim.api.nvim_get_current_buf()
-    if not chat_buffer.is_chat_buffer(buf) then
+    if not lazy_load_chat_buffer().is_chat_buffer(buf) then
       M.open_chat_buffer()
       vim.schedule(function()
         execute_action(action)
@@ -3297,8 +3338,8 @@ function M.setup(opts)
     pattern = "*.chat",
     callback = function()
       local buf = vim.api.nvim_get_current_buf()
-      if chat_buffer.is_chat_buffer(buf) then
-        chat_buffer.init_buffer(buf)
+      if lazy_load_chat_buffer().is_chat_buffer(buf) then
+        lazy_load_chat_buffer().init_buffer(buf)
       end
     end,
   })
@@ -3318,8 +3359,8 @@ function M.setup(opts)
 
   -- Initialize existing .chat buffers
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if chat_buffer.is_chat_buffer(buf) then
-      chat_buffer.init_buffer(buf)
+    if lazy_load_chat_buffer().is_chat_buffer(buf) then
+      lazy_load_chat_buffer().init_buffer(buf)
     end
   end
 
@@ -3338,7 +3379,7 @@ function M.setup(opts)
   end
 
   vim.api.nvim_set_hl(0, "AIReplPrompt", { fg = "#7aa2f7", bold = true })
-  syntax.setup()
+  lazy_load_syntax().setup()
 
   -- Setup .chat syntax highlighting
   require("ai_repl.chat_syntax").setup()

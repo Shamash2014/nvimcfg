@@ -1308,6 +1308,6 @@ return {
   end,
 
   vim.keymap.set("n", "<localleader>ol", function()
-    require("android.logcat").toggle()
+    require("mobile-dev.android.logcat").toggle()
   end, { desc = "Toggle Android logcat" })
 }

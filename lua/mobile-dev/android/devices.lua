@@ -1,4 +1,4 @@
-local state = require("android.state")
+local state = require("mobile-dev.android.state")
 
 local M = {}
 

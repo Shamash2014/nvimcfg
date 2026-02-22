@@ -24,6 +24,16 @@
 local M = {}
 local render = require("ai_repl.render")
 
+local function get_output_buf(proc)
+  if proc and proc.ui and proc.ui.chat_buf then
+    local buf = proc.ui.chat_buf
+    if vim.api.nvim_buf_is_valid(buf) then
+      return buf
+    end
+  end
+  return nil
+end
+
 local ACE_CYCLE = {
   EXECUTE = "execute",
   REFLECT = "reflect",
@@ -92,7 +102,7 @@ function M.start_response_monitoring(proc)
       -- Only re-inject if the agent is NOT busy (truly stalled, not mid-response)
       if proc.state.busy then return end
 
-      local buf = proc.data.buf
+      local buf = get_output_buf(proc)
 
       if ralph_loop.phase == LOOP_PHASE.PLANNING then
         render.append_content(buf, {
@@ -166,7 +176,7 @@ function M.continue_loop(proc)
     return
   end
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
 
   vim.schedule(function()
     render.append_content(buf, {
@@ -189,7 +199,7 @@ function M.end_loop(proc, reason)
   M.stop_response_monitoring()
   ralph_loop.enabled = false
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   local phase_str = ralph_loop.phase == LOOP_PHASE.PLANNING and "planning"
     or ralph_loop.phase == LOOP_PHASE.AWAITING_CONFIRMATION and "awaiting confirmation"
     or "execution"
@@ -287,7 +297,7 @@ end
 function M.continue_planning(proc)
   if not ralph_loop.enabled then return end
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   vim.schedule(function()
     render.append_content(buf, { "", "[📋 Ralph Loop: Continuing to plan...]" })
   end)
@@ -308,7 +318,7 @@ Make sure to include numbered steps for implementation.
 end
 
 function M.prompt_loop_confirmation(proc, _plan_text)
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
 
   vim.schedule(function()
     render.append_content(buf, {
@@ -372,7 +382,7 @@ function M.confirm_loop_plan(proc)
   ralph_loop.current_iteration = 0
   ralph_loop.consecutive_completion_signals = 0
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   vim.schedule(function()
     render.append_content(buf, {
       "",
@@ -403,7 +413,7 @@ function M.revise_loop_plan(proc, feedback)
 
   ralph_loop.phase = LOOP_PHASE.PLANNING
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   vim.schedule(function()
     render.append_content(buf, {
       "",
@@ -496,7 +506,7 @@ Continue execution...
     ralph_loop.completion_promise and ("When finished, include: " .. ralph_loop.completion_promise) or "",
     ralph_loop.completion_promise or "[DONE]")
 
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   vim.schedule(function()
     render.append_content(buf, {
       "",
@@ -551,7 +561,7 @@ end
 
 function M.prompt_plan_confirmation(proc)
   local ralph = require("ai_repl.modes.ralph_wiggum")
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
 
   vim.ui.select(
     { "Yes - Execute", "No - Revise", "Edit - Feedback" },
@@ -592,7 +602,7 @@ end
 
 function M.execute_confirmed_plan(proc)
   local ralph = require("ai_repl.modes.ralph_wiggum")
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
 
   local success, callback = ralph.confirm_plan()
   if not success then return end
@@ -655,7 +665,7 @@ local function sync_plan_to_ui(proc, ralph)
   local steps = ralph.get_plan_steps()
   if proc and proc.ui and #steps > 0 then
     proc.ui.current_plan = steps
-    render.render_plan(proc.data.buf, steps)
+    render.render_plan(get_output_buf(proc), steps)
   end
 end
 
@@ -837,7 +847,7 @@ function M.check_and_continue(proc, response_text)
   end
 
   local ralph = require("ai_repl.modes.ralph_wiggum")
-  local buf = proc.data.buf
+  local buf = get_output_buf(proc)
   ralph.record_iteration(response_text)
 
   local completed_step_content = nil

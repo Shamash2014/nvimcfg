@@ -1,6 +1,6 @@
-local state = require("android.state")
-local sdk = require("android.sdk")
-local devices = require("android.devices")
+local state = require("mobile-dev.android.state")
+local sdk = require("mobile-dev.android.sdk")
+local devices = require("mobile-dev.android.devices")
 
 local M = {}
 

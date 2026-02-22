@@ -4,6 +4,16 @@ local processes = {}
 local active_session_id = nil
 local save_timer = nil
 
+local function get_chat_buf(proc)
+  if proc and proc.ui and proc.ui.chat_buf then
+    local buf = proc.ui.chat_buf
+    if vim.api.nvim_buf_is_valid(buf) then
+      return buf
+    end
+  end
+  return nil
+end
+
 local config = {
   sessions_file = vim.fn.stdpath("data") .. "/ai_repl_sessions.json",
   messages_dir = vim.fn.stdpath("data") .. "/ai_repl_messages",
@@ -71,7 +81,8 @@ end
 
 function M.get_by_buffer(buf)
   for sid, proc in pairs(processes) do
-    if proc.data.buf == buf then
+    local chat_buf = get_chat_buf(proc)
+    if chat_buf and chat_buf == buf then
       return proc, sid
     end
   end

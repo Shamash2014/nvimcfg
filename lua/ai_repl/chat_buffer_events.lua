@@ -89,7 +89,25 @@ local function flush_streaming_text(buf, state)
   find_or_create_insert_line(buf, state)
 
   local response_lines = vim.split(state.streaming_text, "\n", { trimempty = false })
-  vim.api.nvim_buf_set_lines(buf, state.streaming_insert_line, -1, false, response_lines)
+  local rendered = state.rendered_line_count or 0
+
+  if rendered == 0 then
+    vim.api.nvim_buf_set_lines(buf, state.streaming_insert_line, -1, false, response_lines)
+  elseif #response_lines > rendered then
+    local last_idx = state.streaming_insert_line + rendered - 1
+    vim.api.nvim_buf_set_lines(buf, last_idx, last_idx + 1, false,
+      { response_lines[rendered] })
+    if #response_lines > rendered then
+      vim.api.nvim_buf_set_lines(buf, last_idx + 1, last_idx + 1, false,
+        vim.list_slice(response_lines, rendered + 1))
+    end
+  else
+    local last_idx = state.streaming_insert_line + rendered - 1
+    vim.api.nvim_buf_set_lines(buf, last_idx, last_idx + 1, false,
+      { response_lines[#response_lines] })
+  end
+
+  state.rendered_line_count = #response_lines
 end
 
 function M.setup_event_forwarding(buf, proc)
@@ -299,6 +317,7 @@ function M.handle_session_update_in_chat(buf, update, proc)
     pcall(flush_streaming_text, buf, state)
     state.streaming_text = ""
     state.streaming_insert_line = nil
+    state.rendered_line_count = 0
     proc.ui.streaming_response = ""
     proc.ui.streaming_start_line = nil
     vim.bo[buf].modifiable = true
@@ -353,15 +372,13 @@ function M.stop_streaming(buf)
   local state = get_state(buf)
   if not state.streaming then return end
   
-  -- Reset streaming state
   state.streaming = false
   
-  -- Flush any pending text
   flush_streaming_text(buf, state)
   
-  -- Clear all streaming state
   state.streaming_text = ""
   state.streaming_insert_line = nil
+  state.rendered_line_count = 0
   
   -- Ensure buffer is modifiable
   if vim.api.nvim_buf_is_valid(buf) then
@@ -645,6 +662,7 @@ function M.stream_to_chat_buffer(buf, text)
       if not vim.api.nvim_buf_is_valid(buf) then
         state.streaming_text = ""
         state.streaming = false
+        state.rendered_line_count = 0
         return
       end
 
@@ -654,17 +672,31 @@ function M.stream_to_chat_buffer(buf, text)
       find_or_create_insert_line(buf, state)
 
       local response_lines = vim.split(state.streaming_text, "\n", { trimempty = false })
-      vim.api.nvim_buf_set_lines(buf, state.streaming_insert_line, -1, false, response_lines)
+      local rendered = state.rendered_line_count or 0
 
+      if rendered == 0 then
+        vim.api.nvim_buf_set_lines(buf, state.streaming_insert_line, -1, false, response_lines)
+      elseif #response_lines > rendered then
+        local last_idx = state.streaming_insert_line + rendered - 1
+        vim.api.nvim_buf_set_lines(buf, last_idx, last_idx + 1, false,
+          { response_lines[rendered] })
+        if #response_lines > rendered then
+          vim.api.nvim_buf_set_lines(buf, last_idx + 1, last_idx + 1, false,
+            vim.list_slice(response_lines, rendered + 1))
+        end
+      else
+        local last_idx = state.streaming_insert_line + #response_lines - 1
+        vim.api.nvim_buf_set_lines(buf, last_idx, last_idx + 1, false,
+          { response_lines[#response_lines] })
+      end
+
+      state.rendered_line_count = #response_lines
       vim.bo[buf].modifiable = true
 
       local win = vim.fn.bufwinid(buf)
       if win ~= -1 then
         local new_count = vim.api.nvim_buf_line_count(buf)
-        vim.api.nvim_win_set_cursor(win, { new_count, 0 })
-        vim.api.nvim_win_call(win, function()
-          vim.cmd("normal! zb")
-        end)
+        pcall(vim.api.nvim_win_set_cursor, win, { new_count, 0 })
       end
     end)
   end

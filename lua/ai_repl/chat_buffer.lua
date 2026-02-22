@@ -169,10 +169,9 @@ function M.init_buffer(buf)
         end
 
         if needs_sync then
-          -- Sync messages from buffer to process
           proc.data.messages = {}
           for _, msg in ipairs(parsed.messages) do
-            if msg.role == "user" or msg.role == "djinni" then
+            if msg.role == "user" or msg.role == "djinni" or msg.role == "system" then
               registry.append_message(state.session_id, msg.role, msg.content, msg.tool_calls)
             end
           end
@@ -300,6 +299,7 @@ function M.attach_session(buf, session_id)
   state.session_id = proc.session_id
   state.process = proc
   state.modified = false
+  state.system_sent = false
 
   -- Setup event forwarding to ensure AI responses appear in chat buffer
   chat_buffer_events.setup_event_forwarding(buf, proc)
@@ -570,7 +570,21 @@ function M.send_to_process(buf)
   -- Handle @file references
   local prompt = chat_parser.build_prompt(content, parsed.attachments)
 
-  -- Inject @Djinni: marker if not present
+  local system_messages = {}
+  for _, msg in ipairs(parsed.messages) do
+    if msg.role == "system" and msg.content and msg.content ~= "" then
+      table.insert(system_messages, msg.content)
+    end
+  end
+  if #system_messages > 0 and not state.system_sent then
+    local system_block = {
+      type = "text",
+      text = "<system>\n" .. table.concat(system_messages, "\n\n") .. "\n</system>",
+    }
+    table.insert(prompt, 1, system_block)
+    state.system_sent = true
+  end
+
   if parsed.last_role ~= "djinni" then
     M.append_djinni_marker(buf)
   end
@@ -780,12 +794,6 @@ function M.setup_keymaps(buf)
         -- Remove permission keymaps from this buffer
         for _, key in ipairs({ "y", "a", "n", "c" }) do
           pcall(vim.keymap.del, "n", key, { buffer = buf })
-        end
-        -- Also remove from proc's REPL buffer if different
-        if proc.data.buf and proc.data.buf ~= buf then
-          for _, key in ipairs({ "y", "a", "n", "c" }) do
-            pcall(vim.keymap.del, "n", key, { buffer = proc.data.buf })
-          end
         end
         proc.ui.permission_active = false
         proc.ui.permission_queue = {}

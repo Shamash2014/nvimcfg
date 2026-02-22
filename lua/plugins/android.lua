@@ -1,11 +1,11 @@
 return {
-  dir = vim.fn.stdpath("config") .. "/lua/android",
+  dir = vim.fn.stdpath("config") .. "/lua/mobile-dev/android",
   name = "android-dev",
   event = "VeryLazy",
   dependencies = {
     "nvim-lua/plenary.nvim",
   },
   config = function()
-    require("android").setup()
+    require("mobile-dev.android").setup()
   end,
 }

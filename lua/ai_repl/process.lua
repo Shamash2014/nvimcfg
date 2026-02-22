@@ -75,6 +75,7 @@ function Process.new(session_id, opts)
     prompt_queue = {},
   }
   self.ui = {
+    chat_buf = nil,
     streaming_response = "",
     streaming_start_line = nil,
     active_tools = {},

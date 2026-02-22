@@ -1,8 +1,8 @@
 local M = {}
 
 function M.setup()
-  local state = require("android.state")
-  local sdk_mod = require("android.sdk")
+  local state = require("mobile-dev.android.state")
+  local sdk_mod = require("mobile-dev.android.sdk")
 
   sdk_mod.find_sdk()
   local gradlew = sdk_mod.find_gradlew()
@@ -19,10 +19,10 @@ function M.setup()
   sdk_mod.find_modules()
   state.load()
 
-  local build = require("android.build")
-  local logcat = require("android.logcat")
-  local devices = require("android.devices")
-  local run = require("android.run")
+  local build = require("mobile-dev.android.build")
+  local logcat = require("mobile-dev.android.logcat")
+  local devices = require("mobile-dev.android.devices")
+  local run = require("mobile-dev.android.run")
 
   vim.api.nvim_create_user_command("AndroidMenu", function() run.android_menu() end, {})
   vim.api.nvim_create_user_command("AndroidBuild", function(opts)

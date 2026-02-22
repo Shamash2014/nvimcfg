@@ -2,6 +2,16 @@ local M = {}
 
 local render = require("ai_repl.render")
 
+local function get_output_buf(proc)
+  if proc and proc.ui and proc.ui.chat_buf then
+    local buf = proc.ui.chat_buf
+    if vim.api.nvim_buf_is_valid(buf) then
+      return buf
+    end
+  end
+  return nil
+end
+
 local state = {
   active = false,
   questions = {},
@@ -139,7 +149,7 @@ function M.start(proc, questions, on_complete)
   state.current_index = 1
   state.answers = {}
   state.proc = proc
-  state.buf = proc.data.buf
+  state.buf = get_output_buf(proc)
   state.on_complete = on_complete
 
   M.setup_keymaps()
