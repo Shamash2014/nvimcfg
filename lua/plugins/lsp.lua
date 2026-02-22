@@ -1,12 +1,9 @@
 return {
   "neovim/nvim-lspconfig",
-  event = { "BufReadPre", "BufNewFile" },
+  event = "VeryLazy",
   config = function()
-    local lspconfig = require("lspconfig")
-    -- Get capabilities from blink.cmp
     local capabilities = require("blink.cmp").get_lsp_capabilities()
 
-    -- Performance optimized LSP settings
     local default_config = {
       capabilities = capabilities,
       flags = {
@@ -14,8 +11,9 @@ return {
       },
     }
 
-    -- TypeScript/JavaScript with vtsls - comprehensive settings
-    lspconfig.vtsls.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("*", default_config)
+
+    vim.lsp.config("vtsls", {
       filetypes = {
         "javascript",
         "javascriptreact",
@@ -100,13 +98,12 @@ return {
           },
         },
       },
-    }))
+    })
+    vim.lsp.enable("vtsls")
 
-    -- Python with basedpyright
-    lspconfig.basedpyright.setup(default_config)
+    vim.lsp.enable("basedpyright")
 
-    -- Rust with comprehensive rust-analyzer settings
-    lspconfig.rust_analyzer.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("rust_analyzer", {
       settings = {
         ["rust-analyzer"] = {
           imports = {
@@ -175,13 +172,13 @@ return {
           },
         },
       },
-    }))
+    })
+    vim.lsp.enable("rust_analyzer")
 
-    -- Flutter/Dart LSP with enhanced settings
-    lspconfig.dartls.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("dartls", {
       cmd = { "dart", "language-server", "--protocol=lsp" },
       filetypes = { "dart" },
-      root_dir = lspconfig.util.root_pattern("pubspec.yaml", ".git"),
+      root_markers = { "pubspec.yaml", ".git" },
       init_options = {
         onlyAnalyzeProjectsWithOpenFiles = false,
         suggestFromUnimportedLibraries = true,
@@ -210,19 +207,14 @@ return {
         },
       },
       on_attach = function(client, bufnr)
-        -- Store Flutter outline data
         vim.b[bufnr].flutter_outline = nil
 
-        -- Enable virtual text for closing labels
         local namespace = vim.api.nvim_create_namespace("flutter_closing_labels")
 
-        -- Set up handlers for Dart/Flutter notifications
         local handlers = client.handlers or {}
 
-        -- Handler for Flutter outline notifications
         handlers["dart/textDocument/publishFlutterOutline"] = function(err, result, ctx)
           if err then return end
-          -- Get buffer from URI
           local uri = result.uri
           local buf = vim.uri_to_bufnr(uri)
           if result and result.outline and vim.api.nvim_buf_is_valid(buf) then
@@ -230,9 +222,7 @@ return {
           end
         end
 
-        -- Handler for closing labels notifications
         handlers["dart/textDocument/publishClosingLabels"] = function(err, result, ctx)
-          -- Get buffer from URI
           local uri = result.uri
           local buf = vim.uri_to_bufnr(uri)
 
@@ -261,7 +251,6 @@ return {
 
         client.handlers = handlers
 
-        -- Use localleader (\) for Flutter-specific commands
         vim.keymap.set("n", "<localleader>r", ":FlutterReload<CR>", { buffer = bufnr, desc = "Flutter Hot Reload" })
         vim.keymap.set("n", "<localleader>R", ":FlutterRestart<CR>", { buffer = bufnr, desc = "Flutter Hot Restart" })
         vim.keymap.set("n", "<localleader>q", ":FlutterQuit<CR>", { buffer = bufnr, desc = "Flutter Quit" })
@@ -272,7 +261,6 @@ return {
         vim.keymap.set("n", "<localleader>u", ":FlutterPubUpgrade<CR>", { buffer = bufnr, desc = "Flutter Pub Upgrade" })
         vim.keymap.set("n", "<localleader>o", ":FlutterOutline<CR>", { buffer = bufnr, desc = "Flutter Widget Outline" })
 
-        -- Create Flutter commands using plenary for non-blocking execution
         local Job = require('plenary.job')
 
         vim.api.nvim_buf_create_user_command(bufnr, "FlutterReload", function()
@@ -339,7 +327,6 @@ return {
           }):start()
         end, {})
 
-        -- Flutter log viewer in a new terminal
         vim.api.nvim_buf_create_user_command(bufnr, "FlutterLog", function()
           require("snacks").terminal.open("flutter logs", {
             cwd = vim.fn.getcwd(),
@@ -353,7 +340,6 @@ return {
           })
         end, {})
 
-        -- Clear Flutter logs
         vim.api.nvim_buf_create_user_command(bufnr, "FlutterLogClear", function()
           Job:new({
             command = 'flutter',
@@ -370,7 +356,6 @@ return {
           }):start()
         end, {})
 
-        -- Pub commands
         vim.api.nvim_buf_create_user_command(bufnr, "FlutterPubGet", function()
           vim.notify("Running flutter pub get...", vim.log.levels.INFO)
           Job:new({
@@ -407,7 +392,6 @@ return {
           }):start()
         end, {})
 
-        -- Flutter Widget Outline
         vim.api.nvim_buf_create_user_command(bufnr, "FlutterOutline", function()
           local outline = vim.b[bufnr].flutter_outline
 
@@ -416,13 +400,11 @@ return {
             return
           end
 
-          -- Convert outline to flat list for picker
           local items = {}
           local function traverse_outline(node, depth)
             depth = depth or 0
             local indent = string.rep("  ", depth)
 
-            -- Add current node
             local kind = node.kind or "Widget"
             local className = node.className or node.label or "Unknown"
             local range = node.codeRange or node.range
@@ -436,7 +418,6 @@ return {
               })
             end
 
-            -- Traverse children
             if node.children then
               for _, child in ipairs(node.children) do
                 traverse_outline(child, depth + 1)
@@ -451,7 +432,6 @@ return {
             return
           end
 
-          -- Show in Snacks picker
           require("snacks").picker({
             title = "Flutter Widget Outline",
             items = items,
@@ -467,26 +447,24 @@ return {
           })
         end, {})
 
-        -- Widget wrap helper
         vim.keymap.set("v", "<localleader>w", function()
           local start_row, start_col = unpack(vim.api.nvim_buf_get_mark(bufnr, "<"))
           local end_row, end_col = unpack(vim.api.nvim_buf_get_mark(bufnr, ">"))
           local lines = vim.api.nvim_buf_get_lines(bufnr, start_row - 1, end_row, false)
 
-          -- Simple widget wrap with Container
           local indent = lines[1]:match("^%s*")
           vim.api.nvim_buf_set_lines(bufnr, start_row - 1, start_row - 1, false, { indent .. "Container(" })
           vim.api.nvim_buf_set_lines(bufnr, end_row + 1, end_row + 1, false, { indent .. "  child: " })
           vim.api.nvim_buf_set_lines(bufnr, end_row + 2, end_row + 2, false, { indent .. ")," })
         end, { buffer = bufnr, desc = "Wrap with Widget" })
       end,
-    }))
+    })
+    vim.lsp.enable("dartls")
 
-    -- Go with comprehensive gopls settings
-    lspconfig.gopls.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("gopls", {
       cmd = { "gopls" },
       filetypes = { "go", "gomod", "gowork", "gotmpl" },
-      root_dir = lspconfig.util.root_pattern("go.work", "go.mod", ".git"),
+      root_markers = { "go.work", "go.mod", ".git" },
       settings = {
         gopls = {
           gofumpt = true,
@@ -527,15 +505,12 @@ return {
         },
       },
       on_attach = function(client, bufnr)
-        -- Enable inlay hints for Go
         if client.server_capabilities.inlayHintProvider then
           vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
         end
 
-        -- Go-specific keybindings using localleader
         local opts = { buffer = bufnr, silent = true }
 
-        -- Code organization
         vim.keymap.set("n", "<localleader>i", function()
           vim.lsp.buf.code_action({
             context = { only = { "source.organizeImports" } },
@@ -543,7 +518,6 @@ return {
           })
         end, vim.tbl_extend("force", opts, { desc = "Organize Imports" }))
 
-        -- Fill struct
         vim.keymap.set("n", "<localleader>fs", function()
           vim.lsp.buf.code_action({
             context = { only = { "refactor.rewrite" } },
@@ -551,7 +525,6 @@ return {
           })
         end, vim.tbl_extend("force", opts, { desc = "Fill struct" }))
 
-        -- Generate test
         vim.keymap.set("n", "<localleader>gt", function()
           vim.lsp.buf.code_action({
             context = { only = { "source.generateTest" } },
@@ -559,7 +532,6 @@ return {
           })
         end, vim.tbl_extend("force", opts, { desc = "Generate test" }))
 
-        -- Run go mod tidy
         vim.keymap.set("n", "<localleader>m", function()
           vim.lsp.buf.code_action({
             context = { only = { "source.fixAll" } },
@@ -568,12 +540,10 @@ return {
           vim.notify("Running go mod tidy", vim.log.levels.INFO)
         end, vim.tbl_extend("force", opts, { desc = "Go mod tidy" }))
 
-        -- Toggle inlay hints
         vim.keymap.set("n", "<localleader>h", function()
           vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
         end, vim.tbl_extend("force", opts, { desc = "Toggle inlay hints" }))
 
-        -- Run tests
         vim.keymap.set("n", "<localleader>t", function()
           local current_file = vim.fn.expand("%:p:h")
           require("snacks").terminal("go test -v ./...", {
@@ -585,7 +555,6 @@ return {
           })
         end, vim.tbl_extend("force", opts, { desc = "Run tests" }))
 
-        -- Run current file
         vim.keymap.set("n", "<localleader>r", function()
           local current_file = vim.fn.expand("%")
           require("snacks").terminal("go run " .. current_file, {
@@ -596,7 +565,6 @@ return {
           })
         end, vim.tbl_extend("force", opts, { desc = "Run current file" }))
 
-        -- Build
         vim.keymap.set("n", "<localleader>b", function()
           require("snacks").terminal("go build", {
             win = {
@@ -606,23 +574,20 @@ return {
           })
         end, vim.tbl_extend("force", opts, { desc = "Build project" }))
       end,
-    }))
+    })
+    vim.lsp.enable("gopls")
 
-    -- Angular Language Server
-    lspconfig.angularls.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("angularls", {
       cmd = { "ngserver", "--stdio", "--tsProbeLocations", "", "--ngProbeLocations", "" },
       filetypes = { "typescript", "html", "typescriptreact", "typescript.tsx", "htmlangular" },
-      root_dir = lspconfig.util.root_pattern("angular.json", ".git"),
+      root_markers = { "angular.json", ".git" },
       on_attach = function(client, bufnr)
-        -- Angular-specific keybindings
         local opts = { buffer = bufnr, silent = true }
 
-        -- Component navigation
         vim.keymap.set("n", "<localleader>gc", function()
           vim.lsp.buf.definition()
         end, vim.tbl_extend("force", opts, { desc = "Go to component" }))
 
-        -- Template navigation
         vim.keymap.set("n", "<localleader>gt", function()
           vim.cmd("edit %:r.html")
         end, vim.tbl_extend("force", opts, { desc = "Go to template" }))
@@ -635,13 +600,13 @@ return {
           vim.cmd("edit %:r.spec.ts")
         end, vim.tbl_extend("force", opts, { desc = "Go to test" }))
       end,
-    }))
+    })
+    vim.lsp.enable("angularls")
 
-    -- Astro Language Server
-    lspconfig.astro.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("astro", {
       cmd = { "astro-ls", "--stdio" },
       filetypes = { "astro" },
-      root_dir = lspconfig.util.root_pattern("package.json", "tsconfig.json", "jsconfig.json", ".git"),
+      root_markers = { "package.json", "tsconfig.json", "jsconfig.json", ".git" },
       init_options = {
         typescript = {
           tsdk = vim.fs.normalize("node_modules/typescript/lib")
@@ -664,15 +629,12 @@ return {
         },
       },
       on_attach = function(client, bufnr)
-        -- Astro-specific keybindings
         local opts = { buffer = bufnr, silent = true }
 
-        -- Format with prettier
         vim.keymap.set("n", "<localleader>f", function()
           vim.lsp.buf.format({ async = true })
         end, vim.tbl_extend("force", opts, { desc = "Format Astro file" }))
 
-        -- Build
         vim.keymap.set("n", "<localleader>b", function()
           require("snacks").terminal("npm run build", {
             win = {
@@ -682,7 +644,6 @@ return {
           })
         end, vim.tbl_extend("force", opts, { desc = "Build Astro project" }))
 
-        -- Dev server
         vim.keymap.set("n", "<localleader>d", function()
           require("snacks").terminal("npm run dev", {
             win = {
@@ -692,13 +653,13 @@ return {
           })
         end, vim.tbl_extend("force", opts, { desc = "Start dev server" }))
       end,
-    }))
+    })
+    vim.lsp.enable("astro")
 
-    -- Tailwind CSS Language Server (useful for both Angular and Astro)
-    lspconfig.tailwindcss.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("tailwindcss", {
       cmd = { "tailwindcss-language-server", "--stdio" },
       filetypes = { "html", "css", "scss", "javascript", "javascriptreact", "typescript", "typescriptreact", "astro", "vue", "svelte" },
-      root_dir = lspconfig.util.root_pattern("tailwind.config.js", "tailwind.config.cjs", "tailwind.config.mjs", "tailwind.config.ts", ".git"),
+      root_markers = { "tailwind.config.js", "tailwind.config.cjs", "tailwind.config.mjs", "tailwind.config.ts", ".git" },
       settings = {
         tailwindCSS = {
           validate = true,
@@ -724,13 +685,13 @@ return {
           },
         },
       },
-    }))
+    })
+    vim.lsp.enable("tailwindcss")
 
-    -- HTML Language Server (enhanced for Angular templates)
-    lspconfig.html.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("html", {
       cmd = { "vscode-html-language-server", "--stdio" },
       filetypes = { "html", "htmlangular" },
-      root_dir = lspconfig.util.root_pattern("package.json", ".git"),
+      root_markers = { "package.json", ".git" },
       init_options = {
         configurationSection = { "html", "css", "javascript" },
         embeddedLanguages = {
@@ -760,13 +721,13 @@ return {
           },
         },
       },
-    }))
+    })
+    vim.lsp.enable("html")
 
-    -- CSS/SCSS Language Server
-    lspconfig.cssls.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("cssls", {
       cmd = { "vscode-css-language-server", "--stdio" },
       filetypes = { "css", "scss", "less" },
-      root_dir = lspconfig.util.root_pattern("package.json", ".git"),
+      root_markers = { "package.json", ".git" },
       settings = {
         css = {
           validate = true,
@@ -781,13 +742,13 @@ return {
           },
         },
       },
-    }))
+    })
+    vim.lsp.enable("cssls")
 
-    -- Emmet Language Server
-    lspconfig.ls_emmet.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("ls_emmet", {
       cmd = { "ls_emmet", "--stdio" },
       filetypes = { "html", "css", "scss", "javascript", "typescript", "vue", "svelte" },
-      root_dir = lspconfig.util.root_pattern("package.json", ".git"),
+      root_markers = { "package.json", ".git" },
       settings = {
         html = {
           preferences = {
@@ -796,41 +757,28 @@ return {
           },
         },
       },
-    }))
+    })
+    vim.lsp.enable("ls_emmet")
 
-    -- Xcode Build Server configuration for BSP support
-    local function setup_xcode_build_server()
-      local configs = require('lspconfig.configs')
-      if not configs.xcode_build_server then
-        configs.xcode_build_server = {
-          default_config = {
-            name = 'xcode_build_server',
-            cmd = { 'xcode-build-server' },
-            root_dir = lspconfig.util.root_pattern('*.xcodeproj', '*.xcworkspace', 'Package.swift', '.git'),
-            filetypes = { 'swift', 'objective-c', 'objective-cpp' },
-            capabilities = capabilities,
-            init_options = {
-              preferences = {
-                useBuildSystemSettings = true,
-                enableIndexing = true,
-              },
-            },
-          },
-        }
-      end
-      lspconfig.xcode_build_server.setup({})
-    end
-
-    -- Try to setup Xcode Build Server if available
     if vim.fn.executable('xcode-build-server') == 1 then
-      setup_xcode_build_server()
+      vim.lsp.config("xcode_build_server", {
+        cmd = { 'xcode-build-server' },
+        filetypes = { 'swift', 'objective-c', 'objective-cpp' },
+        root_markers = { '*.xcodeproj', '*.xcworkspace', 'Package.swift', '.git' },
+        init_options = {
+          preferences = {
+            useBuildSystemSettings = true,
+            enableIndexing = true,
+          },
+        },
+      })
+      vim.lsp.enable("xcode_build_server")
     end
 
-    -- Swift SourceKit-LSP configuration with xcede and BSP integration
-    lspconfig.sourcekit.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("sourcekit", {
       cmd = { "sourcekit-lsp" },
       filetypes = { "swift", "objective-c", "objective-cpp" },
-      root_dir = lspconfig.util.root_pattern("Package.swift", "Package.resolved", ".git", "*.xcodeproj", "*.xcworkspace"),
+      root_markers = { "Package.swift", "Package.resolved", ".git", "*.xcodeproj", "*.xcworkspace" },
       capabilities = vim.tbl_deep_extend("force", capabilities, {
         workspace = {
           workspaceFolders = true,
@@ -849,20 +797,16 @@ return {
       settings = {
         sourcekit = {
           trace = "verbose",
-          -- Enable BSP support if available
           enableBSP = vim.fn.executable('xcode-build-server') == 1,
         },
       },
       on_attach = function(client, bufnr)
-        -- Enable inlay hints for Swift
         if client.server_capabilities.inlayHintProvider then
           vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
         end
 
-        -- Swift-specific keybindings using localleader
         local opts = { buffer = bufnr, silent = true }
 
-        -- xcede build commands
         vim.keymap.set("n", "<localleader>b", function()
           require("snacks").terminal("xcede build", {
             win = {
@@ -1150,49 +1094,38 @@ return {
           end)
         end, vim.tbl_extend("force", opts, { desc = "Unified build menu" }))
       end,
-    }))
+    })
+    vim.lsp.enable("sourcekit")
 
-    -- Elixir Expert LSP (Official Elixir Language Server)
-    -- Using custom Expert installation path
     local expert_path = vim.fn.expand("~/.tools/expert/expert")
     if vim.fn.executable(expert_path) == 1 then
-      -- Register custom config for Expert if not already defined
-      local configs = require('lspconfig.configs')
-      if not configs.expert then
-        configs.expert = {
-          default_config = {
-            cmd = { expert_path, "server" },
-            filetypes = { "elixir", "eex", "heex", "surface" },
-            root_dir = lspconfig.util.root_pattern("mix.exs", ".git"),
-            single_file_support = true,
-            init_options = {
-              experimental = {
-                completions = {
-                  enable = true
-                }
-              }
-            },
-            settings = {},
-          },
-        }
-      end
-      lspconfig.expert.setup(vim.tbl_extend("force", default_config, {
+      vim.lsp.config("expert", {
+        cmd = { expert_path, "server" },
+        filetypes = { "elixir", "eex", "heex", "surface" },
+        root_markers = { "mix.exs", ".git" },
+        single_file_support = true,
+        init_options = {
+          experimental = {
+            completions = {
+              enable = true
+            }
+          }
+        },
+        settings = {},
         on_attach = function(client, bufnr)
-          -- Enable completion triggered by <c-x><c-o>
           vim.api.nvim_buf_set_option(bufnr, 'omnifunc', 'v:lua.vim.lsp.omnifunc')
         end,
-      }))
+      })
+      vim.lsp.enable("expert")
     else
-      -- Fallback to ElixirLS if Expert not found
       print("Expert LSP not found at " .. expert_path .. ", falling back to ElixirLS")
-      lspconfig.elixirls.setup(default_config)
+      vim.lsp.enable("elixirls")
     end
 
-    -- Java Language Server (jdtls)
-    lspconfig.jdtls.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("jdtls", {
       cmd = { "jdtls" },
       filetypes = { "java" },
-      root_dir = lspconfig.util.root_pattern("build.gradle", "pom.xml", ".git", "mvnw", "gradlew"),
+      root_markers = { "build.gradle", "pom.xml", ".git", "mvnw", "gradlew" },
       settings = {
         java = {
           signatureHelp = { enabled = true },
@@ -1229,20 +1162,20 @@ return {
           },
         },
       },
-    }))
+    })
+    vim.lsp.enable("jdtls")
 
-    -- Kotlin Language Server
-    lspconfig.kotlin_language_server.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("kotlin_language_server", {
       cmd = { "kotlin-language-server" },
       filetypes = { "kotlin", "kt", "kts" },
-      root_dir = lspconfig.util.root_pattern("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts", "pom.xml", ".git"),
-    }))
+      root_markers = { "settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts", "pom.xml", ".git" },
+    })
+    vim.lsp.enable("kotlin_language_server")
 
-    -- YAML Language Server
-    lspconfig.yamlls.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("yamlls", {
       cmd = { "yaml-language-server", "--stdio" },
       filetypes = { "yaml", "yml" },
-      root_dir = lspconfig.util.root_pattern(".git", vim.fn.getcwd()),
+      root_markers = { ".git", vim.fn.getcwd() },
       settings = {
         yaml = {
           hover = true,
@@ -1275,13 +1208,13 @@ return {
           },
         },
       },
-    }))
+    })
+    vim.lsp.enable("yamlls")
 
-    -- TOML Language Server (Taplo)
-    lspconfig.taplo.setup(vim.tbl_extend("force", default_config, {
+    vim.lsp.config("taplo", {
       cmd = { "taplo", "lsp", "stdio" },
       filetypes = { "toml" },
-      root_dir = lspconfig.util.root_pattern("*.toml", ".git"),
+      root_markers = { "*.toml", ".git" },
       settings = {
         taplo = {
           formatter = {
@@ -1304,7 +1237,8 @@ return {
           },
         },
       },
-    }))
+    })
+    vim.lsp.enable("taplo")
   end,
 
   vim.keymap.set("n", "<localleader>ol", function()

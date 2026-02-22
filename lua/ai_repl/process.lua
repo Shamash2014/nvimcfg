@@ -59,7 +59,7 @@ function Process.new(session_id, opts)
     busy = false,
     agent_info = nil,
     agent_capabilities = {},
-    client_capabilities = {},
+    client_capabilities = vim.empty_dict(),
     supports_load_session = false,
     reconnect_count = 0,
   }
@@ -389,11 +389,15 @@ function Process:_acp_initialize()
 
   self:_notify_status("initializing")
 
-  self:send("initialize", {
+  local init_done = false
+  local msg_id = self:send("initialize", {
     protocolVersion = 1,
     clientInfo = CLIENT_INFO,
     clientCapabilities = self.state.client_capabilities
   }, function(result, err)
+    if init_done then return end
+    init_done = true
+    
     if err then
       self:_notify_status("init_failed", err)
       return
@@ -414,6 +418,17 @@ function Process:_acp_initialize()
 
     self:_acp_create_or_load_session()
   end)
+
+  vim.defer_fn(function()
+    if not init_done and msg_id then
+      init_done = true
+      self.conn.callbacks[msg_id] = nil
+      self:_notify_status("init_failed", {
+        message = "Initialization timed out (30s)",
+        hint = "Check if " .. self.config.cmd .. " is running correctly"
+      })
+    end
+  end, 30000)
 end
 
 function Process:_acp_authenticate(method_id, on_success)
@@ -460,11 +475,15 @@ function Process:_acp_create_or_load_session()
   if self.config.load_session_id and self.state.supports_load_session then
     self:_notify_status("loading_session")
 
-    self:send("session/load", {
+    local load_done = false
+    local msg_id = self:send("session/load", {
       sessionId = self.config.load_session_id,
       cwd = cwd,
       mcpServers = self.config.mcp_servers
     }, function(result, err)
+      if load_done then return end
+      load_done = true
+      
       if err then
         self:_notify_status("session_load_failed", err)
         self:_acp_create_new_session(cwd)
@@ -474,6 +493,17 @@ function Process:_acp_create_or_load_session()
       self:_handle_session_result(result)
       self:_notify_status("session_loaded", result)
     end)
+
+    vim.defer_fn(function()
+      if not load_done and msg_id then
+        load_done = true
+        self.conn.callbacks[msg_id] = nil
+        self:_notify_status("session_load_failed", {
+          message = "Session load timed out (30s), creating new session..."
+        })
+        self:_acp_create_new_session(cwd)
+      end
+    end, 30000)
   else
     self:_acp_create_new_session(cwd)
   end
@@ -482,10 +512,14 @@ end
 function Process:_acp_create_new_session(cwd)
   self:_notify_status("creating_session")
 
-  self:send("session/new", {
+  local session_done = false
+  local msg_id = self:send("session/new", {
     cwd = cwd,
     mcpServers = self.config.mcp_servers
   }, function(result, err)
+    if session_done then return end
+    session_done = true
+    
     if err then
       self:_notify_status("session_error_detail", err)
       self:_notify_status("session_failed", err)
@@ -495,6 +529,17 @@ function Process:_acp_create_new_session(cwd)
     self:_handle_session_result(result)
     self:_notify_status("session_created", result)
   end)
+
+  vim.defer_fn(function()
+    if not session_done and msg_id then
+      session_done = true
+      self.conn.callbacks[msg_id] = nil
+      self:_notify_status("session_failed", {
+        message = "Session creation timed out (60s)",
+        hint = "The agent may be busy or unresponsive"
+      })
+    end
+  end, 60000)
 end
 
 function Process:_handle_session_result(result)

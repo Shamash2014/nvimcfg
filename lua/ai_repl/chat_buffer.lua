@@ -221,15 +221,46 @@ function M.init_buffer(buf)
         
         vim.notify("[.chat] Creating session...", vim.log.levels.INFO)
         ai_repl.new_session(provider_id)
-        
+
         vim.defer_fn(function()
           local proc = registry.active()
-          if proc and proc:is_ready() and vim.api.nvim_buf_is_valid(buf) then
-            chat_buffer_events.setup_event_forwarding(buf, proc)
-            M.attach_session(buf, proc.session_id)
-            vim.notify("[.chat] Session created and ready! Press C-] to send.", vim.log.levels.INFO)
+          if not proc then
+            state.creating_session = false
+            return
           end
-          state.creating_session = false
+
+          local function setup_forwarding_when_ready()
+            if not vim.api.nvim_buf_is_valid(buf) then
+              state.creating_session = false
+              return
+            end
+
+            if proc:is_ready() then
+              chat_buffer_events.setup_event_forwarding(buf, proc)
+              M.attach_session(buf, proc.session_id)
+              vim.notify("[.chat] Session created and ready! Press C-] to send.", vim.log.levels.INFO)
+              state.creating_session = false
+            else
+              local attempts = 0
+              local max_attempts = 100
+              vim.defer_fn(function()
+                if attempts >= max_attempts then
+                  vim.notify("[.chat] Session creation timeout. Try /start command.", vim.log.levels.ERROR)
+                  state.creating_session = false
+                  return
+                end
+
+                if proc:is_alive() and vim.api.nvim_buf_is_valid(buf) then
+                  attempts = attempts + 1
+                  setup_forwarding_when_ready()
+                else
+                  state.creating_session = false
+                end
+              end, 100)
+            end
+          end
+
+          setup_forwarding_when_ready()
         end, 100)
       end)
     end
@@ -583,6 +614,10 @@ function M.send_to_process(buf)
     }
     table.insert(prompt, 1, system_block)
     state.system_sent = true
+  end
+
+  if state.process and not chat_buffer_events.is_forwarding_setup(buf, state.process) then
+    vim.notify("[.chat] Warning: Event forwarding not set up. Responses may not appear.", vim.log.levels.WARN)
   end
 
   if parsed.last_role ~= "djinni" then

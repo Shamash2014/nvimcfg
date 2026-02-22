@@ -996,7 +996,9 @@ function M.pick_tasks_and_commands()
       if not item then return end
       if item.is_separator then return end
       if item.is_ai then
-        require("ai_repl").new_session()
+        vim.schedule(function()
+          require("ai_repl").new_session()
+        end)
       elseif item.is_repl then
         require("code_repl").toggle_repl()
       elseif item.is_task then

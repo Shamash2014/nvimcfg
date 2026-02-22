@@ -73,15 +73,9 @@ return {
           module = "blink.cmp.sources.buffer",
           score_offset = -3,
           opts = {
+            -- Only search current buffer for performance
             get_bufnrs = function()
-              local bufs = {}
-              for _, win in ipairs(vim.api.nvim_list_wins()) do
-                local buf = vim.api.nvim_win_get_buf(win)
-                if vim.bo[buf].buftype ~= "terminal" then
-                  bufs[buf] = true
-                end
-              end
-              return vim.tbl_keys(bufs)
+              return vim.api.nvim_list_bufs()
             end,
           },
         },

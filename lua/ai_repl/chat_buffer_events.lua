@@ -149,7 +149,12 @@ function M.setup_event_forwarding(buf, proc)
 
       if method == "session/update" then
         if buf_valid then
-          pcall(M.handle_session_update_in_chat, buf, params.update, self)
+          local ok, err = pcall(M.handle_session_update_in_chat, buf, params.update, self)
+          if not ok then
+            vim.notify("[.chat] Error processing update: " .. tostring(err), vim.log.levels.ERROR)
+            local session_state = require("ai_repl.session_state")
+            session_state.apply_update(self, params.update)
+          end
         else
           -- Buffer closed but we still need to process updates
           local session_state = require("ai_repl.session_state")
@@ -188,6 +193,11 @@ function M.setup_event_forwarding(buf, proc)
   return true
 end
 
+function M.is_forwarding_setup(buf, proc)
+  local state = get_state(buf)
+  return state.original_handlers ~= nil and state.proc == proc
+end
+
 function M.handle_session_update_in_chat(buf, update, proc)
   -- Check if buffer is still valid, if not, just process the update internally
   if not vim.api.nvim_buf_is_valid(buf) then
@@ -204,7 +214,6 @@ function M.handle_session_update_in_chat(buf, update, proc)
     if is_stop_update then
       vim.defer_fn(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
-        if proc and proc.state and proc.state.busy then return end
         M.ensure_you_marker(buf)
       end, 700)
     end
@@ -343,7 +352,6 @@ function M.handle_session_update_in_chat(buf, update, proc)
 
     vim.defer_fn(function()
       if not vim.api.nvim_buf_is_valid(buf) then return end
-      if proc and proc.state and proc.state.busy then return end
       M.ensure_you_marker(buf)
     end, 700)
     if decorations_ok then
@@ -412,8 +420,19 @@ function M.ensure_you_marker(buf)
   end
 
   if last_user_line and (not last_djinni_line or last_user_line > last_djinni_line) then
-    vim.bo[buf].modifiable = true
-    return
+    -- Check if there's non-empty content after the last @You: (tool output, etc.)
+    -- If so, the agent responded without a @Djinni: marker and we still need a new @You:
+    local has_content_after = false
+    for i = last_user_line + 1, #lines do
+      if lines[i] ~= "" then
+        has_content_after = true
+        break
+      end
+    end
+    if not has_content_after then
+      vim.bo[buf].modifiable = true
+      return
+    end
   end
 
   local line_count = #lines
@@ -614,13 +633,7 @@ function M.handle_status_in_chat(buf, status, data, proc)
 
   local banner = {
     "",
-    "==================================================================",
     label,
-    "==================================================================",
-    "Working Directory: " .. proc.data.cwd,
-    "Session ID: " .. proc.session_id,
-    "Provider: " .. (proc.data.provider or "unknown"),
-    "==================================================================",
     "",
   }
 

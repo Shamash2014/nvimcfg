@@ -84,10 +84,11 @@ return {
   -- Color highlighting with treesitter integration
   {
     "brenoprata10/nvim-highlight-colors",
-    event = { "BufReadPre", "BufNewFile" },
+    -- Lazy load - only when needed
+    event = { "BufReadPost", "BufNewFile" },
     config = function()
       require("nvim-highlight-colors").setup({
-        render = "virtual", -- 'background', 'foreground' or 'virtual'
+        render = "virtual",
         virtual_symbol = "■",
         virtual_symbol_position = "inline",
         enable_hex = true,
@@ -96,9 +97,7 @@ return {
         enable_hsl = true,
         enable_var_usage = true,
         enable_named_colors = true,
-        enable_tailwind = false, -- Disable tailwind to avoid conflicts
-        -- Removed custom_colors as they were causing issues
-        -- The plugin will still detect standard hex colors in Flutter like 0xFF6200EE
+        enable_tailwind = false,
         exclude_filetypes = {},
         exclude_buftypes = {},
       })

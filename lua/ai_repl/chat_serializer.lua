@@ -148,22 +148,6 @@ function M.serialize_to_chat(session_id, proc)
 
   local lines = {}
 
-  -- Frontmatter with session metadata
-  table.insert(lines, "```lua")
-  table.insert(lines, "-- AI REPL Session")
-  table.insert(lines, "session = {")
-  table.insert(lines, '  id = "' .. session_id .. '",')
-  table.insert(lines, '  name = "' .. session_name .. '",')
-  table.insert(lines, '  provider = "' .. provider .. '",')
-  table.insert(lines, '  created_at = "' .. format_timestamp(proc._created_at) .. '",')
-  table.insert(lines, '  cwd = "' .. cwd .. '",')
-  if #annotations > 0 then
-    table.insert(lines, '  annotation_count = ' .. #annotations .. ',')
-  end
-  table.insert(lines, "}")
-  table.insert(lines, "```")
-  table.insert(lines, "")
-
   -- Annotations (if any)
   if #annotations > 0 then
     table.insert(lines, "<!--")
@@ -376,20 +360,6 @@ function M.load_chat_file(file_path)
   local annotations = {}
 
   local i = 1
-
-  -- Parse frontmatter
-  if i <= #lines and lines[i]:match("^```lua") then
-    i = i + 1
-    local frontmatter_lines = {}
-    while i <= #lines and not lines[i]:match("^```") do
-      table.insert(frontmatter_lines, lines[i])
-      i = i + 1
-    end
-    if i <= #lines and lines[i]:match("^```") then
-      i = i + 1
-    end
-    -- Could parse Lua frontmatter here for metadata
-  end
 
   -- Parse messages
   while i <= #lines do

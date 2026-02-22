@@ -158,6 +158,10 @@ end
 
 function M.render_prompt(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+
+  local buf_name = vim.api.nvim_buf_get_name(buf)
+  if buf_name:match("%.chat$") then return end
+
   local state = get_state(buf)
   local line_count = vim.api.nvim_buf_line_count(buf)
   state.prompt_line = line_count

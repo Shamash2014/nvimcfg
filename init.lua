@@ -70,6 +70,11 @@ require("lazy").setup("plugins", {
       },
     },
   },
+  -- Default lazy load settings
+  defaults = {
+    lazy = false,
+    version = nil,
+  },
 })
 
 -- Performance optimized options
