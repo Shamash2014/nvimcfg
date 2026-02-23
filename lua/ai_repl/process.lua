@@ -153,6 +153,15 @@ function Process:_start_stale_callback_timer()
       if not has_pending then
         captured_self.state.busy = false
         captured_self:process_queued_prompts()
+
+        local buf = captured_self.ui.chat_buf
+        if buf and vim.api.nvim_buf_is_valid(buf) then
+          local chat_buffer_events = require("ai_repl.chat_buffer_events")
+          local chat_buffer = require("ai_repl.chat_buffer")
+          if chat_buffer.is_chat_buffer(buf) then
+            chat_buffer_events.ensure_you_marker(buf)
+          end
+        end
       end
     end
   end))

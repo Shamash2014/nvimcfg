@@ -71,7 +71,7 @@ local config = setmetatable({
   show_tool_calls = true,
   debug = false,
   reconnect = true,
-  max_reconnect_attempts = 3,
+  max_reconnect_attempts = 5,
   sessions_file = vim.fn.stdpath("data") .. "/ai_repl_sessions.json",
   max_sessions_per_project = 20,
   chat = {
@@ -1094,7 +1094,8 @@ local function create_process(session_id, opts)
     on_exit = function(self, code, was_alive)
       render.stop_animation()
       local buf = get_output_buf(self)
-      if code ~= 0 and buf and was_alive then
+      local should_reconnect = (code ~= 0 or was_alive) and buf and was_alive
+      if should_reconnect then
         append_to_buffer(buf, { "Process exited with code: " .. code }, { type = "error" })
         if config.reconnect and ui.active and self.state.reconnect_count < config.max_reconnect_attempts then
           self.state.reconnect_count = self.state.reconnect_count + 1
@@ -2630,36 +2631,60 @@ function M.kill_session()
 end
 
 function M.restart_session()
-  -- Kill current session and create a fresh one
   local proc = registry.active()
   local cwd
 
+  local current_buf = vim.api.nvim_get_current_buf()
+  local chat_buf = lazy_load_chat_buffer()
+  local is_chat = false
+  
+  if chat_buf and chat_buf.is_chat_buffer then
+    is_chat = chat_buf.is_chat_buffer(current_buf)
+  end
+  local prev_provider = nil
+
+  if not is_chat then
+    local buf_name = vim.api.nvim_buf_get_name(current_buf)
+    if buf_name:match("%.chat$") then
+      is_chat = true
+    end
+  end
+
   if proc then
-    -- Save current working directory
     cwd = proc.data.cwd
+    prev_provider = proc.data.provider
 
-    -- Get current chat buffer if any
-    local current_buf = vim.api.nvim_get_current_buf()
-    local is_chat = lazy_load_chat_buffer().is_chat_buffer(current_buf)
-
-    -- Kill the current session
     proc:kill()
     registry.unregister(proc.session_id)
 
     vim.notify("Restarting session...", vim.log.levels.INFO)
-
-    -- If in a chat buffer, restart the conversation
-    if is_chat then
-      vim.defer_fn(function()
-        lazy_load_chat_buffer().restart_conversation(current_buf)
-      end, 100)
-      return
-    end
   else
     cwd = get_current_project_root()
+
+    if is_chat then
+      local chat_state = require("ai_repl.chat_state")
+      local state = chat_state.get_buffer_state(current_buf)
+      if state and state.session_id then
+        local old_proc = registry.get(state.session_id)
+        if old_proc then
+          prev_provider = old_proc.data.provider
+        end
+      end
+    end
   end
 
-  -- Create new session
+  if is_chat and vim.api.nvim_buf_is_valid(current_buf) then
+    vim.notify("[restart] Restarting in current buffer: " .. vim.api.nvim_buf_get_name(current_buf), vim.log.levels.INFO)
+    vim.defer_fn(function()
+      if vim.api.nvim_buf_is_valid(current_buf) then
+        lazy_load_chat_buffer().restart_conversation(current_buf, prev_provider)
+      end
+    end, 100)
+    return
+  end
+
+  vim.notify("[restart] No chat buffer detected, creating new session", vim.log.levels.INFO)
+
   vim.defer_fn(function()
     M.new_session({ cwd = cwd })
   end, 100)
@@ -2989,10 +3014,12 @@ function M.new_session(provider_id, profile_id)
 
   -- Create actual ACP process
   local session_id = "session_" .. os.time()
+  local cwd = ui.project_root
   proc = create_process(session_id, {
     provider = provider_id,
     extra_args = extra_args,
     profile_id = profile_id,
+    cwd = cwd,
   })
 
   create_buffer(proc, nil)
@@ -3002,7 +3029,15 @@ function M.new_session(provider_id, profile_id)
 
   proc:start()
 
-  M.open_chat_buffer()
+  local cur_buf = vim.api.nvim_get_current_buf()
+  local chat_buffer = require("ai_repl.chat_buffer")
+  if chat_buffer.is_chat_buffer(cur_buf) then
+    local chat_buffer_events = require("ai_repl.chat_buffer_events")
+    chat_buffer_events.setup_event_forwarding(cur_buf, proc)
+    chat_buffer.attach_session(cur_buf, session_id)
+  else
+    M.open_chat_buffer()
+  end
 end
 
 function M._create_process(session_id, opts)

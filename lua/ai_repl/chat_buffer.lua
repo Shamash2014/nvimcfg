@@ -365,6 +365,7 @@ function M.attach_session(buf, session_id)
     vim.api.nvim_buf_call(buf, function()
       vim.cmd("lcd " .. vim.fn.fnameescape(proc.data.cwd))
     end)
+    state.repo_root = proc.data.cwd
   end
 
   return true
@@ -397,9 +398,10 @@ function M.restart_conversation(buf, provider_id)
     M.detach_session(buf)
   end
 
-  -- Clear buffer content and reset to empty template
-  local template = chat_parser.generate_template()
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(template, "\n"))
+  -- Parse existing messages from buffer (don't remove them)
+  local parsed = chat_parser.parse_buffer_cached(buf)
+  local existing_messages = parsed.messages or {}
+  local has_content = #existing_messages > 0
 
   -- Update repo root to current
   state.repo_root = get_repo_root(buf)
@@ -412,6 +414,7 @@ function M.restart_conversation(buf, provider_id)
     local session_id = "session_" .. os.time()
     local proc = ai_repl._create_process(session_id, {
       provider = provider,
+      cwd = state.repo_root,
     })
 
     ai_repl._registry_set(session_id, proc)
@@ -427,6 +430,18 @@ function M.restart_conversation(buf, provider_id)
       if proc:is_ready() then
         chat_buffer_events.setup_event_forwarding(buf, proc)
         M.attach_session(buf, proc.session_id)
+
+        -- Sync existing messages from buffer to new session
+        if has_content then
+          local registry = require("ai_repl.registry")
+          for _, msg in ipairs(existing_messages) do
+            if msg.role == "user" or msg.role == "djinni" or msg.role == "system" then
+              registry.append_message(proc.session_id, msg.role, msg.content, msg.tool_calls)
+            end
+          end
+          vim.notify("[.chat] Synced " .. #existing_messages .. " messages to new session", vim.log.levels.INFO)
+        end
+
         local provider_id = proc.data.provider or "unknown"
         local providers = require("ai_repl.providers")
         local provider_cfg = providers.get(provider_id) or {}

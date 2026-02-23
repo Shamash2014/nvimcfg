@@ -347,9 +347,8 @@ function M.handle_session_update_in_chat(buf, update, proc)
     if not result.ralph_continuing then
       vim.defer_fn(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
-        if proc.state.busy then return end
         M.ensure_you_marker(buf)
-      end, 700)
+      end, 100)
     end
     if decorations_ok then
       pcall(decorations.stop_spinner, buf)
@@ -622,11 +621,13 @@ function M.handle_status_in_chat(buf, status, data, proc)
   end
   if not label then return end
 
+  local cwd = proc.data.cwd or vim.fn.getcwd()
   local banner = {
     "",
     label,
     "  /restart - Restart session",
     "  /restart-chat - Restart conversation in current .chat buffer",
+    "  pwd: " .. cwd,
     "",
   }
 
