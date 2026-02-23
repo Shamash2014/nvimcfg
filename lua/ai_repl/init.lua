@@ -2807,8 +2807,15 @@ function M.toggle()
     end
   end
 
-  -- Always create a new chat buffer
-  M.open_chat_buffer()
+  -- Check if we have an active session
+  local proc = registry.active()
+  if not proc or not proc:is_alive() then
+    -- Create new session with default provider (will open chat buffer automatically)
+    M.new_session(config.default_provider)
+  else
+    -- Open chat buffer with existing session
+    M.open_chat_buffer()
+  end
 end
 
 -- Open or create .chat buffer
