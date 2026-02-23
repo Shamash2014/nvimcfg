@@ -909,7 +909,20 @@ function M.setup_keymaps(buf)
 
   -- Send/Execute hybrid key (C-])
   vim.keymap.set({ "n", "i" }, config.keys.send, function()
-    M.hybrid_send(buf)
+    local state = get_state(buf)
+    if state.process and state.process.ui and state.process.ui.permission_active then
+      local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+      for i = #lines, 1, -1 do
+        if lines[i]:match("^%[%?%]") then
+          vim.api.nvim_win_set_cursor(0, {i, 0})
+          vim.notify("[.chat] Jumped to tool permission prompt. Use [y/a/n/c].", vim.log.levels.INFO)
+          return
+        end
+      end
+      vim.notify("[.chat] No tool permission prompt found in buffer.", vim.log.levels.WARN)
+    else
+      M.hybrid_send(buf)
+    end
   end, opts)
 
   -- Cancel key
