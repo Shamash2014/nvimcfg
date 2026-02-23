@@ -141,9 +141,10 @@ function Process:_start_stale_callback_timer()
   self:_stop_stale_callback_timer()
   self._stale_timer = vim.uv.new_timer()
   local captured_self = self
-  self._stale_timer:start(60000, 60000, vim.schedule_wrap(function()
+  -- Check more frequently (every 30s) to recover stuck agents faster
+  self._stale_timer:start(30000, 30000, vim.schedule_wrap(function()
     if not captured_self.job_id then return end
-    local cleaned = captured_self:cleanup_stale_callbacks(120)
+    local cleaned = captured_self:cleanup_stale_callbacks(60)
     if cleaned > 0 and captured_self.state.busy then
       local has_pending = false
       for _ in pairs(captured_self.conn.callbacks) do
@@ -693,6 +694,11 @@ function Process:cancel()
   -- Send cancellation notification
   self:notify("session/cancel", { sessionId = self.session_id })
 
+  -- Clear ALL pending callbacks to prevent stuck state
+  -- This ensures any response to the cancelled request won't trigger old callbacks
+  self.conn.callbacks = {}
+  self.conn.callback_timeouts = {}
+
   -- Reset streaming and UI state
   self.ui.streaming_response = ""
   self.ui.streaming_start_line = nil
@@ -706,9 +712,24 @@ function Process:cancel()
   self.state.session_ready = true
 end
 
+function Process:force_cancel()
+  -- Clear all callbacks first to prevent any pending responses
+  self.conn.callbacks = {}
+  self.conn.callback_timeouts = {}
+  -- Send cancellation notification first
+  if self:is_alive() then
+    self:notify("session/cancel", { sessionId = self.session_id })
+  end
+  -- Then kill the process
+  self:kill()
+end
+
 function Process:cancel_and_clear_queue()
   if not self:is_alive() then return end
   self:notify("session/cancel", { sessionId = self.session_id })
+  -- Clear all callbacks to prevent stuck state
+  self.conn.callbacks = {}
+  self.conn.callback_timeouts = {}
   -- Cancel current operation AND clear the queue
   self.state.busy = false
   self.data.prompt_queue = {}

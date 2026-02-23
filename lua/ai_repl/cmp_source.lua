@@ -38,6 +38,7 @@ function source:complete(params, callback)
     { label = "/new", detail = "Create new session" },
     { label = "/sessions", detail = "List all sessions" },
     { label = "/kill", detail = "Kill current session (terminate process)" },
+    { label = "/force-cancel", detail = "Force cancel + kill (for stuck agents)" },
     { label = "/restart", detail = "Restart session (kill and create fresh)" },
     { label = "/mode", detail = "Switch mode or show mode picker" },
     { label = "/chat", detail = "Open/create .chat buffer" },

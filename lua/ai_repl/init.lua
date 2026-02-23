@@ -1701,20 +1701,47 @@ function M.handle_command(cmd)
     if lazy_load_chat_buffer().is_chat_buffer(current_buf) then
       vim.notify("[.chat] Starting session...", vim.log.levels.INFO)
 
-      local lines = vim.api.nvim_buf_get_lines(current_buf, 0, -1, false)
       local chat_parser = require("ai_repl.chat_parser")
+      local lines = vim.api.nvim_buf_get_lines(current_buf, 0, -1, false)
       local parsed = chat_parser.parse_buffer(lines, current_buf)
       local old_messages = parsed.messages or {}
 
-      M.new_session(config.default_provider)
-
+      local chat_buffer = require("ai_repl.chat_buffer")
       local chat_buffer_events = require("ai_repl.chat_buffer_events")
+      local current_repo = chat_buffer.get_repo_root(current_buf)
+
+      local proc_for_project = nil
+      for sid, p in pairs(registry.all()) do
+        if p:is_alive() and p.data.cwd == current_repo then
+          proc_for_project = p
+          break
+        end
+      end
+
+      if proc_for_project and proc_for_project:is_ready() then
+        chat_buffer_events.setup_event_forwarding(current_buf, proc_for_project)
+        chat_buffer.attach_session(current_buf, proc_for_project.session_id)
+
+        if #old_messages > 0 then
+          proc_for_project.data.messages = {}
+          for _, msg in ipairs(old_messages) do
+            if msg.role == "user" or msg.role == "djinni" then
+              registry.append_message(proc_for_project.session_id, msg.role, msg.content, msg.tool_calls)
+            end
+          end
+          vim.notify("[.chat] Attached to existing session with " .. #old_messages .. " messages synced.", vim.log.levels.INFO)
+        else
+          vim.notify("[.chat] Attached to existing session. Press C-] to send.", vim.log.levels.INFO)
+        end
+        return
+      end
+
       local function attach_and_sync()
         local proc = registry.active()
         if not proc then return end
 
         chat_buffer_events.setup_event_forwarding(current_buf, proc)
-        lazy_load_chat_buffer().attach_session(current_buf, proc.session_id)
+        chat_buffer.attach_session(current_buf, proc.session_id)
 
         if #old_messages > 0 then
           proc.data.messages = {}
@@ -1729,17 +1756,17 @@ function M.handle_command(cmd)
         end
       end
 
-      local attempts = 0
-      local timer = vim.uv.new_timer()
-      timer:start(100, 200, vim.schedule_wrap(function()
-        attempts = attempts + 1
+      local function wait_for_session()
         local proc = registry.active()
-        if (proc and proc:is_ready()) or attempts > 50 then
-          timer:stop()
-          timer:close()
+        if proc and proc:is_ready() then
           attach_and_sync()
+        else
+          vim.defer_fn(wait_for_session, 100)
         end
-      end))
+      end
+
+      M.new_session(config.default_provider)
+      wait_for_session()
     else
       if buf then
         append_to_buffer(buf, { "[!] Not a .chat buffer" }, { type = "error" })
@@ -1755,6 +1782,22 @@ function M.handle_command(cmd)
     else
       append_to_buffer(buf, { "[!] Not a .chat buffer" }, { type = "error" })
     end
+  elseif command == "kill" then
+    -- Force kill the session
+    if not proc then
+      append_to_buffer(buf, { "[!] No active session" }, { type = "error" })
+      return
+    end
+    proc:kill()
+    append_to_buffer(buf, { "[!] Session killed" }, { type = "error" })
+  elseif command == "force-cancel" then
+    -- Cancel current operation AND kill process (for stuck agents)
+    if not proc then
+      append_to_buffer(buf, { "[!] No active session" }, { type = "error" })
+      return
+    end
+    proc:force_cancel()
+    append_to_buffer(buf, { "[!] Session force-cancelled and killed" }, { type = "error" })
   elseif command == "retry-init" then
     if not proc then
       vim.notify("[!] No active session", vim.log.levels.ERROR)
@@ -2630,18 +2673,59 @@ function M.kill_session()
   vim.notify("Killed session: " .. session_name, vim.log.levels.INFO)
 end
 
-function M.restart_session()
+function M.force_cancel_session()
+  -- Cancel current operation AND kill the process (for stuck agents)
   local proc = registry.active()
-  local cwd
+  if not proc then
+    vim.notify("No active session to cancel", vim.log.levels.WARN)
+    return
+  end
 
+  local session_id = proc.session_id
+  local session_name = proc.data.name or "Session"
+
+  -- Force cancel (cancel + kill)
+  proc:force_cancel()
+
+  -- Remove from registry
+  registry.unregister(session_id)
+
+  vim.notify("Force cancelled session: " .. session_name, vim.log.levels.INFO)
+end
+
+function M.hard_reset()
+  -- Kill ALL opencode processes and clear everything
+  vim.notify("[hard-reset] Starting hard reset...", vim.log.levels.WARN)
+
+  -- Kill all registered sessions
+  local processes = registry.all()
+  for sid, proc in pairs(processes) do
+    if proc and proc:is_alive() then
+      proc:kill()
+    end
+    registry.unregister(sid)
+  end
+
+  -- Also try to kill any stray opencode processes
+  vim.fn.jobstart({ "pkill", "-9", "-f", "opencode acp" }, { detach = true })
+
+  -- Clear all state
+  local chat_state = require("ai_repl.chat_state")
+  chat_state.reset_all()
+
+  vim.notify("[hard-reset] All sessions killed. Use /start to create a new one.", vim.log.levels.WARN)
+end
+
+function M.restart_session()
   local current_buf = vim.api.nvim_get_current_buf()
   local chat_buf = lazy_load_chat_buffer()
   local is_chat = false
-  
+  local proc = nil
+  local cwd = nil
+
   if chat_buf and chat_buf.is_chat_buffer then
     is_chat = chat_buf.is_chat_buffer(current_buf)
   end
-  local prev_provider = nil
 
   if not is_chat then
     local buf_name = vim.api.nvim_buf_get_name(current_buf)
@@ -2649,6 +2733,22 @@ function M.restart_session()
       is_chat = true
     end
   end
+
+  -- Get process from current buffer's state (not registry.active())
+  if is_chat then
+    local chat_state = require("ai_repl.chat_state")
+    local state = chat_state.get_buffer_state(current_buf)
+    if state and state.process then
+      proc = state.process
+    end
+  end
+
+  -- Fallback to registry.active() only if not in a chat buffer
+  if not proc then
+    proc = registry.active()
+  end
+
+  local prev_provider = nil
 
   if proc then
     cwd = proc.data.cwd
@@ -2660,17 +2760,6 @@ function M.restart_session()
     vim.notify("Restarting session...", vim.log.levels.INFO)
   else
     cwd = get_current_project_root()
-
-    if is_chat then
-      local chat_state = require("ai_repl.chat_state")
-      local state = chat_state.get_buffer_state(current_buf)
-      if state and state.session_id then
-        local old_proc = registry.get(state.session_id)
-        if old_proc then
-          prev_provider = old_proc.data.provider
-        end
-      end
-    end
   end
 
   if is_chat and vim.api.nvim_buf_is_valid(current_buf) then

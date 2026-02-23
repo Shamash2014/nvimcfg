@@ -627,6 +627,8 @@ function M.handle_status_in_chat(buf, status, data, proc)
     label,
     "  /restart - Restart session",
     "  /restart-chat - Restart conversation in current .chat buffer",
+    "  /kill - Force kill session",
+    "  /force-cancel - Cancel + kill (for stuck agents)",
     "  pwd: " .. cwd,
     "",
   }

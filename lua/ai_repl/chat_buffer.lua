@@ -15,6 +15,9 @@ local config = {
   keys = {
     send = "<C-]>",        -- Hybrid: execute pending tools or send
     cancel = "<C-c>",
+    kill_session = "<leader>ak",
+    restart_session = "<leader>aR",
+    force_cancel = "<leader>aK",
   },
   -- Buffer behavior
   auto_save = true,
@@ -29,7 +32,6 @@ local function get_state(buf)
   return chat_state.get_buffer_state(buf)
 end
 
--- Get repository root from a buffer path
 local function get_repo_root(buf)
   local buf_name = vim.api.nvim_buf_get_name(buf)
   if buf_name == "" then
@@ -41,14 +43,16 @@ local function get_repo_root(buf)
     dir = vim.fn.getcwd()
   end
 
-  -- Try to get git root
   local git_root = vim.fn.systemlist("git -C " .. vim.fn.shellescape(dir) .. " rev-parse --show-toplevel 2>/dev/null")[1]
   if vim.v.shell_error == 0 and git_root and git_root ~= "" then
     return git_root
   end
 
-  -- Fallback to directory
   return dir
+end
+
+function M.get_repo_root(buf)
+  return get_repo_root(buf)
 end
 
 -- Check if buffer is a .chat file
@@ -188,17 +192,24 @@ function M.init_buffer(buf)
 
     local function create_and_attach_session()
       local ai_repl = require("ai_repl.init")
-      local proc = registry.active()
+      local current_repo = get_repo_root(buf)
+      local proc_for_project = nil
 
-      if proc and proc:is_alive() then
-        -- Use existing active session instead of creating new one
-        M.attach_session(buf, proc.session_id)
-        chat_buffer_events.setup_event_forwarding(buf, proc)
-        local provider_id = proc.data.provider or "unknown"
+      for sid, p in pairs(registry.all()) do
+        if p:is_alive() and p.data.cwd == current_repo then
+          proc_for_project = p
+          break
+        end
+      end
+
+      if proc_for_project then
+        M.attach_session(buf, proc_for_project.session_id)
+        chat_buffer_events.setup_event_forwarding(buf, proc_for_project)
+        local provider_id = proc_for_project.data.provider or "unknown"
         local providers = require("ai_repl.providers")
         local provider_cfg = providers.get(provider_id) or {}
         local provider_name = provider_cfg.name or provider_id
-        vim.notify("[.chat] Attached to active session. Press C-] to send.", vim.log.levels.INFO)
+        vim.notify("[.chat] Attached to session for this project. Press C-] to send.", vim.log.levels.INFO)
         state.creating_session = false
         require("ai_repl.init").update_statusline()
         return
@@ -317,7 +328,7 @@ function M.init_buffer(buf)
   return true
 end
 
--- Detach ACP process from buffer
+-- Attach ACP process to buffer (session_id is optional - if not found, will search for matching repo)
 function M.attach_session(buf, session_id)
   local state = get_state(buf)
 
@@ -326,16 +337,25 @@ function M.attach_session(buf, session_id)
     M.detach_session(buf)
   end
 
-  local proc = registry.get(session_id)
-  if not proc then
-    -- Check if there's an active process we can use
-    proc = registry.active()
+  local proc = nil
+  local current_repo = get_repo_root(buf)
 
-    if not proc or not proc:is_alive() then
-      -- No active process, return error
-      -- The caller should create a session first
-      return false, "No active ACP session. Please create one first with :AIReplNew or /new"
+  if session_id then
+    proc = registry.get(session_id)
+  end
+
+  if not proc or not proc:is_alive() then
+    proc = nil
+    for sid, p in pairs(registry.all()) do
+      if p:is_alive() and p.data.cwd == current_repo then
+        proc = p
+        break
+      end
     end
+  end
+
+  if not proc or not proc:is_alive() then
+    return false, "No ACP session found for this project. Please create one first."
   end
 
   state.session_id = proc.session_id
@@ -966,7 +986,7 @@ function M.setup_keymaps(buf)
   }))
 
   -- Kill session
-  vim.keymap.set("n", "<leader>ak", function()
+  vim.keymap.set("n", config.keys.kill_session, function()
     local state = get_state(buf)
     if state.process and state.process:is_alive() then
       vim.ui.select({
@@ -987,8 +1007,30 @@ function M.setup_keymaps(buf)
     desc = "Kill current AI session"
   }))
 
+  -- Force cancel (cancel + kill for stuck agents)
+  vim.keymap.set("n", config.keys.force_cancel, function()
+    local state = get_state(buf)
+    if state.process and state.process:is_alive() then
+      vim.ui.select({
+        "Yes, force cancel",
+        "No, keep session",
+      }, {
+        prompt = "Force cancel? This will cancel the current operation AND kill the session.",
+      }, function(choice, idx)
+        if idx == 1 then
+          local ai_repl = require("ai_repl")
+          ai_repl.force_cancel_session()
+        end
+      end)
+    else
+      vim.notify("[.chat] No active session to cancel", vim.log.levels.WARN)
+    end
+  end, vim.tbl_extend("force", opts, {
+    desc = "Force cancel (cancel + kill) current AI session"
+  }))
+
   -- Restart session (kill and create fresh)
-  vim.keymap.set("n", "<leader>aR", function()
+  vim.keymap.set("n", config.keys.restart_session, function()
     vim.ui.select({
       "Yes, restart session",
       "No, keep session",
