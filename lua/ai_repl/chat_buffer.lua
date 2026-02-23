@@ -979,6 +979,35 @@ function M.setup_keymaps(buf)
     chat_parser.jump_to_message(buf, -1)
   end, opts)
 
+  -- Jump to next/previous permission prompt
+  vim.keymap.set("n", "]p", function()
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local current_line = vim.api.nvim_win_get_cursor(0)[1]
+    for i = current_line + 1, #lines do
+      if lines[i]:match("^%[%?%]") then
+        vim.api.nvim_win_set_cursor(0, {i, 0})
+        return
+      end
+    end
+    vim.notify("[.chat] No more permission prompts below", vim.log.levels.INFO)
+  end, vim.tbl_extend("force", opts, {
+    desc = "Jump to next permission prompt"
+  }))
+
+  vim.keymap.set("n", "[p", function()
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local current_line = vim.api.nvim_win_get_cursor(0)[1]
+    for i = current_line - 1, 1, -1 do
+      if lines[i]:match("^%[%?%]") then
+        vim.api.nvim_win_set_cursor(0, {i, 0})
+        return
+      end
+    end
+    vim.notify("[.chat] No more permission prompts above", vim.log.levels.INFO)
+  end, vim.tbl_extend("force", opts, {
+    desc = "Jump to previous permission prompt"
+  }))
+
   -- Text objects for messages
   vim.keymap.set("o", "im", function()
     chat_parser.select_message(buf, false)

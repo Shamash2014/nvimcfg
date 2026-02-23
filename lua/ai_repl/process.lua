@@ -168,6 +168,26 @@ function Process:_start_stale_callback_timer()
         end
       end
     end
+
+    if captured_self.state.busy and captured_self.state.last_activity then
+      local inactive_secs = os.time() - captured_self.state.last_activity
+      local no_pending = not next(captured_self.conn.callbacks)
+      if inactive_secs > 180 and no_pending then
+        captured_self.state.busy = false
+        captured_self:process_queued_prompts()
+        local buf = captured_self.ui.chat_buf
+        if buf and vim.api.nvim_buf_is_valid(buf) then
+          local chat_buffer_events = require("ai_repl.chat_buffer_events")
+          local chat_buffer = require("ai_repl.chat_buffer")
+          if chat_buffer.is_chat_buffer(buf) then
+            chat_buffer_events.ensure_you_marker(buf)
+            local ok, decorations = pcall(require, "ai_repl.chat_decorations")
+            if ok then pcall(decorations.stop_spinner, buf) end
+          end
+        end
+        vim.notify("[ai_repl] Agent recovered: no activity for 3m (stuck after tool calls)", vim.log.levels.WARN)
+      end
+    end
   end))
 end
 
@@ -627,6 +647,7 @@ function Process:send_prompt(prompt, opts)
 
   -- Mark as busy before sending
   self.state.busy = true
+  self.state.last_activity = os.time()
   self.ui.streaming_response = ""
   self.ui.streaming_start_line = nil
   self.ui.pending_tool_calls = {}
