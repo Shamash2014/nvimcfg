@@ -89,12 +89,13 @@ end
 
 function Process:start()
   local mise = require("core.mise")
-  local mise_env = mise.get_env(self.config.cwd)
+  local cwd = self.config.cwd or vim.fn.getcwd()
+  local mise_env = mise.get_env(cwd)
   local env = vim.tbl_extend("force", vim.fn.environ(), mise_env, self.config.env)
   local captured_self = self
 
   self.job_id = vim.fn.jobstart({ self.config.cmd, unpack(self.config.args) }, {
-    cwd = self.config.cwd,
+    cwd = cwd,
     env = env,
     on_stdout = function(_, data)
       for _, line in ipairs(data or {}) do
@@ -161,6 +162,8 @@ function Process:_start_stale_callback_timer()
           local chat_buffer = require("ai_repl.chat_buffer")
           if chat_buffer.is_chat_buffer(buf) then
             chat_buffer_events.ensure_you_marker(buf)
+            local ok, decorations = pcall(require, "ai_repl.chat_decorations")
+            if ok then pcall(decorations.stop_spinner, buf) end
           end
         end
       end

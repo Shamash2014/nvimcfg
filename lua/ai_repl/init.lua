@@ -199,12 +199,12 @@ local NODE_MODE_ICONS = {
 
 local function get_mode_display(mode_id)
   if not mode_id then return "📋 plan" end
-  
+
   -- Check if we have mode metadata from ACP
   local proc = registry.active()
   local mode_icon = NODE_MODE_ICONS[mode_id] or "•"
   local mode_name = mode_id
-  
+
   -- Try to get friendly name from available modes
   if proc and proc.state.modes and #proc.state.modes > 0 then
     for _, m in ipairs(proc.state.modes) do
@@ -217,7 +217,7 @@ local function get_mode_display(mode_id)
       end
     end
   end
-  
+
   return mode_icon .. " " .. mode_name
 end
 
@@ -449,12 +449,12 @@ local function handle_session_update(proc, params)
       local output_tokens = usage.outputTokens or usage.output_tokens or result.usage and result.usage.output or 0
       local total = input_tokens + output_tokens
       local thoughts_tokens = usage.thinkingTokens or usage.thinking_tokens or 0
-      
+
       local function fmt(n)
         if n >= 1000 then return string.format("%.1fk", n / 1000) end
         return tostring(n)
       end
-      
+
       local usage_parts = {}
       table.insert(usage_parts, "In: " .. fmt(input_tokens))
       table.insert(usage_parts, "Out: " .. fmt(output_tokens))
@@ -462,7 +462,7 @@ local function handle_session_update(proc, params)
         table.insert(usage_parts, "Thoughts: " .. fmt(thoughts_tokens))
       end
       table.insert(usage_parts, "Total: " .. fmt(total))
-      
+
       -- Show floating notification with cost if available
       local notification_text = table.concat(usage_parts, " | ")
       vim.notify(notification_text, vim.log.levels.INFO, {
@@ -777,33 +777,33 @@ local function handle_method(proc, method, params, msg_id)
       local provider_id = proc.data.provider or config.default_provider
       local provider_config = config.providers[provider_id] or {}
       local background_mode = provider_config.background_permissions or "allow_once"
-      
+
       -- Extract agent-provided options to find appropriate response
       local agent_options = params.options or {}
       local tool_call = params.toolCall or {}
-      
+
       -- Find option IDs based on agent's provided options
       local first_allow_id, allow_always_id, default_option_id
       for _, opt in ipairs(agent_options) do
         local oid = opt.optionId or opt.id
         local okind = opt.kind or ""
-        
+
         -- Check for agent's marked default
         if opt.default or opt.isDefault then
           default_option_id = default_option_id or oid
         end
-        
+
         -- Find allow_always option
         if oid and (oid:match("allow_always") or oid:match("allowAlways")) then
           allow_always_id = allow_always_id or oid
         end
-        
+
         -- Find first allow option
         if oid and okind:match("allow") and not first_allow_id then
           first_allow_id = oid
         end
       end
-      
+
       -- Determine which option to select based on provider's background policy
       local selected_option_id
       if background_mode == "respect_agent" and default_option_id then
@@ -816,7 +816,7 @@ local function handle_method(proc, method, params, msg_id)
         -- Default to allow_always (backward compatible)
         selected_option_id = allow_always_id or first_allow_id or "allow_always"
       end
-      
+
       local response = {
         jsonrpc = "2.0",
         id = msg_id,
@@ -1803,7 +1803,7 @@ function M.handle_command(cmd)
       vim.notify("[!] No active session", vim.log.levels.ERROR)
       return
     end
-    
+
     if proc.state.initialized then
       vim.notify("[!] Session already initialized", vim.log.levels.INFO)
       return
@@ -2807,42 +2807,57 @@ function M.toggle()
     end
   end
 
-  -- Check if we have an active session
   local proc = registry.active()
-  if not proc or not proc:is_alive() then
-    -- Create new session with default provider (will open chat buffer automatically)
-    M.new_session(config.default_provider)
-  else
-    -- Open chat buffer with existing session
-    M.open_chat_buffer()
+  if proc and proc:is_alive() and proc.ui.chat_buf
+     and vim.api.nvim_buf_is_valid(proc.ui.chat_buf) then
+    local buf = proc.ui.chat_buf
+    local win = vim.fn.bufwinid(buf)
+    if win == -1 then
+      local split_direction = config.chat and config.chat.split_direction or "right"
+      if split_direction == "left" then
+        vim.cmd("noautocmd wincmd h")
+      end
+      vim.cmd("vsplit")
+      win = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_buf(win, buf)
+    else
+      vim.api.nvim_set_current_win(win)
+    end
+    return
   end
+  M.open_chat_buffer()
 end
 
 -- Open or create .chat buffer
 -- Open or create .chat buffer
-function M.open_chat_buffer(file_path)
-  -- Ensure we have an active ACP session first
+function M.open_chat_buffer(file_path, skip_session_check, existing_session_id)
   local proc = registry.active()
-  if not proc or not proc:is_alive() then
-    M.new_session(config.default_provider)
-    proc = registry.active()
 
-    if not proc then
-      vim.notify("[.chat] Failed to create ACP session", vim.log.levels.ERROR)
-      return
-    end
+  if not skip_session_check then
+    if not proc or not proc:is_alive() then
+      M.new_session(config.default_provider)
+      proc = registry.active()
 
-    -- Wait for session to be ready (with timeout)
-    local timeout = 50
-    local waited = 0
-    while not proc:is_ready() and waited < timeout do
-      vim.cmd("sleep 10m")
-      waited = waited + 1
-    end
+      if not proc then
+        vim.notify("[.chat] Failed to create ACP session", vim.log.levels.ERROR)
+        return
+      end
 
-    if not proc:is_ready() then
-      vim.notify("[.chat] ACP session not ready", vim.log.levels.ERROR)
-      return
+      if proc.ui.chat_buf and vim.api.nvim_buf_is_valid(proc.ui.chat_buf) then
+        return
+      end
+
+      local timeout = 50
+      local waited = 0
+      while not proc:is_ready() and waited < timeout do
+        vim.cmd("sleep 10m")
+        waited = waited + 1
+      end
+
+      if not proc:is_ready() then
+        vim.notify("[.chat] ACP session not ready", vim.log.levels.ERROR)
+        return
+      end
     end
   end
 
@@ -2860,7 +2875,7 @@ function M.open_chat_buffer(file_path)
   )
 
   local template = chat_parser.generate_template({
-    session_id = proc.session_id or "chat_" .. os.time(),
+    session_id = proc.session_id or ("chat_" .. os.time()),
     provider = proc.data.provider or config.default_provider,
   })
 
@@ -2869,8 +2884,8 @@ function M.open_chat_buffer(file_path)
   vim.api.nvim_buf_set_name(buf, new_path)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(template, "\n"))
 
-  -- Initialize chat buffer
-  local ok, err = lazy_load_chat_buffer().init_buffer(buf)
+  -- Initialize chat buffer with existing session ID to prevent double session creation
+  local ok, err = lazy_load_chat_buffer().init_buffer(buf, existing_session_id)
   if not ok then
     vim.notify("[.chat] Failed to initialize: " .. tostring(err), vim.log.levels.ERROR)
     return
@@ -3132,7 +3147,7 @@ function M.new_session(provider_id, profile_id)
     chat_buffer_events.setup_event_forwarding(cur_buf, proc)
     chat_buffer.attach_session(cur_buf, session_id)
   else
-    M.open_chat_buffer()
+    M.open_chat_buffer(nil, true, session_id)
   end
 end
 
@@ -3238,7 +3253,7 @@ function M.open_session_picker()
   -- List .chat files
   if vim.fn.isdirectory(chat_dir) == 1 then
     local chat_files = vim.fn.glob(chat_dir .. "/*.chat", true, true)
-    
+
     -- Sort by modification time (newest first)
     table.sort(chat_files, function(a, b)
       local stat_a = vim.loop.fs_stat(a)
@@ -3249,11 +3264,11 @@ function M.open_session_picker()
     for _, file_path in ipairs(chat_files) do
       local filename = vim.fn.fnamemodify(file_path, ":t")
       local session_id = vim.fn.fnamemodify(filename, ":r")
-      
+
       -- Try to get session info from the file
       local stat = vim.loop.fs_stat(file_path)
       local mtime = stat and os.date("%Y-%m-%d %H:%M", stat.mtime.sec) or "Unknown"
-      
+
       table.insert(items, {
         label = string.format("%s (%s)", session_id:sub(1, 8), mtime),
         action = "import_chat",
@@ -3296,12 +3311,12 @@ function M.import_chat_from_picker(file_path, session_id)
   local proc = create_process(temp_id, {
     cwd = get_current_project_root(),
   })
-  
+
   local buf = create_buffer(proc, "Imported: " .. session_id:sub(1, 8))
-  
+
   registry.set(temp_id, proc)
   registry.set_active(temp_id)
-  
+
   -- Load messages into the session
   if data.messages and #data.messages > 0 then
     for _, msg in ipairs(data.messages) do
@@ -3310,7 +3325,7 @@ function M.import_chat_from_picker(file_path, session_id)
     -- Render the imported messages
     render.render_history(buf, data.messages)
   end
-  
+
   -- Handle annotations if present
   if data.annotations and #data.annotations > 0 then
     local annotation_session = require("ai_repl.annotations.session")
@@ -3318,29 +3333,29 @@ function M.import_chat_from_picker(file_path, session_id)
       local annotations_config = require("ai_repl.annotations.config")
       annotation_session.start(annotations_config.config)
     end
-    
+
     local ann_bufnr = annotation_session.get_bufnr()
     if ann_bufnr and vim.api.nvim_buf_is_valid(ann_bufnr) then
       local writer = require("ai_repl.annotations.writer")
       local session_state = annotation_session.get_state()
-      
+
       for _, ann in ipairs(data.annotations) do
         writer.append(session_state, "location", ann, ann.note or "")
       end
     end
   end
-  
+
   -- Show the buffer
   local win = get_tab_win()
   if not win or not vim.api.nvim_win_is_valid(win) then
     M.show()
     win = get_tab_win()
   end
-  
+
   if win and vim.api.nvim_win_is_valid(win) then
     vim.api.nvim_win_set_buf(win, buf)
   end
-  
+
   setup_buffer_keymaps(buf)
   proc:start()
 

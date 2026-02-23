@@ -65,7 +65,7 @@ function M.is_chat_buffer(buf)
 end
 
 -- Initialize a .chat buffer with ACP session
-function M.init_buffer(buf)
+function M.init_buffer(buf, existing_session_id)
   if not M.is_chat_buffer(buf) then
     return false, "Not a .chat buffer"
   end
@@ -127,6 +127,19 @@ function M.init_buffer(buf)
   -- Skip session setup if a session is being created
   if state.creating_session then
     return true
+  end
+
+  -- If called with existing_session_id, attach to it immediately
+  if existing_session_id then
+    local proc = registry.get(existing_session_id)
+    if proc and proc:is_alive() then
+      M.attach_session(buf, existing_session_id)
+      local chat_buffer_events = require("ai_repl.chat_buffer_events")
+      chat_buffer_events.setup_event_forwarding(buf, proc)
+      M.setup_keymaps(buf)
+      M.setup_autocmds(buf)
+      return true
+    end
   end
 
   -- Create or attach ACP session
@@ -423,8 +436,8 @@ function M.restart_conversation(buf, provider_id)
   local existing_messages = parsed.messages or {}
   local has_content = #existing_messages > 0
 
-  -- Update repo root to current
-  state.repo_root = get_repo_root(buf)
+  -- Update repo root to current; capture fallback before any picker opens
+  state.repo_root = get_repo_root(buf) or vim.fn.getcwd()
 
   local function create_session_with_provider(provider)
     local ai_repl = require("ai_repl.init")

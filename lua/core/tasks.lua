@@ -1003,7 +1003,8 @@ function M.pick_tasks_and_commands()
       if item.is_separator then return end
       if item.is_ai then
         vim.schedule(function()
-          require("ai_repl").new_session()
+          local ai_repl = require("ai_repl")
+          ai_repl.new_session()
         end)
       elseif item.is_ai_restart then
         vim.schedule(function()

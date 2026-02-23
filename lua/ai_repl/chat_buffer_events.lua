@@ -212,8 +212,9 @@ function M.handle_session_update_in_chat(buf, update, proc)
   local apply_ok, result = pcall(session_state.apply_update, proc, update)
   if not apply_ok then
     if is_stop_update then
-      -- Ensure busy is cleared even if apply_update fails
       proc.state.busy = false
+      local dec_ok, decorations = pcall(require, "ai_repl.chat_decorations")
+      if dec_ok then pcall(decorations.stop_spinner, buf) end
       vim.defer_fn(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
         M.ensure_you_marker(buf)

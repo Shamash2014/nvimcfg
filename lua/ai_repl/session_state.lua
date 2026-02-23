@@ -222,18 +222,21 @@ function M.apply_update(proc, update)
     local user_input_pending = (q_ok and questionnaire.is_active())
       or (proc.ui and proc.ui.permission_active)
 
+    local stop_reason = u.stopReason or "end_turn"
+
     local ralph_continuing = false
     if not user_input_pending then
-      if ralph_helper.is_loop_enabled() then
-        ralph_continuing = ralph_helper.on_agent_stop(proc, response_text)
-      else
-        ralph_continuing = ralph_helper.check_and_continue(proc, response_text)
+      local should_ralph_continue = stop_reason == "end_turn"
+      if should_ralph_continue then
+        if ralph_helper.is_loop_enabled() then
+          ralph_continuing = ralph_helper.on_agent_stop(proc, response_text)
+        else
+          ralph_continuing = ralph_helper.check_and_continue(proc, response_text)
+        end
       end
     end
 
     local should_process_queue = not ralph_continuing and not user_input_pending
-
-    local stop_reason = u.stopReason or "end_turn"
     local usage = u.usage
 
     proc.ui.current_plan = {}
