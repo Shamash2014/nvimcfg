@@ -520,8 +520,8 @@ function M.open_remote_terminal()
     local host = selected.hostname or selected.name
     local user = selected.user or M.config.default_user or vim.fn.getenv("USER")
 
-    vim.cmd("botright split")
-    vim.cmd("resize 15")
+    vim.cmd("topleft vsplit")
+    vim.cmd("vertical resize 80")
     vim.cmd("terminal ssh " .. user .. "@" .. host)
     vim.cmd("startinsert")
   end)

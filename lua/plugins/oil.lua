@@ -44,8 +44,8 @@ return {
                   default = "/",
                 }, function(dir)
                   if dir then
-                    local tramp_path = string.format("/ssh:%s@%s:%s", user, host, dir)
-                    vim.cmd("edit " .. tramp_path)
+                    local oil_ssh_path = string.format("oil-ssh://%s@%s/%s", user, host, dir:gsub("^/", ""))
+                    vim.cmd("Oil " .. vim.fn.fnameescape(oil_ssh_path))
                   end
                 end)
               end
@@ -73,8 +73,8 @@ return {
                 default = "/",
               }, function(dir)
                 if dir then
-                  local tramp_path = string.format("/ssh:%s@%s:%s", user, host, dir)
-                  vim.cmd("edit " .. tramp_path)
+                  local oil_ssh_path = string.format("oil-ssh://%s@%s/%s", user, host, dir:gsub("^/", ""))
+                  vim.cmd("Oil " .. vim.fn.fnameescape(oil_ssh_path))
                 end
               end)
             end
@@ -107,6 +107,12 @@ return {
       ["<C-l>"] = false,
       ["<C-k>"] = false,
       ["<C-j>"] = false,
+    },
+    adapters = {
+      ["oil-ssh"] = "ssh",
+    },
+    ssh = {
+      border = "rounded",
     },
   },
 }
