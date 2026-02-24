@@ -10,8 +10,11 @@ vim.api.nvim_create_user_command("LspDebug", function()
 
   for _, client in ipairs(active_clients) do
     local status = "running"
-    if client.is_stopped and client.is_stopped() then
-      status = "stopped"
+    if type(client.is_stopped) == "function" then
+      local ok, stopped = pcall(client.is_stopped)
+      if ok and stopped then
+        status = "stopped"
+      end
     end
 
     local cmd_str = "unknown"

@@ -1,36 +1,58 @@
 local M = {}
-local sshfs = require("tramp.sshfs")
+local rsync_ssh = require("tramp.rsync_ssh")
 
 function M.connect(host, user, config)
   local ssh_user = user or config.default_user or vim.fn.getenv("USER")
-  local mount_info = sshfs.ensure_mount_sync(host, ssh_user, config.cache_dir)
+  local cache_dir, cache_key = rsync_ssh.get_cache_dir(host, ssh_user, config.cache_dir)
 
-  if not mount_info then
+  vim.fn.mkdir(cache_dir, "p")
+
+  local ssh_cmd = string.format(
+    "ssh -o BatchMode=yes -o ConnectTimeout=5 %s@%s echo ok",
+    ssh_user,
+    host
+  )
+
+  vim.fn.system(ssh_cmd)
+
+  if vim.v.shell_error ~= 0 then
     return nil
   end
 
-  return {
+  local conn = {
     host = host,
     user = ssh_user,
-    mount_info = mount_info,
+    cache_dir = cache_dir,
+    cache_key = cache_key,
     connected = true,
     last_used = os.time(),
   }
+
+  rsync_ssh.cache[cache_key] = conn
+  return conn
 end
 
 function M.disconnect(conn)
-  if conn and conn.mount_info then
-    sshfs.unmount_sync(conn.mount_info)
+  if conn then
+    rsync_ssh.cleanup_cache(conn)
     conn.connected = false
   end
 end
 
 function M.is_alive(conn)
-  if not conn or not conn.connected or not conn.mount_info then
+  if not conn or not conn.connected then
     return false
   end
 
-  if not sshfs.is_mounted(conn.mount_info.mount_point) then
+  local ssh_cmd = string.format(
+    "ssh -o BatchMode=yes -o ConnectTimeout=2 %s@%s echo ok",
+    conn.user,
+    conn.host
+  )
+
+  vim.fn.system(ssh_cmd)
+
+  if vim.v.shell_error ~= 0 then
     conn.connected = false
     return false
   end

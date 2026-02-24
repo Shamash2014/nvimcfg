@@ -367,9 +367,6 @@ function M.create_skill_selector_ui()
   vim.ui.select(lines, {
     prompt = "Select a skill to use:",
   }, function(choice, idx)
-    if choice and idx then
-      return skills[idx].name
-    end
   end)
 end
 

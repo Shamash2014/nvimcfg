@@ -31,7 +31,7 @@ function M.show(config, default_mode, selection, callback)
 
   local win = vim.api.nvim_open_win(input_buf, true, win_opts)
 
-  vim.api.nvim_win_set_option(win, "winhighlight", "Normal:Normal,FloatBorder:FloatBorder")
+  vim.api.nvim_set_option_value("winhighlight", "Normal:Normal,FloatBorder:FloatBorder", { win = win })
 
   local function update_mode_label()
     local new_lines = { mode_label(), "", " > " .. vim.api.nvim_buf_get_lines(input_buf, 2, 3, false)[1]:sub(3) }

@@ -4,7 +4,7 @@ local ssh = require("tramp.ssh")
 local async_ssh = require("tramp.async_ssh")
 local buffer = require("tramp.buffer")
 local async_picker = require("tramp.async_picker")
-local sshfs = require("tramp.sshfs")
+local rsync_ssh = require("tramp.rsync_ssh")
 
 M.config = {
   ssh_config = vim.fn.expand("~/.ssh/config"),
@@ -65,7 +65,7 @@ function M.setup_autocmds()
   vim.api.nvim_create_autocmd("VimLeavePre", {
     group = group,
     callback = function()
-      sshfs.unmount_all(function() end)
+      rsync_ssh.cleanup_all()
     end,
   })
 end
@@ -103,6 +103,14 @@ function M.setup_commands()
   vim.api.nvim_create_user_command("TrampExplore", function(opts)
     M.explore_remote(opts.args)
   end, { nargs = "?" })
+
+  vim.api.nvim_create_user_command("TrampExec", function(opts)
+    M.exec_remote(opts.args)
+  end, { nargs = 1 })
+
+  vim.api.nvim_create_user_command("TrampTerm", function()
+    M.open_remote_terminal()
+  end, {})
 end
 
 function M.read_remote_file(filepath)
@@ -261,11 +269,19 @@ function M.find_remote()
 
       local conn = M.get_connection(host, user)
       if not conn then
-        vim.notify("Failed to connect to " .. host, vim.log.levels.ERROR)
-        return
-      end
+        async_ssh.connect(host, user, M.config, function(new_conn, err)
+          if err or not new_conn then
+            vim.notify("Failed to connect to " .. host .. ": " .. (err or "unknown error"), vim.log.levels.ERROR)
+            return
+          end
 
-      async_picker.browse_remote(conn, user, host, dir)
+          local key = string.format("%s@%s", user or M.config.default_user or vim.fn.getenv("USER"), host)
+          M.connections[key] = new_conn
+          async_picker.browse_remote(new_conn, user, host, dir)
+        end)
+      else
+        async_picker.browse_remote(conn, user, host, dir)
+      end
     end)
   end)
 end
@@ -356,13 +372,22 @@ function M.grep_remote(pattern)
   end
 
   local conn = M.get_connection(parsed.host, parsed.user)
-  if not conn then
-    vim.notify("Failed to connect to " .. parsed.host, vim.log.levels.ERROR)
-    return
-  end
-
   local dir = path.dirname(parsed.path)
-  async_picker.grep_remote(conn, parsed.user, parsed.host, dir, pattern)
+
+  if not conn then
+    async_ssh.connect(parsed.host, parsed.user, M.config, function(new_conn, err)
+      if err or not new_conn then
+        vim.notify("Failed to connect to " .. parsed.host .. ": " .. (err or "unknown error"), vim.log.levels.ERROR)
+        return
+      end
+
+      local key = string.format("%s@%s", parsed.user or M.config.default_user or vim.fn.getenv("USER"), parsed.host)
+      M.connections[key] = new_conn
+      async_picker.grep_remote(new_conn, parsed.user, parsed.host, dir, pattern)
+    end)
+  else
+    async_picker.grep_remote(conn, parsed.user, parsed.host, dir, pattern)
+  end
 end
 
 function M.explore_remote(tramp_path)
@@ -396,6 +421,110 @@ function M.explore_remote(tramp_path)
   else
     M.find_remote()
   end
+end
+
+function M.exec_remote(command)
+  local hosts = ssh.get_ssh_hosts(M.config.ssh_config)
+
+  if #hosts == 0 then
+    vim.notify("No SSH hosts found in " .. M.config.ssh_config, vim.log.levels.WARN)
+    return
+  end
+
+  vim.ui.select(hosts, {
+    prompt = "Select remote host:",
+    format_item = function(host)
+      return host.name .. (host.hostname and " (" .. host.hostname .. ")" or "")
+    end,
+  }, function(selected)
+    if not selected then
+      return
+    end
+
+    local host = selected.hostname or selected.name
+    local user = selected.user or M.config.default_user or vim.fn.getenv("USER")
+
+    local cmd_to_run = command
+    if not cmd_to_run or cmd_to_run == "" then
+      vim.ui.input({
+        prompt = "Command to execute: ",
+      }, function(input)
+        if not input then
+          return
+        end
+        cmd_to_run = input
+        M._do_exec(host, user, cmd_to_run)
+      end)
+    else
+      M._do_exec(host, user, cmd_to_run)
+    end
+  end)
+end
+
+function M._do_exec(host, user, command, opts)
+  opts = opts or {}
+
+  local conn = M.get_connection(host, user)
+  local function do_execute(connection)
+    vim.notify("Executing: " .. command, vim.log.levels.INFO)
+
+    async_ssh.execute(connection, command, opts, function(result)
+      if result.success then
+        local output = table.concat(result.stdout, "\n")
+        if output ~= "" then
+          vim.notify("Command completed:\n" .. output, vim.log.levels.INFO)
+        else
+          vim.notify("Command completed successfully", vim.log.levels.INFO)
+        end
+      else
+        local error_output = table.concat(result.stderr, "\n")
+        vim.notify("Command failed (exit code " .. result.exit_code .. "):\n" .. error_output, vim.log.levels.ERROR)
+      end
+    end)
+  end
+
+  if not conn then
+    async_ssh.connect(host, user, M.config, function(new_conn, err)
+      if err or not new_conn then
+        vim.notify("Failed to connect to " .. host .. ": " .. (err or "unknown error"), vim.log.levels.ERROR)
+        return
+      end
+
+      local key = string.format("%s@%s", user or M.config.default_user or vim.fn.getenv("USER"), host)
+      M.connections[key] = new_conn
+      do_execute(new_conn)
+    end)
+  else
+    do_execute(conn)
+  end
+end
+
+function M.open_remote_terminal()
+  local hosts = ssh.get_ssh_hosts(M.config.ssh_config)
+
+  if #hosts == 0 then
+    vim.notify("No SSH hosts found in " .. M.config.ssh_config, vim.log.levels.WARN)
+    return
+  end
+
+  vim.ui.select(hosts, {
+    prompt = "Select remote host:",
+    format_item = function(host)
+      return host.name .. (host.hostname and " (" .. host.hostname .. ")" or "")
+    end,
+  }, function(selected)
+    if not selected then
+      return
+    end
+
+    local host = selected.hostname or selected.name
+    local user = selected.user or M.config.default_user or vim.fn.getenv("USER")
+
+    vim.cmd("botright split")
+    vim.cmd("resize 15")
+    vim.cmd("terminal ssh " .. user .. "@" .. host)
+    vim.cmd("startinsert")
+  end)
 end
 
 return M

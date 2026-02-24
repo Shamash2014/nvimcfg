@@ -8,11 +8,11 @@ M.active_diff_ui = nil
 
 local function create_buffer_with_content(content, filetype)
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
-  vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
+  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+  vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
 
   if filetype then
-    vim.api.nvim_buf_set_option(buf, "filetype", filetype)
+    vim.api.nvim_set_option_value("filetype", filetype, { buf = buf })
   end
 
   if content then
@@ -20,7 +20,7 @@ local function create_buffer_with_content(content, filetype)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   end
 
-  vim.api.nvim_buf_set_option(buf, "modifiable", false)
+  vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
 
   return buf
 end
@@ -145,10 +145,10 @@ function M.show_diff(diff_data, opts)
 
   diff_layout:mount()
 
-  vim.api.nvim_win_set_option(old_popup.winid, "number", true)
-  vim.api.nvim_win_set_option(new_popup.winid, "number", true)
-  vim.api.nvim_win_set_option(old_popup.winid, "relativenumber", false)
-  vim.api.nvim_win_set_option(new_popup.winid, "relativenumber", false)
+  vim.api.nvim_set_option_value("number", true, { win = old_popup.winid })
+  vim.api.nvim_set_option_value("number", true, { win = new_popup.winid })
+  vim.api.nvim_set_option_value("relativenumber", false, { win = old_popup.winid })
+  vim.api.nvim_set_option_value("relativenumber", false, { win = new_popup.winid })
 
   M.active_diff_ui = {
     layout = diff_layout,

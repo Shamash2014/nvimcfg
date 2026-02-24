@@ -303,8 +303,8 @@ local function handle_session_update(proc, params)
 
   local buf = get_output_buf(proc)
 
-  local chat_buf = require("ai_repl.chat_buffer")
-  if chat_buf.is_chat_buffer(buf) then
+  local chat_buffer_mod = require("ai_repl.chat_buffer")
+  if chat_buffer_mod.is_chat_buffer(buf) then
     if result.type == "stop" then
       update_statusline()
       local chat_buffer_events = require("ai_repl.chat_buffer_events")

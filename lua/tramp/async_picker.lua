@@ -6,6 +6,11 @@ function M.browse_remote(conn, user, host, dir, opts)
   opts = opts or {}
   dir = path.normalize(dir or "/")
 
+  if not conn or not conn.connected then
+    vim.notify("No valid connection to " .. host, vim.log.levels.ERROR)
+    return
+  end
+
   vim.notify("Loading remote directory...", vim.log.levels.INFO)
 
   async_ssh.list_directory(conn, dir, function(files, err)
@@ -94,6 +99,11 @@ function M.grep_remote(conn, user, host, dir, pattern, opts)
   opts = opts or {}
   dir = path.normalize(dir or "/")
 
+  if not conn or not conn.connected then
+    vim.notify("No valid connection to " .. host, vim.log.levels.ERROR)
+    return
+  end
+
   vim.notify("Searching remote files...", vim.log.levels.INFO)
 
   async_ssh.grep(conn, dir, pattern, function(results, err)
@@ -169,6 +179,11 @@ end
 function M.find_files(conn, user, host, dir, opts)
   opts = opts or {}
   dir = path.normalize(dir or "/")
+
+  if not conn or not conn.connected then
+    vim.notify("No valid connection to " .. host, vim.log.levels.ERROR)
+    return
+  end
 
   vim.notify("Finding remote files...", vim.log.levels.INFO)
 

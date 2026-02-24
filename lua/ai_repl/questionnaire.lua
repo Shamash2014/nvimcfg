@@ -274,7 +274,7 @@ function M.finish()
 
   for i, q in ipairs(state.questions) do
     local answer = state.answers[i] or "[skipped]"
-    local short_q = (q.question or "Q" .. i):sub(1, 30)
+    local short_q = (q.question or ("Q" .. i)):sub(1, 30)
     if #(q.question or "") > 30 then short_q = short_q .. "..." end
     render.append_content(state.buf, {
       string.format("│ %d. %s", i, short_q),

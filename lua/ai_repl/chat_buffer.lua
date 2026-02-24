@@ -22,7 +22,7 @@ local config = {
   },
   -- Buffer behavior
   auto_save = true,
-  auto_save_delay = 2000,  -- Delay in ms before autosave after text changes
+  auto_save_delay = 0,  -- Delay in ms before autosave after text changes
   save_on_send = true,    -- Autosave before/after sending messages
   save_on_leave = true,   -- Autosave when leaving buffer
   fold_thinking = true,

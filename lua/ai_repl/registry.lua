@@ -280,7 +280,7 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
       -- Also export to .chat format for archival
       local chat_dir = vim.fn.stdpath("data") .. "/ai_repl_chats"
       vim.fn.mkdir(chat_dir, "p")
-      chat_serializer = require("ai_repl.chat_serializer")
+      local chat_serializer = require("ai_repl.chat_serializer")
       chat_serializer.save_chat_file(sid, chat_dir .. "/" .. sid .. ".chat")
     end
     M.kill_all()

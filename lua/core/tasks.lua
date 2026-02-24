@@ -514,7 +514,7 @@ function M.run_task(task, opts)
     if term.buf and type(term.buf) == "number" and term.buf > 0 then
       local ok, is_valid = pcall(vim.api.nvim_buf_is_valid, term.buf)
       if ok and is_valid then
-        vim.api.nvim_buf_set_option(term.buf, 'bufhidden', 'hide')
+        vim.api.nvim_set_option_value('bufhidden', 'hide', { buf = term.buf })
       end
     end
   end
@@ -540,7 +540,7 @@ function M.run_task(task, opts)
         end
 
         -- Restore buffer options for visible state
-        vim.api.nvim_buf_set_option(self.term.buf, 'buflisted', true)
+        vim.api.nvim_set_option_value('buflisted', true, { buf = self.term.buf })
 
         -- Make terminal interactive again
         self.term.opts.interactive = true
@@ -564,7 +564,7 @@ function M.run_task(task, opts)
           -- Critical: Set buffer to persist when hidden - don't unload it
           vim.api.nvim_buf_set_option(self.term.buf, 'bufhidden', 'hide')
           -- Also make sure the buffer stays loaded
-          vim.api.nvim_buf_set_option(self.term.buf, 'buflisted', false)
+          vim.api.nvim_set_option_value('buflisted', false, { buf = self.term.buf })
         end
 
         -- Hide the terminal window but keep process running
@@ -963,6 +963,18 @@ function M.pick_tasks_and_commands()
   })
 
   table.insert(items, {
+    text = "Execute Remote Command",
+    desc = "Run command on remote host",
+    is_remote_exec = true,
+  })
+
+  table.insert(items, {
+    text = "Open Remote Terminal",
+    desc = "Open SSH terminal to remote host",
+    is_remote_term = true,
+  })
+
+  table.insert(items, {
     text = "Enter custom command...",
     task = { cmd = "custom" },
     is_task = true,
@@ -1056,6 +1068,14 @@ function M.pick_tasks_and_commands()
       elseif item.is_remote_explore then
         vim.schedule(function()
           require("tramp").explore_remote()
+        end)
+      elseif item.is_remote_exec then
+        vim.schedule(function()
+          require("tramp").exec_remote("")
+        end)
+      elseif item.is_remote_term then
+        vim.schedule(function()
+          require("tramp").open_remote_terminal()
         end)
       elseif item.is_task then
         if item.task.cmd == "custom" then
@@ -1230,7 +1250,7 @@ function M.kill_all_tasks()
   -- Kill any detached/orphaned terminals
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_valid(buf) then
-      local ok, buftype = pcall(vim.api.nvim_buf_get_option, buf, 'buftype')
+      local ok, buftype = pcall(vim.api.nvim_get_option_value, 'buftype', { buf = buf })
       if ok and buftype == 'terminal' then
         local ok2, chan = pcall(vim.api.nvim_buf_get_var, buf, 'terminal_job_id')
         if ok2 and chan then

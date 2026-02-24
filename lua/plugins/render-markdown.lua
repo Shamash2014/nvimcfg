@@ -15,9 +15,6 @@ return {
       max_file_size = 0.5,  -- Disable for files > 500KB (was 10MB)
       max_overlap_width = 50,
       render_modes = { 'n' },  -- ONLY render in normal mode, skip insert/command mode
-      anti_conceal = {
-        enabled = false,  -- Disable for performance
-      },
       -- Lazy rendering - only render visible area
       lazy = {
         enabled = true,  -- Enable lazy rendering
@@ -123,14 +120,6 @@ return {
       },
       -- Enable for markdown files (including .chat)
       file_types = { 'markdown' },
-      -- Disable for large files (repeated for emphasis)
-      max_file_size = 10.0,
-      -- Anti-conceal settings (overriding above)
-      anti_conceal = {
-        enabled = false,  -- CRITICAL: Disable for performance
-      },
-      -- Only render in normal mode
-      render_modes = { 'n' },
       -- Keybindings
       mappings = {
         enable = false,
