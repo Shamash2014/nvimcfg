@@ -934,6 +934,35 @@ function M.pick_tasks_and_commands()
   })
 
   table.insert(items, {
+    text = "── Remote SSH ──",
+    is_separator = true,
+  })
+
+  table.insert(items, {
+    text = "Connect to Remote Host",
+    desc = "Connect to remote SSH host",
+    is_remote_connect = true,
+  })
+
+  table.insert(items, {
+    text = "Edit Remote File",
+    desc = "Edit file on remote host",
+    is_remote_edit = true,
+  })
+
+  table.insert(items, {
+    text = "Find Remote Files",
+    desc = "Find files on remote host",
+    is_remote_find = true,
+  })
+
+  table.insert(items, {
+    text = "Explore Remote Directory",
+    desc = "Browse remote directory with Oil",
+    is_remote_explore = true,
+  })
+
+  table.insert(items, {
     text = "Enter custom command...",
     task = { cmd = "custom" },
     is_task = true,
@@ -1012,6 +1041,22 @@ function M.pick_tasks_and_commands()
         end)
       elseif item.is_repl then
         require("code_repl").toggle_repl()
+      elseif item.is_remote_connect then
+        vim.schedule(function()
+          require("tramp").connect()
+        end)
+      elseif item.is_remote_edit then
+        vim.schedule(function()
+          require("tramp").edit_remote()
+        end)
+      elseif item.is_remote_find then
+        vim.schedule(function()
+          require("tramp").find_remote()
+        end)
+      elseif item.is_remote_explore then
+        vim.schedule(function()
+          require("tramp").explore_remote()
+        end)
       elseif item.is_task then
         if item.task.cmd == "custom" then
           M.run_custom_command()
