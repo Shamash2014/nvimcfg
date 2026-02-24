@@ -280,6 +280,7 @@ function M.handle_session_update_in_chat(buf, update, proc)
 
   elseif result.type == "tool_call_update" then
     if result.tool_finished then
+      if decorations_ok then pcall(decorations.stop_spinner, buf) end
       if result.update.status == "failed" then
         local tool_name = result.tool.title or result.tool.kind or "tool"
         M.append_to_chat_buffer(buf, { "[!] " .. tool_name .. " failed" })

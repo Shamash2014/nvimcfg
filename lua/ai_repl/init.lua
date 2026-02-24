@@ -74,6 +74,7 @@ local config = setmetatable({
   max_reconnect_attempts = 5,
   sessions_file = vim.fn.stdpath("data") .. "/ai_repl_sessions.json",
   max_sessions_per_project = 20,
+  session_strategy = "latest",  -- "new", "latest", "prompt", "new-deferred"
   chat = {
     split_width = 0.8,
     split_direction = "right",  -- "right", "left", "above", "below"
@@ -1376,7 +1377,15 @@ function M.send_prompt(content, opts)
     registry.append_message(proc.session_id, "user", user_message_text)
   end
 
-  proc:send_prompt(prompt)
+  local async = require("ai_repl.async")
+  async.run(function()
+    local result, err = proc:send_prompt(prompt)
+    if err and err.code ~= "NOT_ALIVE" and err.code ~= "NOT_READY" then
+      vim.schedule(function()
+        append_to_buffer(get_output_buf(proc), { "Error: " .. (err.message or vim.inspect(err)) }, { type = "error" })
+      end)
+    end
+  end)
   update_statusline()
 end
 
@@ -1621,12 +1630,13 @@ function M.handle_command(cmd)
       "  /mode [mode] - Show mode picker or switch to specific mode",
       "  /config - Show session config options picker",
       "  /chat [file] - Open/create .chat buffer (creates session if needed)",
-      "  /start - Start AI session for current .chat buffer",
+      "  /start, /init - Start AI session for current .chat buffer",
       "  /chat-new - Start chat in current buffer (if .chat file) or create new one (session starts on C-])",
       "  /restart-chat - Restart conversation in current .chat buffer",
       "  /summarize - Summarize current conversation",
       "  /spec export - Export spec to markdown",
       "  /cwd [path] - Show/change working directory",
+      "  /strategy [strategy] - Show/set session strategy (new/latest/prompt/new-deferred)",
       "  /queue - Show queued messages",
       "  /edit [n] - Edit queued message",
       "  /remove [n] - Remove queued message",
@@ -1696,7 +1706,7 @@ function M.handle_command(cmd)
     M.open_chat_buffer(args[1])
   elseif command == "chat-new" then
     M.open_chat_buffer_new()
-  elseif command == "start" then
+  elseif command == "start" or command == "init" then
     local current_buf = vim.api.nvim_get_current_buf()
     if lazy_load_chat_buffer().is_chat_buffer(current_buf) then
       vim.notify("[.chat] Starting session...", vim.log.levels.INFO)
@@ -1842,6 +1852,33 @@ function M.handle_command(cmd)
       local cwd = proc and proc.data.cwd or ui.project_root or vim.fn.getcwd()
       append_to_buffer(buf, { "Working directory: " .. cwd }, { type = "silent" })
     end
+  elseif command == "strategy" then
+    local valid_strategies = { "new", "latest", "prompt", "new-deferred" }
+    if args[1] then
+      local new_strategy = args[1]
+      if vim.tbl_contains(valid_strategies, new_strategy) then
+        config.session_strategy = new_strategy
+        vim.notify("[Session Strategy] Set to: " .. new_strategy, vim.log.levels.INFO)
+        if buf then
+          append_to_buffer(buf, { "Session strategy: " .. new_strategy }, { type = "silent" })
+        end
+      else
+        local msg = "[!] Invalid strategy. Valid options: " .. table.concat(valid_strategies, ", ")
+        if buf then
+          append_to_buffer(buf, { msg }, { type = "error" })
+        else
+          vim.notify(msg, vim.log.levels.ERROR)
+        end
+      end
+    else
+      local current = config.session_strategy or "latest"
+      local msg = "Current session strategy: " .. current .. "\nOptions: " .. table.concat(valid_strategies, ", ")
+      if buf then
+        append_to_buffer(buf, { "", msg, "" }, { type = "silent" })
+      else
+        vim.notify(msg, vim.log.levels.INFO)
+      end
+    end
   elseif command == "clear" then
     if buf then
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
@@ -1974,8 +2011,11 @@ function M.handle_command(cmd)
         append_to_buffer(buf, { "", "[▶️ Ralph Wiggum resumed]" }, { type = "silent" })
         if proc then
           local continuation = ralph.get_continuation_prompt()
+          local async = require("ai_repl.async")
           vim.defer_fn(function()
-            proc:send_prompt(continuation, { silent = true })
+            async.run(function()
+              proc:send_prompt(continuation, { silent = true })
+            end)
           end, 500)
         end
       else
@@ -2471,7 +2511,10 @@ function M.show_agent_commands_only()
           vim.schedule(function()
             local cmd_text = "/" .. item.command.name
             append_to_buffer(get_output_buf(proc), { "", "> " .. cmd_text, "" }, { type = "silent" })
-            proc:send_prompt(cmd_text)
+            local async = require("ai_repl.async")
+            async.run(function()
+              proc:send_prompt(cmd_text)
+            end)
           end)
         end
       end,
@@ -2598,12 +2641,16 @@ function M._show_config_option_values(proc, option)
     if not choice or not idx then return end
     local selected = options[idx]
     if selected then
-      proc:set_config_option(option.configId, selected.value, function(result, err)
-        if err then
-          vim.notify("Failed to set config: " .. vim.inspect(err), vim.log.levels.ERROR)
-        else
-          vim.notify((option.label or option.configId) .. " set to: " .. (selected.name or selected.value), vim.log.levels.INFO)
-        end
+      local async = require("ai_repl.async")
+      async.run(function()
+        local result, err = proc:set_config_option(option.configId, selected.value)
+        vim.schedule(function()
+          if err then
+            vim.notify("Failed to set config: " .. vim.inspect(err), vim.log.levels.ERROR)
+          else
+            vim.notify((option.label or option.configId) .. " set to: " .. (selected.name or selected.value), vim.log.levels.INFO)
+          end
+        end)
       end)
     end
   end)
@@ -2921,6 +2968,7 @@ function M.open_chat_buffer(file_path, skip_session_check, existing_session_id)
 
     -- Set window width/height
     local split_width = config.chat.split_width or 0.4
+    local split_height = config.chat.split_height or 0.4
     if split_direction == "right" or split_direction == "left" then
       local current_width = vim.api.nvim_win_get_width(0)
       local new_width = math.floor(current_width * split_width)
@@ -3025,6 +3073,7 @@ function M.open_chat_buffer_new()
 
   -- Set window size
   local split_width = config.chat.split_width or 0.4
+  local split_height = config.chat.split_height or 0.4
   if split_direction == "right" or split_direction == "left" then
     local current_width = vim.api.nvim_win_get_width(0)
     local new_width = math.floor(current_width * split_width)
@@ -3704,6 +3753,10 @@ end
 function M.get_slash_commands()
   local proc = registry.active()
   return proc and proc.data.slash_commands or {}
+end
+
+function M.get_config()
+  return config
 end
 
 function M.setup(opts)

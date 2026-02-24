@@ -13,97 +13,151 @@ return {
 
     vim.lsp.config("*", default_config)
 
-    vim.lsp.config("vtsls", {
-      filetypes = {
-        "javascript",
-        "javascriptreact",
-        "javascript.jsx",
-        "typescript",
-        "typescriptreact",
-        "typescript.tsx",
-        "vue"
-      },
-      settings = {
-        complete_function_calls = true,
-        vtsls = {
-          enableMoveToFileCodeAction = true,
-          autoUseWorkspaceTsdk = true,
-          experimental = {
-            maxInlayHintLength = 30,
-            completion = {
-              enableServerSideFuzzyMatch = true,
+    local original_schedule = vim.schedule
+    local lsp_error_suppression_active = false
+
+    vim.schedule = function(fn)
+      return original_schedule(function()
+        local ok, err = pcall(fn)
+        if not ok then
+          local err_str = tostring(err)
+          if err_str:match("unhandled method") or err_str:match("code = 123") or err_str:match("code_name = unknown") then
+            if not lsp_error_suppression_active then
+              lsp_error_suppression_active = true
+              original_schedule(function()
+                vim.notify(
+                  "LSP initialization error suppressed.\n" ..
+                  "A language server failed to respond to the initialize method.\n" ..
+                  "This is usually safe to ignore. Check :LspLog if needed.",
+                  vim.log.levels.WARN
+                )
+                vim.defer_fn(function()
+                  lsp_error_suppression_active = false
+                end, 5000)
+              end)
+            end
+            return
+          end
+          error(err)
+        end
+      end)
+    end
+
+    local function safe_enable(server_name)
+      local ok, err = pcall(vim.lsp.enable, server_name)
+      if not ok then
+        vim.schedule(function()
+          local error_msg = tostring(err)
+          if error_msg:match("unhandled method") or error_msg:match("RPC") then
+            vim.notify(
+              string.format("LSP '%s' failed to initialize.\nError: %s\nCheck :LspInfo for details.", server_name, error_msg),
+              vim.log.levels.ERROR
+            )
+          else
+            vim.notify("Failed to enable " .. server_name .. ": " .. error_msg, vim.log.levels.WARN)
+          end
+        end)
+        return false
+      end
+      return true
+    end
+
+    if vim.fn.executable("vtsls") == 1 then
+      vim.lsp.config("vtsls", {
+        filetypes = {
+          "javascript",
+          "javascriptreact",
+          "javascript.jsx",
+          "typescript",
+          "typescriptreact",
+          "typescript.tsx",
+          "vue"
+        },
+        settings = {
+          complete_function_calls = true,
+          vtsls = {
+            enableMoveToFileCodeAction = true,
+            autoUseWorkspaceTsdk = true,
+            experimental = {
+              maxInlayHintLength = 30,
+              completion = {
+                enableServerSideFuzzyMatch = true,
+              },
+            },
+          },
+          typescript = {
+            globalPlugins = {
+              {
+                name = "@angular/language-service",
+                location = vim.fs.normalize("node_modules/@angular/language-service"),
+                enableForWorkspaceTypeScriptVersions = false,
+              },
+            },
+            updateImportsOnFileMove = { enabled = "always" },
+            suggest = {
+              completeFunctionCalls = true,
+              autoImports = true,
+              includeCompletionsForModuleExports = true,
+            },
+            preferences = {
+              importModuleSpecifier = "relative",
+              includePackageJsonAutoImports = "on",
+            },
+            inlayHints = {
+              enumMemberValues = { enabled = true },
+              functionLikeReturnTypes = { enabled = true },
+              parameterNames = { enabled = "literals" },
+              parameterTypes = { enabled = true },
+              variableTypes = { enabled = false },
+              propertyDeclarationTypes = { enabled = true }
+            },
+            format = {
+              enable = true,
+              semicolons = "insert",
+              insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces = true,
+              insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false,
+            },
+            workspaceSymbols = {
+              scope = "allOpenProjects",
+            },
+          },
+          javascript = {
+            updateImportsOnFileMove = { enabled = "always" },
+            suggest = {
+              completeFunctionCalls = true,
+              autoImports = true,
+              includeCompletionsForModuleExports = true,
+            },
+            preferences = {
+              importModuleSpecifier = "relative",
+              includePackageJsonAutoImports = "on",
+            },
+            inlayHints = {
+              enumMemberValues = { enabled = true },
+              functionLikeReturnTypes = { enabled = true },
+              parameterNames = { enabled = "literals" },
+              parameterTypes = { enabled = true },
+              variableTypes = { enabled = false },
+              propertyDeclarationTypes = { enabled = true }
+            },
+            format = {
+              enable = true,
+              semicolons = "insert",
+              insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces = true,
+              insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false,
             },
           },
         },
-        typescript = {
-          globalPlugins = {
-            {
-              name = "@angular/language-service",
-              location = vim.fs.normalize("node_modules/@angular/language-service"),
-              enableForWorkspaceTypeScriptVersions = false,
-            },
-          },
-          updateImportsOnFileMove = { enabled = "always" },
-          suggest = {
-            completeFunctionCalls = true,
-            autoImports = true,
-            includeCompletionsForModuleExports = true,
-          },
-          preferences = {
-            importModuleSpecifier = "relative",
-            includePackageJsonAutoImports = "on",
-          },
-          inlayHints = {
-            enumMemberValues = { enabled = true },
-            functionLikeReturnTypes = { enabled = true },
-            parameterNames = { enabled = "literals" },
-            parameterTypes = { enabled = true },
-            variableTypes = { enabled = false },
-            propertyDeclarationTypes = { enabled = true }
-          },
-          format = {
-            enable = true,
-            semicolons = "insert",
-            insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces = true,
-            insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false,
-          },
-          workspaceSymbols = {
-            scope = "allOpenProjects",
-          },
-        },
-        javascript = {
-          updateImportsOnFileMove = { enabled = "always" },
-          suggest = {
-            completeFunctionCalls = true,
-            autoImports = true,
-            includeCompletionsForModuleExports = true,
-          },
-          preferences = {
-            importModuleSpecifier = "relative",
-            includePackageJsonAutoImports = "on",
-          },
-          inlayHints = {
-            enumMemberValues = { enabled = true },
-            functionLikeReturnTypes = { enabled = true },
-            parameterNames = { enabled = "literals" },
-            parameterTypes = { enabled = true },
-            variableTypes = { enabled = false },
-            propertyDeclarationTypes = { enabled = true }
-          },
-          format = {
-            enable = true,
-            semicolons = "insert",
-            insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces = true,
-            insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false,
-          },
-        },
-      },
-    })
-    vim.lsp.enable("vtsls")
+      })
+      safe_enable("vtsls")
+    end
 
-    vim.lsp.enable("basedpyright")
+    if vim.fn.executable("basedpyright") == 1 or vim.fn.executable("basedpyright-langserver") == 1 then
+      safe_enable("basedpyright")
+    end
 
-    vim.lsp.config("rust_analyzer", {
+    if vim.fn.executable("rust-analyzer") == 1 then
+      vim.lsp.config("rust_analyzer", {
       settings = {
         ["rust-analyzer"] = {
           imports = {
@@ -172,10 +226,12 @@ return {
           },
         },
       },
-    })
-    vim.lsp.enable("rust_analyzer")
+      })
+      safe_enable("rust_analyzer")
+    end
 
-    vim.lsp.config("dartls", {
+    if vim.fn.executable("dart") == 1 then
+      vim.lsp.config("dartls", {
       cmd = { "dart", "language-server", "--protocol=lsp" },
       filetypes = { "dart" },
       root_markers = { "pubspec.yaml", ".git" },
@@ -458,10 +514,12 @@ return {
           vim.api.nvim_buf_set_lines(bufnr, end_row + 2, end_row + 2, false, { indent .. ")," })
         end, { buffer = bufnr, desc = "Wrap with Widget" })
       end,
-    })
-    vim.lsp.enable("dartls")
+      })
+      safe_enable("dartls")
+    end
 
-    vim.lsp.config("gopls", {
+    if vim.fn.executable("gopls") == 1 then
+      vim.lsp.config("gopls", {
       cmd = { "gopls" },
       filetypes = { "go", "gomod", "gowork", "gotmpl" },
       root_markers = { "go.work", "go.mod", ".git" },
@@ -513,28 +571,28 @@ return {
 
         vim.keymap.set("n", "<localleader>i", function()
           vim.lsp.buf.code_action({
-            context = { only = { "source.organizeImports" } },
+            context = { only = { "source.organizeImports" }, diagnostics = {} },
             apply = true,
           })
         end, vim.tbl_extend("force", opts, { desc = "Organize Imports" }))
 
         vim.keymap.set("n", "<localleader>fs", function()
           vim.lsp.buf.code_action({
-            context = { only = { "refactor.rewrite" } },
+            context = { only = { "refactor.rewrite" }, diagnostics = {} },
             apply = true,
           })
         end, vim.tbl_extend("force", opts, { desc = "Fill struct" }))
 
         vim.keymap.set("n", "<localleader>gt", function()
           vim.lsp.buf.code_action({
-            context = { only = { "source.generateTest" } },
+            context = { only = { "source.generateTest" }, diagnostics = {} },
             apply = true,
           })
         end, vim.tbl_extend("force", opts, { desc = "Generate test" }))
 
         vim.keymap.set("n", "<localleader>m", function()
           vim.lsp.buf.code_action({
-            context = { only = { "source.fixAll" } },
+            context = { only = { "source.fixAll" }, diagnostics = {} },
             apply = true,
           })
           vim.notify("Running go mod tidy", vim.log.levels.INFO)
@@ -574,10 +632,12 @@ return {
           })
         end, vim.tbl_extend("force", opts, { desc = "Build project" }))
       end,
-    })
-    vim.lsp.enable("gopls")
+      })
+      safe_enable("gopls")
+    end
 
-    vim.lsp.config("angularls", {
+    if vim.fn.executable("ngserver") == 1 then
+      vim.lsp.config("angularls", {
       cmd = { "ngserver", "--stdio", "--tsProbeLocations", "", "--ngProbeLocations", "" },
       filetypes = { "typescript", "html", "typescriptreact", "typescript.tsx", "htmlangular" },
       root_markers = { "angular.json", ".git" },
@@ -600,10 +660,12 @@ return {
           vim.cmd("edit %:r.spec.ts")
         end, vim.tbl_extend("force", opts, { desc = "Go to test" }))
       end,
-    })
-    vim.lsp.enable("angularls")
+      })
+      safe_enable("angularls")
+    end
 
-    vim.lsp.config("astro", {
+    if vim.fn.executable("astro-ls") == 1 then
+      vim.lsp.config("astro", {
       cmd = { "astro-ls", "--stdio" },
       filetypes = { "astro" },
       root_markers = { "package.json", "tsconfig.json", "jsconfig.json", ".git" },
@@ -653,10 +715,12 @@ return {
           })
         end, vim.tbl_extend("force", opts, { desc = "Start dev server" }))
       end,
-    })
-    vim.lsp.enable("astro")
+      })
+      safe_enable("astro")
+    end
 
-    vim.lsp.config("tailwindcss", {
+    if vim.fn.executable("tailwindcss-language-server") == 1 then
+      vim.lsp.config("tailwindcss", {
       cmd = { "tailwindcss-language-server", "--stdio" },
       filetypes = { "html", "css", "scss", "javascript", "javascriptreact", "typescript", "typescriptreact", "astro", "vue", "svelte" },
       root_markers = { "tailwind.config.js", "tailwind.config.cjs", "tailwind.config.mjs", "tailwind.config.ts", ".git" },
@@ -685,10 +749,12 @@ return {
           },
         },
       },
-    })
-    vim.lsp.enable("tailwindcss")
+      })
+      safe_enable("tailwindcss")
+    end
 
-    vim.lsp.config("html", {
+    if vim.fn.executable("vscode-html-language-server") == 1 then
+      vim.lsp.config("html", {
       cmd = { "vscode-html-language-server", "--stdio" },
       filetypes = { "html", "htmlangular" },
       root_markers = { "package.json", ".git" },
@@ -721,10 +787,12 @@ return {
           },
         },
       },
-    })
-    vim.lsp.enable("html")
+      })
+      safe_enable("html")
+    end
 
-    vim.lsp.config("cssls", {
+    if vim.fn.executable("vscode-css-language-server") == 1 then
+      vim.lsp.config("cssls", {
       cmd = { "vscode-css-language-server", "--stdio" },
       filetypes = { "css", "scss", "less" },
       root_markers = { "package.json", ".git" },
@@ -742,10 +810,12 @@ return {
           },
         },
       },
-    })
-    vim.lsp.enable("cssls")
+      })
+      safe_enable("cssls")
+    end
 
-    vim.lsp.config("ls_emmet", {
+    if vim.fn.executable("ls_emmet") == 1 then
+      vim.lsp.config("ls_emmet", {
       cmd = { "ls_emmet", "--stdio" },
       filetypes = { "html", "css", "scss", "javascript", "typescript", "vue", "svelte" },
       root_markers = { "package.json", ".git" },
@@ -757,8 +827,9 @@ return {
           },
         },
       },
-    })
-    vim.lsp.enable("ls_emmet")
+      })
+      safe_enable("ls_emmet")
+    end
 
     if vim.fn.executable('xcode-build-server') == 1 then
       vim.lsp.config("xcode_build_server", {
@@ -772,10 +843,11 @@ return {
           },
         },
       })
-      vim.lsp.enable("xcode_build_server")
+      safe_enable("xcode_build_server")
     end
 
-    vim.lsp.config("sourcekit", {
+    if vim.fn.executable("sourcekit-lsp") == 1 then
+      vim.lsp.config("sourcekit", {
       cmd = { "sourcekit-lsp" },
       filetypes = { "swift", "objective-c", "objective-cpp" },
       root_markers = { "Package.swift", "Package.resolved", ".git", "*.xcodeproj", "*.xcworkspace" },
@@ -1094,8 +1166,9 @@ return {
           end)
         end, vim.tbl_extend("force", opts, { desc = "Unified build menu" }))
       end,
-    })
-    vim.lsp.enable("sourcekit")
+      })
+      safe_enable("sourcekit")
+    end
 
     local expert_path = vim.fn.expand("~/.tools/expert/expert")
     if vim.fn.executable(expert_path) == 1 then
@@ -1113,66 +1186,71 @@ return {
         },
         settings = {},
         on_attach = function(client, bufnr)
-          vim.api.nvim_buf_set_option(bufnr, 'omnifunc', 'v:lua.vim.lsp.omnifunc')
+          vim.bo[bufnr].omnifunc = 'v:lua.vim.lsp.omnifunc'
         end,
       })
-      vim.lsp.enable("expert")
+      safe_enable("expert")
     else
       print("Expert LSP not found at " .. expert_path .. ", falling back to ElixirLS")
-      vim.lsp.enable("elixirls")
+      safe_enable("elixirls")
     end
 
-    vim.lsp.config("jdtls", {
-      cmd = { "jdtls" },
-      filetypes = { "java" },
-      root_markers = { "build.gradle", "pom.xml", ".git", "mvnw", "gradlew" },
-      settings = {
-        java = {
-          signatureHelp = { enabled = true },
-          contentProvider = { preferred = "fernflower" },
-          completion = {
-            favoriteStaticMembers = {
-              "org.junit.jupiter.api.Assertions.*",
-              "org.junit.jupiter.api.Assumptions.*",
-              "org.junit.Assert.*",
-              "org.junit.Assume.*",
-              "org.mockito.Mockito.*"
+    if vim.fn.executable("jdtls") == 1 then
+      vim.lsp.config("jdtls", {
+        cmd = { "jdtls" },
+        filetypes = { "java" },
+        root_markers = { "build.gradle", "pom.xml", ".git", "mvnw", "gradlew" },
+        settings = {
+          java = {
+            signatureHelp = { enabled = true },
+            contentProvider = { preferred = "fernflower" },
+            completion = {
+              favoriteStaticMembers = {
+                "org.junit.jupiter.api.Assertions.*",
+                "org.junit.jupiter.api.Assumptions.*",
+                "org.junit.Assert.*",
+                "org.junit.Assume.*",
+                "org.mockito.Mockito.*"
+              },
+              importOrder = {
+                "java",
+                "javax",
+                "com",
+                "org"
+              },
             },
-            importOrder = {
-              "java",
-              "javax",
-              "com",
-              "org"
+            sources = {
+              organizeImports = {
+                starThreshold = 9999,
+                staticStarThreshold = 9999,
+              },
             },
-          },
-          sources = {
-            organizeImports = {
-              starThreshold = 9999,
-              staticStarThreshold = 9999,
+            codeGeneration = {
+              toString = {
+                template = "${object.className}{${member.name()}=${member.value}, ${otherMembers}}"
+              },
+              hashCodeEquals = {
+                useJava7Objects = true,
+              },
+              useBlocks = true,
             },
-          },
-          codeGeneration = {
-            toString = {
-              template = "${object.className}{${member.name()}=${member.value}, ${otherMembers}}"
-            },
-            hashCodeEquals = {
-              useJava7Objects = true,
-            },
-            useBlocks = true,
           },
         },
-      },
-    })
-    vim.lsp.enable("jdtls")
+      })
+      safe_enable("jdtls")
+    end
 
-    vim.lsp.config("kotlin_language_server", {
-      cmd = { "kotlin-language-server" },
-      filetypes = { "kotlin", "kt", "kts" },
-      root_markers = { "settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts", "pom.xml", ".git" },
-    })
-    vim.lsp.enable("kotlin_language_server")
+    if vim.fn.executable("kotlin-language-server") == 1 then
+      vim.lsp.config("kotlin_language_server", {
+        cmd = { "kotlin-language-server" },
+        filetypes = { "kotlin", "kt", "kts" },
+        root_markers = { "settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts", "pom.xml", ".git" },
+      })
+      safe_enable("kotlin_language_server")
+    end
 
-    vim.lsp.config("yamlls", {
+    if vim.fn.executable("yaml-language-server") == 1 then
+      vim.lsp.config("yamlls", {
       cmd = { "yaml-language-server", "--stdio" },
       filetypes = { "yaml", "yml" },
       root_markers = { ".git", vim.fn.getcwd() },
@@ -1208,10 +1286,12 @@ return {
           },
         },
       },
-    })
-    vim.lsp.enable("yamlls")
+      })
+      safe_enable("yamlls")
+    end
 
-    vim.lsp.config("taplo", {
+    if vim.fn.executable("taplo") == 1 then
+      vim.lsp.config("taplo", {
       cmd = { "taplo", "lsp", "stdio" },
       filetypes = { "toml" },
       root_markers = { "*.toml", ".git" },
@@ -1237,8 +1317,9 @@ return {
           },
         },
       },
-    })
-    vim.lsp.enable("taplo")
+      })
+      safe_enable("taplo")
+    end
   end,
 
   vim.keymap.set("n", "<localleader>ol", function()

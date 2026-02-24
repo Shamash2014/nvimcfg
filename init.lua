@@ -200,6 +200,9 @@ end, { desc = 'Reload config' })
 require("core.utils").setup_auto_root()
 require("core.tasks").setup()
 
+-- Load command modules
+require("commands.lsp-debug")
+
 -- LSP keymaps (only active when LSP is attached)
 vim.api.nvim_create_autocmd("LspAttach", {
   group = vim.api.nvim_create_augroup("UserLspConfig", {}),

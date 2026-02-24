@@ -1,6 +1,8 @@
 local Process = {}
 Process.__index = Process
 
+local async = require("ai_repl.async")
+
 local CLIENT_INFO = {
   name = "ai_repl.nvim",
   title = "AI REPL for Neovim",
@@ -199,7 +201,7 @@ function Process:_stop_stale_callback_timer()
   end
 end
 
-function Process:send(method, params, callback)
+function Process:_send(method, params, callback)
   if not self.job_id then return nil end
 
   local id = self.conn.message_id
@@ -214,14 +216,12 @@ function Process:send(method, params, callback)
 
   if callback then
     self.conn.callbacks[id] = callback
-    -- Track callback creation time for timeout monitoring
     self.conn.callback_timeouts[id] = {
       created_at = os.time(),
       method = method
     }
   end
 
-  -- Add error handling for chansend
   local ok, err = pcall(function()
     vim.fn.chansend(self.job_id, vim.json.encode(msg) .. "\n")
   end)
@@ -230,13 +230,48 @@ function Process:send(method, params, callback)
     if self._on_debug and self.config.debug then
       self:_on_debug("chansend failed: " .. tostring(err))
     end
-    -- Don't call _on_exit here - the process might still be alive
-    -- Just return nil to indicate failure
-    -- The actual job exit will be detected by jobwait in is_alive()
     return nil
   end
 
   return id
+end
+
+function Process:send(method, params, timeout_ms)
+  timeout_ms = timeout_ms or 30000
+
+  return async.await(function(cb)
+    local completed = false
+    local timer = vim.uv.new_timer()
+
+    local wrapped_cb = function(result, err)
+      if completed then return end
+      completed = true
+      if timer then
+        timer:stop()
+        timer:close()
+      end
+      cb(result, err)
+    end
+
+    timer:start(timeout_ms, 0, vim.schedule_wrap(function()
+      if not completed then
+        completed = true
+        timer:stop()
+        timer:close()
+        cb(nil, { code = "TIMEOUT", message = string.format("%s timed out after %dms", method, timeout_ms) })
+      end
+    end))
+
+    local msg_id = self:_send(method, params, wrapped_cb)
+    if not msg_id then
+      if not completed then
+        completed = true
+        timer:stop()
+        timer:close()
+        cb(nil, { code = "SEND_FAILED", message = "Failed to send message" })
+      end
+    end
+  end)
 end
 
 function Process:notify(method, params)
@@ -423,7 +458,7 @@ function Process:_acp_initialize()
   self:_notify_status("initializing")
 
   local init_done = false
-  local msg_id = self:send("initialize", {
+  local msg_id = self:_send("initialize", {
     protocolVersion = 1,
     clientInfo = CLIENT_INFO,
     clientCapabilities = self.state.client_capabilities
@@ -468,7 +503,7 @@ function Process:_acp_authenticate(method_id, on_success)
   self:_notify_status("authenticating", { methodId = method_id })
 
   local auth_done = false
-  local msg_id = self:send("authenticate", {
+  local msg_id = self:_send("authenticate", {
     methodId = method_id
   }, function(_, err)
     auth_done = true
@@ -509,7 +544,7 @@ function Process:_acp_create_or_load_session()
     self:_notify_status("loading_session")
 
     local load_done = false
-    local msg_id = self:send("session/load", {
+    local msg_id = self:_send("session/load", {
       sessionId = self.config.load_session_id,
       cwd = cwd,
       mcpServers = self.config.mcp_servers
@@ -546,7 +581,7 @@ function Process:_acp_create_new_session(cwd)
   self:_notify_status("creating_session")
 
   local session_done = false
-  local msg_id = self:send("session/new", {
+  local msg_id = self:_send("session/new", {
     cwd = cwd,
     mcpServers = self.config.mcp_servers
   }, function(result, err)
@@ -608,77 +643,72 @@ end
 function Process:send_prompt(prompt, opts)
   opts = opts or {}
 
-  -- Check if process is alive (has job_id)
-  if not self:is_alive() then
+  return async.await(function(cb)
+    if not self:is_alive() then
+      if self.config.debug and self._on_debug then
+        self:_on_debug("send_prompt: not alive")
+      end
+      cb(nil, { code = "NOT_ALIVE", message = "Process is not alive" })
+      return
+    end
+
+    if not self.state.session_ready and not self.state.initialized then
+      if self.config.debug and self._on_debug then
+        self:_on_debug("send_prompt: not ready (not initialized)")
+      end
+      cb(nil, { code = "NOT_READY", message = "Session not ready" })
+      return
+    end
+
+    if self.ui and self.ui.permission_active then
+      local text = self:_extract_prompt_text(prompt)
+      table.insert(self.data.prompt_queue, { prompt = prompt, text = text, opts = opts })
+      if self.config.debug and self._on_debug then
+        self:_on_debug("send_prompt: permission_active, queued")
+      end
+      cb({ queued = true }, nil)
+      return
+    end
+
+    if self.state.busy then
+      local text = self:_extract_prompt_text(prompt)
+      table.insert(self.data.prompt_queue, { prompt = prompt, text = text, opts = opts })
+      if self.config.debug and self._on_debug then
+        self:_on_debug("send_prompt: busy, queued")
+      end
+      cb({ queued = true }, nil)
+      return
+    end
+
+    self.state.busy = true
+    self.state.last_activity = os.time()
+    self.ui.streaming_response = ""
+    self.ui.streaming_start_line = nil
+    self.ui.pending_tool_calls = {}
+
     if self.config.debug and self._on_debug then
-      self:_on_debug("send_prompt: not alive")
+      self:_on_debug("send_prompt: sending to session " .. self.session_id)
     end
-    return nil
-  end
 
-  -- Check if session is ready (initialized)
-  -- Note: After cancellation, session_ready should remain true if we've initialized
-  if not self.state.session_ready and not self.state.initialized then
-    if self.config.debug and self._on_debug then
-      self:_on_debug("send_prompt: not ready (not initialized)")
+    prompt = self:_transform_ultrathink(prompt)
+
+    local formatted_prompt = prompt
+    if type(prompt) == "string" then
+      formatted_prompt = { { type = "text", text = prompt } }
+    elseif type(prompt) == "table" and #prompt > 0 and type(prompt[1]) == "string" then
+      local new_prompt = {}
+      for _, text in ipairs(prompt) do
+        table.insert(new_prompt, { type = "text", text = text })
+      end
+      formatted_prompt = new_prompt
     end
-    return nil
-  end
 
-  -- Queue if ACP is awaiting a permission response
-  if self.ui and self.ui.permission_active then
-    local text = self:_extract_prompt_text(prompt)
-    table.insert(self.data.prompt_queue, { prompt = prompt, text = text, opts = opts })
-    if self.config.debug and self._on_debug then
-      self:_on_debug("send_prompt: permission_active, queued")
-    end
-    return nil
-  end
+    local request_params = {
+      sessionId = self.session_id,
+      prompt = formatted_prompt
+    }
 
-  -- Queue if busy
-  if self.state.busy then
-    local text = self:_extract_prompt_text(prompt)
-    table.insert(self.data.prompt_queue, { prompt = prompt, text = text, opts = opts })
-    if self.config.debug and self._on_debug then
-      self:_on_debug("send_prompt: busy, queued")
-    end
-    return nil
-  end
-
-  -- Mark as busy before sending
-  self.state.busy = true
-  self.state.last_activity = os.time()
-  self.ui.streaming_response = ""
-  self.ui.streaming_start_line = nil
-  self.ui.pending_tool_calls = {}
-
-  if self.config.debug and self._on_debug then
-    self:_on_debug("send_prompt: sending to session " .. self.session_id)
-  end
-
-  prompt = self:_transform_ultrathink(prompt)
-
-  -- Transform prompt to ACP array format if needed
-  local formatted_prompt = prompt
-  if type(prompt) == "string" then
-    formatted_prompt = { { type = "text", text = prompt } }
-  elseif type(prompt) == "table" and #prompt > 0 and type(prompt[1]) == "string" then
-    -- Handle case where prompt is an array of strings
-    local new_prompt = {}
-    for _, text in ipairs(prompt) do
-      table.insert(new_prompt, { type = "text", text = text })
-    end
-    formatted_prompt = new_prompt
-  end
-
-  local request_params = {
-    sessionId = self.session_id,
-    prompt = formatted_prompt
-  }
-
-  -- Wrap the send in pcall to catch any errors during send
-  local ok, result_id = pcall(function()
-    return self:send("session/prompt", request_params, function(result, err)
+    local msg_id = self:_send("session/prompt", request_params, function(result, err)
       if err then
         if self._on_debug then
           self:_on_debug("Prompt error: " .. vim.inspect(err))
@@ -687,29 +717,17 @@ function Process:send_prompt(prompt, opts)
         vim.schedule(function()
           self:process_queued_prompts()
         end)
+        cb(nil, err)
+      else
+        cb(result, nil)
       end
-      -- Note: busy=false on normal completion is handled by the "stop"
-      -- session update in session_state.apply_update, not here.
-      -- The callback response just signals the RPC round-trip is done.
     end)
-  end)
 
-  if not ok then
-    -- Send failed, reset state
-    if self._on_debug then
-      self:_on_debug("send_prompt failed: " .. tostring(result_id))
+    if not msg_id then
+      self.state.busy = false
+      cb(nil, { code = "SEND_FAILED", message = "Failed to send prompt" })
     end
-    self.state.busy = false
-    return nil
-  end
-
-  -- send() returned nil means chansend failed — reset busy
-  if not result_id then
-    self.state.busy = false
-    return nil
-  end
-
-  return result_id
+  end)
 end
 
 function Process:cancel()
@@ -771,17 +789,24 @@ function Process:set_mode(mode_id)
   self.state.mode = mode_id
 end
 
-function Process:set_config_option(config_id, value, callback)
-  if not self:is_ready() then return end
-  self:send("session/set_config_option", {
-    sessionId = self.session_id,
-    configId = config_id,
-    value = value,
-  }, function(result, err)
-    if result and result.configOptions then
-      self.state.config_options = result.configOptions
-    end
-    if callback then callback(result, err) end
+function Process:set_config_option(config_id, value)
+  if not self:is_ready() then
+    return async.await(function(cb)
+      cb(nil, { code = "NOT_READY", message = "Session not ready" })
+    end)
+  end
+
+  return async.await(function(cb)
+    self:_send("session/set_config_option", {
+      sessionId = self.session_id,
+      configId = config_id,
+      value = value,
+    }, function(result, err)
+      if result and result.configOptions then
+        self.state.config_options = result.configOptions
+      end
+      cb(result, err)
+    end)
   end)
 end
 
@@ -793,11 +818,21 @@ function Process:process_queued_prompts()
   end
   if #self.data.prompt_queue > 0 then
     local next_prompt = table.remove(self.data.prompt_queue, 1)
-    if type(next_prompt) == "table" and next_prompt.prompt then
-      self:send_prompt(next_prompt.prompt, next_prompt.opts)
-    else
-      self:send_prompt(next_prompt)
-    end
+    async.run(function()
+      if type(next_prompt) == "table" and next_prompt.prompt then
+        async.await(function(cb)
+          async.run(function()
+            self:send_prompt(next_prompt.prompt, next_prompt.opts)
+          end, cb)
+        end)
+      else
+        async.await(function(cb)
+          async.run(function()
+            self:send_prompt(next_prompt)
+          end, cb)
+        end)
+      end
+    end)
   end
 end
 
@@ -872,45 +907,48 @@ function Process:restart()
   end, 100)
 end
 
-function Process:reset_session_with_context(injection_prompt, callback)
-  if not self.state.initialized then
-    if callback then callback(false, "not initialized") end
-    return
-  end
-
-  local cwd = self.data.cwd or vim.fn.getcwd()
-  local old_session_id = self.session_id
-
-  self.state.session_ready = false
-  self.state.busy = false
-  self.data.prompt_queue = {}
-  self.ui.streaming_response = ""
-  self.ui.active_tools = {}
-  self.ui.pending_tool_calls = {}
-
-  self:_notify_status("resetting_session")
-
-  self:send("session/new", {
-    cwd = cwd,
-    mcpServers = self.config.mcp_servers
-  }, function(result, err)
-    if err then
-      self:_notify_status("session_reset_failed", err)
-      if callback then callback(false, err) end
+function Process:reset_session_with_context(injection_prompt)
+  return async.await(function(cb)
+    if not self.state.initialized then
+      cb(false, "not initialized")
       return
     end
 
-    self:_handle_session_result(result)
-    self:_notify_status("session_reset", { old_id = old_session_id, new_id = self.session_id })
+    local cwd = self.data.cwd or vim.fn.getcwd()
+    local old_session_id = self.session_id
 
-    if injection_prompt then
-      vim.defer_fn(function()
-        self:send_prompt(injection_prompt, { silent = true })
-        if callback then callback(true, nil) end
-      end, 100)
-    else
-      if callback then callback(true, nil) end
-    end
+    self.state.session_ready = false
+    self.state.busy = false
+    self.data.prompt_queue = {}
+    self.ui.streaming_response = ""
+    self.ui.active_tools = {}
+    self.ui.pending_tool_calls = {}
+
+    self:_notify_status("resetting_session")
+
+    self:_send("session/new", {
+      cwd = cwd,
+      mcpServers = self.config.mcp_servers
+    }, function(result, err)
+      if err then
+        self:_notify_status("session_reset_failed", err)
+        cb(false, err)
+        return
+      end
+
+      self:_handle_session_result(result)
+      self:_notify_status("session_reset", { old_id = old_session_id, new_id = self.session_id })
+
+      if injection_prompt then
+        async.run(function()
+          async.sleep(100)
+          self:send_prompt(injection_prompt, { silent = true })
+          cb(true, nil)
+        end)
+      else
+        cb(true, nil)
+      end
+    end)
   end)
 end
 

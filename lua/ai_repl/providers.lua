@@ -6,10 +6,9 @@ local providers = {
     cmd = "claude-code-acp",
     args = {},
     env = {},
-    -- Permission settings: "default", "bypassPermissions", "dontAsk"
     permission_mode = "default",
-    -- Background permissions: "allow_always", "allow_once", "respect_agent"
     background_permissions = "allow_once",
+    mcp_servers = {},
   },
 
   goose = {
@@ -19,6 +18,7 @@ local providers = {
     env = {},
     permission_mode = "default",
     background_permissions = "allow_once",
+    mcp_servers = {},
   },
   opencode = {
     name = "OpenCode",
@@ -27,6 +27,7 @@ local providers = {
     env = {},
     permission_mode = "default",
     background_permissions = "allow_once",
+    mcp_servers = {},
   },
   codex = {
     name = "Codex",
@@ -36,6 +37,7 @@ local providers = {
     permission_mode = "default",
     background_permissions = "allow_once",
     supports_profiles = true,
+    mcp_servers = {},
   },
   droid = {
     name = "Droid",
@@ -44,6 +46,7 @@ local providers = {
     env = {},
     permission_mode = "default",
     background_permissions = "allow_once",
+    mcp_servers = {},
   },
   stakpak = {
     name = "Stakpak",
@@ -52,6 +55,7 @@ local providers = {
     env = {},
     permission_mode = "default",
     background_permissions = "allow_once",
+    mcp_servers = {},
   },
   fastagent = {
     name = "Fast Agent",
@@ -60,6 +64,7 @@ local providers = {
     env = {},
     permission_mode = "default",
     background_permissions = "allow_once",
+    mcp_servers = {},
   },
 }
 
@@ -77,6 +82,7 @@ function M.get_config(id)
     env = provider.env or {},
     permission_mode = provider.permission_mode or "default",
     background_permissions = provider.background_permissions or "allow_once",
+    mcp_servers = provider.mcp_servers or {},
   }
 end
 

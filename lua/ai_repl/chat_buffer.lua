@@ -9,6 +9,7 @@ local render = require("ai_repl.render")
 local annotations = require("ai_repl.annotations")
 local chat_buffer_events = require("ai_repl.chat_buffer_events")
 local chat_state = require("ai_repl.chat_state")
+local async = require("ai_repl.async")
 
 local config = {
   -- Keybindings for .chat buffers
@@ -205,83 +206,34 @@ function M.init_buffer(buf, existing_session_id)
 
     local function create_and_attach_session()
       local ai_repl = require("ai_repl.init")
+      local session_strategy = require("ai_repl.session_strategy")
       local current_repo = get_repo_root(buf)
-      local proc_for_project = nil
 
-      for sid, p in pairs(registry.all()) do
-        if p:is_alive() and p.data.cwd == current_repo then
-          proc_for_project = p
-          break
-        end
-      end
+      -- Get session strategy from config
+      local strategy = ai_repl.get_config().session_strategy or "latest"
 
-      if proc_for_project then
-        M.attach_session(buf, proc_for_project.session_id)
-        chat_buffer_events.setup_event_forwarding(buf, proc_for_project)
-        local provider_id = proc_for_project.data.provider or "unknown"
-        local providers = require("ai_repl.providers")
-        local provider_cfg = providers.get(provider_id) or {}
-        local provider_name = provider_cfg.name or provider_id
-        vim.notify("[.chat] Attached to session for this project. Press C-] to send.", vim.log.levels.INFO)
-        state.creating_session = false
-        require("ai_repl.init").update_statusline()
-        return
-      end
-
-      ai_repl.pick_provider(function(provider_id)
-        if not provider_id then
+      session_strategy.get_or_create_session(strategy, current_repo, function(proc)
+        if not proc then
           state.creating_session = false
           return
         end
 
-        vim.notify("[.chat] Creating session...", vim.log.levels.INFO)
-        ai_repl.new_session(provider_id)
+        if not vim.api.nvim_buf_is_valid(buf) then
+          state.creating_session = false
+          return
+        end
 
-        vim.defer_fn(function()
-          local proc = registry.active()
-          if not proc then
-            state.creating_session = false
-            return
-          end
+        chat_buffer_events.setup_event_forwarding(buf, proc)
+        M.attach_session(buf, proc.session_id)
 
-          local function setup_forwarding_when_ready()
-            if not vim.api.nvim_buf_is_valid(buf) then
-              state.creating_session = false
-              return
-            end
+        local provider_id = proc.data.provider or "unknown"
+        local providers = require("ai_repl.providers")
+        local provider_cfg = providers.get(provider_id) or {}
+        local provider_name = provider_cfg.name or provider_id
 
-            if proc:is_ready() then
-              chat_buffer_events.setup_event_forwarding(buf, proc)
-              M.attach_session(buf, proc.session_id)
-              local provider_id = proc.data.provider or "unknown"
-              local providers = require("ai_repl.providers")
-              local provider_cfg = providers.get(provider_id) or {}
-              local provider_name = provider_cfg.name or provider_id
-              vim.notify("[.chat] Session created and ready! Press C-] to send.", vim.log.levels.INFO)
-              state.creating_session = false
-              require("ai_repl.init").update_statusline()
-            else
-              local attempts = 0
-              local max_attempts = 100
-              vim.defer_fn(function()
-                if attempts >= max_attempts then
-                  vim.notify("[.chat] Session creation timeout. Try /start command.", vim.log.levels.ERROR)
-                  state.creating_session = false
-                  return
-                end
-
-                if proc:is_alive() and vim.api.nvim_buf_is_valid(buf) then
-                  attempts = attempts + 1
-                  setup_forwarding_when_ready()
-                else
-                  state.creating_session = false
-                end
-              end, 100)
-            end
-          end
-
-          setup_forwarding_when_ready()
-        end, 100)
+        vim.notify("[.chat] Session ready! Press C-] to send.", vim.log.levels.INFO)
+        state.creating_session = false
+        require("ai_repl.init").update_statusline()
       end)
     end
 
@@ -569,7 +521,7 @@ function M.send_to_process(buf)
       local trimmed = last_user_msg.content:gsub("^%s*(.-)%s*$", "%1")
       if trimmed:sub(1, 1) == "/" then
         local cmd = trimmed:sub(2):match("^(%S+)")
-        if cmd == "start" or cmd == "new" then
+        if cmd == "start" or cmd == "init" or cmd == "new" then
           local ai_repl = require("ai_repl")
           if parsed.last_role ~= "djinni" then
             M.append_djinni_marker(buf)
@@ -721,7 +673,9 @@ function M.send_to_process(buf)
   end
 
   -- Send prompt
-  proc:send_prompt(prompt)
+  async.run(function()
+    proc:send_prompt(prompt)
+  end)
 
   -- Update state
   state.streaming = true
@@ -730,21 +684,40 @@ function M.send_to_process(buf)
   -- Poll for completion and append @You: when done
   local poll_timer = vim.uv.new_timer()
   local timer_closed = false
+  local max_wait_time = 300000
+  local elapsed_time = 0
+
   poll_timer:start(500, 300, vim.schedule_wrap(function()
     if timer_closed then return end
+    elapsed_time = elapsed_time + 300
+
+    if elapsed_time > max_wait_time then
+      timer_closed = true
+      poll_timer:stop()
+      poll_timer:close()
+      return
+    end
+
     if proc.state.busy then return end
+
     timer_closed = true
     poll_timer:stop()
     poll_timer:close()
+
     if not vim.api.nvim_buf_is_valid(buf) then return end
+
     state.streaming = false
     chat_buffer_events.stop_streaming(buf)
-    chat_buffer_events.ensure_you_marker(buf)
 
-    -- Autosave after response is received
-    if config.save_on_send and config.auto_save then
-      M.autosave_buffer(buf)
-    end
+    vim.defer_fn(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      chat_buffer_events.ensure_you_marker(buf)
+
+      -- Autosave after response is received
+      if config.save_on_send and config.auto_save then
+        M.autosave_buffer(buf)
+      end
+    end, 150)
   end))
 
   return true
@@ -1126,7 +1099,7 @@ function M.hybrid_send(buf)
       local trimmed = last_user_msg.content:gsub("^%s*(.-)%s*$", "%1")
       if trimmed:sub(1, 1) == "/" then
         local cmd = trimmed:sub(2):match("^(%S+)")
-        if cmd == "start" or cmd == "new" then
+        if cmd == "start" or cmd == "init" or cmd == "new" then
           local ai_repl = require("ai_repl")
           if parsed.last_role ~= "djinni" then
             M.append_djinni_marker(buf)
