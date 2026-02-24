@@ -15,13 +15,46 @@ function M.is_mounted(mount_point)
   return vim.v.shell_error == 0 and #result > 0
 end
 
-function M.mount(host, user, cache_dir, callback)
+function M.verify_connection(mount_info, callback)
+  if not mount_info or not mount_info.mount_point then
+    callback(false)
+    return
+  end
+
+  if not M.is_mounted(mount_info.mount_point) then
+    callback(false)
+    return
+  end
+
+  local test_cmd = string.format("timeout 2 ls %s > /dev/null 2>&1", vim.fn.shellescape(mount_info.mount_point))
+  Job:new({
+    command = "sh",
+    args = { "-c", test_cmd },
+    on_exit = vim.schedule_wrap(function(_, return_val)
+      callback(return_val == 0)
+    end),
+  }):start()
+end
+
+function M.ensure_mount(host, user, cache_dir, callback)
   local mount_point, mount_key = M.get_mount_point(host, user, cache_dir)
 
   if M.mounts[mount_key] and M.is_mounted(mount_point) then
     callback(M.mounts[mount_key], nil)
     return
   end
+
+  if M.is_mounted(mount_point) then
+    M.unmount({ mount_point = mount_point, mount_key = mount_key }, function()
+      M.mount(host, user, cache_dir, callback)
+    end)
+  else
+    M.mount(host, user, cache_dir, callback)
+  end
+end
+
+function M.mount(host, user, cache_dir, callback)
+  local mount_point, mount_key = M.get_mount_point(host, user, cache_dir)
 
   vim.fn.mkdir(mount_point, "p")
 
@@ -95,12 +128,22 @@ function M.unmount_all(callback)
   end
 end
 
-function M.mount_sync(host, user, cache_dir)
+function M.ensure_mount_sync(host, user, cache_dir)
   local mount_point, mount_key = M.get_mount_point(host, user, cache_dir)
 
   if M.mounts[mount_key] and M.is_mounted(mount_point) then
     return M.mounts[mount_key]
   end
+
+  if M.is_mounted(mount_point) then
+    M.unmount_sync({ mount_point = mount_point, mount_key = mount_key })
+  end
+
+  return M.mount_sync(host, user, cache_dir)
+end
+
+function M.mount_sync(host, user, cache_dir)
+  local mount_point, mount_key = M.get_mount_point(host, user, cache_dir)
 
   vim.fn.mkdir(mount_point, "p")
 

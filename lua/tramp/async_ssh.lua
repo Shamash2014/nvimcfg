@@ -5,7 +5,7 @@ local sshfs = require("tramp.sshfs")
 function M.connect(host, user, config, callback)
   local ssh_user = user or config.default_user or vim.fn.getenv("USER")
 
-  sshfs.mount(host, ssh_user, config.cache_dir, function(mount_info, err)
+  sshfs.ensure_mount(host, ssh_user, config.cache_dir, function(mount_info, err)
     if err or not mount_info then
       callback(nil, err or "Failed to mount sshfs")
       return
@@ -42,17 +42,24 @@ function M.read_file(conn, remote_path, callback)
     return
   end
 
-  local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
-
-  vim.schedule(function()
-    local ok, content = pcall(vim.fn.readfile, local_path)
-    conn.last_used = os.time()
-
-    if ok then
-      callback(content, nil)
-    else
-      callback(nil, "Failed to read file: " .. tostring(content))
+  sshfs.verify_connection(conn.mount_info, function(is_alive)
+    if not is_alive then
+      callback(nil, "Connection lost - mount point not responding")
+      return
     end
+
+    local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
+
+    vim.schedule(function()
+      local ok, content = pcall(vim.fn.readfile, local_path)
+      conn.last_used = os.time()
+
+      if ok then
+        callback(content, nil)
+      else
+        callback(nil, "Failed to read file: " .. tostring(content))
+      end
+    end)
   end)
 end
 
@@ -62,20 +69,27 @@ function M.write_file(conn, remote_path, content, callback)
     return
   end
 
-  local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
-
-  vim.schedule(function()
-    local dir = vim.fn.fnamemodify(local_path, ":h")
-    vim.fn.mkdir(dir, "p")
-
-    local ok, err = pcall(vim.fn.writefile, content, local_path)
-    conn.last_used = os.time()
-
-    if ok then
-      callback(true, nil)
-    else
-      callback(false, "Failed to write file: " .. tostring(err))
+  sshfs.verify_connection(conn.mount_info, function(is_alive)
+    if not is_alive then
+      callback(false, "Connection lost - mount point not responding")
+      return
     end
+
+    local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
+
+    vim.schedule(function()
+      local dir = vim.fn.fnamemodify(local_path, ":h")
+      vim.fn.mkdir(dir, "p")
+
+      local ok, err = pcall(vim.fn.writefile, content, local_path)
+      conn.last_used = os.time()
+
+      if ok then
+        callback(true, nil)
+      else
+        callback(false, "Failed to write file: " .. tostring(err))
+      end
+    end)
   end)
 end
 
@@ -85,45 +99,52 @@ function M.list_directory(conn, remote_path, callback)
     return
   end
 
-  local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
-
-  vim.schedule(function()
-    conn.last_used = os.time()
-
-    local ok, entries = pcall(vim.fn.readdir, local_path)
-    if not ok then
-      callback(nil, "Failed to list directory: " .. tostring(entries))
+  sshfs.verify_connection(conn.mount_info, function(is_alive)
+    if not is_alive then
+      callback(nil, "Connection lost - mount point not responding")
       return
     end
 
-    local files = {}
-    for _, name in ipairs(entries) do
-      if name ~= "." and name ~= ".." then
-        local full_local = local_path .. "/" .. name
-        local full_remote = remote_path
-        if not remote_path:match("/$") then
-          full_remote = remote_path .. "/"
+    local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
+
+    vim.schedule(function()
+      conn.last_used = os.time()
+
+      local ok, entries = pcall(vim.fn.readdir, local_path)
+      if not ok then
+        callback(nil, "Failed to list directory: " .. tostring(entries))
+        return
+      end
+
+      local files = {}
+      for _, name in ipairs(entries) do
+        if name ~= "." and name ~= ".." then
+          local full_local = local_path .. "/" .. name
+          local full_remote = remote_path
+          if not remote_path:match("/$") then
+            full_remote = remote_path .. "/"
+          end
+          full_remote = full_remote .. name
+
+          local is_dir = vim.fn.isdirectory(full_local) == 1
+
+          table.insert(files, {
+            name = name,
+            path = full_remote,
+            type = is_dir and "directory" or "file",
+          })
         end
-        full_remote = full_remote .. name
-
-        local is_dir = vim.fn.isdirectory(full_local) == 1
-
-        table.insert(files, {
-          name = name,
-          path = full_remote,
-          type = is_dir and "directory" or "file",
-        })
       end
-    end
 
-    table.sort(files, function(a, b)
-      if a.type ~= b.type then
-        return a.type == "directory"
-      end
-      return a.name < b.name
+      table.sort(files, function(a, b)
+        if a.type ~= b.type then
+          return a.type == "directory"
+        end
+        return a.name < b.name
+      end)
+
+      callback(files, nil)
     end)
-
-    callback(files, nil)
   end)
 end
 
@@ -211,7 +232,7 @@ function M.grep(conn, remote_path, pattern, callback)
   Job:new({
     command = "grep",
     args = { "-r", "-n", "-H", pattern, local_path },
-    on_exit = vim.schedule_wrap(function(j, return_val)
+    on_exit = vim.schedule_wrap(function(j, _)
       conn.last_used = os.time()
 
       local results = {}

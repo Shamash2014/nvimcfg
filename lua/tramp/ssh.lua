@@ -3,7 +3,7 @@ local sshfs = require("tramp.sshfs")
 
 function M.connect(host, user, config)
   local ssh_user = user or config.default_user or vim.fn.getenv("USER")
-  local mount_info = sshfs.mount_sync(host, ssh_user, config.cache_dir)
+  local mount_info = sshfs.ensure_mount_sync(host, ssh_user, config.cache_dir)
 
   if not mount_info then
     return nil
