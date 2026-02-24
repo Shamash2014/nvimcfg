@@ -1,44 +1,75 @@
 local M = {}
+local sshfs = require("tramp.sshfs")
 
 function M.connect(host, user, config)
   local ssh_user = user or config.default_user or vim.fn.getenv("USER")
-  local ssh_command = string.format("ssh -o ConnectTimeout=%d %s@%s", config.connection_timeout, ssh_user, host)
+  local mount_point, mount_key = sshfs.get_mount_point(host, ssh_user, config.cache_dir)
 
-  local test_cmd = ssh_command .. " 'echo TRAMP_OK'"
-  local result = vim.fn.systemlist(test_cmd)
+  if sshfs.mounts[mount_key] and sshfs.is_mounted(mount_point) then
+    return {
+      host = host,
+      user = ssh_user,
+      mount_info = sshfs.mounts[mount_key],
+      connected = true,
+      last_used = os.time(),
+    }
+  end
 
-  if vim.v.shell_error ~= 0 or not vim.tbl_contains(result, "TRAMP_OK") then
+  vim.fn.mkdir(mount_point, "p")
+
+  local sshfs_cmd = string.format(
+    "sshfs -o reconnect -o ServerAliveInterval=15 -o ServerAliveCountMax=3 %s@%s:/ %s",
+    ssh_user,
+    host,
+    vim.fn.shellescape(mount_point)
+  )
+
+  vim.fn.system(sshfs_cmd)
+
+  if vim.v.shell_error ~= 0 then
+    vim.fn.delete(mount_point, "d")
     return nil
   end
+
+  local mount_info = {
+    host = host,
+    user = ssh_user,
+    mount_point = mount_point,
+    mount_key = mount_key,
+    mounted_at = os.time(),
+  }
+
+  sshfs.mounts[mount_key] = mount_info
 
   return {
     host = host,
     user = ssh_user,
-    ssh_command = ssh_command,
+    mount_info = mount_info,
     connected = true,
     last_used = os.time(),
   }
 end
 
 function M.disconnect(conn)
-  if conn then
+  if conn and conn.mount_info then
+    local mount_point = conn.mount_info.mount_point
+    vim.fn.system("umount " .. vim.fn.shellescape(mount_point))
+    if vim.v.shell_error == 0 then
+      sshfs.mounts[conn.mount_info.mount_key] = nil
+      vim.fn.delete(mount_point, "d")
+    end
     conn.connected = false
   end
 end
 
 function M.is_alive(conn)
-  if not conn or not conn.connected then
+  if not conn or not conn.connected or not conn.mount_info then
     return false
   end
 
-  if os.time() - conn.last_used > 300 then
-    local test_cmd = conn.ssh_command .. " 'echo ALIVE'"
-    local result = vim.fn.systemlist(test_cmd)
-
-    if vim.v.shell_error ~= 0 or not vim.tbl_contains(result, "ALIVE") then
-      conn.connected = false
-      return false
-    end
+  if not sshfs.is_mounted(conn.mount_info.mount_point) then
+    conn.connected = false
+    return false
   end
 
   conn.last_used = os.time()
@@ -46,16 +77,14 @@ function M.is_alive(conn)
 end
 
 function M.read_file(conn, remote_path)
-  if not M.is_alive(conn) then
+  if not M.is_alive(conn) or not conn.mount_info then
     return nil
   end
 
-  local escaped_path = vim.fn.shellescape(remote_path)
-  local cmd = conn.ssh_command .. " 'cat " .. escaped_path .. "'"
+  local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
 
-  local result = vim.fn.systemlist(cmd)
-
-  if vim.v.shell_error ~= 0 then
+  local ok, result = pcall(vim.fn.readfile, local_path)
+  if not ok then
     return nil
   end
 
@@ -64,95 +93,86 @@ function M.read_file(conn, remote_path)
 end
 
 function M.write_file(conn, remote_path, content)
-  if not M.is_alive(conn) then
+  if not M.is_alive(conn) or not conn.mount_info then
     return false
   end
 
-  local escaped_path = vim.fn.shellescape(remote_path)
+  local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
 
-  local temp_file = vim.fn.tempname()
-  vim.fn.writefile(content, temp_file)
+  local dir = vim.fn.fnamemodify(local_path, ":h")
+  vim.fn.mkdir(dir, "p")
 
-  local scp_cmd = string.format("scp %s %s@%s:%s", vim.fn.shellescape(temp_file), conn.user, conn.host, escaped_path)
-
-  vim.fn.system(scp_cmd)
-  local success = vim.v.shell_error == 0
-
-  vim.fn.delete(temp_file)
+  local ok, err = pcall(vim.fn.writefile, content, local_path)
 
   conn.last_used = os.time()
-  return success
+  return ok and err == 0
 end
 
 function M.list_directory(conn, remote_path)
-  if not M.is_alive(conn) then
+  if not M.is_alive(conn) or not conn.mount_info then
     return nil
   end
 
-  local escaped_path = vim.fn.shellescape(remote_path)
-  local cmd = conn.ssh_command
-    .. " 'ls -1ApL --group-directories-first "
-    .. escaped_path
-    .. " 2>/dev/null || ls -1Ap "
-    .. escaped_path
-    .. "'"
+  local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
 
-  local result = vim.fn.systemlist(cmd)
-
-  if vim.v.shell_error ~= 0 then
+  local ok, entries = pcall(vim.fn.readdir, local_path)
+  if not ok then
     return nil
   end
 
   local files = {}
-  for _, line in ipairs(result) do
-    if line ~= "" and line ~= "./" and line ~= "../" then
-      local is_dir = line:match("/$")
-      local name = is_dir and line:sub(1, -2) or line
-
-      local full_path = remote_path
+  for _, name in ipairs(entries) do
+    if name ~= "." and name ~= ".." then
+      local full_local = local_path .. "/" .. name
+      local full_remote = remote_path
       if not remote_path:match("/$") then
-        full_path = remote_path .. "/"
+        full_remote = remote_path .. "/"
       end
-      full_path = full_path .. name
+      full_remote = full_remote .. name
+
+      local is_dir = vim.fn.isdirectory(full_local) == 1
 
       table.insert(files, {
         name = name,
-        path = full_path,
+        path = full_remote,
         type = is_dir and "directory" or "file",
       })
     end
   end
+
+  table.sort(files, function(a, b)
+    if a.type ~= b.type then
+      return a.type == "directory"
+    end
+    return a.name < b.name
+  end)
 
   conn.last_used = os.time()
   return files
 end
 
 function M.file_exists(conn, remote_path)
-  if not M.is_alive(conn) then
+  if not M.is_alive(conn) or not conn.mount_info then
     return false
   end
 
-  local escaped_path = vim.fn.shellescape(remote_path)
-  local cmd = conn.ssh_command .. " 'test -e " .. escaped_path .. " && echo EXISTS'"
-
-  local result = vim.fn.systemlist(cmd)
+  local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
 
   conn.last_used = os.time()
-  return vim.v.shell_error == 0 and vim.tbl_contains(result, "EXISTS")
+  return vim.fn.filereadable(local_path) == 1 or vim.fn.isdirectory(local_path) == 1
 end
 
 function M.delete_file(conn, remote_path)
-  if not M.is_alive(conn) then
+  if not M.is_alive(conn) or not conn.mount_info then
     return false
   end
 
-  local escaped_path = vim.fn.shellescape(remote_path)
-  local cmd = conn.ssh_command .. " 'rm -f " .. escaped_path .. "'"
+  local local_path = sshfs.get_local_path(conn.mount_info, remote_path)
 
-  vim.fn.system(cmd)
+  local ok, err = pcall(vim.fn.delete, local_path)
 
   conn.last_used = os.time()
-  return vim.v.shell_error == 0
+  return ok and err == 0
 end
 
 function M.get_ssh_hosts(ssh_config_path)

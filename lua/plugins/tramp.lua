@@ -13,6 +13,7 @@ return {
   keys = {
     { "<leader>re", function() require("tramp").edit_remote() end, desc = "Edit Remote File" },
     { "<leader>rf", function() require("tramp").find_remote() end, desc = "Find Remote Files" },
+    { "<leader>fs", function() require("tramp").explore_remote() end, desc = "Explore Remote (oil)" },
     { "<leader>rx", function() require("tramp").explore_remote() end, desc = "Explore Remote Directory" },
     { "<leader>rg", function()
         vim.ui.input({ prompt = "Grep pattern: " }, function(pattern)

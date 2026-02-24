@@ -4,6 +4,7 @@ local ssh = require("tramp.ssh")
 local async_ssh = require("tramp.async_ssh")
 local buffer = require("tramp.buffer")
 local async_picker = require("tramp.async_picker")
+local sshfs = require("tramp.sshfs")
 
 M.config = {
   ssh_config = vim.fn.expand("~/.ssh/config"),
@@ -58,6 +59,13 @@ function M.setup_autocmds()
     pattern = "/ssh:*",
     callback = function(args)
       M.write_remote_file(args.file)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = group,
+    callback = function()
+      sshfs.unmount_all(function() end)
     end,
   })
 end
@@ -149,25 +157,39 @@ function M.write_remote_file(filepath)
     return
   end
 
-  local conn = M.get_connection(parsed.host, parsed.user)
-  if not conn then
-    vim.notify("Failed to connect to " .. parsed.host, vim.log.levels.ERROR)
-    return
-  end
+  parsed.path = path.normalize(parsed.path)
 
   local content = buffer.get_content()
 
   vim.notify("Saving remote file...", vim.log.levels.INFO)
 
-  async_ssh.write_file(conn, parsed.path, content, function(success, err)
-    if not success then
-      vim.notify("Failed to write remote file: " .. (err or "unknown error"), vim.log.levels.ERROR)
-      return
-    end
+  local function do_write(conn)
+    async_ssh.write_file(conn, parsed.path, content, function(success, err)
+      if not success then
+        vim.notify("Failed to write remote file: " .. (err or "unknown error"), vim.log.levels.ERROR)
+        return
+      end
 
-    vim.bo.modified = false
-    vim.notify("Remote file saved: " .. parsed.path, vim.log.levels.INFO)
-  end)
+      vim.bo.modified = false
+      vim.notify("Remote file saved: " .. parsed.path, vim.log.levels.INFO)
+    end)
+  end
+
+  local conn = M.get_connection(parsed.host, parsed.user)
+  if not conn then
+    async_ssh.connect(parsed.host, parsed.user, M.config, function(new_conn, err)
+      if err or not new_conn then
+        vim.notify("Failed to connect to " .. parsed.host .. ": " .. (err or "unknown error"), vim.log.levels.ERROR)
+        return
+      end
+
+      local key = string.format("%s@%s", parsed.user or M.config.default_user or vim.fn.getenv("USER"), parsed.host)
+      M.connections[key] = new_conn
+      do_write(new_conn)
+    end)
+  else
+    do_write(conn)
+  end
 end
 
 function M.get_connection(host, user)
@@ -292,7 +314,8 @@ function M.disconnect()
     end
 
     if M.connections[selected] then
-      ssh.disconnect(M.connections[selected])
+      local conn = M.connections[selected]
+      ssh.disconnect(conn)
       M.connections[selected] = nil
       vim.notify("Disconnected from " .. selected, vim.log.levels.INFO)
     end
