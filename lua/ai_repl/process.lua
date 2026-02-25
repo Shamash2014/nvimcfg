@@ -399,6 +399,7 @@ function Process:_handle_message(line)
 end
 
 function Process:_on_exit(code)
+  self:_stop_stale_callback_timer()
   local was_alive = self.job_id ~= nil
   self.job_id = nil
   self.state.initialized = false

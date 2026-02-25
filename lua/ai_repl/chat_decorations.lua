@@ -76,6 +76,8 @@ function M.schedule_redecorate(buf)
 
   if redecorate_timers[buf] then
     redecorate_timers[buf]:stop()
+    redecorate_timers[buf]:close()
+    redecorate_timers[buf] = nil
   end
 
   -- Use longer debounce for large buffers
@@ -408,6 +410,19 @@ function M.complete_tool_spinner(buf, tool_id, success)
   state.tool_indicators[tool_id] = nil
 end
 
+function M.cleanup_tool_spinners(buf)
+  local chat_state = require("ai_repl.chat_state")
+  local state = chat_state.get_buffer_state(buf)
+  if not state.tool_indicators then return end
+  for tool_id, indicator in pairs(state.tool_indicators) do
+    if indicator.timer then
+      indicator.timer:stop()
+      indicator.timer:close()
+    end
+    state.tool_indicators[tool_id] = nil
+  end
+end
+
 function M.setup_buffer(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
 
@@ -470,6 +485,7 @@ function M.setup_buffer(buf)
     buffer = buf,
     callback = function()
       M.stop_spinner(buf)
+      M.cleanup_tool_spinners(buf)
       if redecorate_timers[buf] then
         redecorate_timers[buf]:stop()
         redecorate_timers[buf]:close()

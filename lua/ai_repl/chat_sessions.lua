@@ -9,6 +9,7 @@ local ns_id = vim.api.nvim_create_namespace("AIReplChatSessions")
 local sessions_buf = nil
 local sessions_win = nil
 local return_to_win = nil
+local refresh_timer = nil
 
 local line_to_entry_map = {}
 
@@ -60,6 +61,17 @@ local function get_buffer_status(buf)
   return "inactive"
 end
 
+local function get_context_folder(buf)
+  local state = chat_state.get_buffer_state(buf)
+  if state.process and state.process.data and state.process.data.cwd then
+    return vim.fn.fnamemodify(state.process.data.cwd, ":t")
+  end
+  if state.repo_root then
+    return vim.fn.fnamemodify(state.repo_root, ":t")
+  end
+  return nil
+end
+
 local function get_buffer_entries(buf)
   local buf_name = vim.api.nvim_buf_get_name(buf)
   local relative_name = vim.fn.fnamemodify(buf_name, ":t")
@@ -81,6 +93,7 @@ local function get_buffer_entries(buf)
     status = status,
     is_current = is_current,
     msg_count = #parsed.messages,
+    context_folder = get_context_folder(buf),
   })
 
   return entries
@@ -151,10 +164,12 @@ local function render_sessions_buffer()
         end
 
         local msg_info = string.format("(%d)", entry.msg_count)
-        local line = string.format("%s %s %s",
+        local context = entry.context_folder and string.format(" [%s]", entry.context_folder) or ""
+        local line = string.format("%s %s %s%s",
           status_icon,
           entry.name,
-          msg_info
+          msg_info,
+          context
         )
         table.insert(lines, line)
       end
@@ -218,6 +233,15 @@ local function render_sessions_buffer()
         end_col = msg_start + #msg_info,
         hl_group = "Comment",
       })
+
+      if entry.context_folder then
+        local context_str = string.format(" [%s]", entry.context_folder)
+        local context_start = msg_start + #msg_info
+        vim.api.nvim_buf_set_extmark(sessions_buf, ns_id, line_idx - 1, context_start, {
+          end_col = context_start + #context_str,
+          hl_group = "Special",
+        })
+      end
     end
 
     ::continue::
@@ -414,33 +438,35 @@ function M.open()
     end,
   })
 
-  local timer = vim.uv.new_timer()
-  if timer then
-    timer:start(1000, 1000, vim.schedule_wrap(function()
+  if refresh_timer then
+    refresh_timer:stop()
+    refresh_timer:close()
+    refresh_timer = nil
+  end
+
+  refresh_timer = vim.uv.new_timer()
+  if refresh_timer then
+    refresh_timer:start(1000, 1000, vim.schedule_wrap(function()
       if not sessions_buf or not vim.api.nvim_buf_is_valid(sessions_buf) then
-        if timer then
-          timer:stop()
-          timer:close()
+        if refresh_timer then
+          refresh_timer:stop()
+          refresh_timer:close()
+          refresh_timer = nil
         end
         return
       end
       render_sessions_buffer()
     end))
-
-    vim.api.nvim_create_autocmd("BufWipeout", {
-      buffer = sessions_buf,
-      once = true,
-      callback = function()
-        if timer then
-          timer:stop()
-          timer:close()
-        end
-      end,
-    })
   end
 end
 
 function M.close()
+  if refresh_timer then
+    refresh_timer:stop()
+    refresh_timer:close()
+    refresh_timer = nil
+  end
+
   if sessions_win and vim.api.nvim_win_is_valid(sessions_win) then
     vim.api.nvim_win_close(sessions_win, true)
     sessions_win = nil

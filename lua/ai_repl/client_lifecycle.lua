@@ -6,6 +6,8 @@ M.clients_by_buffer = {}
 
 M.buffer_to_session = {}
 
+local stale_cleanup_timer = nil
+
 function M.register_client(session_id, process, opts)
   opts = opts or {}
   local chat_buf = opts.chat_buf
@@ -152,6 +154,7 @@ function M.setup_auto_cleanup()
   vim.api.nvim_create_autocmd("VimLeavePre", {
     group = vim.api.nvim_create_augroup("AiReplLifecycle", { clear = true }),
     callback = function()
+      M.cleanup_timers()
       local count = M.cleanup_all_clients()
       if count > 0 then
         vim.notify(
@@ -162,8 +165,12 @@ function M.setup_auto_cleanup()
     end,
   })
 
-  local stale_timer = vim.uv.new_timer()
-  stale_timer:start(300000, 300000, vim.schedule_wrap(function()
+  if stale_cleanup_timer then
+    stale_cleanup_timer:stop()
+    stale_cleanup_timer:close()
+  end
+  stale_cleanup_timer = vim.uv.new_timer()
+  stale_cleanup_timer:start(300000, 300000, vim.schedule_wrap(function()
     local cleaned = M.cleanup_stale_clients(3600)
     if cleaned > 0 then
       vim.notify(
@@ -172,6 +179,14 @@ function M.setup_auto_cleanup()
       )
     end
   end))
+end
+
+function M.cleanup_timers()
+  if stale_cleanup_timer then
+    stale_cleanup_timer:stop()
+    stale_cleanup_timer:close()
+    stale_cleanup_timer = nil
+  end
 end
 
 return M

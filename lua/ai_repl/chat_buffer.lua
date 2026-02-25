@@ -202,42 +202,8 @@ function M.init_buffer(buf, existing_session_id)
       vim.notify("[.chat] No active session. Type /start to begin.", vim.log.levels.INFO)
     end
   elseif not state.session_id then
-    state.creating_session = true
-
-    local function create_and_attach_session()
-      local ai_repl = require("ai_repl.init")
-      local session_strategy = require("ai_repl.session_strategy")
-      local current_repo = get_repo_root(buf)
-
-      -- Get session strategy from config
-      local strategy = ai_repl.get_config().session_strategy or "latest"
-
-      session_strategy.get_or_create_session(strategy, current_repo, function(proc)
-        if not proc then
-          state.creating_session = false
-          return
-        end
-
-        if not vim.api.nvim_buf_is_valid(buf) then
-          state.creating_session = false
-          return
-        end
-
-        chat_buffer_events.setup_event_forwarding(buf, proc)
-        M.attach_session(buf, proc.session_id)
-
-        local provider_id = proc.data.provider or "unknown"
-        local providers = require("ai_repl.providers")
-        local provider_cfg = providers.get(provider_id) or {}
-        local provider_name = provider_cfg.name or provider_id
-
-        vim.notify("[.chat] Session ready! Press C-] to send.", vim.log.levels.INFO)
-        state.creating_session = false
-        require("ai_repl.init").update_statusline()
-      end)
-    end
-
-    vim.schedule(create_and_attach_session)
+    -- Don't auto-create session eagerly — wait for user to send a message.
+    -- This prevents spawning ACP processes for every .chat buffer on startup.
   end
 
   -- Setup event forwarding from process to chat buffer
@@ -509,34 +475,7 @@ function M.send_to_process(buf)
   local state = get_state(buf)
 
   if not state.process then
-    local parsed = chat_parser.parse_buffer_cached(buf)
-    local last_user_msg = nil
-    for i = #parsed.messages, 1, -1 do
-      if parsed.messages[i].role == "user" then
-        last_user_msg = parsed.messages[i]
-        break
-      end
-    end
-    if last_user_msg then
-      local trimmed = last_user_msg.content:gsub("^%s*(.-)%s*$", "%1")
-      if trimmed:sub(1, 1) == "/" then
-        local cmd = trimmed:sub(2):match("^(%S+)")
-        if cmd == "start" or cmd == "init" or cmd == "new" then
-          local ai_repl = require("ai_repl")
-          if parsed.last_role ~= "djinni" then
-            M.append_djinni_marker(buf)
-          end
-          ai_repl.handle_command(trimmed:sub(2))
-          vim.schedule(function()
-            if vim.api.nvim_buf_is_valid(buf) then
-              chat_buffer_events.ensure_you_marker(buf)
-            end
-          end)
-          return true
-        end
-      end
-    end
-    vim.notify("[.chat] No active session. Type /start to begin.", vim.log.levels.ERROR)
+    vim.notify("[.chat] No active session. Press C-] to start one.", vim.log.levels.ERROR)
     return false
   end
 
@@ -689,6 +628,14 @@ function M.send_to_process(buf)
 
   poll_timer:start(500, 300, vim.schedule_wrap(function()
     if timer_closed then return end
+
+    if not vim.api.nvim_buf_is_valid(buf) then
+      timer_closed = true
+      poll_timer:stop()
+      poll_timer:close()
+      return
+    end
+
     elapsed_time = elapsed_time + 300
 
     if elapsed_time > max_wait_time then
@@ -1094,35 +1041,40 @@ function M.hybrid_send(buf)
   local state = get_state(buf)
 
   if not state.process then
-    local parsed = chat_parser.parse_buffer_cached(buf)
-    local last_user_msg = nil
-    for i = #parsed.messages, 1, -1 do
-      if parsed.messages[i].role == "user" then
-        last_user_msg = parsed.messages[i]
-        break
-      end
+    if state.creating_session then
+      vim.notify("[.chat] Session is starting, please wait...", vim.log.levels.INFO)
+      return false
     end
-    if last_user_msg then
-      local trimmed = last_user_msg.content:gsub("^%s*(.-)%s*$", "%1")
-      if trimmed:sub(1, 1) == "/" then
-        local cmd = trimmed:sub(2):match("^(%S+)")
-        if cmd == "start" or cmd == "init" or cmd == "new" then
-          local ai_repl = require("ai_repl")
-          if parsed.last_role ~= "djinni" then
-            M.append_djinni_marker(buf)
-          end
-          ai_repl.handle_command(trimmed:sub(2))
-          vim.schedule(function()
-            if vim.api.nvim_buf_is_valid(buf) then
-              chat_buffer_events.ensure_you_marker(buf)
-            end
-          end)
-          return true
+
+    state.creating_session = true
+    vim.notify("[.chat] Starting session...", vim.log.levels.INFO)
+
+    local ai_repl = require("ai_repl.init")
+    local session_strategy = require("ai_repl.session_strategy")
+    local current_repo = get_repo_root(buf)
+    local strategy = ai_repl.get_config().session_strategy or "latest"
+
+    session_strategy.get_or_create_session(strategy, current_repo, function(proc)
+      state.creating_session = false
+      if not proc then
+        vim.notify("[.chat] Failed to create session.", vim.log.levels.ERROR)
+        return
+      end
+      if not vim.api.nvim_buf_is_valid(buf) then
+        return
+      end
+
+      chat_buffer_events.setup_event_forwarding(buf, proc)
+      M.attach_session(buf, proc.session_id)
+      ai_repl.update_statusline()
+
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(buf) then
+          M.hybrid_send(buf)
         end
-      end
-    end
-    vim.notify("[.chat] No active session. Type /start to begin.", vim.log.levels.ERROR)
-    return false
+      end)
+    end)
+    return true
   end
 
   -- Check if process is alive
@@ -1183,12 +1135,17 @@ function M.setup_autocmds(buf)
           autosave_timer:stop()
           autosave_timer:close()
         end
-        autosave_timer = vim.defer_fn(function()
+        autosave_timer = vim.uv.new_timer()
+        autosave_timer:start(config.auto_save_delay, 0, vim.schedule_wrap(function()
+          if autosave_timer then
+            autosave_timer:stop()
+            autosave_timer:close()
+            autosave_timer = nil
+          end
           if vim.api.nvim_buf_is_valid(buf) then
             M.autosave_buffer(buf)
           end
-          autosave_timer = nil
-        end, config.auto_save_delay) -- Use configurable delay
+        end))
       end
     end,
   })
@@ -1209,6 +1166,13 @@ function M.setup_autocmds(buf)
   vim.api.nvim_create_autocmd("BufDelete", {
     buffer = buf,
     callback = function()
+      -- Clean up autosave timer
+      if autosave_timer then
+        autosave_timer:stop()
+        autosave_timer:close()
+        autosave_timer = nil
+      end
+
       -- Final autosave before deletion
       if config.auto_save then
         M.autosave_buffer(buf)
