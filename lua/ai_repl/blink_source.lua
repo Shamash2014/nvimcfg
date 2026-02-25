@@ -11,7 +11,7 @@ function source:enabled()
 end
 
 function source:get_trigger_characters()
-  return { "/" }
+  return { "/", "@" }
 end
 
 function source:get_completions(ctx, callback)
@@ -19,6 +19,45 @@ function source:get_completions(ctx, callback)
   local line = ctx.line
   local cursor_col = ctx.cursor[2]
   local before_cursor = line:sub(1, cursor_col)
+
+  -- Check for @ file reference trigger
+  local at_typed = before_cursor:match("@([^%s{}]*)$")
+  if at_typed then
+    local file_refs = require("ai_repl.file_references")
+    local buf = vim.api.nvim_get_current_buf()
+    local state = require("ai_repl.chat_state").get_buffer_state(buf)
+    local project_root = state.repo_root or vim.fn.getcwd()
+
+    table.insert(items, {
+      label = "@{file}",
+      filterText = "{file}",
+      kind = vim.lsp.protocol.CompletionItemKind.File,
+      documentation = {
+        kind = "markdown",
+        value = "Current file (this .chat file, or last edited file in REPL)",
+      },
+    })
+
+    local candidates = file_refs.get_completion_candidates(at_typed, project_root, 30)
+    for _, filepath in ipairs(candidates) do
+      table.insert(items, {
+        label = "@" .. filepath,
+        filterText = filepath,
+        kind = vim.lsp.protocol.CompletionItemKind.File,
+        documentation = {
+          kind = "markdown",
+          value = "Attach file: " .. filepath,
+        },
+      })
+    end
+
+    callback({
+      items = items,
+      is_incomplete_backward = true,
+      is_incomplete_forward = true,
+    })
+    return
+  end
 
   -- Only trigger after / at start of line or after whitespace
   local trigger_pos = before_cursor:match("^%s*/()") or before_cursor:match("%s*/()$")

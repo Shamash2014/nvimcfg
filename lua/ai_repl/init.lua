@@ -1201,83 +1201,6 @@ local function create_buffer(proc, name)
   return nil
 end
 
-local IMAGE_EXTENSIONS = {
-  png = "image/png",
-  jpg = "image/jpeg",
-  jpeg = "image/jpeg",
-  gif = "image/gif",
-  webp = "image/webp",
-  svg = "image/svg+xml",
-}
-
-local function get_mime_type(file_path)
-  local ext = file_path:match("%.([^%.]+)$")
-  if ext then
-    ext = ext:lower()
-    if IMAGE_EXTENSIONS[ext] then
-      return IMAGE_EXTENSIONS[ext], true
-    end
-  end
-  return "text/plain", false
-end
-
-local function read_file_content(file_path, is_image)
-  if is_image then
-    local f = io.open(file_path, "rb")
-    if not f then return nil end
-    local data = f:read("*a")
-    f:close()
-    local ok, encoded = pcall(function()
-      return vim.base64.encode(data)
-    end)
-    if ok then return encoded end
-    return nil
-  else
-    local lines = vim.fn.readfile(file_path)
-    return table.concat(lines, "\n")
-  end
-end
-
-local function parse_file_references(text)
-  local prompt = {}
-  local files = {}
-  local remaining_text = text
-
-  for file_ref in text:gmatch("@([^%s]+)") do
-    local abs_path = vim.fn.fnamemodify(file_ref, ":p")
-    if vim.fn.filereadable(abs_path) == 1 then
-      table.insert(files, abs_path)
-      remaining_text = remaining_text:gsub("@" .. vim.pesc(file_ref), "", 1)
-    end
-  end
-
-  for _, file_path in ipairs(files) do
-    local mime_type, is_image = get_mime_type(file_path)
-    local content = read_file_content(file_path, is_image)
-
-    if content then
-      local resource = {
-        uri = "file://" .. file_path,
-        name = vim.fn.fnamemodify(file_path, ":t"),
-        mimeType = mime_type,
-      }
-      if is_image then
-        resource.blob = content
-      else
-        resource.text = content
-      end
-      table.insert(prompt, { type = "resource", resource = resource })
-    end
-  end
-
-  remaining_text = remaining_text:gsub("^%s*(.-)%s*$", "%1")
-  if remaining_text ~= "" then
-    table.insert(prompt, { type = "text", text = remaining_text })
-  end
-
-  return prompt, #files > 0
-end
-
 local function setup_buffer_keymaps(buf)
   -- Minimal setup for internal process buffer (hidden, not used for interaction)
   -- Chat buffers have their own keymap setup in lazy_load_chat_buffer().lua
@@ -1323,8 +1246,22 @@ function M.send_prompt(content, opts)
   local user_message_text = ""
 
   if type(content) == "string" then
-    prompt = { { type = "text", text = content } }
-    user_message_text = content
+    local file_refs = require("ai_repl.file_references")
+    local project_root = proc.data.cwd or vim.fn.getcwd()
+    local alt = vim.fn.expand("#:p")
+    if alt:match("%.chat$") then alt = nil end
+    local source_file = require("ai_repl.chat_state").get_last_non_chat_file() or alt
+    local ref_blocks, cleaned, ref_count = file_refs.resolve_references(content, project_root, source_file)
+    if ref_count > 0 then
+      prompt = { { type = "text", text = cleaned } }
+      for _, block in ipairs(ref_blocks) do
+        table.insert(prompt, block)
+      end
+      user_message_text = cleaned
+    else
+      prompt = { { type = "text", text = content } }
+      user_message_text = content
+    end
   elseif type(content) == "table" then
     prompt = content
     local preview = ""
@@ -2846,6 +2783,10 @@ function M.toggle()
     return
   end
 
+  -- Track source file before switching to chat
+  local current_file = vim.api.nvim_buf_get_name(current_buf)
+  require("ai_repl.chat_state").set_last_non_chat_file(current_file)
+
   -- Close any existing chat buffer windows first
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     local buf = vim.api.nvim_win_get_buf(win)
@@ -2878,6 +2819,11 @@ end
 -- Open or create .chat buffer
 -- Open or create .chat buffer
 function M.open_chat_buffer(file_path, skip_session_check, existing_session_id)
+  -- Track source file before switching to chat
+  local current_buf = vim.api.nvim_get_current_buf()
+  local current_file = vim.api.nvim_buf_get_name(current_buf)
+  require("ai_repl.chat_state").set_last_non_chat_file(current_file)
+
   local proc = registry.active()
 
   if not skip_session_check then
@@ -3006,9 +2952,10 @@ end
 function M.open_chat_buffer_new()
   local chat_parser = require("ai_repl.chat_parser")
 
-  -- Check if current buffer is already a .chat file
+  -- Track source file before switching to chat
   local buf = vim.api.nvim_get_current_buf()
   local buf_name = vim.api.nvim_buf_get_name(buf)
+  require("ai_repl.chat_state").set_last_non_chat_file(buf_name)
 
   if buf_name:match("%.chat$") then
     -- Current buffer is already a .chat file, just initialize it
@@ -3537,23 +3484,13 @@ function M.add_file_as_link(file, message)
   if not proc then return end
 
   local abs_path = vim.fn.fnamemodify(file, ":p")
-  local mime_type, is_image = get_mime_type(abs_path)
-  local content = read_file_content(abs_path, is_image)
+  local project_root = proc.data.cwd or vim.fn.getcwd()
+  local file_refs = require("ai_repl.file_references")
+  local ref_blocks, _, count = file_refs.resolve_references("@" .. abs_path, project_root, nil)
 
-  if not content then return end
+  if count == 0 then return end
 
-  local resource = {
-    uri = "file://" .. abs_path,
-    name = vim.fn.fnamemodify(file, ":t"),
-    mimeType = mime_type,
-  }
-  if is_image then
-    resource.blob = content
-  else
-    resource.text = content
-  end
-
-  local prompt = { { type = "resource", resource = resource } }
+  local prompt = vim.deepcopy(ref_blocks)
 
   if message then
     table.insert(prompt, { type = "text", text = message })

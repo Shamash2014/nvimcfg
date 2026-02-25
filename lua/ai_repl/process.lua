@@ -747,6 +747,8 @@ function Process:cancel()
   self.ui.streaming_start_line = nil
   self.ui.pending_tool_calls = {}
   self.ui.active_tools = {}
+  self.ui.permission_active = false
+  self.ui.permission_queue = {}
 
   -- Mark as not busy to allow new operations
   self.state.busy = false

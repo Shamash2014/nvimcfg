@@ -580,8 +580,17 @@ function M.send_to_process(buf)
     return true
   end
 
-  -- Handle @file references
-  local prompt = chat_parser.build_prompt(content, parsed.attachments)
+  -- Resolve @file references and @{file}
+  -- In .chat buffers, @{file} means the current .chat file itself
+  local file_refs = require("ai_repl.file_references")
+  local project_root = state.repo_root or get_repo_root(buf) or vim.fn.getcwd()
+  local source_file = vim.api.nvim_buf_get_name(buf)
+  local ref_blocks, cleaned_content, ref_count = file_refs.resolve_references(content, project_root, source_file)
+
+  local prompt = chat_parser.build_prompt(cleaned_content, parsed.attachments)
+  for _, block in ipairs(ref_blocks) do
+    table.insert(prompt, block)
+  end
 
   local system_messages = {}
   for _, msg in ipairs(parsed.messages) do
@@ -827,19 +836,94 @@ end
 function M.setup_keymaps(buf)
   local opts = { buffer = buf, silent = true }
 
+  -- Helper to find permission prompt lines
+  local function find_permission_prompts(lines)
+    local prompts = {}
+    for i, line in ipairs(lines) do
+      if line:match("^%[%?%]") then
+        table.insert(prompts, i)
+      end
+    end
+    return prompts
+  end
+
+  -- Helper to jump to a permission prompt
+  local function jump_to_permission_prompt(direction)
+    local state = get_state(buf)
+    local proc = state and state.process
+    if not proc or not proc.ui or not proc.ui.permission_active then
+      vim.notify("[.chat] No active permission prompt", vim.log.levels.WARN)
+      return
+    end
+
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local prompts = find_permission_prompts(lines)
+    if #prompts == 0 then
+      vim.notify("[.chat] No permission prompts found", vim.log.levels.WARN)
+      return
+    end
+
+    local current_pos = vim.api.nvim_win_get_cursor(0)
+    local current_line = current_pos[1]
+
+    local target_idx
+    if direction == "next" then
+      for i = #prompts, 1, -1 do
+        if prompts[i] > current_line then
+          target_idx = i
+          break
+        end
+      end
+      if not target_idx then target_idx = #prompts end
+    else
+      for i = 1, #prompts do
+        if prompts[i] < current_line then
+          target_idx = i
+          break
+        end
+      end
+      if not target_idx then target_idx = 1 end
+    end
+
+    vim.api.nvim_win_set_cursor(0, {prompts[target_idx], 0})
+    local queue_len = proc.ui.permission_queue and #proc.ui.permission_queue or 0
+    vim.notify(string.format("[.chat] Permission %d/%d (queue: %d)", 
+      target_idx, #prompts, queue_len), vim.log.levels.INFO)
+  end
+
+  -- Navigate to next permission prompt (]p)
+  vim.keymap.set("n", "]p", function() jump_to_permission_prompt("next") end, opts)
+  -- Navigate to previous permission prompt ([p)
+  vim.keymap.set("n", "[p", function() jump_to_permission_prompt("prev") end, opts)
+
+  -- Show permission queue status
+  vim.keymap.set("n", "<leader>pq", function()
+    local state = get_state(buf)
+    local proc = state and state.process
+    if proc and proc.ui and proc.ui.permission_active then
+      local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+      local prompts = find_permission_prompts(lines)
+      local queue_len = proc.ui.permission_queue and #proc.ui.permission_queue or 0
+      vim.notify(string.format("[.chat] Permission prompts: %d, Queued: %d, Active: %s", 
+        #prompts, queue_len, proc.ui.permission_active and "yes" or "no"), vim.log.levels.INFO)
+    else
+      vim.notify("[.chat] No active permission prompts", vim.log.levels.INFO)
+    end
+  end, opts)
+
   -- Send/Execute hybrid key (C-])
   vim.keymap.set({ "n", "i" }, config.keys.send, function()
     local state = get_state(buf)
     if state.process and state.process.ui and state.process.ui.permission_active then
       local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-      for i = #lines, 1, -1 do
-        if lines[i]:match("^%[%?%]") then
-          vim.api.nvim_win_set_cursor(0, {i, 0})
-          vim.notify("[.chat] Jumped to tool permission prompt. Use [y/a/n/c].", vim.log.levels.INFO)
-          return
-        end
+      local prompts = find_permission_prompts(lines)
+      if #prompts > 0 then
+        local queue_len = state.process.ui.permission_queue and #state.process.ui.permission_queue or 0
+        vim.api.nvim_win_set_cursor(0, {prompts[#prompts], 0})
+        vim.notify(string.format("[.chat] At permission prompt %d/%d (queue: %d). Use [y/a/n/c].]", 
+          #prompts, #prompts, queue_len), vim.log.levels.INFO)
+        return
       end
-      vim.notify("[.chat] No tool permission prompt found in buffer.", vim.log.levels.WARN)
     else
       M.hybrid_send(buf)
     end

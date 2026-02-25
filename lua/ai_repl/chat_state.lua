@@ -5,6 +5,7 @@ local global_state = {
   active_session = nil,
   original_updatetime = vim.o.updatetime,
   active_chat_buffers = 0,
+  last_non_chat_file = nil,
 }
 
 local buffer_states = {}
@@ -77,6 +78,16 @@ function M.decrement_active_buffers()
   if global_state.active_chat_buffers == 0 then
     vim.o.updatetime = global_state.original_updatetime
   end
+end
+
+function M.set_last_non_chat_file(path)
+  if path and path ~= "" and not path:match("%.chat$") then
+    global_state.last_non_chat_file = path
+  end
+end
+
+function M.get_last_non_chat_file()
+  return global_state.last_non_chat_file
 end
 
 return M
