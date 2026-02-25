@@ -1,7 +1,8 @@
 return {
   dir = vim.fn.stdpath("config") .. "/lua/mobile-dev/android",
   name = "android-dev",
-  event = "VeryLazy",
+  ft = { "kotlin", "java", "xml" },
+  cmd = { "AndroidBuild", "AndroidRun", "AndroidLogcat", "AndroidDevices" },
   dependencies = {
     "nvim-lua/plenary.nvim",
   },

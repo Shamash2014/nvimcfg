@@ -65,9 +65,9 @@ return {
     {
       "<leader>ab",
       function()
-        require("ai_repl").list_session_buffers()
+        require("ai_repl.chat_sessions").toggle()
       end,
-      desc = "List Session Buffers",
+      desc = "Chat Sessions Picker",
     },
     {
       "<leader>aa",

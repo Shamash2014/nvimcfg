@@ -1,7 +1,8 @@
 return {
   name = "ai_repl",
   dir = vim.fn.stdpath("config") .. "/lua/ai_repl",
-  event = "VeryLazy",
+  cmd = { "AIReplChat", "AIReplChatPicker", "AIReplAddAnnotation", "AIReplSyncAnnotations" },
+  ft = "chat",
   config = function()
     require("ai_repl").setup({
       default_provider = "claude",
@@ -13,7 +14,7 @@ return {
         droid = { name = "Droid", cmd = "droid", args = {"exec", "--output-format", "acp"}, env = {} },
       },
       history_size = 1000,
-      permission_mode = "plan",
+      permission_mode = "default",
       show_tool_calls = true,
       annotations = {
         enabled = true,
@@ -30,19 +31,4 @@ return {
       }
     })
   end,
-  keys = {
-    {
-      "<leader>ac",
-      function() require("ai_repl").open_chat_buffer() end,
-      mode = "n",
-      desc = "Open .chat buffer"
-    },
-    {
-      "<leader>ai",
-      function() require("ai_repl").send_selection() end,
-      mode = { "v" },
-      desc = "Send selection to AI"
-    },
-  },
-  cmd = { "AIReplChat", "AIReplAddAnnotation", "AIReplSyncAnnotations" }
 }

@@ -1,7 +1,6 @@
 return {
   dir = vim.fn.stdpath("config") .. "/lua/tramp",
   name = "tramp.nvim",
-  event = "VeryLazy",
   config = function()
     require("tramp").setup({
       ssh_config = vim.fn.expand("~/.ssh/config"),

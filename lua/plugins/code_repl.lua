@@ -1,10 +1,6 @@
 return {
   name = "code_repl",
   dir = vim.fn.stdpath("config") .. "/lua/code_repl",
-  dependencies = {
-    -- No external dependencies
-  },
-  event = "VeryLazy",
   config = function()
     require("code_repl").setup({
       auto_start = true,

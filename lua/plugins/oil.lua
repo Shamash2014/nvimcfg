@@ -3,6 +3,12 @@ return {
   cmd = "Oil",
   keys = {
     { "-", function()
+        local buf = vim.api.nvim_get_current_buf()
+        if require("ai_repl.chat_buffer").is_chat_buffer(buf) then
+          require("ai_repl.chat_sessions").toggle()
+          return
+        end
+
         local ssh = require("tramp.ssh")
         local tramp = require("tramp")
         local hosts = ssh.get_ssh_hosts(tramp.config.ssh_config)

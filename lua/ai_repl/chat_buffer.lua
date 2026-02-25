@@ -396,7 +396,7 @@ function M.restart_conversation(buf, provider_id)
 
     vim.notify("[.chat] Creating new session with " .. provider .. "...", vim.log.levels.INFO)
 
-    local session_id = "session_" .. os.time()
+    local session_id = registry.generate_unique_session_id()
     local proc = ai_repl._create_process(session_id, {
       provider = provider,
       cwd = state.repo_root,
@@ -1080,6 +1080,13 @@ function M.setup_keymaps(buf)
   end, vim.tbl_extend("force", opts, {
     desc = "Summarize conversation in .chat buffer"
   }))
+
+  -- Open chat sessions picker (Oil-like)
+  vim.keymap.set("n", "-", function()
+    require("ai_repl.chat_sessions").toggle()
+  end, vim.tbl_extend("force", opts, {
+    desc = "Open chat sessions picker"
+  }))
 end
 
 -- Hybrid send: tools → execute → send
@@ -1206,6 +1213,14 @@ function M.setup_autocmds(buf)
       if config.auto_save then
         M.autosave_buffer(buf)
       end
+
+      -- Kill the session process if this buffer is attached to one
+      local state = get_state(buf)
+      if state.session_id and state.process and state.process:is_alive() then
+        vim.notify("[.chat] Killing session " .. state.session_id, vim.log.levels.INFO)
+        registry.remove(state.session_id)
+      end
+
       M.detach_session(buf)
       chat_state.cleanup_buffer_state(buf)
     end,

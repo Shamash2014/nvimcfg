@@ -36,6 +36,40 @@ function M.set(session_id, process)
   processes[session_id] = process
 end
 
+-- Generate a globally unique session ID
+-- Format: session_<timestamp>_<counter>
+-- This ensures uniqueness even when multiple sessions are created in the same second
+function M.generate_unique_session_id()
+  local counter = 0
+  local session_id
+  repeat
+    session_id = string.format("session_%d_%04d", os.time(), counter)
+    counter = counter + 1
+  until not processes[session_id]
+  return session_id
+end
+
+-- Validate that all registered sessions have unique IDs
+-- Returns: success (boolean), message (string), duplicates (table or nil)
+function M.validate_unique_sessions()
+  local seen = {}
+  local duplicates = {}
+
+  for session_id, proc in pairs(processes) do
+    if seen[session_id] then
+      table.insert(duplicates, session_id)
+    else
+      seen[session_id] = proc
+    end
+  end
+
+  if #duplicates > 0 then
+    return false, string.format("Found %d duplicate session IDs", #duplicates), duplicates
+  end
+
+  return true, "All session IDs are unique", nil
+end
+
 function M.remove(session_id)
   local proc = processes[session_id]
   if proc then

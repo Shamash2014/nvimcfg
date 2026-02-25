@@ -3096,6 +3096,11 @@ function M.open_chat_buffer_new()
   vim.notify("[.chat] New buffer ready - start typing, session will be created when you press C-]", vim.log.levels.INFO)
 end
 
+function M.open_chat_picker()
+  local chat_sessions = require("ai_repl.chat_sessions")
+  chat_sessions.open()
+end
+
 -- Add annotation to current .chat buffer
 function M.add_annotation_to_chat()
   local buf = vim.api.nvim_get_current_buf()
@@ -3128,6 +3133,12 @@ function M.sync_chat_annotations()
   else
     vim.notify("Sync failed: " .. tostring(msg), vim.log.levels.ERROR)
   end
+end
+
+-- Open chat sessions picker (Oil-like interface for managing .chat buffers)
+function M.list_session_buffers()
+  local chat_sessions = require("ai_repl.chat_sessions")
+  chat_sessions.toggle()
 end
 
 function M.pick_provider(callback)
@@ -3172,8 +3183,9 @@ function M.new_session(provider_id, profile_id)
     end
   end
 
-  -- Create actual ACP process
-  local session_id = "session_" .. os.time()
+  -- Create actual ACP process with unique session ID
+  local session_id = registry.generate_unique_session_id()
+
   local cwd = ui.project_root
   proc = create_process(session_id, {
     provider = provider_id,
@@ -3809,8 +3821,17 @@ function M.setup(opts)
     AIReplSessions = M.open_session_picker,
     AIReplPicker = M.pick_process,
     AIReplChat = M.open_chat_buffer,
+    AIReplChatPicker = M.open_chat_picker,
     AIReplAddAnnotation = M.add_annotation_to_chat,
     AIReplSyncAnnotations = M.sync_chat_annotations,
+    AIReplValidateSessions = function()
+      local success, message, duplicates = registry.validate_unique_sessions()
+      if success then
+        vim.notify("[AIRepl] " .. message, vim.log.levels.INFO)
+      else
+        vim.notify("[AIRepl] " .. message .. ": " .. table.concat(duplicates, ", "), vim.log.levels.WARN)
+      end
+    end,
     AIReplSwitch = function()
       vim.cmd("AIReplSessions")
     end,
