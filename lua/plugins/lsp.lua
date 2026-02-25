@@ -722,7 +722,7 @@ return {
     if vim.fn.executable("tailwindcss-language-server") == 1 then
       vim.lsp.config("tailwindcss", {
       cmd = { "tailwindcss-language-server", "--stdio" },
-      filetypes = { "html", "css", "scss", "javascript", "javascriptreact", "typescript", "typescriptreact", "astro", "vue", "svelte" },
+      filetypes = { "html", "css", "javascript", "javascriptreact", "typescript", "typescriptreact", "astro", "vue", "svelte" },
       root_markers = { "tailwind.config.js", "tailwind.config.cjs", "tailwind.config.mjs", "tailwind.config.ts", ".git" },
       settings = {
         tailwindCSS = {
@@ -1254,6 +1254,9 @@ return {
       cmd = { "yaml-language-server", "--stdio" },
       filetypes = { "yaml", "yml" },
       root_markers = { ".git", vim.fn.getcwd() },
+      capabilities = vim.tbl_deep_extend("force", capabilities, {
+        workspace = { didChangeConfiguration = { dynamicRegistration = true } },
+      }),
       settings = {
         yaml = {
           hover = true,

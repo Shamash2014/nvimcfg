@@ -1004,7 +1004,7 @@ function M.setup_keymaps(buf)
     desc = "Force cancel (cancel + kill) current AI session"
   }))
 
-  -- Restart session (kill and create fresh)
+  -- Restart session (kill and create fresh) — buffer-local only
   vim.keymap.set("n", config.keys.restart_session, function()
     vim.ui.select({
       "Yes, restart session",
@@ -1013,8 +1013,13 @@ function M.setup_keymaps(buf)
       prompt = "Restart session? This will kill the current session and create a new one.",
     }, function(choice, idx)
       if idx == 1 then
-        local ai_repl = require("ai_repl")
-        ai_repl.restart_session()
+        local state = get_state(buf)
+        if state.process then
+          state.process:kill()
+          registry.unregister(state.session_id)
+        end
+        M.detach_session(buf)
+        M.restart_conversation(buf)
       end
     end)
   end, vim.tbl_extend("force", opts, {
@@ -1052,9 +1057,9 @@ function M.hybrid_send(buf)
     local ai_repl = require("ai_repl.init")
     local session_strategy = require("ai_repl.session_strategy")
     local current_repo = get_repo_root(buf)
-    local strategy = ai_repl.get_config().session_strategy or "latest"
 
-    session_strategy.get_or_create_session(strategy, current_repo, function(proc)
+    -- Each .chat buffer owns its own session — never reuse across buffers
+    session_strategy.get_or_create_session("new", current_repo, function(proc)
       state.creating_session = false
       if not proc then
         vim.notify("[.chat] Failed to create session.", vim.log.levels.ERROR)

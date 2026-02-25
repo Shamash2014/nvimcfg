@@ -1,3 +1,11 @@
+local ffi = require("ffi")
+ffi.cdef([[
+  typedef struct { uint64_t rlim_cur; uint64_t rlim_max; } rlimit_t;
+  int setrlimit(int resource, const rlimit_t *rlp);
+]])
+local rlim = ffi.new("rlimit_t", { rlim_cur = 10240, rlim_max = 1048575 })
+ffi.C.setrlimit(8, rlim) -- 8 = RLIMIT_NOFILE on macOS
+
 -- Disable unused providers for faster startup
 vim.g.loaded_python3_provider = 0
 vim.g.loaded_ruby_provider = 0
