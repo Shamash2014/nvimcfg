@@ -259,7 +259,7 @@ function M.init_buffer(buf, existing_session_id)
   return true
 end
 
--- Attach ACP process to buffer (session_id is optional - if not found, will search for matching repo)
+-- Attach ACP process to buffer (session_id is required - never reuse sessions across buffers)
 function M.attach_session(buf, session_id)
   local state = get_state(buf)
 
@@ -269,20 +269,9 @@ function M.attach_session(buf, session_id)
   end
 
   local proc = nil
-  local current_repo = get_repo_root(buf)
 
   if session_id then
     proc = registry.get(session_id)
-  end
-
-  if not proc or not proc:is_alive() then
-    proc = nil
-    for sid, p in pairs(registry.all()) do
-      if p:is_alive() and p.data.cwd == current_repo then
-        proc = p
-        break
-      end
-    end
   end
 
   if not proc or not proc:is_alive() then

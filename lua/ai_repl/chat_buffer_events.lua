@@ -505,8 +505,11 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
       local response = {
         jsonrpc = "2.0",
         id = msg_id,
-        result = { outcome = { outcome = "selected", optionId = first_allow_id or "allow_always" } }
+        result = { outcome = { outcome = "selected", optionId = allow_always_id or first_allow_id } }
       }
+      if not (allow_always_id or first_allow_id) then
+        response.result = { outcome = { outcome = "cancelled" } }
+      end
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
       if proc.ui then
         proc.ui.permission_active = false
@@ -572,14 +575,29 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
       cleanup_keymaps()
 
       if choice == "y" then
-        M.append_to_chat_buffer(buf, { "[+] Allowed" })
-        send_selected(first_allow_id or "allow_once")
+        if not first_allow_id then
+          M.append_to_chat_buffer(buf, { "[!] Agent did not provide an allow option" })
+          send_cancelled()
+        else
+          M.append_to_chat_buffer(buf, { "[+] Allowed" })
+          send_selected(first_allow_id)
+        end
       elseif choice == "a" then
-        M.append_to_chat_buffer(buf, { "[+] Always allowed" })
-        send_selected(allow_always_id or "allow_always")
+        if not allow_always_id then
+          M.append_to_chat_buffer(buf, { "[!] Agent did not provide an 'always' option" })
+          send_cancelled()
+        else
+          M.append_to_chat_buffer(buf, { "[+] Always allowed" })
+          send_selected(allow_always_id)
+        end
       elseif choice == "n" then
-        M.append_to_chat_buffer(buf, { "[x] Denied" })
-        send_selected(first_deny_id or "reject_once")
+        if not first_deny_id then
+          M.append_to_chat_buffer(buf, { "[!] Agent did not provide a deny option" })
+          send_cancelled()
+        else
+          M.append_to_chat_buffer(buf, { "[x] Denied" })
+          send_selected(first_deny_id)
+        end
       else
         M.append_to_chat_buffer(buf, { "[x] Cancelled", "", "@You:", "", "" })
         send_cancelled()

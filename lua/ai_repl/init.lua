@@ -605,8 +605,11 @@ local function show_permission_prompt(proc, msg_id, params)
       local response = {
         jsonrpc = "2.0",
         id = msg_id,
-        result = { outcome = { outcome = "selected", optionId = first_allow_id or "allow_always" } }
+        result = { outcome = { outcome = "selected", optionId = allow_always_id or first_allow_id } }
       }
+      if not (allow_always_id or first_allow_id) then
+        response.result = { outcome = { outcome = "cancelled" } }
+      end
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
       proc.ui.permission_active = false
       local queue = proc.ui.permission_queue
@@ -805,27 +808,26 @@ local function handle_method(proc, method, params, msg_id)
         end
       end
 
-      -- Determine which option to select based on provider's background policy
       local selected_option_id
       if background_mode == "respect_agent" and default_option_id then
-        -- Use agent's suggested default
         selected_option_id = default_option_id
       elseif background_mode == "allow_once" then
-        -- Use first allow option (not always)
-        selected_option_id = first_allow_id or "allow_once"
+        selected_option_id = first_allow_id
       else
-        -- Default to allow_always (backward compatible)
-        selected_option_id = allow_always_id or first_allow_id or "allow_always"
+        selected_option_id = allow_always_id or first_allow_id
       end
 
       local response = {
         jsonrpc = "2.0",
         id = msg_id,
-        result = { outcome = { outcome = "selected", optionId = selected_option_id } }
+        result = selected_option_id
+          and { outcome = { outcome = "selected", optionId = selected_option_id } }
+          or { outcome = { outcome = "cancelled" } }
       }
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
       append_to_buffer(buf, {
-        "[+] Auto-approved (background " .. background_mode .. "): " .. (tool_call.title or "tool")
+        (selected_option_id and "[+] Auto-approved" or "[!] Auto-cancelled (no agent option)")
+          .. " (background " .. background_mode .. "): " .. (tool_call.title or "tool")
       }, { type = "silent" })
     end
 
@@ -1565,6 +1567,7 @@ function M.handle_command(cmd)
       "  /kill - Kill current session (terminate process)",
       "  /restart - Restart session (kill and create fresh)",
       "  /mode [mode] - Show mode picker or switch to specific mode",
+      "  /profile - Switch Codex profile (Codex only)",
       "  /config - Show session config options picker",
       "  /chat [file] - Open/create .chat buffer (creates session if needed)",
       "  /start, /init - Start AI session for current .chat buffer",
@@ -1637,6 +1640,86 @@ function M.handle_command(cmd)
     else
       M.show_mode_picker()
     end
+  elseif command == "profile" then
+    if not proc or proc.data.provider ~= "codex" then
+      if buf then
+        append_to_buffer(buf, { "[!] /profile is only available for Codex provider" }, { type = "error" })
+      else
+        vim.notify("[!] /profile is only available for Codex provider", vim.log.levels.ERROR)
+      end
+      return
+    end
+
+    local current_buf = vim.api.nvim_get_current_buf()
+    local chat_buf = lazy_load_chat_buffer()
+    local is_chat = chat_buf and chat_buf.is_chat_buffer and chat_buf.is_chat_buffer(current_buf)
+    local cwd = proc.data.cwd
+    local old_messages = vim.deepcopy(proc.data.messages or {})
+
+    M.pick_codex_profile(function(profile_id, cancelled)
+      if cancelled then return end
+
+      proc:kill()
+      registry.unregister(proc.session_id)
+
+      local profile_name = profile_id or "default"
+      vim.notify("[profile] Switching to " .. profile_name .. "...", vim.log.levels.INFO)
+
+      vim.defer_fn(function()
+        if is_chat and vim.api.nvim_buf_is_valid(current_buf) then
+          local session_id = "chat_" .. os.time()
+          local providers = require("ai_repl.providers")
+          local codex_profiles = require("ai_repl.codex_profiles")
+          local extra_args = codex_profiles.build_args(profile_id)
+
+          local new_proc = create_process(session_id, {
+            provider = "codex",
+            extra_args = extra_args,
+            profile_id = profile_id,
+            cwd = cwd,
+          })
+
+          registry.set(session_id, new_proc)
+          registry.set_active(session_id)
+
+          new_proc:start()
+
+          local function wait_for_session_and_sync()
+            if not vim.api.nvim_buf_is_valid(current_buf) then
+              return
+            end
+
+            if new_proc:is_ready() then
+              local chat_buffer_events = require("ai_repl.chat_buffer_events")
+              chat_buffer_events.setup_event_forwarding(current_buf, new_proc)
+              chat_buf.attach_session(current_buf, session_id)
+
+              if #old_messages > 0 then
+                for _, msg in ipairs(old_messages) do
+                  if msg.role == "user" or msg.role == "djinni" or msg.role == "system" then
+                    registry.append_message(session_id, msg.role, msg.content, msg.tool_calls)
+                  end
+                end
+                vim.notify("[✓] Switched to profile: " .. profile_name .. " (" .. #old_messages .. " messages synced)", vim.log.levels.INFO)
+              else
+                vim.notify("[✓] Switched to profile: " .. profile_name, vim.log.levels.INFO)
+              end
+            else
+              vim.defer_fn(wait_for_session_and_sync, 100)
+            end
+          end
+
+          vim.defer_fn(wait_for_session_and_sync, 100)
+        else
+          M.new_session("codex", profile_id)
+          vim.defer_fn(function()
+            if buf then
+              append_to_buffer(buf, { "[✓] Switched to profile: " .. profile_name }, { type = "silent" })
+            end
+          end, 500)
+        end
+      end, 100)
+    end)
   elseif command == "config" or command == "options" then
     M.show_config_options_picker()
   elseif command == "chat" or command == "mode-chat" then
@@ -1646,7 +1729,7 @@ function M.handle_command(cmd)
   elseif command == "start" or command == "init" then
     local current_buf = vim.api.nvim_get_current_buf()
     if lazy_load_chat_buffer().is_chat_buffer(current_buf) then
-      vim.notify("[.chat] Starting session...", vim.log.levels.INFO)
+      vim.notify("[.chat] Starting new session...", vim.log.levels.INFO)
 
       local chat_parser = require("ai_repl.chat_parser")
       local lines = vim.api.nvim_buf_get_lines(current_buf, 0, -1, false)
@@ -1656,32 +1739,6 @@ function M.handle_command(cmd)
       local chat_buffer = require("ai_repl.chat_buffer")
       local chat_buffer_events = require("ai_repl.chat_buffer_events")
       local current_repo = chat_buffer.get_repo_root(current_buf)
-
-      local proc_for_project = nil
-      for sid, p in pairs(registry.all()) do
-        if p:is_alive() and p.data.cwd == current_repo then
-          proc_for_project = p
-          break
-        end
-      end
-
-      if proc_for_project and proc_for_project:is_ready() then
-        chat_buffer_events.setup_event_forwarding(current_buf, proc_for_project)
-        chat_buffer.attach_session(current_buf, proc_for_project.session_id)
-
-        if #old_messages > 0 then
-          proc_for_project.data.messages = {}
-          for _, msg in ipairs(old_messages) do
-            if msg.role == "user" or msg.role == "djinni" then
-              registry.append_message(proc_for_project.session_id, msg.role, msg.content, msg.tool_calls)
-            end
-          end
-          vim.notify("[.chat] Attached to existing session with " .. #old_messages .. " messages synced.", vim.log.levels.INFO)
-        else
-          vim.notify("[.chat] Attached to existing session. Press C-] to send.", vim.log.levels.INFO)
-        end
-        return
-      end
 
       local function attach_and_sync()
         local proc = registry.active()
@@ -3121,13 +3178,9 @@ function M.new_session(provider_id, profile_id)
   ui.project_root = get_project_root(ui.source_buf or cur_buf)
 
   local extra_args = nil
-  if providers.supports_profiles(provider_id) then
+  if providers.supports_profiles(provider_id) and profile_id then
     local codex_profiles = require("ai_repl.codex_profiles")
-    local effective_profile = profile_id or codex_profiles.get_last_profile()
-    if effective_profile then
-      extra_args = codex_profiles.build_args(effective_profile)
-      profile_id = effective_profile
-    end
+    extra_args = codex_profiles.build_args(profile_id)
   end
 
   -- Create actual ACP process with unique session ID
@@ -3200,20 +3253,15 @@ function M.pick_codex_profile(callback)
     prompt = "Select Codex Profile:",
   }, function(choice, idx)
     if not choice then
-      if callback then callback(nil) end
+      if callback then callback(nil, true) end
       return
     end
     local selected = items[idx]
     codex_profiles.set_last_profile(selected.id)
-    if callback then callback(selected.id) end
+    if callback then callback(selected.id, false) end
   end)
 end
 
-function M.pick_codex_profile_and_start()
-  M.pick_codex_profile(function(profile_id)
-    M.new_session("codex", profile_id)
-  end)
-end
 
 function M.load_session(session_id, opts)
   opts = opts or {}
