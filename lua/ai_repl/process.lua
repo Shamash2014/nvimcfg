@@ -275,13 +275,22 @@ function Process:send(method, params, timeout_ms)
 end
 
 function Process:notify(method, params)
-  if not self.job_id then return end
+  if not self.job_id then
+    if self._on_debug and self.config.debug then
+      self:_on_debug("notify called but no job_id: " .. method)
+    end
+    return
+  end
 
   local msg = {
     jsonrpc = "2.0",
     method = method,
     params = params or {},
   }
+
+  if self._on_debug and self.config.debug then
+    self:_on_debug("notify: " .. method .. " " .. vim.inspect(params))
+  end
 
   -- Add error handling for chansend
   local ok, err = pcall(function()
@@ -632,6 +641,9 @@ function Process:_handle_session_result(result)
 
   if result.availableCommands then
     self.data.slash_commands = result.availableCommands
+    if self.config.debug and self._on_debug then
+      self:_on_debug("availableCommands received: " .. vim.inspect(result.availableCommands))
+    end
   end
 
   self.state.session_ready = true

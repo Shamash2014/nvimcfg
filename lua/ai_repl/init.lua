@@ -2185,9 +2185,26 @@ function M.handle_command(cmd)
       append_to_buffer(buf, { "", "[i] Ralph Loop not active" }, { type = "silent" })
     end
   else
+    if not proc then
+      append_to_buffer(buf, { "[!] No active session" }, { type = "error" })
+      return
+    end
+
+    if config.debug and proc.data.slash_commands then
+      vim.notify("[debug] Available commands: " .. vim.inspect(vim.tbl_map(function(c) return c.name end, proc.data.slash_commands)), vim.log.levels.DEBUG)
+    end
+
+    local found_command = false
     if proc and proc.data.slash_commands then
       for _, sc in ipairs(proc.data.slash_commands) do
         if sc.name == command or sc.name == "/" .. command then
+          found_command = true
+          -- Debug: log slash command attempt
+          if config.debug then
+            vim.notify(string.format("[debug] slash command: name=%s, session_id=%s, job_id=%s",
+              sc.name, tostring(proc.session_id), tostring(proc.job_id)), vim.log.levels.DEBUG)
+          end
+
           -- Mark that we're expecting a response to a slash command
           proc.data.pending_slash_command = {
             name = sc.name,
@@ -2210,6 +2227,23 @@ function M.handle_command(cmd)
           return
         end
       end
+    else
+      if config.debug then
+        vim.notify("[debug] no proc or no slash_commands", vim.log.levels.DEBUG)
+      end
+    end
+
+    -- Fallback: if command not found in agent's registered commands,
+    -- send it as a regular prompt (some agents handle slash commands this way)
+    if not found_command then
+      if config.debug then
+        vim.notify("[debug] command not in registered list, sending as prompt: /" .. command, vim.log.levels.DEBUG)
+      end
+      local async = require("ai_repl.async")
+      async.run(function()
+        proc:send_prompt("/" .. command .. (args[1] and (" " .. table.concat(args, " ")) or ""))
+      end)
+      return
     end
     append_to_buffer(buf, { "[!] Unknown command: " .. command }, { type = "error" })
   end
