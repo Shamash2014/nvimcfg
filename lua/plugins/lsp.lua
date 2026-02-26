@@ -599,7 +599,8 @@ return {
         end, vim.tbl_extend("force", opts, { desc = "Go mod tidy" }))
 
         vim.keymap.set("n", "<localleader>h", function()
-          vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
+          local enabled = vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr })
+          vim.lsp.inlay_hint.enable(not enabled, { bufnr = bufnr })
         end, vim.tbl_extend("force", opts, { desc = "Toggle inlay hints" }))
 
         vim.keymap.set("n", "<localleader>t", function()
@@ -1021,7 +1022,8 @@ return {
 
         -- Toggle inlay hints
         vim.keymap.set("n", "<localleader>h", function()
-          vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
+          local enabled = vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr })
+          vim.lsp.inlay_hint.enable(not enabled, { bufnr = bufnr })
         end, vim.tbl_extend("force", opts, { desc = "Toggle inlay hints" }))
 
         -- List available schemes and devices

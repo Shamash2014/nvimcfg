@@ -295,8 +295,19 @@ end
 local function handle_session_update(proc, params)
   local apply_ok, result = pcall(session_state.apply_update, proc, params.update)
   if not apply_ok then
-    -- Ensure busy is cleared if apply_update fails
     proc.state.busy = false
+    local buf = get_output_buf(proc)
+    local chat_buffer_mod = require("ai_repl.chat_buffer")
+    if buf and chat_buffer_mod.is_chat_buffer(buf) then
+      local chat_buffer_events = require("ai_repl.chat_buffer_events")
+      local decorations_ok, decorations = pcall(require, "ai_repl.chat_decorations")
+      if decorations_ok then pcall(decorations.stop_spinner, buf) end
+      vim.defer_fn(function()
+        if buf and vim.api.nvim_buf_is_valid(buf) then
+          chat_buffer_events.ensure_you_marker(buf)
+        end
+      end, 700)
+    end
     return
   end
   if not result then return end

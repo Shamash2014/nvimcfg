@@ -66,6 +66,15 @@ local providers = {
     background_permissions = "allow_once",
     mcp_servers = {},
   },
+  pi = {
+    name = "Pi",
+    cmd = "npx",
+    args = {"-y", "pi-acp"},
+    env = {},
+    permission_mode = "default",
+    background_permissions = "allow_once",
+    mcp_servers = {},
+  },
 }
 
 -- Helper to get provider config with fallback to defaults
