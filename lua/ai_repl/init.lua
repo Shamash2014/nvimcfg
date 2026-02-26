@@ -2514,12 +2514,14 @@ function M.show_agent_commands_only()
         picker:close()
         if item and item.command then
           vim.schedule(function()
-            local cmd_text = "/" .. item.command.name
-            append_to_buffer(get_output_buf(proc), { "", "> " .. cmd_text, "" }, { type = "silent" })
-            local async = require("ai_repl.async")
-            async.run(function()
-              proc:send_prompt(cmd_text)
-            end)
+            local cmd_name = item.command.name
+            local cmd_display = cmd_name:gsub("^/", "")
+            append_to_buffer(get_output_buf(proc), { "", "[⚡] " .. cmd_display, "" }, { type = "silent" })
+            proc:notify("session/slash_command", {
+              sessionId = proc.session_id,
+              commandName = cmd_name,
+              args = {}
+            })
           end)
         end
       end,
