@@ -20,6 +20,7 @@ local NS_SPIN = vim.api.nvim_create_namespace("chat_spin")
 local NS_TOKENS = vim.api.nvim_create_namespace("chat_tokens")
 local NS_LINE_HL = vim.api.nvim_create_namespace("chat_line_hl")
 local NS_TOOL_STATUS = vim.api.nvim_create_namespace("chat_tool_status")
+local NS_MODEL = vim.api.nvim_create_namespace("chat_model")
 
 local SPINNERS = {
   generating = { "|", "/", "-", "\\" },
@@ -421,6 +422,50 @@ function M.cleanup_tool_spinners(buf)
     end
     state.tool_indicators[tool_id] = nil
   end
+end
+
+function M.show_model_info(buf, proc)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  if not proc then return end
+
+  vim.api.nvim_buf_clear_namespace(buf, NS_MODEL, 0, -1)
+
+  local first_line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
+  if not first_line:match("^```") then return end
+
+  local parts = {}
+
+  local provider_id = proc.data.provider or "unknown"
+  local providers = require("ai_repl.providers")
+  local provider_cfg = providers.get(provider_id) or {}
+  local provider_name = provider_cfg.name or provider_id
+
+  local profile_id = proc.data.profile_id
+  if profile_id then
+    table.insert(parts, provider_name .. ":" .. profile_id)
+  else
+    table.insert(parts, provider_name)
+  end
+
+  local agent_name = proc.state.agent_info and proc.state.agent_info.name
+  if agent_name then
+    agent_name = agent_name:gsub("^@[^/]+/", "")
+    local friendly = { ["claude-code-acp"] = "Claude Code" }
+    agent_name = friendly[agent_name] or agent_name
+    table.insert(parts, agent_name)
+  end
+
+  if proc.state.mode then
+    table.insert(parts, proc.state.mode)
+  end
+
+  local label = table.concat(parts, " | ")
+
+  vim.api.nvim_buf_set_extmark(buf, NS_MODEL, 0, 0, {
+    virt_text = { { "  " .. label, "Comment" } },
+    virt_text_pos = "eol",
+    priority = 40,
+  })
 end
 
 function M.setup_buffer(buf)

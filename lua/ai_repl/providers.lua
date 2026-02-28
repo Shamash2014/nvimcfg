@@ -27,6 +27,7 @@ local providers = {
     env = {},
     permission_mode = "default",
     background_permissions = "allow_once",
+    supports_profiles = true,
     mcp_servers = {},
   },
   codex = {

@@ -196,6 +196,10 @@ function M.init_buffer(buf, existing_session_id)
         table.insert(lines, "")
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
         require("ai_repl.init").update_statusline()
+        local dec_ok, dec = pcall(require, "ai_repl.chat_decorations")
+        if dec_ok then
+          dec.show_model_info(buf, proc)
+        end
       end)
     else
       -- No active session exists, user must manually start with /start
@@ -308,6 +312,11 @@ function M.attach_session(buf, session_id)
     state.repo_root = proc.data.cwd
   end
 
+  local decorations_ok, decorations = pcall(require, "ai_repl.chat_decorations")
+  if decorations_ok then
+    decorations.show_model_info(buf, proc)
+  end
+
   return true
 end
 
@@ -326,12 +335,20 @@ function M.detach_session(buf)
 end
 
 -- Restart conversation in chat buffer
-function M.restart_conversation(buf, provider_id)
+-- opts: { profile_id = string?, extra_args = table? }
+function M.restart_conversation(buf, provider_id, opts)
   if not M.is_chat_buffer(buf) then
     return false, "Not a .chat buffer"
   end
 
+  opts = opts or {}
   local state = get_state(buf)
+
+  -- Capture profile_id from old process before detaching
+  local profile_id = opts.profile_id
+  if not profile_id and state.process then
+    profile_id = state.process.data.profile_id
+  end
 
   -- Detach from current session
   if state.session_id then
@@ -349,12 +366,23 @@ function M.restart_conversation(buf, provider_id)
   local function create_session_with_provider(provider)
     local ai_repl = require("ai_repl.init")
 
-    vim.notify("[.chat] Creating new session with " .. provider .. "...", vim.log.levels.INFO)
+    local extra_args = opts.extra_args
+    if not extra_args and profile_id then
+      extra_args = ai_repl.build_profile_args(provider, profile_id)
+    end
+
+    local display_name = provider
+    if profile_id then
+      display_name = provider .. ":" .. profile_id
+    end
+    vim.notify("[.chat] Creating new session with " .. display_name .. "...", vim.log.levels.INFO)
 
     local session_id = registry.generate_unique_session_id()
     local proc = ai_repl._create_process(session_id, {
       provider = provider,
       cwd = state.repo_root,
+      extra_args = extra_args,
+      profile_id = profile_id,
     })
 
     ai_repl._registry_set(session_id, proc)
@@ -1111,6 +1139,40 @@ function M.setup_keymaps(buf)
     require("ai_repl.chat_sessions").toggle()
   end, vim.tbl_extend("force", opts, {
     desc = "Open chat sessions picker"
+  }))
+
+  -- Cycle AI mode (Shift-Tab)
+  vim.keymap.set({ "n", "i" }, "<S-Tab>", function()
+    local state = get_state(buf)
+    if not state.process or not state.process:is_ready() then
+      vim.notify("[.chat] No active session. Press C-] to start one.", vim.log.levels.WARN)
+      return
+    end
+    local proc = state.process
+    local modes = proc.state.modes or {}
+    if #modes == 0 then
+      vim.notify("[.chat] No modes available", vim.log.levels.INFO)
+      return
+    end
+    local current = proc.state.mode
+    local current_idx = 1
+    for i, m in ipairs(modes) do
+      if m.id == current or m.modeId == current then
+        current_idx = i
+        break
+      end
+    end
+    local next_idx = (current_idx % #modes) + 1
+    local next_mode = modes[next_idx]
+    local next_id = next_mode.id or next_mode.modeId
+    proc:set_mode(next_id)
+    require("ai_repl.init").update_statusline()
+    local MODE_ICONS = { plan = "📋", spec = "📝", auto = "🤖", code = "💻", chat = "💬", execute = "▶️" }
+    local icon = MODE_ICONS[next_id] or "↻"
+    local name = next_mode.displayName or next_mode.name or next_id
+    vim.notify(icon .. " " .. name, vim.log.levels.INFO)
+  end, vim.tbl_extend("force", opts, {
+    desc = "Cycle AI mode"
   }))
 end
 

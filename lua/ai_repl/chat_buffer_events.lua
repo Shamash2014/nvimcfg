@@ -321,9 +321,13 @@ function M.handle_session_update_in_chat(buf, update, proc)
     local mode_id = result.update.modeId or result.update.currentModeId
     local icon = MODE_ICONS[mode_id] or "↻"
     M.append_to_chat_buffer(buf, { "[" .. icon .. "] Mode: " .. (mode_id or "unknown") })
+    vim.notify("[" .. icon .. "] Mode: " .. (mode_id or "unknown"), vim.log.levels.INFO)
+    local decorations = require("ai_repl.chat_decorations")
+    decorations.show_model_info(buf, proc)
 
   elseif result.type == "modes" then
-    -- Silently track available modes (no UI output needed)
+    local decorations = require("ai_repl.chat_decorations")
+    decorations.show_model_info(buf, proc)
 
   elseif result.type == "stop" then
     state.streaming = false
@@ -676,6 +680,9 @@ function M.handle_status_in_chat(buf, status, data, proc)
 
   -- Keep buffer modifiable for voice input
   vim.bo[buf].modifiable = true
+
+  local decorations = require("ai_repl.chat_decorations")
+  decorations.show_model_info(buf, proc)
 end
 
 function M.stream_to_chat_buffer(buf, text)

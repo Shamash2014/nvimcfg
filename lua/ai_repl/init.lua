@@ -293,47 +293,30 @@ local function append_to_buffer(buf, lines, opts)
 end
 
 local function handle_session_update(proc, params)
+  local buf = get_output_buf(proc)
+  local chat_buffer_mod = require("ai_repl.chat_buffer")
+
+  if buf and vim.api.nvim_buf_is_valid(buf) and chat_buffer_mod.is_chat_buffer(buf) then
+    local chat_buffer_events = require("ai_repl.chat_buffer_events")
+    if not chat_buffer_events.is_forwarding_setup(buf, proc) then
+      chat_buffer_events.setup_event_forwarding(buf, proc)
+    end
+    pcall(chat_buffer_events.handle_session_update_in_chat, buf, params.update, proc)
+    if params.update then
+      local su = params.update.sessionUpdate
+      if su == "stop" or su == "current_mode_update" or su == "modes" then
+        update_statusline()
+      end
+    end
+    return
+  end
+
   local apply_ok, result = pcall(session_state.apply_update, proc, params.update)
   if not apply_ok then
     proc.state.busy = false
-    local buf = get_output_buf(proc)
-    local chat_buffer_mod = require("ai_repl.chat_buffer")
-    if buf and chat_buffer_mod.is_chat_buffer(buf) then
-      local chat_buffer_events = require("ai_repl.chat_buffer_events")
-      local decorations_ok, decorations = pcall(require, "ai_repl.chat_decorations")
-      if decorations_ok then pcall(decorations.stop_spinner, buf) end
-      vim.defer_fn(function()
-        if buf and vim.api.nvim_buf_is_valid(buf) then
-          chat_buffer_events.ensure_you_marker(buf)
-        end
-      end, 700)
-    end
     return
   end
   if not result then return end
-
-  local buf = get_output_buf(proc)
-
-  local chat_buffer_mod = require("ai_repl.chat_buffer")
-  if chat_buffer_mod.is_chat_buffer(buf) then
-    if result.type == "stop" then
-      update_statusline()
-      local chat_buffer_events = require("ai_repl.chat_buffer_events")
-      chat_buffer_events.ensure_you_marker(buf)
-      vim.defer_fn(function()
-        proc:process_queued_prompts()
-        update_statusline()
-      end, 200)
-    elseif result.ralph_continuing then
-      vim.defer_fn(function()
-        proc:process_queued_prompts()
-        update_statusline()
-      end, 200)
-    elseif result.type == "current_mode_update" or result.type == "modes" then
-      update_statusline()
-    end
-    return
-  end
 
   local u = result.update
 
@@ -1578,7 +1561,7 @@ function M.handle_command(cmd)
       "  /kill - Kill current session (terminate process)",
       "  /restart - Restart session (kill and create fresh)",
       "  /mode [mode] - Show mode picker or switch to specific mode",
-      "  /profile - Switch Codex profile (Codex only)",
+      "  /profile - Switch profile/model (Codex, OpenCode)",
       "  /config - Show session config options picker",
       "  /chat [file] - Open/create .chat buffer (creates session if needed)",
       "  /start, /init - Start AI session for current .chat buffer",
@@ -1652,22 +1635,24 @@ function M.handle_command(cmd)
       M.show_mode_picker()
     end
   elseif command == "profile" then
-    if not proc or proc.data.provider ~= "codex" then
+    local providers_mod = require("ai_repl.providers")
+    if not proc or not providers_mod.supports_profiles(proc.data.provider) then
       if buf then
-        append_to_buffer(buf, { "[!] /profile is only available for Codex provider" }, { type = "error" })
+        append_to_buffer(buf, { "[!] /profile is only available for providers with profile/model support (Codex, OpenCode)" }, { type = "error" })
       else
-        vim.notify("[!] /profile is only available for Codex provider", vim.log.levels.ERROR)
+        vim.notify("[!] /profile is only available for providers with profile/model support", vim.log.levels.ERROR)
       end
       return
     end
 
+    local current_provider = proc.data.provider
     local current_buf = vim.api.nvim_get_current_buf()
     local chat_buf = lazy_load_chat_buffer()
     local is_chat = chat_buf and chat_buf.is_chat_buffer and chat_buf.is_chat_buffer(current_buf)
     local cwd = proc.data.cwd
     local old_messages = vim.deepcopy(proc.data.messages or {})
 
-    M.pick_codex_profile(function(profile_id, cancelled)
+    M.pick_profile(current_provider, function(profile_id, cancelled)
       if cancelled then return end
 
       proc:kill()
@@ -1679,12 +1664,10 @@ function M.handle_command(cmd)
       vim.defer_fn(function()
         if is_chat and vim.api.nvim_buf_is_valid(current_buf) then
           local session_id = "chat_" .. os.time()
-          local providers = require("ai_repl.providers")
-          local codex_profiles = require("ai_repl.codex_profiles")
-          local extra_args = codex_profiles.build_args(profile_id)
+          local extra_args = M.build_profile_args(current_provider, profile_id)
 
           local new_proc = create_process(session_id, {
-            provider = "codex",
+            provider = current_provider,
             extra_args = extra_args,
             profile_id = profile_id,
             cwd = cwd,
@@ -1722,7 +1705,7 @@ function M.handle_command(cmd)
 
           vim.defer_fn(wait_for_session_and_sync, 100)
         else
-          M.new_session("codex", profile_id)
+          M.new_session(current_provider, profile_id)
           vim.defer_fn(function()
             if buf then
               append_to_buffer(buf, { "[✓] Switched to profile: " .. profile_name }, { type = "silent" })
@@ -2837,10 +2820,12 @@ function M.restart_session()
   end
 
   local prev_provider = nil
+  local prev_profile_id = nil
 
   if proc then
     cwd = proc.data.cwd
     prev_provider = proc.data.provider
+    prev_profile_id = proc.data.profile_id
 
     proc:kill()
     registry.unregister(proc.session_id)
@@ -2854,7 +2839,9 @@ function M.restart_session()
     vim.notify("[restart] Restarting in current buffer: " .. vim.api.nvim_buf_get_name(current_buf), vim.log.levels.INFO)
     vim.defer_fn(function()
       if vim.api.nvim_buf_is_valid(current_buf) then
-        lazy_load_chat_buffer().restart_conversation(current_buf, prev_provider)
+        lazy_load_chat_buffer().restart_conversation(current_buf, prev_provider, {
+          profile_id = prev_profile_id,
+        })
       end
     end, 100)
     return
@@ -2863,7 +2850,7 @@ function M.restart_session()
   vim.notify("[restart] No chat buffer detected, creating new session", vim.log.levels.INFO)
 
   vim.defer_fn(function()
-    M.new_session({ cwd = cwd })
+    M.new_session(prev_provider, prev_profile_id)
   end, 100)
 end
 
@@ -3224,11 +3211,7 @@ function M.new_session(provider_id, profile_id)
   end
   ui.project_root = get_project_root(ui.source_buf or cur_buf)
 
-  local extra_args = nil
-  if providers.supports_profiles(provider_id) and profile_id then
-    local codex_profiles = require("ai_repl.codex_profiles")
-    extra_args = codex_profiles.build_args(profile_id)
-  end
+  local extra_args = M.build_profile_args(provider_id, profile_id)
 
   -- Create actual ACP process with unique session ID
   local session_id = registry.generate_unique_session_id()
@@ -3307,6 +3290,69 @@ function M.pick_codex_profile(callback)
     codex_profiles.set_last_profile(selected.id)
     if callback then callback(selected.id, false) end
   end)
+end
+
+function M.pick_opencode_model(callback)
+  local opencode_models = require("ai_repl.opencode_models")
+  local models = opencode_models.list_models()
+
+  if #models == 0 then
+    vim.notify("No models found from opencode", vim.log.levels.WARN)
+    if callback then callback(nil) end
+    return
+  end
+
+  local items = {
+    { id = nil, label = "default (no model override)" }
+  }
+  for _, m in ipairs(models) do
+    table.insert(items, {
+      id = m.id,
+      label = opencode_models.format_model_label(m)
+    })
+  end
+
+  local labels = {}
+  for _, item in ipairs(items) do
+    table.insert(labels, item.label)
+  end
+
+  vim.ui.select(labels, {
+    prompt = "Select OpenCode Model:",
+  }, function(choice, idx)
+    if not choice then
+      if callback then callback(nil, true) end
+      return
+    end
+    local selected = items[idx]
+    opencode_models.set_last_model(selected.id)
+    if callback then callback(selected.id, false) end
+  end)
+end
+
+function M.pick_profile(provider_id, callback)
+  if provider_id == "codex" then
+    M.pick_codex_profile(callback)
+  elseif provider_id == "opencode" then
+    M.pick_opencode_model(callback)
+  else
+    vim.notify("[!] Provider " .. (provider_id or "unknown") .. " does not support profiles", vim.log.levels.ERROR)
+    if callback then callback(nil, true) end
+  end
+end
+
+function M.build_profile_args(provider_id, profile_id)
+  if not profile_id or profile_id == "" then
+    return nil
+  end
+  if provider_id == "codex" then
+    local codex_profiles = require("ai_repl.codex_profiles")
+    return codex_profiles.build_args(profile_id)
+  elseif provider_id == "opencode" then
+    local opencode_models = require("ai_repl.opencode_models")
+    return opencode_models.build_args(profile_id)
+  end
+  return nil
 end
 
 
