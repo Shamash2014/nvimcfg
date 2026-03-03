@@ -64,6 +64,7 @@ function Process.new(session_id, opts)
     client_capabilities = vim.empty_dict(),
     supports_load_session = false,
     reconnect_count = 0,
+    agents_md_injected = false,
   }
   self.data = {
     buf = nil,
@@ -704,6 +705,18 @@ function Process:send_prompt(prompt, opts)
     end
 
     prompt = self:_transform_ultrathink(prompt)
+
+    if not self.state.agents_md_injected then
+      self.state.agents_md_injected = true
+      local ok, agents_md = pcall(require, "ai_repl.agents_md")
+      if ok then
+        local cwd = self.data.cwd or vim.fn.getcwd()
+        local context = agents_md.get_context_for_session({ cwd = cwd })
+        if context then
+          prompt = agents_md.inject_into_session_prompt(prompt, context.content)
+        end
+      end
+    end
 
     local formatted_prompt = prompt
     if type(prompt) == "string" then
