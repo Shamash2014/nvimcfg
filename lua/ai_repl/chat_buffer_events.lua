@@ -654,8 +654,18 @@ function M.handle_status_in_chat(buf, status, data, proc)
     "  /kill - Force kill session",
     "  /force-cancel - Cancel + kill (for stuck agents)",
     "  pwd: " .. cwd,
-    "",
   }
+
+  local mcp_servers = proc.config and proc.config.mcp_servers or {}
+  if #mcp_servers > 0 then
+    local names = {}
+    for _, s in ipairs(mcp_servers) do
+      table.insert(names, s.name or s.command or "unknown")
+    end
+    table.insert(banner, "  mcp: " .. table.concat(names, ", "))
+  end
+
+  table.insert(banner, "")
 
   if not vim.api.nvim_buf_is_valid(buf) then return end
 

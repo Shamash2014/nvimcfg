@@ -1140,6 +1140,16 @@ local function create_process(session_id, opts)
         local provider_id = self.data.provider or config.default_provider
         local provider_cfg = config.providers[provider_id] or {}
         local provider_name = provider_cfg.name or provider_id
+
+        local mcp_servers = self.config and self.config.mcp_servers or {}
+        if #mcp_servers > 0 then
+          local names = {}
+          for _, s in ipairs(mcp_servers) do
+            table.insert(names, s.name or s.command or "unknown")
+          end
+          append_to_buffer(buf, { "MCP: " .. table.concat(names, ", ") }, { type = "silent" })
+        end
+
         update_statusline()
 
       elseif status == "session_loaded" then
