@@ -45,9 +45,9 @@ local function normalize_server_config(server)
     headers = headers,
   }
 
-  if server.type == "http" or server.type == "https" then
+  if normalized.type == "http" or normalized.type == "https" then
     normalized.url = server.url
-  elseif server.type == "stdio" then
+  else
     normalized.command = server.command or server.cmd
     normalized.args = server.args or {}
   end
