@@ -175,7 +175,7 @@ function M.init_buffer(buf, existing_session_id)
           proc.data.messages = {}
           for _, msg in ipairs(parsed.messages) do
             if msg.role == "user" or msg.role == "djinni" or msg.role == "system" then
-              registry.append_message(state.session_id, msg.role, msg.content, msg.tool_calls)
+              registry.append_message(proc.session_id, msg.role, msg.content, msg.tool_calls)
             end
           end
         end
@@ -390,8 +390,21 @@ function M.restart_conversation(buf, provider_id, opts)
 
     proc:start()
 
+    local attempts = 0
+    local max_attempts = 100
     local function attach_when_ready()
       if not vim.api.nvim_buf_is_valid(buf) then
+        return
+      end
+
+      if not proc:is_alive() then
+        vim.notify("[.chat] Restart failed: process died", vim.log.levels.ERROR)
+        return
+      end
+
+      attempts = attempts + 1
+      if attempts > max_attempts then
+        vim.notify("[.chat] Restart timed out waiting for session", vim.log.levels.ERROR)
         return
       end
 
@@ -399,7 +412,6 @@ function M.restart_conversation(buf, provider_id, opts)
         chat_buffer_events.setup_event_forwarding(buf, proc)
         M.attach_session(buf, proc.session_id)
 
-        -- Sync existing messages from buffer to new session
         if has_content then
           local registry = require("ai_repl.registry")
           for _, msg in ipairs(existing_messages) do
@@ -766,12 +778,12 @@ function M.save_buffer(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local parsed = chat_parser.parse_buffer_cached(buf)
 
-  -- Save messages to registry
+  local sid = state.process and state.process.session_id or state.session_id
   for _, msg in ipairs(parsed.messages) do
     if msg.role == "user" then
-      registry.append_message(state.session_id, msg.role, msg.content, msg.tool_calls)
+      registry.append_message(sid, msg.role, msg.content, msg.tool_calls)
     elseif msg.role == "djinni" then
-      registry.append_message(state.session_id, msg.role, msg.content, msg.tool_calls)
+      registry.append_message(sid, msg.role, msg.content, msg.tool_calls)
     end
   end
 
@@ -1117,7 +1129,7 @@ function M.setup_keymaps(buf)
         local state = get_state(buf)
         if state.process then
           state.process:kill()
-          registry.unregister(state.session_id)
+          registry.unregister(state.process.session_id)
         end
         M.detach_session(buf)
         M.restart_conversation(buf)
@@ -1320,9 +1332,10 @@ function M.setup_autocmds(buf)
 
       -- Kill the session process if this buffer is attached to one
       local state = get_state(buf)
-      if state.session_id and state.process and state.process:is_alive() then
-        vim.notify("[.chat] Killing session " .. state.session_id, vim.log.levels.INFO)
-        registry.remove(state.session_id)
+      if state.process and state.process:is_alive() then
+        local sid = state.process.session_id or state.session_id
+        vim.notify("[.chat] Killing session " .. (sid or "unknown"), vim.log.levels.INFO)
+        if sid then registry.remove(sid) end
       end
 
       M.detach_session(buf)

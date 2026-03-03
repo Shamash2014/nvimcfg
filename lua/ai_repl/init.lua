@@ -1058,17 +1058,26 @@ local function create_process(session_id, opts)
     end
   end
 
-  local EMPTY_ARRAY_LOCAL = setmetatable({}, { __is_list = true })
-  local mcp_servers = (#config.mcp_servers > 0)
+  local mcp = require("ai_repl.mcp")
+  local cwd = opts.cwd or get_current_project_root()
+  local explicit_servers = (#config.mcp_servers > 0)
     and config.mcp_servers
     or read_provider_mcp_servers(provider_id)
-    or EMPTY_ARRAY_LOCAL
+    or {}
+  local provider_mcp = mcp.get_provider_mcp_servers(provider_id)
+  local base_servers = vim.list_extend(vim.deepcopy(explicit_servers), provider_mcp)
+  local mcp_servers = mcp.resolve_mcp_servers({
+    cwd = cwd,
+    load_from_config = true,
+    mcp_servers = base_servers,
+    debug = config.debug,
+  })
 
   local proc = Process.new(session_id, {
     cmd = provider.cmd,
     args = args,
     env = vim.tbl_extend("force", provider.env or {}, opts.env or {}),
-    cwd = opts.cwd or get_current_project_root(),
+    cwd = cwd,
     debug = config.debug,
     load_session_id = opts.load_session_id,
     provider = provider_id,
@@ -1678,20 +1687,34 @@ function M.handle_command(cmd)
 
           new_proc:start()
 
+          local attempts = 0
+          local max_attempts = 100
           local function wait_for_session_and_sync()
             if not vim.api.nvim_buf_is_valid(current_buf) then
               return
             end
 
+            if not new_proc:is_alive() then
+              vim.notify("[!] Profile switch failed: process died", vim.log.levels.ERROR)
+              return
+            end
+
+            attempts = attempts + 1
+            if attempts > max_attempts then
+              vim.notify("[!] Profile switch timed out waiting for session", vim.log.levels.ERROR)
+              return
+            end
+
             if new_proc:is_ready() then
+              local real_session_id = new_proc.session_id
               local chat_buffer_events = require("ai_repl.chat_buffer_events")
               chat_buffer_events.setup_event_forwarding(current_buf, new_proc)
-              chat_buf.attach_session(current_buf, session_id)
+              chat_buf.attach_session(current_buf, real_session_id)
 
               if #old_messages > 0 then
                 for _, msg in ipairs(old_messages) do
                   if msg.role == "user" or msg.role == "djinni" or msg.role == "system" then
-                    registry.append_message(session_id, msg.role, msg.content, msg.tool_calls)
+                    registry.append_message(real_session_id, msg.role, msg.content, msg.tool_calls)
                   end
                 end
                 vim.notify("[✓] Switched to profile: " .. profile_name .. " (" .. #old_messages .. " messages synced)", vim.log.levels.INFO)
