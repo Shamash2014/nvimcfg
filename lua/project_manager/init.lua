@@ -49,8 +49,12 @@ local function render()
 
           local name_part = session.buf_name or "(repl)"
           local msg_part = session.msg_count > 0 and string.format(" (%d)", session.msg_count) or ""
-          local line = string.format("  %s %s  %s%s",
-            status_icon, session.provider_name, name_part, msg_part)
+          local ann_part = session.annotation_count and session.annotation_count > 0
+            and string.format("  %d", session.annotation_count) or ""
+          local task_part = session.open_task_count and session.open_task_count > 0
+            and string.format("  %d", session.open_task_count) or ""
+          local line = string.format("  %s %s  %s%s%s%s",
+            status_icon, session.provider_name, name_part, msg_part, ann_part, task_part)
           table.insert(lines, line)
           table.insert(entries, {
             type = "live_session",
@@ -61,8 +65,26 @@ local function render()
             status = session.status,
             buf_name = name_part,
             msg_count = session.msg_count,
+            annotation_count = session.annotation_count or 0,
+            open_task_count = session.open_task_count or 0,
             project_path = proj.path,
           })
+
+          if session.plan_items and #session.plan_items > 0 then
+            for _, task in ipairs(session.plan_items) do
+              local task_icon = task.status == "in_progress" and "◐" or "○"
+              local task_line = string.format("      %s %s", task_icon, task.content)
+              table.insert(lines, task_line)
+              table.insert(entries, {
+                type = "task",
+                buf = session.buf,
+                session_id = session.session_id,
+                task_content = task.content,
+                task_status = task.status,
+                project_path = proj.path,
+              })
+            end
+          end
         elseif session.type == "persisted" then
           local line = string.format("    %s  (%s)",
             session.provider_name, session.time_display)
@@ -72,6 +94,22 @@ local function render()
             session_id = session.session_id,
             provider_name = session.provider_name,
             time_display = session.time_display,
+            project_path = proj.path,
+          })
+        end
+      end
+
+      if proj.buffers and #proj.buffers > 0 then
+        for _, buffer in ipairs(proj.buffers) do
+          local modified = buffer.modified and " [+]" or ""
+          local line = string.format("    %s%s", buffer.name, modified)
+          table.insert(lines, line)
+          table.insert(entries, {
+            type = "buffer",
+            bufnr = buffer.bufnr,
+            name = buffer.name,
+            path = buffer.path,
+            modified = buffer.modified,
             project_path = proj.path,
           })
         end
@@ -136,12 +174,44 @@ local function render()
         hl_group = "Directory",
       })
 
+      local cursor = name_end
       if entry.msg_count > 0 then
         local msg_text = string.format(" (%d)", entry.msg_count)
-        local msg_start = name_end
-        vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, msg_start, {
-          end_col = math.min(msg_start + #msg_text, #lines[line_idx]),
+        vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, cursor, {
+          end_col = math.min(cursor + #msg_text, #lines[line_idx]),
           hl_group = "Comment",
+        })
+        cursor = cursor + #msg_text
+      end
+
+      if entry.annotation_count > 0 then
+        local ann_text = string.format("  %d", entry.annotation_count)
+        vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, cursor, {
+          end_col = math.min(cursor + #ann_text, #lines[line_idx]),
+          hl_group = "DiagnosticInfo",
+        })
+        cursor = cursor + #ann_text
+      end
+
+      if entry.open_task_count and entry.open_task_count > 0 then
+        local task_text = string.format("  %d", entry.open_task_count)
+        vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, cursor, {
+          end_col = math.min(cursor + #task_text, #lines[line_idx]),
+          hl_group = "DiagnosticHint",
+        })
+      end
+    elseif entry.type == "buffer" then
+      local name_start = 4
+      local name_end = name_start + #entry.name
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, name_start, {
+        end_col = math.min(name_end, #lines[line_idx]),
+        hl_group = "Normal",
+      })
+
+      if entry.modified then
+        vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, name_end, {
+          end_col = #lines[line_idx],
+          hl_group = "DiagnosticWarn",
         })
       end
     elseif entry.type == "persisted_session" then
@@ -152,6 +222,16 @@ local function render()
 
       local time_start = 4 + #entry.provider_name + 2
       vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, time_start, {
+        end_col = #lines[line_idx],
+        hl_group = "Comment",
+      })
+    elseif entry.type == "task" then
+      local icon_hl = entry.task_status == "in_progress" and "DiagnosticWarn" or "Comment"
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 6, {
+        end_col = math.min(8, #lines[line_idx]),
+        hl_group = icon_hl,
+      })
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 8, {
         end_col = #lines[line_idx],
         hl_group = "Comment",
       })
@@ -184,6 +264,18 @@ local function open_selected()
   if entry.type == "live_session" and entry.buf and vim.api.nvim_buf_is_valid(entry.buf) then
     M.close()
     vim.api.nvim_win_set_buf(0, entry.buf)
+    return
+  end
+
+  if entry.type == "task" and entry.buf and vim.api.nvim_buf_is_valid(entry.buf) then
+    M.close()
+    vim.api.nvim_win_set_buf(0, entry.buf)
+    return
+  end
+
+  if entry.type == "buffer" and entry.bufnr and vim.api.nvim_buf_is_valid(entry.bufnr) then
+    M.close()
+    vim.api.nvim_set_current_buf(entry.bufnr)
     return
   end
 end
@@ -261,6 +353,19 @@ local function delete_selected()
     render()
     return
   end
+
+  if entry.type == "buffer" then
+    local label = entry.modified and (entry.name .. " [+]") or entry.name
+    local choice = vim.fn.confirm("Close buffer?\n" .. label, "&Yes\n&No", 2)
+    if choice ~= 1 then
+      return
+    end
+    if vim.api.nvim_buf_is_valid(entry.bufnr) then
+      vim.api.nvim_buf_delete(entry.bufnr, { force = true })
+    end
+    render()
+    return
+  end
 end
 
 local function show_help()
@@ -282,14 +387,22 @@ local function show_help()
     "",
     "  On project:",
     "  <CR> / l     Open in Oil",
+    "  n            New session (default provider)",
+    "  s            New session (pick provider)",
     "  d            Kill all sessions",
     "",
-    "  On live session:",
+    "  On live session / task:",
     "  <CR> / l     Open chat buffer",
+    "  n            New session in project",
+    "  s            New session (pick provider)",
     "  d            Delete session",
     "",
     "  On saved session:",
     "  d            Remove from disk",
+    "",
+    "  On buffer:",
+    "  <CR> / l     Open buffer",
+    "  d            Close buffer",
     "",
     "  General:",
     "  R            Refresh",
@@ -317,6 +430,52 @@ local function show_help()
   })
 end
 
+local function get_project_for_entry(entry)
+  if entry.type == "project" then
+    return entry
+  end
+  if entry.project_path then
+    for _, e in pairs(line_to_entry_map) do
+      if e.type == "project" and e.path == entry.project_path then
+        return e
+      end
+    end
+  end
+  return nil
+end
+
+local function start_new_session(provider_id)
+  local entry = get_selected_entry()
+  if not entry then return end
+
+  local project = get_project_for_entry(entry)
+  if not project then return end
+
+  M.close()
+  vim.cmd("cd " .. vim.fn.fnameescape(project.path))
+  local ai_repl = require("ai_repl")
+  if provider_id then
+    ai_repl.new_session(provider_id)
+  else
+    ai_repl.open_chat_buffer()
+  end
+end
+
+local function start_new_session_pick_provider()
+  local entry = get_selected_entry()
+  if not entry then return end
+
+  local project = get_project_for_entry(entry)
+  if not project then return end
+
+  local ai_repl = require("ai_repl")
+  ai_repl.pick_provider(function(provider_id)
+    M.close()
+    vim.cmd("cd " .. vim.fn.fnameescape(project.path))
+    ai_repl.new_session(provider_id)
+  end)
+end
+
 local function setup_keymaps()
   if not pm_buf or not vim.api.nvim_buf_is_valid(pm_buf) then
     return
@@ -327,6 +486,8 @@ local function setup_keymaps()
   vim.keymap.set("n", "<CR>", open_selected, opts)
   vim.keymap.set("n", "l", open_selected, opts)
   vim.keymap.set("n", "d", delete_selected, opts)
+  vim.keymap.set("n", "n", function() start_new_session() end, opts)
+  vim.keymap.set("n", "s", start_new_session_pick_provider, opts)
   vim.keymap.set("n", "R", function()
     showing_help = false
     render()

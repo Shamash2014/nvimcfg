@@ -106,10 +106,23 @@ local function collect_live_sessions(projects, seen_paths)
     local buf_valid = chat_buf and vim.api.nvim_buf_is_valid(chat_buf)
     local buf_name = buf_valid and vim.fn.fnamemodify(vim.api.nvim_buf_get_name(chat_buf), ":t") or nil
     local msg_count = 0
+    local annotation_count = 0
     if buf_valid and ok_parser then
       local parse_ok, parsed = pcall(chat_parser.parse_buffer_cached, chat_buf)
       if parse_ok and parsed then
         msg_count = #parsed.messages
+        annotation_count = parsed.annotations and #parsed.annotations or 0
+      end
+    end
+
+    local plan = proc.ui and proc.ui.current_plan or {}
+    local open_tasks = {}
+    for _, item in ipairs(plan) do
+      if item.status ~= "completed" then
+        table.insert(open_tasks, {
+          content = item.content or item.activeForm or "",
+          status = item.status or "pending",
+        })
       end
     end
 
@@ -123,6 +136,9 @@ local function collect_live_sessions(projects, seen_paths)
       priority = prio,
       buf_name = buf_name,
       msg_count = msg_count,
+      annotation_count = annotation_count,
+      plan_items = open_tasks,
+      open_task_count = #open_tasks,
     })
 
     seen_paths[root] = true
@@ -182,6 +198,52 @@ local function collect_persisted_sessions(projects, seen_paths)
   end
 end
 
+local function collect_open_buffers(projects)
+  local ok_chat, chat_buffer = pcall(require, "ai_repl.chat_buffer")
+
+  local buffers = vim.fn.getbufinfo({ buflisted = 1 })
+  for _, buf_info in ipairs(buffers) do
+    local name = buf_info.name
+    if name == "" then
+      goto continue
+    end
+
+    local buftype = vim.bo[buf_info.bufnr].buftype
+    if buftype ~= "" then
+      goto continue
+    end
+
+    if ok_chat and chat_buffer.is_chat_buffer(buf_info.bufnr) then
+      goto continue
+    end
+
+    local dir = vim.fn.fnamemodify(name, ":h")
+    local root = resolve_git_root(dir)
+    if not root then
+      goto continue
+    end
+    root = normalize_path(root)
+
+    local proj = projects[root]
+    if not proj then
+      goto continue
+    end
+
+    if not proj.buffers then
+      proj.buffers = {}
+    end
+
+    table.insert(proj.buffers, {
+      bufnr = buf_info.bufnr,
+      name = vim.fn.fnamemodify(name, ":t"),
+      path = name,
+      modified = buf_info.changed == 1,
+    })
+
+    ::continue::
+  end
+end
+
 local function collect_oldfiles_projects(projects, seen_paths)
   local oldfiles = vim.v.oldfiles or {}
   local checked_dirs = {}
@@ -223,6 +285,7 @@ function M.gather()
   collect_live_sessions(projects, seen_paths)
   collect_persisted_sessions(projects, seen_paths)
   collect_oldfiles_projects(projects, seen_paths)
+  collect_open_buffers(projects)
 
   local sorted = {}
   for _, proj in pairs(projects) do
