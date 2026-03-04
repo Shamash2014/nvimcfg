@@ -354,6 +354,10 @@ function M.handle_session_update_in_chat(buf, update, proc)
       vim.defer_fn(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
         M.ensure_you_marker(buf)
+
+        -- Autosave after response is complete
+        local chat_buffer = require("ai_repl.chat_buffer")
+        pcall(chat_buffer.autosave_buffer, buf)
       end, 100)
     end
     if decorations_ok then

@@ -44,6 +44,9 @@ local ROLE_SIGN = {
 local spinner_state = {}
 local redecorate_timers = {}
 
+-- Cache for last role detection to avoid scanning entire buffer on every spinner tick
+local last_role_cache = {} -- buf -> { last_role = string, line_count = number }
+
 local function apply_role_highlights(buf)
   -- DISABLED: Highlighting was causing 91% of processing time
   -- This function was too expensive and has been disabled for performance
@@ -94,6 +97,35 @@ function M.schedule_redecorate(buf)
   end))
 end
 
+-- Invalidate role cache when buffer content changes
+function M.invalidate_role_cache(buf)
+  last_role_cache[buf] = nil
+end
+
+-- Get cached last role, only re-scanning if line count changed
+local function get_last_role_cached(buf)
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  local cached = last_role_cache[buf]
+  if cached and cached.line_count == line_count then
+    return cached.last_role
+  end
+
+  -- Only scan last 50 lines — role markers are always near the end
+  local scan_start = math.max(1, line_count - 50)
+  local lines = vim.api.nvim_buf_get_lines(buf, scan_start - 1, line_count, false)
+  local last_role = nil
+  for i = #lines, 1, -1 do
+    local role = lines[i] and lines[i]:match("^@(%w+):")
+    if role then
+      last_role = role
+      break
+    end
+  end
+
+  last_role_cache[buf] = { last_role = last_role, line_count = line_count }
+  return last_role
+end
+
 function M.start_spinner(buf, kind)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
 
@@ -112,62 +144,18 @@ function M.start_spinner(buf, kind)
       return
     end
 
-    -- Check if we should hide spinner
-    local should_hide = false
-    local line_count = vim.api.nvim_buf_line_count(buf)
-
-    -- Check if @You: is the last role marker (user input phase)
-    local last_role_line = nil
-    local last_role = nil
-    for i = line_count, 1, -1 do
-      local line = vim.api.nvim_buf_get_lines(buf, i - 1, i, false)[1]
-      if line and line:match("^@%w+:") then
-        last_role_line = i
-        last_role = line:match("^@(%w+):")
-        break
-      end
-    end
-
-    -- Hide spinner if user is typing (last role is @You:)
+    -- Use cached role detection instead of scanning every tick
+    local last_role = get_last_role_cached(buf)
     if last_role == "You" then
-      should_hide = true
-    end
-
-    -- Also hide if cursor is in insert mode on a user message
-    local win = vim.fn.bufwinid(buf)
-    if win ~= -1 then
-      local cursor = vim.api.nvim_win_get_cursor(win)
-      local cursor_line = cursor[1]
-      local mode = vim.api.nvim_get_mode().mode
-
-      -- Check if cursor is in user message section
-      if mode:match("i") then -- insert mode
-        -- Find which section cursor is in
-        for i = cursor_line, 1, -1 do
-          local line = vim.api.nvim_buf_get_lines(buf, i - 1, i, false)[1]
-          if line and line:match("^@%w+:") then
-            local role = line:match("^@(%w+):")
-            if role == "You" then
-              should_hide = true
-            end
-            break
-          end
-        end
-      end
-    end
-
-    -- Clear spinner if we should hide it
-    if should_hide then
       vim.api.nvim_buf_clear_namespace(buf, NS_SPIN, 0, -1)
       return
     end
 
-    -- Show spinner on last djinni line
-    vim.api.nvim_buf_clear_namespace(buf, NS_SPIN, 0, -1)
-
+    -- Place spinner on last non-empty line (check only last 5 lines)
+    local line_count = vim.api.nvim_buf_line_count(buf)
     local last_line = math.max(0, line_count - 1)
-
-    for i = last_line, 0, -1 do
+    local check_from = math.max(0, last_line - 5)
+    for i = last_line, check_from, -1 do
       local line = vim.api.nvim_buf_get_lines(buf, i, i + 1, false)[1]
       if line and line ~= "" then
         last_line = i
@@ -175,6 +163,7 @@ function M.start_spinner(buf, kind)
       end
     end
 
+    vim.api.nvim_buf_clear_namespace(buf, NS_SPIN, 0, -1)
     local frame = frames[frame_idx]
     vim.api.nvim_buf_set_extmark(buf, NS_SPIN, last_line, 0, {
       virt_text = { { " " .. frame .. " ", "ChatSpinner" } },
@@ -354,10 +343,21 @@ function M.show_tool_spinner(buf, tool_id, line)
   })
 
   local timer = vim.uv.new_timer()
+  local tick_count = 0
+  local max_ticks = 6000 -- 10 minutes at 100ms intervals
   timer:start(0, 100, vim.schedule_wrap(function()
     if not vim.api.nvim_buf_is_valid(buf) then
       timer:stop()
       timer:close()
+      return
+    end
+
+    tick_count = tick_count + 1
+    if tick_count > max_ticks then
+      timer:stop()
+      timer:close()
+      pcall(vim.api.nvim_buf_del_extmark, buf, NS_TOOL_STATUS, extmark_id)
+      if state.tool_indicators then state.tool_indicators[tool_id] = nil end
       return
     end
 
@@ -495,9 +495,8 @@ function M.setup_buffer(buf)
   vim.api.nvim_create_autocmd("TextChanged", {
     buffer = buf,
     callback = function()
+      M.invalidate_role_cache(buf)
       M.schedule_redecorate(buf)
-      -- DISABLED: Fold updates on every text change were too expensive
-      -- Folds will only update on WinEnter and InsertLeave
     end,
   })
 
@@ -531,6 +530,7 @@ function M.setup_buffer(buf)
     callback = function()
       M.stop_spinner(buf)
       M.cleanup_tool_spinners(buf)
+      last_role_cache[buf] = nil
       if redecorate_timers[buf] then
         redecorate_timers[buf]:stop()
         redecorate_timers[buf]:close()

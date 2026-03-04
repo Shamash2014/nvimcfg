@@ -658,52 +658,9 @@ function M.send_to_process(buf)
   state.streaming = true
   state.last_role = "djinni"
 
-  -- Poll for completion and append @You: when done
-  local poll_timer = vim.uv.new_timer()
-  local timer_closed = false
-  local max_wait_time = 300000
-  local elapsed_time = 0
-
-  poll_timer:start(500, 300, vim.schedule_wrap(function()
-    if timer_closed then return end
-
-    if not vim.api.nvim_buf_is_valid(buf) then
-      timer_closed = true
-      poll_timer:stop()
-      poll_timer:close()
-      return
-    end
-
-    elapsed_time = elapsed_time + 300
-
-    if elapsed_time > max_wait_time then
-      timer_closed = true
-      poll_timer:stop()
-      poll_timer:close()
-      return
-    end
-
-    if proc.state.busy then return end
-
-    timer_closed = true
-    poll_timer:stop()
-    poll_timer:close()
-
-    if not vim.api.nvim_buf_is_valid(buf) then return end
-
-    state.streaming = false
-    chat_buffer_events.stop_streaming(buf)
-
-    vim.defer_fn(function()
-      if not vim.api.nvim_buf_is_valid(buf) then return end
-      chat_buffer_events.ensure_you_marker(buf)
-
-      -- Autosave after response is received
-      if config.save_on_send and config.auto_save then
-        M.autosave_buffer(buf)
-      end
-    end, 150)
-  end))
+  -- Completion is handled event-driven by chat_buffer_events "stop" handler
+  -- which calls ensure_you_marker, stop_streaming, and triggers redecorate.
+  -- No polling needed.
 
   return true
 end
@@ -1148,9 +1105,9 @@ function M.setup_keymaps(buf)
 
   -- Open chat sessions picker (Oil-like)
   vim.keymap.set("n", "-", function()
-    require("ai_repl.chat_sessions").toggle()
+    require("project_manager").toggle()
   end, vim.tbl_extend("force", opts, {
-    desc = "Open chat sessions picker"
+    desc = "Open project manager"
   }))
 
   -- Cycle AI mode (Shift-Tab)

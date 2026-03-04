@@ -3168,8 +3168,7 @@ function M.open_chat_buffer_new()
 end
 
 function M.open_chat_picker()
-  local chat_sessions = require("ai_repl.chat_sessions")
-  chat_sessions.open()
+  require("project_manager").open()
 end
 
 -- Add annotation to current .chat buffer
@@ -3206,10 +3205,8 @@ function M.sync_chat_annotations()
   end
 end
 
--- Open chat sessions picker (Oil-like interface for managing .chat buffers)
 function M.list_session_buffers()
-  local chat_sessions = require("ai_repl.chat_sessions")
-  chat_sessions.toggle()
+  require("project_manager").toggle()
 end
 
 function M.pick_provider(callback)
@@ -3945,6 +3942,9 @@ function M.setup(opts)
     end,
     AIReplSwitch = function()
       vim.cmd("AIReplSessions")
+    end,
+    ProjectManager = function()
+      require("project_manager").open()
     end,
   }) do
     vim.api.nvim_create_user_command(cmd_name, fn, {})

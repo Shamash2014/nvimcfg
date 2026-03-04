@@ -1,5 +1,8 @@
 local M = {}
 
+local async = require("ai_repl.async")
+local uv = vim.uv or vim.loop
+
 -- Track running tasks
 M.running_tasks = {}
 
@@ -9,6 +12,58 @@ M.terminals = {}
 -- Command history
 M.command_history = {}
 M.max_history = 50
+
+-- Async filesystem helpers (all resume on main thread via vim.schedule)
+local function async_fs_stat(path)
+  return async.await(function(cb)
+    uv.fs_stat(path, function(err, stat)
+      vim.schedule(function()
+        cb({ err = err, stat = stat })
+      end)
+    end)
+  end)
+end
+
+local function async_fs_scandir(path)
+  return async.await(function(cb)
+    uv.fs_scandir(path, function(err, handle)
+      vim.schedule(function()
+        cb({ err = err, handle = handle })
+      end)
+    end)
+  end)
+end
+
+local function async_readfile(path)
+  return async.await(function(cb)
+    uv.fs_open(path, "r", 438, function(err_open, fd)
+      if err_open or not fd then
+        vim.schedule(function() cb(nil) end)
+        return
+      end
+      uv.fs_fstat(fd, function(err_stat, stat)
+        if err_stat or not stat then
+          uv.fs_close(fd, function() end)
+          vim.schedule(function() cb(nil) end)
+          return
+        end
+        uv.fs_read(fd, stat.size, 0, function(err_read, data)
+          uv.fs_close(fd, function() end)
+          if err_read or not data then
+            vim.schedule(function() cb(nil) end)
+            return
+          end
+          vim.schedule(function() cb(data) end)
+        end)
+      end)
+    end)
+  end)
+end
+
+local function async_file_exists(path)
+  local r = async_fs_stat(path)
+  return r.stat ~= nil
+end
 
 -- Build full terminal environment for task execution
 local function build_terminal_env(extra, cwd)
@@ -93,7 +148,7 @@ local skip_folders = {
   [".next"] = true,
 }
 
--- Find nested project folders
+-- Find nested project folders (async - must be called inside async.run)
 local function find_project_folders(root, max_depth)
   max_depth = max_depth or 3
   local projects = {}
@@ -116,11 +171,11 @@ local function find_project_folders(root, max_depth)
     if seen[dir] then return end
     seen[dir] = true
 
-    local handle = vim.loop.fs_scandir(dir)
-    if not handle then return end
+    local result = async_fs_scandir(dir)
+    if result.err or not result.handle then return end
 
     while true do
-      local name, type = vim.loop.fs_scandir_next(handle)
+      local name, type = uv.fs_scandir_next(result.handle)
       if not name then break end
 
       if type == "directory" and not skip_folders[name] then
@@ -188,9 +243,9 @@ local tasks = {
   },
 }
 
--- Detect project type based on files in root
-local function detect_project_type()
-  local root = vim.fs.root(0, { ".git" }) or vim.fn.getcwd()
+-- Detect project type based on files in root (async)
+local function detect_project_type(root)
+  root = root or vim.fn.getcwd()
 
   local checks = {
     { files = { "pubspec.yaml" }, type = "flutter" },
@@ -204,7 +259,7 @@ local function detect_project_type()
 
   for _, check in ipairs(checks) do
     for _, file in ipairs(check.files) do
-      if vim.fn.filereadable(root .. "/" .. file) == 1 then
+      if async_file_exists(root .. "/" .. file) then
         return check.type
       end
     end
@@ -213,18 +268,17 @@ local function detect_project_type()
   return nil
 end
 
--- Load tasks from .vscode/tasks.json
-function M.load_vscode_tasks()
-  local root = vim.fs.root(0, { ".git" }) or vim.fn.getcwd()
+-- Load tasks from .vscode/tasks.json (async)
+function M.load_vscode_tasks(root)
+  root = root or vim.fn.getcwd()
   local tasks_file = root .. "/.vscode/tasks.json"
 
-  if vim.fn.filereadable(tasks_file) == 0 then
+  local data = async_readfile(tasks_file)
+  if not data then
     return {}
   end
 
-  local content = vim.fn.readfile(tasks_file)
-  local ok, json = pcall(vim.json.decode, table.concat(content, "\n"))
-
+  local ok, json = pcall(vim.json.decode, data)
   if not ok or not json.tasks then
     return {}
   end
@@ -234,7 +288,6 @@ function M.load_vscode_tasks()
     if task.command or task.type == "shell" then
       local cmd = task.command
 
-      -- Handle shell type tasks
       if task.type == "shell" and not cmd then
         if task.args then
           cmd = table.concat(task.args, " ")
@@ -254,28 +307,51 @@ function M.load_vscode_tasks()
   return custom_tasks
 end
 
--- Parse npm scripts from package.json
+-- Parse npm scripts from package.json (async)
 local function load_npm_tasks(cwd)
   cwd = cwd or vim.fn.getcwd()
   local result = {}
   local package_json = cwd .. "/package.json"
 
-  if vim.fn.filereadable(package_json) == 1 then
-    local ok, content = pcall(vim.fn.readfile, package_json)
-    if not ok then return {} end
+  local data = async_readfile(package_json)
+  if not data then return {} end
 
-    local json_str = table.concat(content, '\n')
-    local ok2, package = pcall(vim.json.decode, json_str)
-    if not ok2 or not package.scripts then
-      return {}
-    end
+  local ok, package = pcall(vim.json.decode, data)
+  if not ok or not package.scripts then
+    return {}
+  end
 
-    for name, command in pairs(package.scripts) do
+  for name, command in pairs(package.scripts) do
+    table.insert(result, {
+      name = "npm: " .. name,
+      cmd = "npm run " .. name,
+      desc = command:sub(1, 50),
+      type = "npm",
+      cwd = cwd,
+    })
+  end
+
+  return result
+end
+
+-- Parse Justfile for recipes (async)
+local function load_justfile_tasks(cwd)
+  cwd = cwd or vim.fn.getcwd()
+  local result = {}
+
+  local data = async_readfile(cwd .. "/justfile")
+  if not data then
+    data = async_readfile(cwd .. "/Justfile")
+  end
+  if not data then return {} end
+
+  for line in data:gmatch("[^\r\n]+") do
+    local recipe = line:match("^([%w%-_]+)[^:]*:")
+    if recipe then
       table.insert(result, {
-        name = "npm: " .. name,
-        cmd = "npm run " .. name,
-        desc = command:sub(1, 50),
-        type = "npm",
+        name = "just: " .. recipe,
+        cmd = "just " .. recipe,
+        type = "justfile",
         cwd = cwd,
       })
     end
@@ -284,73 +360,40 @@ local function load_npm_tasks(cwd)
   return result
 end
 
--- Parse Justfile for recipes
-local function load_justfile_tasks(cwd)
-  cwd = cwd or vim.fn.getcwd()
-  local result = {}
-  local justfile_path = cwd .. "/justfile"
-
-  if vim.fn.filereadable(justfile_path) == 0 then
-    justfile_path = cwd .. "/Justfile"
-  end
-
-  if vim.fn.filereadable(justfile_path) == 1 then
-    local lines = vim.fn.readfile(justfile_path)
-    for _, line in ipairs(lines) do
-      local recipe = line:match("^([%w%-_]+)[^:]*:")
-      if recipe then
-        table.insert(result, {
-          name = "just: " .. recipe,
-          cmd = "just " .. recipe,
-          type = "justfile",
-          cwd = cwd,
-        })
-      end
-    end
-  end
-
-  return result
-end
-
--- Parse Makefile for targets
+-- Parse Makefile for targets (async)
 local function load_makefile_tasks(cwd)
   cwd = cwd or vim.fn.getcwd()
   local result = {}
-  local makefile_path = cwd .. "/Makefile"
 
-  if vim.fn.filereadable(makefile_path) == 0 then
-    makefile_path = cwd .. "/makefile"
+  local data = async_readfile(cwd .. "/Makefile")
+  if not data then
+    data = async_readfile(cwd .. "/makefile")
   end
+  if not data then return {} end
 
-  if vim.fn.filereadable(makefile_path) == 1 then
-    local lines = vim.fn.readfile(makefile_path)
-    for _, line in ipairs(lines) do
-      local target = line:match("^([%w%-_]+):")
-      if target and not target:match("^%.") then
-        table.insert(result, {
-          name = "make: " .. target,
-          cmd = "make " .. target,
-          type = "makefile",
-          cwd = cwd,
-        })
-      end
+  for line in data:gmatch("[^\r\n]+") do
+    local target = line:match("^([%w%-_]+):")
+    if target and not target:match("^%.") then
+      table.insert(result, {
+        name = "make: " .. target,
+        cmd = "make " .. target,
+        type = "makefile",
+        cwd = cwd,
+      })
     end
   end
 
   return result
 end
 
--- Parse mix.exs for aliases and provide common mix tasks
+-- Parse mix.exs for aliases and provide common mix tasks (async)
 local function load_mix_tasks(cwd)
   cwd = cwd or vim.fn.getcwd()
   local result = {}
-  local mix_exs_path = cwd .. "/mix.exs"
 
-  if vim.fn.filereadable(mix_exs_path) == 0 then
-    return {}
-  end
+  local content = async_readfile(cwd .. "/mix.exs")
+  if not content then return {} end
 
-  local content = table.concat(vim.fn.readfile(mix_exs_path), "\n")
   local is_phoenix = content:match(":phoenix") ~= nil
 
   local aliases_block = content:match("defp?%s+aliases[^d].-do%s*%[(.-)%]")
@@ -423,32 +466,30 @@ local function load_tasks_for_folder(folder, file)
   return {}
 end
 
--- Get available tasks for current project
-function M.get_tasks()
+-- Get available tasks for current project (async - runs in coroutine)
+-- Must be called inside async.run()
+function M.get_tasks_async()
   local project_tasks = {}
   local root = vim.fn.getcwd()
+  local git_root = vim.fs.root(0, { ".git" }) or root
 
-  -- Load root-level tasks
-  for _, task in ipairs(load_npm_tasks()) do
-    table.insert(project_tasks, task)
-  end
-  for _, task in ipairs(M.load_vscode_tasks()) do
-    table.insert(project_tasks, task)
-  end
-  for _, task in ipairs(load_justfile_tasks()) do
-    table.insert(project_tasks, task)
-  end
-  for _, task in ipairs(load_makefile_tasks()) do
-    table.insert(project_tasks, task)
-  end
-  for _, task in ipairs(load_mix_tasks()) do
-    table.insert(project_tasks, task)
+  local loaders = {
+    function() return load_npm_tasks(root) end,
+    function() return M.load_vscode_tasks(git_root) end,
+    function() return load_justfile_tasks(root) end,
+    function() return load_makefile_tasks(root) end,
+    function() return load_mix_tasks(root) end,
+  }
+
+  for _, loader in ipairs(loaders) do
+    for _, task in ipairs(loader()) do
+      table.insert(project_tasks, task)
+    end
   end
 
-  -- Scan for nested projects (monorepo support)
   local nested = find_project_folders(root, 3)
   for _, project in ipairs(nested) do
-    local rel_path = project.path:gsub("^" .. root .. "/", "")
+    local rel_path = project.path:gsub("^" .. vim.pesc(root) .. "/", "")
     local folder_tasks = load_tasks_for_folder(project.path, project.file)
 
     for _, task in ipairs(folder_tasks) do
@@ -457,8 +498,7 @@ function M.get_tasks()
     end
   end
 
-  -- Add tasks based on detected project type
-  local project_type = detect_project_type()
+  local project_type = detect_project_type(git_root)
   if project_type and tasks[project_type] then
     for _, task in ipairs(tasks[project_type]) do
       table.insert(project_tasks, task)
@@ -466,6 +506,15 @@ function M.get_tasks()
   end
 
   return project_tasks
+end
+
+-- Async wrapper: gathers tasks in coroutine, calls callback on main thread
+function M.get_tasks(callback)
+  async.run(function()
+    local result = M.get_tasks_async()
+    async.schedule()
+    callback(result)
+  end)
 end
 
 -- Run a specific task
@@ -733,85 +782,80 @@ end
 
 -- Show task picker
 function M.pick_task()
-  local available_tasks = M.get_tasks()
-
-  -- Create items for picker, with custom command first
-  local items = {
-    {
-      text = "Enter custom command...",
-      desc = "",
-      task = { cmd = "custom" }
+  M.get_tasks(function(available_tasks)
+    local items = {
+      {
+        text = "Enter custom command...",
+        desc = "",
+        task = { cmd = "custom" }
+      }
     }
-  }
 
-  -- Add last 3 commands from history
-  for i = 1, math.min(3, #M.command_history) do
-    local entry = M.command_history[i]
-    local time_ago = os.difftime(os.time(), entry.timestamp)
-    local time_str
-    if time_ago < 60 then
-      time_str = "just now"
-    elseif time_ago < 3600 then
-      time_str = math.floor(time_ago / 60) .. "m ago"
-    else
-      time_str = math.floor(time_ago / 3600) .. "h ago"
-    end
-    table.insert(items, {
-      text = "[" .. i .. "] " .. entry.name,
-      desc = time_str .. " - " .. entry.cmd,
-      task = { name = entry.name, cmd = entry.cmd, desc = entry.desc },
-      is_history = true
-    })
-  end
-
-  -- Add separator if we have history
-  if #M.command_history > 0 then
-    table.insert(items, {
-      text = "──────────────",
-      desc = "",
-      task = nil
-    })
-  end
-
-  -- Add all other tasks from configuration files
-  for _, task in ipairs(available_tasks) do
-    if task.type == "npm" then
-      local name = task.name:gsub("^npm: ", "")
-      table.insert(items, {
-        text = name,
-        desc = task.desc,
-        task = task
-      })
-    else
-      table.insert(items, {
-        text = task.name,
-        desc = task.desc,
-        task = task
-      })
-    end
-  end
-
-  -- Use vim.ui.select (which Snacks overrides)
-  vim.ui.select(items, {
-    prompt = "Select task to run:",
-    format_item = function(item)
-      if item.desc and item.desc ~= "" then
-        return item.text .. " • " .. item.desc
+    for i = 1, math.min(3, #M.command_history) do
+      local entry = M.command_history[i]
+      local time_ago = os.difftime(os.time(), entry.timestamp)
+      local time_str
+      if time_ago < 60 then
+        time_str = "just now"
+      elseif time_ago < 3600 then
+        time_str = math.floor(time_ago / 60) .. "m ago"
       else
-        return item.text
+        time_str = math.floor(time_ago / 3600) .. "h ago"
       end
-    end,
-  }, function(item)
-    if not item or not item.task then
-      return
+      table.insert(items, {
+        text = "[" .. i .. "] " .. entry.name,
+        desc = time_str .. " - " .. entry.cmd,
+        task = { name = entry.name, cmd = entry.cmd, desc = entry.desc },
+        is_history = true
+      })
     end
 
-    if item.task.cmd == "custom" then
-      M.run_custom_command()
-    else
-      M.run_task(item.task)
-      M.last_task = item.task
+    if #M.command_history > 0 then
+      table.insert(items, {
+        text = "──────────────",
+        desc = "",
+        task = nil
+      })
     end
+
+    for _, task in ipairs(available_tasks) do
+      if task.type == "npm" then
+        local name = task.name:gsub("^npm: ", "")
+        table.insert(items, {
+          text = name,
+          desc = task.desc,
+          task = task
+        })
+      else
+        table.insert(items, {
+          text = task.name,
+          desc = task.desc,
+          task = task
+        })
+      end
+    end
+
+    vim.ui.select(items, {
+      prompt = "Select task to run:",
+      format_item = function(item)
+        if item.desc and item.desc ~= "" then
+          return item.text .. " • " .. item.desc
+        else
+          return item.text
+        end
+      end,
+    }, function(item)
+      if not item or not item.task then
+        return
+      end
+
+      if item.task.cmd == "custom" then
+        M.run_custom_command()
+      else
+        M.run_task(item.task)
+        M.last_task = item.task
+      end
+    end)
   end)
 end
 
@@ -913,118 +957,125 @@ end
 -- Combined picker for tasks and Vim commands
 function M.pick_tasks_and_commands()
   local snacks = require("snacks")
-  local items = {}
 
-  table.insert(items, {
-    text = "New AI Session",
-    desc = "Create a new AI REPL session",
-    is_ai = true,
-  })
+  M.get_tasks(function(available_tasks)
+    local items = {}
 
-  table.insert(items, {
-    text = "Restart AI Session",
-    desc = "Restart current AI REPL session in .chat buffer",
-    is_ai_restart = true,
-  })
+    table.insert(items, {
+      text = "Project Manager",
+      desc = "Browse projects and AI sessions",
+      is_project_manager = true,
+    })
 
-  table.insert(items, {
-    text = "Toggle REPL",
-    desc = "Toggle code REPL window",
-    is_repl = true,
-  })
+    table.insert(items, {
+      text = "New AI Session",
+      desc = "Create a new AI REPL session",
+      is_ai = true,
+    })
 
-  table.insert(items, {
-    text = "── Remote SSH ──",
-    is_separator = true,
-  })
+    table.insert(items, {
+      text = "Restart AI Session",
+      desc = "Restart current AI REPL session in .chat buffer",
+      is_ai_restart = true,
+    })
 
-  table.insert(items, {
-    text = "Connect to Remote Host",
-    desc = "Connect to remote SSH host",
-    is_remote_connect = true,
-  })
+    table.insert(items, {
+      text = "Toggle REPL",
+      desc = "Toggle code REPL window",
+      is_repl = true,
+    })
 
-  table.insert(items, {
-    text = "Edit Remote File",
-    desc = "Edit file on remote host",
-    is_remote_edit = true,
-  })
+    table.insert(items, {
+      text = "── Remote SSH ──",
+      is_separator = true,
+    })
 
-  table.insert(items, {
-    text = "Find Remote Files",
-    desc = "Find files on remote host",
-    is_remote_find = true,
-  })
+    table.insert(items, {
+      text = "Connect to Remote Host",
+      desc = "Connect to remote SSH host",
+      is_remote_connect = true,
+    })
 
-  table.insert(items, {
-    text = "Explore Remote Directory",
-    desc = "Browse remote directory with Oil",
-    is_remote_explore = true,
-  })
+    table.insert(items, {
+      text = "Edit Remote File",
+      desc = "Edit file on remote host",
+      is_remote_edit = true,
+    })
 
-  table.insert(items, {
-    text = "Execute Remote Command",
-    desc = "Run command on remote host",
-    is_remote_exec = true,
-  })
+    table.insert(items, {
+      text = "Find Remote Files",
+      desc = "Find files on remote host",
+      is_remote_find = true,
+    })
 
-  table.insert(items, {
-    text = "Open Remote Terminal",
-    desc = "Open SSH terminal to remote host",
-    is_remote_term = true,
-  })
+    table.insert(items, {
+      text = "Explore Remote Directory",
+      desc = "Browse remote directory with Oil",
+      is_remote_explore = true,
+    })
 
-  table.insert(items, {
-    text = "Enter custom command...",
-    task = { cmd = "custom" },
-    is_task = true,
-  })
+    table.insert(items, {
+      text = "Execute Remote Command",
+      desc = "Run command on remote host",
+      is_remote_exec = true,
+    })
 
-  for i = 1, math.min(3, #M.command_history) do
-    local entry = M.command_history[i]
-    local time_ago = os.difftime(os.time(), entry.timestamp)
-    local time_str
-    if time_ago < 60 then
-      time_str = "just now"
-    elseif time_ago < 3600 then
-      time_str = math.floor(time_ago / 60) .. "m ago"
-    else
-      time_str = math.floor(time_ago / 3600) .. "h ago"
+    table.insert(items, {
+      text = "Open Remote Terminal",
+      desc = "Open SSH terminal to remote host",
+      is_remote_term = true,
+    })
+
+    table.insert(items, {
+      text = "Enter custom command...",
+      task = { cmd = "custom" },
+      is_task = true,
+    })
+
+    for i = 1, math.min(3, #M.command_history) do
+      local entry = M.command_history[i]
+      local time_ago = os.difftime(os.time(), entry.timestamp)
+      local time_str
+      if time_ago < 60 then
+        time_str = "just now"
+      elseif time_ago < 3600 then
+        time_str = math.floor(time_ago / 60) .. "m ago"
+      else
+        time_str = math.floor(time_ago / 3600) .. "h ago"
+      end
+      table.insert(items, {
+        text = "[" .. i .. "] " .. entry.name,
+        desc = time_str .. " - " .. entry.cmd,
+        task = { name = entry.name, cmd = entry.cmd, desc = entry.desc },
+        is_task = true,
+        is_history = true,
+      })
     end
+
+    for _, task in ipairs(available_tasks) do
+      local name = task.type == "npm" and task.name:gsub("^npm: ", "") or task.name
+      table.insert(items, {
+        text = name,
+        desc = task.desc or "",
+        task = task,
+        is_task = true,
+      })
+    end
+
     table.insert(items, {
-      text = "[" .. i .. "] " .. entry.name,
-      desc = time_str .. " - " .. entry.cmd,
-      task = { name = entry.name, cmd = entry.cmd, desc = entry.desc },
-      is_task = true,
-      is_history = true,
+      text = "── Vim Commands ──",
+      is_separator = true,
     })
-  end
 
-  local available_tasks = M.get_tasks()
-  for _, task in ipairs(available_tasks) do
-    local name = task.type == "npm" and task.name:gsub("^npm: ", "") or task.name
-    table.insert(items, {
-      text = name,
-      desc = task.desc or "",
-      task = task,
-      is_task = true,
-    })
-  end
+    local commands = vim.fn.getcompletion("", "command")
+    for _, cmd in ipairs(commands) do
+      table.insert(items, {
+        text = cmd,
+        is_command = true,
+      })
+    end
 
-  table.insert(items, {
-    text = "── Vim Commands ──",
-    is_separator = true,
-  })
-
-  local commands = vim.fn.getcompletion("", "command")
-  for _, cmd in ipairs(commands) do
-    table.insert(items, {
-      text = cmd,
-      is_command = true,
-    })
-  end
-
-  snacks.picker.pick({
+    snacks.picker.pick({
     source = "select",
     items = items,
     prompt = "Run",
@@ -1042,7 +1093,11 @@ function M.pick_tasks_and_commands()
       picker:close()
       if not item then return end
       if item.is_separator then return end
-      if item.is_ai then
+      if item.is_project_manager then
+        vim.schedule(function()
+          require("project_manager").open()
+        end)
+      elseif item.is_ai then
         vim.schedule(function()
           local ai_repl = require("ai_repl")
           ai_repl.new_session()
@@ -1088,7 +1143,8 @@ function M.pick_tasks_and_commands()
         vim.cmd(item.text)
       end
     end,
-  })
+    })
+  end)
 end
 
 -- Get command history
@@ -1169,42 +1225,51 @@ function M.show_running_tasks()
   end)
 end
 
--- Quick npm commands
+-- Quick npm commands (async)
 function M.run_npm_script(script_name)
-  local npm_tasks = load_npm_tasks()
-  for _, task in ipairs(npm_tasks) do
-    if task.name == "npm: " .. script_name then
-      M.run_task(task)
-      return true
+  async.run(function()
+    local npm_tasks = load_npm_tasks()
+    async.schedule()
+    for _, task in ipairs(npm_tasks) do
+      if task.name == "npm: " .. script_name then
+        M.run_task(task)
+        return
+      end
     end
-  end
-  return false
+    vim.notify(string.format('No "%s" npm script found', script_name), vim.log.levels.WARN)
+  end)
 end
 
 function M.npm_dev()
-  if not M.run_npm_script('dev') then
-    if not M.run_npm_script('start') then
-      vim.notify('No "dev" or "start" npm script found', vim.log.levels.WARN)
+  async.run(function()
+    local npm_tasks = load_npm_tasks()
+    async.schedule()
+    for _, task in ipairs(npm_tasks) do
+      if task.name == "npm: dev" then
+        M.run_task(task)
+        return
+      end
     end
-  end
+    for _, task in ipairs(npm_tasks) do
+      if task.name == "npm: start" then
+        M.run_task(task)
+        return
+      end
+    end
+    vim.notify('No "dev" or "start" npm script found', vim.log.levels.WARN)
+  end)
 end
 
 function M.npm_test()
-  if not M.run_npm_script('test') then
-    vim.notify('No "test" npm script found', vim.log.levels.WARN)
-  end
+  M.run_npm_script("test")
 end
 
 function M.npm_build()
-  if not M.run_npm_script('build') then
-    vim.notify('No "build" npm script found', vim.log.levels.WARN)
-  end
+  M.run_npm_script("build")
 end
 
 function M.npm_lint()
-  if not M.run_npm_script('lint') then
-    vim.notify('No "lint" npm script found', vim.log.levels.WARN)
-  end
+  M.run_npm_script("lint")
 end
 
 -- Run last task

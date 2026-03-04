@@ -1,7 +1,7 @@
 return {
   name = "ai_repl",
   dir = vim.fn.stdpath("config") .. "/lua/ai_repl",
-  cmd = { "AIReplChat", "AIReplChatPicker", "AIReplAddAnnotation", "AIReplSyncAnnotations" },
+  cmd = { "AIReplChat", "AIReplChatPicker", "AIReplAddAnnotation", "AIReplSyncAnnotations", "ProjectManager" },
   ft = "chat",
   config = function()
     require("ai_repl").setup({

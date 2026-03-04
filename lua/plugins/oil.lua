@@ -5,7 +5,7 @@ return {
     { "-", function()
         local buf = vim.api.nvim_get_current_buf()
         if require("ai_repl.chat_buffer").is_chat_buffer(buf) then
-          require("ai_repl.chat_sessions").toggle()
+          require("project_manager").toggle()
           return
         end
 

@@ -65,9 +65,9 @@ return {
     {
       "<leader>ab",
       function()
-        require("ai_repl.chat_sessions").toggle()
+        require("project_manager").toggle()
       end,
-      desc = "Chat Sessions Picker",
+      desc = "Project Manager",
     },
     {
       "<leader>aa",
