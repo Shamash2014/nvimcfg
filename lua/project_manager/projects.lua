@@ -1,0 +1,259 @@
+local M = {}
+
+local STATUS_PRIORITY = {
+  waiting = 5,
+  busy = 4,
+  done = 3,
+  active = 2,
+  inactive = 1,
+}
+
+local function resolve_git_root(path)
+  if not path or path == "" then
+    return nil
+  end
+  local git_dir = vim.fs.find(".git", { upward = true, path = path, limit = 1 })
+  if git_dir and #git_dir > 0 then
+    return vim.fn.fnamemodify(git_dir[1], ":h")
+  end
+  return nil
+end
+
+local function normalize_path(path)
+  return vim.fn.fnamemodify(path, ":p"):gsub("/$", "")
+end
+
+local function relative_time(timestamp)
+  if not timestamp then
+    return "unknown"
+  end
+  local diff = os.time() - timestamp
+  if diff < 60 then
+    return "just now"
+  elseif diff < 3600 then
+    return string.format("%dm ago", math.floor(diff / 60))
+  elseif diff < 86400 then
+    return string.format("%dh ago", math.floor(diff / 3600))
+  else
+    return string.format("%dd ago", math.floor(diff / 86400))
+  end
+end
+
+local function get_process_status(proc)
+  if not proc or not proc:is_alive() then
+    return "inactive"
+  end
+  if proc.ui and proc.ui.permission_active then
+    return "waiting"
+  end
+  if not proc.state.busy and proc.state.session_ready then
+    return "done"
+  end
+  if proc.state.busy then
+    return "busy"
+  end
+  return "active"
+end
+
+local function ensure_project(projects, root)
+  if not projects[root] then
+    projects[root] = {
+      path = root,
+      name = vim.fn.fnamemodify(root, ":t"),
+      sessions = {},
+      best_priority = 0,
+      source = "oldfiles",
+    }
+  end
+  return projects[root]
+end
+
+local function collect_live_sessions(projects, seen_paths)
+  local ok_reg, registry = pcall(require, "ai_repl.registry")
+  if not ok_reg then return end
+
+  local ok_prov, providers = pcall(require, "ai_repl.providers")
+  local ok_parser, chat_parser = pcall(require, "ai_repl.chat_parser")
+
+  for sid, proc in pairs(registry.all()) do
+    local cwd = proc.data and proc.data.cwd
+    if not cwd then
+      goto continue
+    end
+
+    local root = resolve_git_root(cwd) or cwd
+    root = normalize_path(root)
+
+    local proj = ensure_project(projects, root)
+    proj.source = "live"
+
+    local status = get_process_status(proc)
+    local prio = STATUS_PRIORITY[status] or 0
+    if prio > proj.best_priority then
+      proj.best_priority = prio
+    end
+
+    local provider_id = proc.data.provider
+    local provider_name = provider_id or "Agent"
+    if ok_prov and provider_id then
+      local cfg = providers.get(provider_id)
+      if cfg then
+        provider_name = cfg.name
+      end
+    end
+
+    local chat_buf = proc.ui and proc.ui.chat_buf
+    local buf_valid = chat_buf and vim.api.nvim_buf_is_valid(chat_buf)
+    local buf_name = buf_valid and vim.fn.fnamemodify(vim.api.nvim_buf_get_name(chat_buf), ":t") or nil
+    local msg_count = 0
+    if buf_valid and ok_parser then
+      local parse_ok, parsed = pcall(chat_parser.parse_buffer_cached, chat_buf)
+      if parse_ok and parsed then
+        msg_count = #parsed.messages
+      end
+    end
+
+    table.insert(proj.sessions, {
+      type = "live",
+      session_id = sid,
+      buf = buf_valid and chat_buf or nil,
+      process = proc,
+      provider_name = provider_name,
+      status = status,
+      priority = prio,
+      buf_name = buf_name,
+      msg_count = msg_count,
+    })
+
+    seen_paths[root] = true
+    ::continue::
+  end
+end
+
+local function collect_persisted_sessions(projects, seen_paths)
+  local ok_reg, registry = pcall(require, "ai_repl.registry")
+  if not ok_reg then return end
+
+  local ok_prov, providers = pcall(require, "ai_repl.providers")
+
+  local saved_sessions = registry.load_from_disk()
+  local live_sids = {}
+  for sid in pairs(registry.all()) do
+    live_sids[sid] = true
+  end
+
+  for sid, info in pairs(saved_sessions) do
+    if live_sids[sid] then
+      goto continue
+    end
+
+    local cwd = info.cwd
+    if not cwd then
+      goto continue
+    end
+
+    local root = resolve_git_root(cwd) or cwd
+    root = normalize_path(root)
+
+    local proj = ensure_project(projects, root)
+    if proj.source ~= "live" then
+      proj.source = "persisted"
+    end
+
+    local provider_id = info.provider
+    local provider_name = provider_id or "Agent"
+    if ok_prov and provider_id then
+      local cfg = providers.get(provider_id)
+      if cfg then
+        provider_name = cfg.name
+      end
+    end
+
+    table.insert(proj.sessions, {
+      type = "persisted",
+      session_id = sid,
+      provider_name = provider_name,
+      last_saved = info.last_saved,
+      time_display = "saved " .. relative_time(info.last_saved),
+    })
+
+    seen_paths[root] = true
+    ::continue::
+  end
+end
+
+local function collect_oldfiles_projects(projects, seen_paths)
+  local oldfiles = vim.v.oldfiles or {}
+  local checked_dirs = {}
+  local added = 0
+
+  for _, filepath in ipairs(oldfiles) do
+    if added >= 20 then
+      break
+    end
+
+    local dir = vim.fn.fnamemodify(filepath, ":h")
+    if checked_dirs[dir] then
+      goto continue
+    end
+    checked_dirs[dir] = true
+
+    local root = resolve_git_root(dir)
+    if not root then
+      goto continue
+    end
+    root = normalize_path(root)
+
+    if seen_paths[root] then
+      goto continue
+    end
+
+    ensure_project(projects, root)
+    seen_paths[root] = true
+    added = added + 1
+
+    ::continue::
+  end
+end
+
+function M.gather()
+  local projects = {}
+  local seen_paths = {}
+
+  collect_live_sessions(projects, seen_paths)
+  collect_persisted_sessions(projects, seen_paths)
+  collect_oldfiles_projects(projects, seen_paths)
+
+  local sorted = {}
+  for _, proj in pairs(projects) do
+    table.sort(proj.sessions, function(a, b)
+      if a.type ~= b.type then
+        return a.type == "live"
+      end
+      if a.type == "live" then
+        return (a.priority or 0) > (b.priority or 0)
+      end
+      return (a.last_saved or 0) > (b.last_saved or 0)
+    end)
+    table.insert(sorted, proj)
+  end
+
+  local SOURCE_PRIORITY = { live = 3, persisted = 2, oldfiles = 1 }
+  table.sort(sorted, function(a, b)
+    local sa = SOURCE_PRIORITY[a.source] or 0
+    local sb = SOURCE_PRIORITY[b.source] or 0
+    if sa ~= sb then
+      return sa > sb
+    end
+    if a.best_priority ~= b.best_priority then
+      return a.best_priority > b.best_priority
+    end
+    return a.name < b.name
+  end)
+
+  return sorted
+end
+
+M.STATUS_PRIORITY = STATUS_PRIORITY
+
+return M
