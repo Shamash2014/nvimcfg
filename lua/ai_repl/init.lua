@@ -3008,10 +3008,7 @@ function M.open_chat_buffer(file_path, skip_session_check, existing_session_id)
     return
   end
 
-  -- Store chat buffer reference in process for rendering
-  if proc then
-    proc.ui.chat_buf = buf
-  end
+  -- chat_buf is set in attach_session() which init_buffer calls
 
   -- Open in configured split direction (default: right vertical)
   local win = vim.fn.bufwinid(buf)

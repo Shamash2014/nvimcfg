@@ -287,6 +287,8 @@ function M.attach_session(buf, session_id)
   state.modified = false
   state.system_sent = false
 
+  proc.ui.chat_buf = buf
+
   -- Setup event forwarding to ensure AI responses appear in chat buffer
   chat_buffer_events.setup_event_forwarding(buf, proc)
 
