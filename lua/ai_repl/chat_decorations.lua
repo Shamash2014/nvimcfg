@@ -132,8 +132,14 @@ function M.start_spinner(buf, kind)
   M.stop_spinner(buf)
 
   local frames = SPINNERS[kind] or SPINNERS.generating
-  local interval = SPIN_TIMING[kind] or 100
+  local base_interval = SPIN_TIMING[kind] or 100
   local frame_idx = 1
+
+  local active_count = 0
+  for _ in pairs(spinner_state) do
+    active_count = active_count + 1
+  end
+  local interval = active_count > 1 and math.max(base_interval, 300) or base_interval
 
   local timer = vim.uv.new_timer()
   spinner_state[buf] = { timer = timer, kind = kind }
@@ -144,20 +150,23 @@ function M.start_spinner(buf, kind)
       return
     end
 
-    -- Use cached role detection instead of scanning every tick
+    local win = vim.fn.bufwinid(buf)
+    if win == -1 then
+      return
+    end
+
     local last_role = get_last_role_cached(buf)
-    if last_role == "You" then
+    if last_role == 'You' then
       vim.api.nvim_buf_clear_namespace(buf, NS_SPIN, 0, -1)
       return
     end
 
-    -- Place spinner on last non-empty line (check only last 5 lines)
     local line_count = vim.api.nvim_buf_line_count(buf)
     local last_line = math.max(0, line_count - 1)
     local check_from = math.max(0, last_line - 5)
     for i = last_line, check_from, -1 do
       local line = vim.api.nvim_buf_get_lines(buf, i, i + 1, false)[1]
-      if line and line ~= "" then
+      if line and line ~= '' then
         last_line = i
         break
       end
@@ -166,8 +175,8 @@ function M.start_spinner(buf, kind)
     vim.api.nvim_buf_clear_namespace(buf, NS_SPIN, 0, -1)
     local frame = frames[frame_idx]
     vim.api.nvim_buf_set_extmark(buf, NS_SPIN, last_line, 0, {
-      virt_text = { { " " .. frame .. " ", "ChatSpinner" } },
-      virt_text_pos = "eol",
+      virt_text = { { ' ' .. frame .. ' ', 'ChatSpinner' } },
+      virt_text_pos = 'eol',
       priority = 60,
     })
 
@@ -344,8 +353,9 @@ function M.show_tool_spinner(buf, tool_id, line)
 
   local timer = vim.uv.new_timer()
   local tick_count = 0
-  local max_ticks = 6000 -- 10 minutes at 100ms intervals
-  timer:start(0, 100, vim.schedule_wrap(function()
+  local tool_interval = 300
+  local max_ticks = 2000 -- 10 minutes at 300ms intervals
+  timer:start(0, tool_interval, vim.schedule_wrap(function()
     if not vim.api.nvim_buf_is_valid(buf) then
       timer:stop()
       timer:close()
@@ -361,11 +371,16 @@ function M.show_tool_spinner(buf, tool_id, line)
       return
     end
 
+    local win = vim.fn.bufwinid(buf)
+    if win == -1 then
+      return
+    end
+
     frame_idx = (frame_idx % #frames) + 1
     pcall(vim.api.nvim_buf_set_extmark, buf, NS_TOOL_STATUS, line - 1, 0, {
       id = extmark_id,
-      virt_text = { { frames[frame_idx] .. " Executing...", "Comment" } },
-      virt_text_pos = "eol",
+      virt_text = { { frames[frame_idx] .. ' Executing...', 'Comment' } },
+      virt_text_pos = 'eol',
       priority = 250,
     })
   end))

@@ -311,13 +311,15 @@ end
 function Process:kill()
   self:_stop_stale_callback_timer()
   if self.job_id then
-    local pid = vim.fn.jobpid(self.job_id)
-    if pid and pid > 0 then
-      pcall(vim.uv.kill, -pid, "sigterm")
+    local ok, pid = pcall(vim.fn.jobpid, self.job_id)
+    if ok and pid and pid > 0 then
+      pcall(vim.uv.kill, -pid, 'sigterm')
     end
     pcall(vim.fn.jobstop, self.job_id)
     self.job_id = nil
   end
+  self._alive_cache = false
+  self._alive_cache_time = 0
   self.state.initialized = false
   self.state.session_ready = false
   self.state.busy = false
@@ -349,24 +351,35 @@ end
 function Process:is_alive()
   if not self.job_id then return false end
 
-  -- Verify the job is actually still running
-  -- Use jobwait() with timeout=0 to check without blocking
-  local pid = vim.fn.jobpid(self.job_id)
-  if pid and pid > 0 then
-    -- Job exists, verify it's running
-    local info = vim.fn.jobwait({self.job_id}, 0)
-    -- jobwait returns: -1 if still running, -2 if invalid, 0+ if exited
-    if info and info[1] == -1 then
-      return true
-    end
-    -- Job has exited or is invalid
-    if info and (info[1] >= 0 or info[1] == -2) then
-      self.job_id = nil
-      return false
-    end
+  local now = vim.uv.hrtime()
+  if self._alive_cache and (now - self._alive_cache_time) < 2e9 then
+    return self._alive_cache
   end
 
-  -- Fallback: if we can't check, assume alive if job_id is set
+  local ok, pid = pcall(vim.fn.jobpid, self.job_id)
+  if not ok or not pid or pid <= 0 then
+    self.job_id = nil
+    self._alive_cache = false
+    self._alive_cache_time = now
+    return false
+  end
+
+  local info = vim.fn.jobwait({ self.job_id }, 0)
+  if info and info[1] == -1 then
+    self._alive_cache = true
+    self._alive_cache_time = now
+    return true
+  end
+
+  if info and (info[1] >= 0 or info[1] == -2) then
+    self.job_id = nil
+    self._alive_cache = false
+    self._alive_cache_time = now
+    return false
+  end
+
+  self._alive_cache = true
+  self._alive_cache_time = now
   return true
 end
 
@@ -412,6 +425,8 @@ function Process:_on_exit(code)
   self:_stop_stale_callback_timer()
   local was_alive = self.job_id ~= nil
   self.job_id = nil
+  self._alive_cache = false
+  self._alive_cache_time = 0
   self.state.initialized = false
   self.state.session_ready = false
   self.state.busy = false

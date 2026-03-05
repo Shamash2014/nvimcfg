@@ -979,17 +979,26 @@ local function render_anim_frame()
     return
   end
 
+  local win = vim.fn.bufwinid(animation.buf)
+  if win == -1 then
+    local delay = SPIN_TIMING[animation.state] or 100
+    animation.timer = vim.fn.timer_start(delay, function()
+      vim.schedule(render_anim_frame)
+    end)
+    return
+  end
+
   local chars = SPINNERS[animation.state] or SPINNERS.generating
   local char = chars[animation.frame] or chars[1]
   animation.frame = (animation.frame % #chars) + 1
 
   local prompt_ln = M.get_prompt_line(animation.buf)
-  local display = " " .. char .. " " .. animation.state .. " "
+  local display = ' ' .. char .. ' ' .. animation.state .. ' '
 
   animation.extmark_id = vim.api.nvim_buf_set_extmark(animation.buf, NS_ANIM, math.max(0, prompt_ln - 2), 0, {
     id = animation.extmark_id,
-    virt_lines = { { { display, "Comment" } } },
-    virt_lines_above = false
+    virt_lines = { { { display, 'Comment' } } },
+    virt_lines_above = false,
   })
 
   local delay = SPIN_TIMING[animation.state] or 100

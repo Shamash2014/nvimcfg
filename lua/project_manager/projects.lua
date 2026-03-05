@@ -8,14 +8,32 @@ local STATUS_PRIORITY = {
   inactive = 1,
 }
 
+local git_root_cache = {}
+local git_root_cache_time = 0
+
 local function resolve_git_root(path)
-  if not path or path == "" then
+  if not path or path == '' then
     return nil
   end
-  local git_dir = vim.fs.find(".git", { upward = true, path = path, limit = 1 })
-  if git_dir and #git_dir > 0 then
-    return vim.fn.fnamemodify(git_dir[1], ":h")
+
+  local now = vim.uv.hrtime()
+  if (now - git_root_cache_time) > 10e9 then
+    git_root_cache = {}
+    git_root_cache_time = now
   end
+
+  if git_root_cache[path] ~= nil then
+    return git_root_cache[path] or nil
+  end
+
+  local git_dir = vim.fs.find('.git', { upward = true, path = path, limit = 1 })
+  if git_dir and #git_dir > 0 then
+    local root = vim.fn.fnamemodify(git_dir[1], ':h')
+    git_root_cache[path] = root
+    return root
+  end
+
+  git_root_cache[path] = false
   return nil
 end
 
