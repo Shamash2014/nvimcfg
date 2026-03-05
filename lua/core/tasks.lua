@@ -557,14 +557,21 @@ function M.run_task(task, opts)
 
   if not opts.background then
     term:show()
-    term:focus()  -- Focus the terminal for foreground tasks
+    term:focus()
   else
-    -- For background tasks, ensure the buffer persists
     if term.buf and type(term.buf) == "number" and term.buf > 0 then
       local ok, is_valid = pcall(vim.api.nvim_buf_is_valid, term.buf)
       if ok and is_valid then
         vim.api.nvim_set_option_value('bufhidden', 'hide', { buf = term.buf })
       end
+    end
+  end
+
+  if term.buf and type(term.buf) == "number" and term.buf > 0 then
+    local ok, is_valid = pcall(vim.api.nvim_buf_is_valid, term.buf)
+    if ok and is_valid then
+      local sb = opts.background and 100 or 1000
+      pcall(vim.api.nvim_set_option_value, 'scrollback', sb, { buf = term.buf })
     end
   end
 

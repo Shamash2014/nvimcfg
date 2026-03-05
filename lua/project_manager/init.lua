@@ -567,6 +567,12 @@ local function show_help()
     "  On tab window:",
     "  <CR> / l     Switch to tab & window",
     "",
+    "  Navigation:",
+    "  ]p / [p      Next/prev project",
+    "  ]s / [s      Next/prev session",
+    "  ]t / [t      Next/prev task",
+    "  J / K        Next/prev same type",
+    "",
     "  General:",
     "  R            Refresh",
     "  - / q / Esc  Close",
@@ -639,6 +645,61 @@ local function start_new_session_pick_provider()
   end)
 end
 
+local function get_lines_by_type(match_fn)
+  local lines = {}
+  for line_nr, entry in pairs(line_to_entry_map) do
+    if match_fn(entry) then
+      table.insert(lines, line_nr)
+    end
+  end
+  table.sort(lines)
+  return lines
+end
+
+local function jump_to(lines, direction)
+  if not pm_buf or not vim.api.nvim_buf_is_valid(pm_buf) then return end
+  if #lines == 0 then return end
+  local cursor = vim.api.nvim_win_get_cursor(0)[1]
+
+  if direction == 'next' then
+    for _, ln in ipairs(lines) do
+      if ln > cursor then
+        vim.api.nvim_win_set_cursor(0, { ln, 0 })
+        return
+      end
+    end
+    vim.api.nvim_win_set_cursor(0, { lines[1], 0 })
+  else
+    for i = #lines, 1, -1 do
+      if lines[i] < cursor then
+        vim.api.nvim_win_set_cursor(0, { lines[i], 0 })
+        return
+      end
+    end
+    vim.api.nvim_win_set_cursor(0, { lines[#lines], 0 })
+  end
+end
+
+local function jump_typed(type_name, direction)
+  jump_to(get_lines_by_type(function(e) return e.type == type_name end), direction)
+end
+
+local SESSION_TYPES = {
+  live_session = true,
+  persisted_session = true,
+}
+
+local function jump_session(direction)
+  jump_to(get_lines_by_type(function(e) return SESSION_TYPES[e.type] end), direction)
+end
+
+local function jump_same_type(direction)
+  if not pm_buf or not vim.api.nvim_buf_is_valid(pm_buf) then return end
+  local current = get_selected_entry()
+  if not current then return end
+  jump_typed(current.type, direction)
+end
+
 local function setup_keymaps()
   if not pm_buf or not vim.api.nvim_buf_is_valid(pm_buf) then
     return
@@ -660,6 +721,14 @@ local function setup_keymaps()
   vim.keymap.set("n", "-", function() M.close() end, opts)
   vim.keymap.set("n", "g?", show_help, opts)
   vim.keymap.set("n", "?", show_help, opts)
+  vim.keymap.set('n', ']p', function() jump_typed('project', 'next') end, opts)
+  vim.keymap.set('n', '[p', function() jump_typed('project', 'prev') end, opts)
+  vim.keymap.set('n', ']s', function() jump_session('next') end, opts)
+  vim.keymap.set('n', '[s', function() jump_session('prev') end, opts)
+  vim.keymap.set('n', ']t', function() jump_typed('running_task', 'next') end, opts)
+  vim.keymap.set('n', '[t', function() jump_typed('running_task', 'prev') end, opts)
+  vim.keymap.set('n', 'J', function() jump_same_type('next') end, opts)
+  vim.keymap.set('n', 'K', function() jump_same_type('prev') end, opts)
 end
 
 function M.open()
