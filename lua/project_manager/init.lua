@@ -5,7 +5,7 @@ local projects_mod = require("project_manager.projects")
 local ns_id = vim.api.nvim_create_namespace("ProjectManager")
 
 local pm_buf = nil
-local return_buf = nil
+local return_tab = nil
 local line_to_entry_map = {}
 local showing_help = false
 
@@ -324,6 +324,22 @@ local function get_selected_entry()
   return line_to_entry_map[cursor[1]]
 end
 
+local function close_without_restore()
+  if pm_buf and vim.api.nvim_buf_is_valid(pm_buf) then
+    vim.api.nvim_buf_delete(pm_buf, { force = true })
+    pm_buf = nil
+  end
+  return_tab = nil
+  line_to_entry_map = {}
+  showing_help = false
+end
+
+local function open_in_pm_tab(callback)
+  close_without_restore()
+  vim.cmd("tabnew")
+  callback()
+end
+
 local function open_selected()
   local entry = get_selected_entry()
   if not entry then
@@ -331,45 +347,50 @@ local function open_selected()
   end
 
   if entry.type == "project" then
-    M.close()
-    vim.cmd("Oil " .. vim.fn.fnameescape(entry.path))
+    open_in_pm_tab(function()
+      vim.cmd("Oil " .. vim.fn.fnameescape(entry.path))
+    end)
     return
   end
 
   if entry.type == "live_session" and entry.buf and vim.api.nvim_buf_is_valid(entry.buf) then
-    M.close()
-    vim.api.nvim_win_set_buf(0, entry.buf)
+    open_in_pm_tab(function()
+      vim.api.nvim_win_set_buf(0, entry.buf)
+    end)
     return
   end
 
   if entry.type == "task" and entry.buf and vim.api.nvim_buf_is_valid(entry.buf) then
-    M.close()
-    vim.api.nvim_win_set_buf(0, entry.buf)
+    open_in_pm_tab(function()
+      vim.api.nvim_win_set_buf(0, entry.buf)
+    end)
     return
   end
 
   if entry.type == "buffer" and entry.bufnr and vim.api.nvim_buf_is_valid(entry.bufnr) then
-    M.close()
-    vim.api.nvim_set_current_buf(entry.bufnr)
+    open_in_pm_tab(function()
+      vim.api.nvim_set_current_buf(entry.bufnr)
+    end)
     return
   end
 
   if entry.type == "running_task" then
     if entry.task_ref then
-      M.close()
-      entry.task_ref:attach()
+      open_in_pm_tab(function()
+        entry.task_ref:attach()
+      end)
     end
     return
   end
 
   if entry.type == "tab" then
-    M.close()
+    close_without_restore()
     pcall(vim.api.nvim_set_current_tabpage, entry.tabpage)
     return
   end
 
   if entry.type == "tab_window" then
-    M.close()
+    close_without_restore()
     local ok = pcall(vim.api.nvim_set_current_tabpage, entry.tabpage)
     if ok then
       pcall(vim.api.nvim_set_current_win, entry.winid)
@@ -650,13 +671,9 @@ function M.open()
       render()
       return
     end
-    vim.api.nvim_win_set_buf(0, pm_buf)
-    showing_help = false
-    render()
-    return
   end
 
-  return_buf = vim.api.nvim_get_current_buf()
+  return_tab = vim.api.nvim_get_current_tabpage()
 
   pm_buf = vim.api.nvim_create_buf(false, true)
   vim.bo[pm_buf].buftype = "nofile"
@@ -665,6 +682,7 @@ function M.open()
   vim.bo[pm_buf].filetype = "project-manager"
   vim.bo[pm_buf].modifiable = false
 
+  vim.cmd("tabnew")
   vim.api.nvim_win_set_buf(0, pm_buf)
 
   vim.wo[0].cursorline = true
@@ -689,7 +707,7 @@ function M.open()
     buffer = pm_buf,
     callback = function()
       pm_buf = nil
-      return_buf = nil
+      return_tab = nil
       line_to_entry_map = {}
       showing_help = false
     end,
@@ -698,16 +716,18 @@ function M.open()
 end
 
 function M.close()
-  if return_buf and vim.api.nvim_buf_is_valid(return_buf) then
-    vim.api.nvim_win_set_buf(0, return_buf)
-  end
+  local tab_to_restore = return_tab
 
   if pm_buf and vim.api.nvim_buf_is_valid(pm_buf) then
     vim.api.nvim_buf_delete(pm_buf, { force = true })
     pm_buf = nil
   end
 
-  return_buf = nil
+  if tab_to_restore and vim.api.nvim_tabpage_is_valid(tab_to_restore) then
+    vim.api.nvim_set_current_tabpage(tab_to_restore)
+  end
+
+  return_tab = nil
   line_to_entry_map = {}
   showing_help = false
 end
