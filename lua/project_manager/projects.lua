@@ -198,7 +198,7 @@ local function collect_persisted_sessions(projects, seen_paths)
   end
 end
 
-local function collect_open_buffers(projects)
+local function collect_open_buffers(projects, tab_visible_bufs)
   local ok_chat, chat_buffer = pcall(require, "ai_repl.chat_buffer")
 
   local buffers = vim.fn.getbufinfo({ buflisted = 1 })
@@ -210,6 +210,10 @@ local function collect_open_buffers(projects)
 
     local buftype = vim.bo[buf_info.bufnr].buftype
     if buftype ~= "" then
+      goto continue
+    end
+
+    if tab_visible_bufs and tab_visible_bufs[buf_info.bufnr] then
       goto continue
     end
 
@@ -242,6 +246,113 @@ local function collect_open_buffers(projects)
 
     ::continue::
   end
+end
+
+local function collect_running_tasks(projects, seen_paths)
+  local ok_tasks, tasks_mod = pcall(require, "core.tasks")
+  if not ok_tasks then return end
+
+  for _, task in ipairs(tasks_mod.running_tasks) do
+    if not task:is_alive() then
+      goto continue
+    end
+
+    local cwd = task.cwd
+    if not cwd then
+      goto continue
+    end
+
+    local root = resolve_git_root(cwd) or cwd
+    root = normalize_path(root)
+
+    local proj = ensure_project(projects, root)
+    if proj.source ~= "live" then
+      proj.source = "persisted"
+    end
+
+    if not proj.running_tasks then
+      proj.running_tasks = {}
+    end
+
+    local runtime = os.difftime(os.time(), task.start_time)
+    local runtime_str
+    if runtime < 60 then
+      runtime_str = string.format("%ds", runtime)
+    else
+      runtime_str = string.format("%dm %ds", math.floor(runtime / 60), runtime % 60)
+    end
+
+    table.insert(proj.running_tasks, {
+      type = "running_task",
+      name = task.name,
+      runtime_str = runtime_str,
+      background = task.background,
+      term_buf = task.term and task.term.buf,
+      task_ref = task,
+    })
+
+    seen_paths[root] = true
+    ::continue::
+  end
+end
+
+local function collect_open_tabs(projects)
+  local current_tabpage = vim.api.nvim_get_current_tabpage()
+  local tab_visible_bufs = {}
+
+  for tabnr, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
+    local wins = vim.api.nvim_tabpage_list_wins(tabpage)
+    local tab_windows = {}
+    local tab_root = nil
+
+    for _, winid in ipairs(wins) do
+      local bufnr = vim.api.nvim_win_get_buf(winid)
+      local buftype = vim.bo[bufnr].buftype
+      if buftype ~= "" then
+        goto continue_win
+      end
+
+      local name = vim.api.nvim_buf_get_name(bufnr)
+      if name == "" then
+        goto continue_win
+      end
+
+      local short_name = vim.fn.fnamemodify(name, ":t")
+
+      if not tab_root then
+        local dir = vim.fn.fnamemodify(name, ":h")
+        tab_root = resolve_git_root(dir)
+        if tab_root then
+          tab_root = normalize_path(tab_root)
+        end
+      end
+
+      tab_visible_bufs[bufnr] = true
+      table.insert(tab_windows, {
+        winid = winid,
+        bufnr = bufnr,
+        name = short_name,
+      })
+
+      ::continue_win::
+    end
+
+    if tab_root and #tab_windows > 0 then
+      local proj = ensure_project(projects, tab_root)
+      if not proj.tabs then
+        proj.tabs = {}
+      end
+      table.insert(proj.tabs, {
+        type = "tab",
+        tabnr = tabnr,
+        tabpage = tabpage,
+        is_current = (tabpage == current_tabpage),
+        windows = tab_windows,
+      })
+    end
+  end
+
+  return tab_visible_bufs
 end
 
 local function collect_oldfiles_projects(projects, seen_paths)
@@ -284,8 +395,10 @@ function M.gather()
 
   collect_live_sessions(projects, seen_paths)
   collect_persisted_sessions(projects, seen_paths)
+  collect_running_tasks(projects, seen_paths)
   collect_oldfiles_projects(projects, seen_paths)
-  collect_open_buffers(projects)
+  local tab_visible_bufs = collect_open_tabs(projects)
+  collect_open_buffers(projects, tab_visible_bufs)
 
   local sorted = {}
   for _, proj in pairs(projects) do

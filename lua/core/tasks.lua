@@ -578,6 +578,7 @@ function M.run_task(task, opts)
     cmd = cmd,
     term = term,
     background = opts.background or false,
+    cwd = cwd,
     start_time = os.time(),
     -- Function to attach and make interactive
     attach = function(self)

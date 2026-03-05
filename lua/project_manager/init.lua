@@ -99,6 +99,54 @@ local function render()
         end
       end
 
+      if proj.running_tasks and #proj.running_tasks > 0 then
+        for _, rt in ipairs(proj.running_tasks) do
+          local icon = " "
+          local bg_tag = rt.background and " [bg]" or ""
+          local line = string.format("  %s %s  (%s)%s", icon, rt.name, rt.runtime_str, bg_tag)
+          table.insert(lines, line)
+          table.insert(entries, {
+            type = "running_task",
+            name = rt.name,
+            runtime_str = rt.runtime_str,
+            background = rt.background,
+            term_buf = rt.term_buf,
+            task_ref = rt.task_ref,
+            project_path = proj.path,
+          })
+        end
+      end
+
+      if proj.tabs and #proj.tabs > 0 then
+        for _, tab in ipairs(proj.tabs) do
+          local current_marker = tab.is_current and "" or " "
+          local win_count = #tab.windows
+          local line = string.format("  %s Tab %d (%d win%s)",
+            current_marker, tab.tabnr, win_count, win_count == 1 and "" or "s")
+          table.insert(lines, line)
+          table.insert(entries, {
+            type = "tab",
+            tabnr = tab.tabnr,
+            tabpage = tab.tabpage,
+            is_current = tab.is_current,
+            project_path = proj.path,
+          })
+
+          for _, win in ipairs(tab.windows) do
+            local win_line = string.format("      %s", win.name)
+            table.insert(lines, win_line)
+            table.insert(entries, {
+              type = "tab_window",
+              winid = win.winid,
+              bufnr = win.bufnr,
+              name = win.name,
+              tabpage = tab.tabpage,
+              project_path = proj.path,
+            })
+          end
+        end
+      end
+
       if proj.buffers and #proj.buffers > 0 then
         for _, buffer in ipairs(proj.buffers) do
           local modified = buffer.modified and " [+]" or ""
@@ -235,6 +283,33 @@ local function render()
         end_col = #lines[line_idx],
         hl_group = "Comment",
       })
+    elseif entry.type == "running_task" then
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 2, {
+        end_col = 4,
+        hl_group = "DiagnosticOk",
+      })
+      local name_start = 5
+      local name_end = name_start + #entry.name
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, name_start, {
+        end_col = math.min(name_end, #lines[line_idx]),
+        hl_group = "Keyword",
+      })
+      local rest_start = name_end + 2
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, rest_start, {
+        end_col = #lines[line_idx],
+        hl_group = "Comment",
+      })
+    elseif entry.type == "tab" then
+      local hl = entry.is_current and "DiagnosticInfo" or "Comment"
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 2, {
+        end_col = #lines[line_idx],
+        hl_group = hl,
+      })
+    elseif entry.type == "tab_window" then
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 6, {
+        end_col = #lines[line_idx],
+        hl_group = "Normal",
+      })
     end
 
     ::continue::
@@ -276,6 +351,29 @@ local function open_selected()
   if entry.type == "buffer" and entry.bufnr and vim.api.nvim_buf_is_valid(entry.bufnr) then
     M.close()
     vim.api.nvim_set_current_buf(entry.bufnr)
+    return
+  end
+
+  if entry.type == "running_task" then
+    if entry.task_ref then
+      M.close()
+      entry.task_ref:attach()
+    end
+    return
+  end
+
+  if entry.type == "tab" then
+    M.close()
+    pcall(vim.api.nvim_set_current_tabpage, entry.tabpage)
+    return
+  end
+
+  if entry.type == "tab_window" then
+    M.close()
+    local ok = pcall(vim.api.nvim_set_current_tabpage, entry.tabpage)
+    if ok then
+      pcall(vim.api.nvim_set_current_win, entry.winid)
+    end
     return
   end
 end
@@ -366,6 +464,39 @@ local function delete_selected()
     render()
     return
   end
+
+  if entry.type == "running_task" then
+    local choice = vim.fn.confirm("Kill task?\n" .. entry.name, "&Yes\n&No", 2)
+    if choice ~= 1 then
+      return
+    end
+    if entry.task_ref and entry.task_ref.term then
+      pcall(function() entry.task_ref.term:close() end)
+    end
+    render()
+    return
+  end
+
+  if entry.type == "tab" then
+    if #vim.api.nvim_list_tabpages() <= 1 then
+      vim.notify("Cannot close the last tab", vim.log.levels.WARN)
+      return
+    end
+    local choice = vim.fn.confirm(
+      string.format("Close Tab %d?", entry.tabnr),
+      "&Yes\n&No",
+      2
+    )
+    if choice ~= 1 then
+      return
+    end
+    M.close()
+    local ok = pcall(vim.api.nvim_set_current_tabpage, entry.tabpage)
+    if ok then
+      vim.cmd("tabclose")
+    end
+    return
+  end
 end
 
 local function show_help()
@@ -403,6 +534,17 @@ local function show_help()
     "  On buffer:",
     "  <CR> / l     Open buffer",
     "  d            Close buffer",
+    "",
+    "  On running task:",
+    "  <CR> / l     Attach to task terminal",
+    "  d            Kill task",
+    "",
+    "  On tab:",
+    "  <CR> / l     Switch to tab",
+    "  d            Close tab",
+    "",
+    "  On tab window:",
+    "  <CR> / l     Switch to tab & window",
     "",
     "  General:",
     "  R            Refresh",
