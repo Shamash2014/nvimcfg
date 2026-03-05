@@ -70,6 +70,13 @@ return {
       desc = "Project Manager",
     },
     {
+      "<leader>fp",
+      function()
+        require("project_manager").toggle()
+      end,
+      desc = "Project Manager",
+    },
+    {
       "<leader>aa",
       function()
         require("ai_repl.annotations").annotate()
