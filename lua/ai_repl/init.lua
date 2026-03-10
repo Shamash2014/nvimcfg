@@ -575,21 +575,10 @@ local function show_permission_prompt(proc, msg_id, params)
     local desc = get_tool_description(raw_title, input, locations)
 
     local agent_options = params.options or {}
-    local first_allow_id, first_deny_id, allow_always_id
-    for _, opt in ipairs(agent_options) do
-      local oid = opt.optionId or opt.id
-      local okind = opt.kind or ""
-      if oid then
-        if oid:match("allow_always") or oid:match("allowAlways") then
-          allow_always_id = allow_always_id or oid
-        elseif okind:match("allow") or oid:match("allow") or oid:match("yes") or oid:match("approve") then
-          first_allow_id = first_allow_id or oid
-        end
-        if okind:match("deny") or oid:match("deny") or oid:match("no") or oid:match("reject") then
-          first_deny_id = first_deny_id or oid
-        end
-      end
-    end
+    local perm_opts = lazy_load_tool_utils().parse_permission_options(agent_options)
+    local first_allow_id = perm_opts.allow
+    local first_deny_id = perm_opts.deny
+    local allow_always_id = perm_opts.always
 
     local provider_id = proc.data.provider or config.default_provider
     local provider_config = config.providers[provider_id] or {}
@@ -780,25 +769,15 @@ local function handle_method(proc, method, params, msg_id)
       local agent_options = params.options or {}
       local tool_call = params.toolCall or {}
 
-      -- Find option IDs based on agent's provided options
-      local first_allow_id, allow_always_id, default_option_id
+      local perm_opts = lazy_load_tool_utils().parse_permission_options(agent_options)
+      local first_allow_id = perm_opts.allow
+      local allow_always_id = perm_opts.always
+
+      local default_option_id
       for _, opt in ipairs(agent_options) do
-        local oid = opt.optionId or opt.id
-        local okind = opt.kind or ""
-
-        -- Check for agent's marked default
         if opt.default or opt.isDefault then
-          default_option_id = default_option_id or oid
-        end
-
-        -- Find allow_always option
-        if oid and (oid:match("allow_always") or oid:match("allowAlways")) then
-          allow_always_id = allow_always_id or oid
-        end
-
-        -- Find first allow option
-        if oid and okind:match("allow") and not first_allow_id then
-          first_allow_id = oid
+          default_option_id = opt.optionId or opt.id
+          break
         end
       end
 

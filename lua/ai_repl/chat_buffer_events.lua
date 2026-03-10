@@ -480,23 +480,11 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
 
     local desc = tool_utils.get_tool_description(raw_title, input, locations, { include_path = true, include_line = true })
 
-    -- Extract option IDs from agent-provided options
     local agent_options = params.options or {}
-    local first_allow_id, first_deny_id, allow_always_id
-    for _, opt in ipairs(agent_options) do
-      local oid = opt.optionId or opt.id
-      local okind = opt.kind or ""
-      if oid then
-        if oid:match("allow_always") or oid:match("allowAlways") then
-          allow_always_id = allow_always_id or oid
-        elseif okind:match("allow") or oid:match("allow") or oid:match("yes") or oid:match("approve") then
-          first_allow_id = first_allow_id or oid
-        end
-        if okind:match("deny") or oid:match("deny") or oid:match("no") or oid:match("reject") then
-          first_deny_id = first_deny_id or oid
-        end
-      end
-    end
+    local perm_opts = tool_utils.parse_permission_options(agent_options)
+    local first_allow_id = perm_opts.allow
+    local first_deny_id = perm_opts.deny
+    local allow_always_id = perm_opts.always
 
     -- Check bypass mode
     local config_ok, ai_config = pcall(function()

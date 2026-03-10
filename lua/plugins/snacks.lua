@@ -66,6 +66,7 @@ return {
     { "<leader>ol", function() Snacks.picker.loclist({ layout = { preset = "vscode" } }) end, desc = "Location List" },
     { "<leader>om", function() Snacks.picker.marks({ layout = { preset = "vscode" } }) end, desc = "Marks" },
     { "<leader>cd", function() Snacks.picker.diagnostics({ layout = { preset = "vscode" } }) end, desc = "Diagnostics" },
+    { "<leader>ok", function() require("task_manager").toggle() end, desc = "Task Manager" },
     { "<leader>ot", function() Snacks.terminal() end, desc = "Open Terminal" },
   },
 }

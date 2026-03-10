@@ -64,4 +64,45 @@ function M.get_tool_description(title, input, locations, opts)
   return ""
 end
 
+function M.parse_permission_options(agent_options)
+  local first_allow_id, first_deny_id, allow_always_id
+  for _, opt in ipairs(agent_options) do
+    local oid = opt.optionId or opt.id
+    local okind = opt.kind or ""
+    if oid then
+      if oid:match("allow_always") or oid:match("allowAlways") then
+        allow_always_id = allow_always_id or oid
+      elseif okind:match("allow") or oid:match("allow") or oid:match("yes") or oid:match("approve") then
+        first_allow_id = first_allow_id or oid
+      end
+      if okind:match("deny") or oid:match("deny") or oid:match("no") or oid:match("reject") then
+        first_deny_id = first_deny_id or oid
+      end
+    end
+  end
+
+  -- Positional fallback: if pattern matching found nothing, use first/last options
+  if #agent_options >= 2 then
+    local first_oid = agent_options[1].optionId or agent_options[1].id
+    local last_oid = agent_options[#agent_options].optionId or agent_options[#agent_options].id
+    if not first_allow_id and not allow_always_id then
+      first_allow_id = first_oid
+    end
+    if not first_deny_id then
+      first_deny_id = last_oid
+    end
+  elseif #agent_options == 1 then
+    local oid = agent_options[1].optionId or agent_options[1].id
+    if not first_allow_id and not allow_always_id then
+      first_allow_id = oid
+    end
+  end
+
+  return {
+    allow = first_allow_id,
+    deny = first_deny_id,
+    always = allow_always_id,
+  }
+end
+
 return M
