@@ -240,7 +240,6 @@ function M.apply_update(proc, update)
     local should_process_queue = not ralph_continuing and not user_input_pending
     local usage = u.usage
 
-    proc.ui.current_plan = {}
     proc.ui.active_tools = {}
     proc.ui.pending_tool_calls = {}
 

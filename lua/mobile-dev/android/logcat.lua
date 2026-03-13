@@ -70,12 +70,18 @@ local function create_buffer()
   return M._buf
 end
 
+local ns_id = vim.api.nvim_create_namespace('logcat_highlights')
+
 local function apply_highlights(buf, start_line, lines)
   for i, line in ipairs(lines) do
     local level = line:match("^%d%d%-%d%d%s+%d%d:%d%d:%d%d%.%d+%s+%d+%s+%d+%s+(%a)")
       or line:match("^(%a)/")
     if level and level_highlights[level] then
-      pcall(vim.api.nvim_buf_add_highlight, buf, -1, level_highlights[level], start_line + i - 1, 0, -1)
+      pcall(vim.api.nvim_buf_set_extmark, buf, ns_id, start_line + i - 1, 0, {
+        end_col = -1,
+        hl_group = level_highlights[level],
+        hl_eol = true,
+      })
     end
   end
 end

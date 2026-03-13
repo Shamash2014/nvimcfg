@@ -241,12 +241,16 @@ local function update_statusline()
 
   local ok, sp = pcall(vim.fn.winlayout)
   if ok and sp and sp[1] == "leaf" then
-    vim.wo[win].statusline = string.format(
-      "%%#StatusLine# %s | %%#Title#%s%s %%#Comment#%s",
-      mode_display,
-      agent_name,
-      queue_str,
-      provider_name
+    vim.api.nvim_set_option_value(
+      'statusline',
+      string.format(
+        "%%#StatusLine# %s | %%#Title#%s%s %%#Comment#%s",
+        mode_display,
+        agent_name,
+        queue_str,
+        provider_name
+      ),
+      { scope = 'local', win = win }
     )
   end
 end
@@ -3208,6 +3212,45 @@ function M.new_session(provider_id, profile_id)
       M.new_session(id)
     end)
     return
+  end
+
+  local providers_mod = require("ai_repl.providers")
+  if not profile_id and providers_mod.supports_profiles(provider_id) then
+    if provider_id == "codex" then
+      local codex_profiles = require("ai_repl.codex_profiles")
+      local saved_profile = codex_profiles.get_last_profile()
+      if saved_profile then
+        local profiles = codex_profiles.list_profiles()
+        for _, p in ipairs(profiles) do
+          if p.id == saved_profile then
+            profile_id = saved_profile
+            break
+          end
+        end
+      end
+    elseif provider_id == "opencode" then
+      local opencode_models = require("ai_repl.opencode_models")
+      local saved_model = opencode_models.get_last_model()
+      if saved_model then
+        local models = opencode_models.list_models()
+        for _, m in ipairs(models) do
+          if m.id == saved_model then
+            profile_id = saved_model
+            break
+          end
+        end
+      end
+    end
+
+    if not profile_id then
+      M.pick_profile(provider_id, function(selected_profile_id, cancelled)
+        if cancelled then
+          return
+        end
+        M.new_session(provider_id, selected_profile_id)
+      end)
+      return
+    end
   end
 
   local cur_buf = vim.api.nvim_get_current_buf()

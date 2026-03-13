@@ -110,7 +110,7 @@ opt.ignorecase = true
 opt.smartcase = true
 
 -- UI
-opt.termguicolors = true
+opt.termguicolors = (vim.env.COLORTERM == "truecolor") or vim.o.t_Co >= 256
 opt.scrolloff = 8
 opt.sidescrolloff = 8
 opt.signcolumn = "yes"
@@ -128,7 +128,7 @@ opt.shortmess:append("filnxtToOFcI")  -- Shorten messages to fit in one line
 opt.updatetime = 300     -- Faster completion (default 4000ms)
 opt.timeoutlen = 300     -- Faster key sequence completion
 opt.ttimeoutlen = 10     -- Faster escape key response
-opt.lazyredraw = true    -- Don't redraw during macros
+opt.lazyredraw = false   -- Must be false: true causes 100% CPU with terminal buffers and neogit
 opt.synmaxcol = 300      -- Limit syntax highlighting for long lines
 opt.redrawtime = 10000   -- Time before redraw timeout
 opt.maxmempattern = 20000 -- Max memory for pattern matching

@@ -34,14 +34,20 @@ local function get_filetype_from_path(file_path)
 end
 
 local function apply_diff_highlights(buf, diff_type)
-  vim.api.nvim_buf_clear_namespace(buf, -1, 0, -1)
+  local ns_id = vim.api.nvim_create_namespace('ai_repl_diff')
+  vim.api.nvim_buf_clear_namespace(buf, ns_id, 0, -1)
 
   local line_count = vim.api.nvim_buf_line_count(buf)
-  for i = 0, line_count - 1 do
-    if diff_type == "removed" then
-      vim.api.nvim_buf_add_highlight(buf, -1, "DiffDelete", i, 0, -1)
-    elseif diff_type == "added" then
-      vim.api.nvim_buf_add_highlight(buf, -1, "DiffAdd", i, 0, -1)
+  local hl_group = diff_type == "removed" and "DiffDelete" or diff_type == "added" and "DiffAdd" or nil
+
+  if hl_group then
+    for i = 0, line_count - 1 do
+      vim.api.nvim_buf_set_extmark(buf, ns_id, i, 0, {
+        end_row = i,
+        end_col = -1,
+        hl_group = hl_group,
+        hl_eol = true,
+      })
     end
   end
 end

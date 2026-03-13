@@ -29,8 +29,14 @@ local function setup_auto_root()
       end
 
       -- Skip Neogit buffers and other git-related special buffers
-      -- to prevent unwanted tab switching during git operations
-      if ft:match("^neogit") or ft:match("^git") or ft:match "^fugitive" then
+      -- to prevent unwanted directory changes during git operations
+      if ft:match("^neogit") or ft:match("^git") or ft:match("^fugitive") or ft:match("^Neogit") then
+        return
+      end
+
+      -- Guard against neogit buffers before filetype is set (bufname check)
+      local bufname = vim.api.nvim_buf_get_name(0)
+      if bufname:match("Neogit") or bufname:match("neogit") or bufname == "" then
         return
       end
 

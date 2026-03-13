@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-global
 return {
   "folke/snacks.nvim",
   priority = 1000,
@@ -5,7 +6,7 @@ return {
   opts = {
     bigfile = { enabled = true },
     quickfile = { enabled = true },
-    words = { enabled = true },
+    words = { enabled = false },
     terminal = { enabled = true },
     input = {
       enabled = true,

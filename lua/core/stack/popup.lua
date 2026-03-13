@@ -236,7 +236,10 @@ function Popup:show()
 
   local ns = vim.api.nvim_create_namespace("stack_popup")
   for _, hl in ipairs(highlights) do
-    vim.api.nvim_buf_add_highlight(self.buf, ns, hl.hl, hl.line, hl.col, hl.end_col)
+    vim.api.nvim_buf_set_extmark(self.buf, ns, hl.line, hl.col, {
+      end_col = hl.end_col,
+      hl_group = hl.hl,
+    })
   end
 
   local height = #lines

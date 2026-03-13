@@ -207,9 +207,9 @@ local function render_runner()
   table.insert(lines, "│ []] Next test  [[] Prev test  [q] Quit" .. string.rep(" ", width - 42) .. " │")
   table.insert(lines, "└" .. string.rep("─", width - 2) .. "┘")
 
-  vim.api.nvim_buf_set_option(state.runner_bufnr, "modifiable", true)
+  vim.bo[state.runner_bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(state.runner_bufnr, 0, -1, false, lines)
-  vim.api.nvim_buf_set_option(state.runner_bufnr, "modifiable", false)
+  vim.bo[state.runner_bufnr].modifiable = false
 end
 
 local function sync_source_position()
@@ -503,9 +503,9 @@ function M.start(tests, source_file)
   vim.api.nvim_win_set_buf(0, state.runner_bufnr)
   state.runner_winid = vim.api.nvim_get_current_win()
 
-  vim.api.nvim_buf_set_option(state.runner_bufnr, "buftype", "nofile")
-  vim.api.nvim_buf_set_option(state.runner_bufnr, "bufhidden", "wipe")
-  vim.api.nvim_buf_set_option(state.runner_bufnr, "swapfile", false)
+  vim.bo[state.runner_bufnr].buftype = "nofile"
+  vim.bo[state.runner_bufnr].bufhidden = "wipe"
+  vim.bo[state.runner_bufnr].swapfile = false
   vim.api.nvim_buf_set_name(state.runner_bufnr, "WildTest")
 
   vim.api.nvim_win_set_width(state.runner_winid, 56)

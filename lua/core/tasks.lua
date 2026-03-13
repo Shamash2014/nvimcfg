@@ -618,9 +618,7 @@ function M.run_task(task, opts)
       if self.term and self.term.buf then
         -- Ensure the terminal buffer persists when hidden
         if vim.api.nvim_buf_is_valid(self.term.buf) then
-          -- Critical: Set buffer to persist when hidden - don't unload it
-          vim.api.nvim_buf_set_option(self.term.buf, 'bufhidden', 'hide')
-          -- Also make sure the buffer stays loaded
+          vim.bo[self.term.buf].bufhidden = 'hide'
           vim.api.nvim_set_option_value('buflisted', false, { buf = self.term.buf })
         end
 
@@ -1309,7 +1307,7 @@ function M.kill_all_tasks()
           local chan = vim.api.nvim_buf_get_var(task.term.buf, "terminal_job_id")
           if chan then
             vim.fn.chansend(chan, "\x03") -- Send Ctrl+C
-            vim.wait(100, function() return false end)
+            vim.uv.sleep(100) -- Non-blocking sleep to let Ctrl+C propagate
             vim.fn.jobstop(chan) -- Force stop
           end
           vim.api.nvim_buf_delete(task.term.buf, { force = true })
