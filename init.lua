@@ -116,6 +116,8 @@ opt.sidescrolloff = 8
 opt.signcolumn = "yes"
 opt.colorcolumn = "80"
 opt.cursorline = false  -- Disable for performance
+opt.equalalways = true   -- Auto-equalize split sizes (cmux-style fixed columns)
+opt.eadirection = "both" -- Equalize in both directions
 
 -- Command line and messages
 opt.cmdheight = 1        -- Keep command line at exactly 1 line

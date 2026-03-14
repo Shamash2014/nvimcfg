@@ -73,9 +73,16 @@ return {
     {
       "<leader>fp",
       function()
-        require("project_manager").toggle()
+        require("project_manager").toggle_split()
       end,
-      desc = "Project Manager",
+      desc = "Project Manager (split)",
+    },
+    {
+      "<leader>fo",
+      function()
+        require("project_manager").toggle_split()
+      end,
+      desc = "Project Manager (split)",
     },
     {
       "<leader>aa",

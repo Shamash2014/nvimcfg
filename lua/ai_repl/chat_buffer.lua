@@ -369,8 +369,14 @@ function M.restart_conversation(buf, provider_id, opts)
     local ai_repl = require("ai_repl.init")
 
     local extra_args = opts.extra_args
-    if not extra_args and profile_id then
-      extra_args = ai_repl.build_profile_args(provider, profile_id)
+    local prepend_args = opts.prepend_args
+    if not extra_args and not prepend_args and profile_id then
+      local prof_args, prof_pos = ai_repl.build_profile_args(provider, profile_id)
+      if prof_pos == "prepend" then
+        prepend_args = prof_args
+      else
+        extra_args = prof_args
+      end
     end
 
     local display_name = provider
@@ -384,6 +390,7 @@ function M.restart_conversation(buf, provider_id, opts)
       provider = provider,
       cwd = state.repo_root,
       extra_args = extra_args,
+      prepend_args = prepend_args,
       profile_id = profile_id,
     })
 

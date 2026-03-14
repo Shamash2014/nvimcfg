@@ -8,6 +8,8 @@ local pm_buf = nil
 local return_tab = nil
 local line_to_entry_map = {}
 local showing_help = false
+---@type false|"v"|"s"
+local split_mode = false
 
 local function render()
   if not pm_buf or not vim.api.nvim_buf_is_valid(pm_buf) then
@@ -332,6 +334,26 @@ local function close_without_restore()
   return_tab = nil
   line_to_entry_map = {}
   showing_help = false
+  split_mode = false
+end
+
+local function open_in_split_neighbor(callback)
+  local pm_win = vim.api.nvim_get_current_win()
+  local wins = vim.api.nvim_tabpage_list_wins(0)
+  local target_win = nil
+  for _, w in ipairs(wins) do
+    if w ~= pm_win then
+      target_win = w
+      break
+    end
+  end
+  if target_win then
+    vim.api.nvim_set_current_win(target_win)
+  end
+  local cmd = split_mode == "s" and "split" or "vsplit"
+  vim.cmd(cmd)
+  callback()
+  close_without_restore()
 end
 
 local function open_in_pm_tab(callback)
@@ -346,29 +368,34 @@ local function open_selected()
     return
   end
 
+  if not split_mode then
+    split_mode = "v"
+  end
+  local open = open_in_split_neighbor
+
   if entry.type == "project" then
-    open_in_pm_tab(function()
+    open(function()
       vim.cmd("Oil " .. vim.fn.fnameescape(entry.path))
     end)
     return
   end
 
   if entry.type == "live_session" and entry.buf and vim.api.nvim_buf_is_valid(entry.buf) then
-    open_in_pm_tab(function()
+    open(function()
       vim.api.nvim_win_set_buf(0, entry.buf)
     end)
     return
   end
 
   if entry.type == "task" and entry.buf and vim.api.nvim_buf_is_valid(entry.buf) then
-    open_in_pm_tab(function()
+    open(function()
       vim.api.nvim_win_set_buf(0, entry.buf)
     end)
     return
   end
 
   if entry.type == "buffer" and entry.bufnr and vim.api.nvim_buf_is_valid(entry.bufnr) then
-    open_in_pm_tab(function()
+    open(function()
       vim.api.nvim_set_current_buf(entry.bufnr)
     end)
     return
@@ -376,7 +403,7 @@ local function open_selected()
 
   if entry.type == "running_task" then
     if entry.task_ref then
-      open_in_pm_tab(function()
+      open(function()
         entry.task_ref:attach()
       end)
     end
@@ -397,6 +424,11 @@ local function open_selected()
     end
     return
   end
+end
+
+local function open_selected_in_split(direction)
+  split_mode = direction
+  open_selected()
 end
 
 local function delete_selected()
@@ -573,6 +605,10 @@ local function show_help()
     "  ]t / [t      Next/prev task",
     "  J / K        Next/prev same type",
     "",
+    "  Split open:",
+    "  <localleader>v  Open in vsplit",
+    "  <localleader>w  Open in split",
+    "",
     "  General:",
     "  R            Refresh",
     "  - / q / Esc  Close",
@@ -709,8 +745,10 @@ local function setup_keymaps()
 
   vim.keymap.set("n", "<CR>", open_selected, opts)
   vim.keymap.set("n", "l", open_selected, opts)
+  vim.keymap.set("n", "<localleader>v", function() open_selected_in_split("v") end, opts)
+  vim.keymap.set("n", "<localleader>w", function() open_selected_in_split("s") end, opts)
   vim.keymap.set("n", "d", delete_selected, opts)
-  vim.keymap.set("n", "n", function() start_new_session() end, opts)
+  vim.keymap.set("n", "<localleader>n", function() start_new_session() end, opts)
   vim.keymap.set("n", "s", start_new_session_pick_provider, opts)
   vim.keymap.set("n", "R", function()
     showing_help = false
@@ -779,6 +817,7 @@ function M.open()
       return_tab = nil
       line_to_entry_map = {}
       showing_help = false
+      split_mode = false
     end,
     once = true,
   })
@@ -799,6 +838,62 @@ function M.close()
   return_tab = nil
   line_to_entry_map = {}
   showing_help = false
+  split_mode = false
+end
+
+function M.open_split()
+  if pm_buf and vim.api.nvim_buf_is_valid(pm_buf) then
+    local wins = vim.fn.win_findbuf(pm_buf)
+    if #wins > 0 then
+      vim.api.nvim_set_current_win(wins[1])
+      showing_help = false
+      render()
+      return
+    end
+  end
+
+  return_tab = nil
+  split_mode = "v"
+
+  pm_buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[pm_buf].buftype = "nofile"
+  vim.bo[pm_buf].swapfile = false
+  vim.bo[pm_buf].bufhidden = "wipe"
+  vim.bo[pm_buf].filetype = "project-manager"
+  vim.bo[pm_buf].modifiable = false
+
+  vim.cmd("topleft vsplit")
+  vim.api.nvim_win_set_buf(0, pm_buf)
+
+  vim.wo[0].cursorline = true
+  vim.wo[0].cursorlineopt = "both"
+  vim.wo[0].number = false
+  vim.wo[0].relativenumber = false
+  vim.wo[0].signcolumn = "no"
+  vim.wo[0].foldcolumn = "0"
+  vim.wo[0].spell = false
+  vim.wo[0].list = false
+  vim.wo[0].wrap = false
+
+  setup_keymaps()
+  showing_help = false
+  render()
+
+  if vim.api.nvim_buf_line_count(pm_buf) > 0 then
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  end
+
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = pm_buf,
+    callback = function()
+      pm_buf = nil
+      return_tab = nil
+      line_to_entry_map = {}
+      showing_help = false
+      split_mode = false
+    end,
+    once = true,
+  })
 end
 
 function M.toggle()
@@ -810,6 +905,17 @@ function M.toggle()
     end
   end
   M.open()
+end
+
+function M.toggle_split()
+  if pm_buf and vim.api.nvim_buf_is_valid(pm_buf) then
+    local wins = vim.fn.win_findbuf(pm_buf)
+    if #wins > 0 then
+      M.close()
+      return
+    end
+  end
+  M.open_split()
 end
 
 return M

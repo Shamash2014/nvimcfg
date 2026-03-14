@@ -1035,6 +1035,11 @@ local function create_process(session_id, opts)
   end
 
   local args = vim.deepcopy(provider.args or {})
+  if opts.prepend_args then
+    for i = #opts.prepend_args, 1, -1 do
+      table.insert(args, 1, opts.prepend_args[i])
+    end
+  end
   if opts.extra_args then
     for _, arg in ipairs(opts.extra_args) do
       table.insert(args, arg)
@@ -1666,11 +1671,12 @@ function M.handle_command(cmd)
       vim.defer_fn(function()
         if is_chat and vim.api.nvim_buf_is_valid(current_buf) then
           local session_id = "chat_" .. os.time()
-          local extra_args = M.build_profile_args(current_provider, profile_id)
+          local prof_args, prof_pos = M.build_profile_args(current_provider, profile_id)
 
           local new_proc = create_process(session_id, {
             provider = current_provider,
-            extra_args = extra_args,
+            extra_args = prof_pos ~= "prepend" and prof_args or nil,
+            prepend_args = prof_pos == "prepend" and prof_args or nil,
             profile_id = profile_id,
             cwd = cwd,
           })
@@ -3232,13 +3238,7 @@ function M.new_session(provider_id, profile_id)
       local opencode_models = require("ai_repl.opencode_models")
       local saved_model = opencode_models.get_last_model()
       if saved_model then
-        local models = opencode_models.list_models()
-        for _, m in ipairs(models) do
-          if m.id == saved_model then
-            profile_id = saved_model
-            break
-          end
-        end
+        profile_id = saved_model
       end
     end
 
@@ -3260,7 +3260,7 @@ function M.new_session(provider_id, profile_id)
   end
   ui.project_root = get_project_root(ui.source_buf or cur_buf)
 
-  local extra_args = M.build_profile_args(provider_id, profile_id)
+  local profile_args, profile_pos = M.build_profile_args(provider_id, profile_id)
 
   -- Create actual ACP process with unique session ID
   local session_id = registry.generate_unique_session_id()
@@ -3268,7 +3268,8 @@ function M.new_session(provider_id, profile_id)
   local cwd = ui.project_root
   proc = create_process(session_id, {
     provider = provider_id,
-    extra_args = extra_args,
+    extra_args = profile_pos ~= "prepend" and profile_args or nil,
+    prepend_args = profile_pos == "prepend" and profile_args or nil,
     profile_id = profile_id,
     cwd = cwd,
   })
@@ -3392,16 +3393,16 @@ end
 
 function M.build_profile_args(provider_id, profile_id)
   if not profile_id or profile_id == "" then
-    return nil
+    return {}
   end
   if provider_id == "codex" then
     local codex_profiles = require("ai_repl.codex_profiles")
-    return codex_profiles.build_args(profile_id)
+    return codex_profiles.build_args(profile_id), "append"
   elseif provider_id == "opencode" then
     local opencode_models = require("ai_repl.opencode_models")
-    return opencode_models.build_args(profile_id)
+    return opencode_models.build_args(profile_id), "prepend"
   end
-  return nil
+  return {}
 end
 
 
