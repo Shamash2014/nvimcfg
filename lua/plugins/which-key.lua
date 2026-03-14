@@ -25,6 +25,7 @@ return {
       { "<leader>g", group = "git" },
       { "<leader>gk", group = "stack" },
       { "<leader>o", group = "options/config" },
+      { "<leader>od", group = "database" },
       { "<leader>p", group = "project" },
       { "<leader>r", group = "run/tasks" },
       { "<leader>t", group = "tabs" },
