@@ -861,8 +861,7 @@ end
 
 function Process:process_queued_prompts()
   if self.state.busy then return end
-  local q_ok, questionnaire = pcall(require, "ai_repl.questionnaire")
-  if (q_ok and questionnaire.is_active()) or (self.ui and self.ui.permission_active) then
+  if self.ui and self.ui.permission_active then
     return
   end
   if #self.data.prompt_queue > 0 then

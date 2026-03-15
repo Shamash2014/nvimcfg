@@ -247,17 +247,6 @@ function M.handle_session_update_in_chat(buf, update, proc)
       local mode_icon = MODE_ICONS[proc.state.mode or "execute"] or "▶️"
       M.append_to_chat_buffer(buf, { "", "[▶] " .. mode_icon .. " Starting execution..." })
       return
-    elseif result.is_ask_user then
-      if decorations_ok then pcall(decorations.stop_spinner, buf) end
-      if result.questions and #result.questions > 0 then
-        local q_ok, questionnaire = pcall(require, "ai_repl.questionnaire")
-        if q_ok then
-          questionnaire.start(proc, result.questions, function(response)
-            proc:send_prompt(response)
-          end)
-        end
-      end
-      return
     end
 
     if decorations_ok then pcall(decorations.start_spinner, buf, "executing") end

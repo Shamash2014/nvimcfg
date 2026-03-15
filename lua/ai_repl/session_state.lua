@@ -62,10 +62,6 @@ function M.apply_update(proc, update)
 
     local is_exit_plan = u.title == "ExitPlanMode"
 
-    local is_ask_user = u.title == "AskUser" or u.title == "AskUserQuestion"
-      or (u.rawInput and u.rawInput.questions)
-    local questions = is_ask_user and u.rawInput and u.rawInput.questions or {}
-
     return {
       type = "tool_call",
       update = u,
@@ -73,8 +69,6 @@ function M.apply_update(proc, update)
       is_plan_tool = is_plan_tool,
       plan_entries = is_plan_tool and u.rawInput.todos or nil,
       is_exit_plan = is_exit_plan,
-      is_ask_user = is_ask_user,
-      questions = questions,
     }
 
   elseif update_type == "tool_call_update" then
@@ -219,9 +213,7 @@ function M.apply_update(proc, update)
       registry.append_message(proc.session_id, "djinni", response_text, tool_calls_to_save)
     end
 
-    local q_ok, questionnaire = pcall(require, "ai_repl.questionnaire")
-    local user_input_pending = (q_ok and questionnaire.is_active())
-      or (proc.ui and proc.ui.permission_active)
+    local user_input_pending = proc.ui and proc.ui.permission_active
 
     local stop_reason = u.stopReason or "end_turn"
 

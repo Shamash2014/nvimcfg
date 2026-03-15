@@ -940,10 +940,6 @@ function M.setup_keymaps(buf)
         proc.ui.permission_queue = {}
       end
 
-      -- Cancel active questionnaire
-      local q_ok, questionnaire = pcall(require, "ai_repl.questionnaire")
-      if q_ok then pcall(questionnaire.cancel) end
-
       -- Cancel current operation but keep the process alive
       proc:cancel()
 

@@ -339,8 +339,6 @@ local TOOL_DISPLAY = {
   NotebookEdit = { icon = "📓", name = "Notebook" },
   ExitPlanMode = { icon = "▶️", name = "Execute" },
   EnterPlanMode = { icon = "📝", name = "Plan Mode" },
-  AskUser = { icon = "❓", name = "Question" },
-  AskUserQuestion = { icon = "❓", name = "Question" },
 }
 
 local function get_tool_description(tool)

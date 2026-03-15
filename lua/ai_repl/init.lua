@@ -20,7 +20,6 @@ local providers = require("ai_repl.providers")
 
 local ralph_helper
 local tool_utils
-local questionnaire
 local syntax
 local chat_buffer
 
@@ -36,13 +35,6 @@ local function lazy_load_tool_utils()
     tool_utils = require("ai_repl.tool_utils")
   end
   return tool_utils
-end
-
-local function lazy_load_questionnaire()
-  if not questionnaire then
-    questionnaire = require("ai_repl.questionnaire")
-  end
-  return questionnaire
 end
 
 local function lazy_load_syntax()
@@ -369,13 +361,6 @@ local function handle_session_update(proc, params)
       local mode_display = get_mode_display(proc.state.mode or "execute")
       append_to_buffer(buf, { "", "[▶] " .. mode_display .. " mode: Starting execution...", "" }, { type = "silent" })
       return
-    elseif result.is_ask_user then
-      render.stop_animation()
-      if #result.questions > 0 then
-        lazy_load_questionnaire().start(proc, result.questions, function(response)
-          M.send_prompt(response)
-        end)
-      end
     else
       render.start_animation(buf, "executing")
       render.render_tool(buf, result.tool)
@@ -389,9 +374,7 @@ local function handle_session_update(proc, params)
         render.render_diff(buf, result.diff.path, result.diff.old, result.diff.new)
       end
 
-      if result.tool.title ~= "AskUser" and result.tool.title ~= "AskUserQuestion" then
-        render.render_tool(buf, result.tool)
-      end
+      render.render_tool(buf, result.tool)
 
       if result.images and #result.images > 0 then
         for _, img in ipairs(result.images) do
