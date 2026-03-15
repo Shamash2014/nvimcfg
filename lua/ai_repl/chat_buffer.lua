@@ -1119,6 +1119,45 @@ function M.setup_keymaps(buf)
     desc = "Open project manager"
   }))
 
+  -- Clipboard image paste
+  local function paste_clipboard_image()
+    local has_image = vim.fn.system("pngpaste - >/dev/null 2>&1; echo $?"):gsub("%s+", "")
+    if has_image ~= "0" then
+      return false
+    end
+    local tmp = "/tmp/nvim_clip_" .. os.time() .. "_" .. math.random(1000, 9999) .. ".png"
+    vim.fn.system("pngpaste " .. vim.fn.shellescape(tmp))
+    if vim.v.shell_error ~= 0 then
+      return false
+    end
+    local ref = "@" .. tmp
+    local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+    local line = vim.api.nvim_get_current_line()
+    local new_line = line:sub(1, col) .. ref .. line:sub(col + 1)
+    vim.api.nvim_set_current_line(new_line)
+    vim.api.nvim_win_set_cursor(0, { row, col + #ref })
+    return true
+  end
+
+  vim.keymap.set("n", "p", function()
+    if not paste_clipboard_image() then
+      vim.cmd("normal! p")
+    end
+  end, vim.tbl_extend("force", opts, { desc = "Paste (image-aware)" }))
+
+  vim.keymap.set("n", "P", function()
+    if not paste_clipboard_image() then
+      vim.cmd("normal! P")
+    end
+  end, vim.tbl_extend("force", opts, { desc = "Paste before (image-aware)" }))
+
+  vim.keymap.set("i", "<C-v>", function()
+    if not paste_clipboard_image() then
+      local key = vim.api.nvim_replace_termcodes("<C-r>+", true, false, true)
+      vim.api.nvim_feedkeys(key, "n", false)
+    end
+  end, vim.tbl_extend("force", opts, { desc = "Paste (image-aware)" }))
+
   -- Cycle AI mode (Shift-Tab)
   vim.keymap.set({ "n", "i" }, "<S-Tab>", function()
     local state = get_state(buf)
