@@ -3399,8 +3399,7 @@ function M.build_profile_args(provider_id, profile_id)
     local codex_profiles = require("ai_repl.codex_profiles")
     return codex_profiles.build_args(profile_id), "append"
   elseif provider_id == "opencode" then
-    local opencode_models = require("ai_repl.opencode_models")
-    return opencode_models.build_args(profile_id), "prepend"
+    return {}, nil
   end
   return {}
 end

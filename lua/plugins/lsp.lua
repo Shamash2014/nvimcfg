@@ -1,5 +1,6 @@
 return {
   "neovim/nvim-lspconfig",
+  dependencies = { "b0o/SchemaStore.nvim" },
   event = "VeryLazy",
   config = function()
     local capabilities = require("blink.cmp").get_lsp_capabilities()
@@ -1251,6 +1252,21 @@ return {
       safe_enable("kotlin_language_server")
     end
 
+    if vim.fn.executable("vscode-json-language-server") == 1 then
+      vim.lsp.config("jsonls", {
+        cmd = { "vscode-json-language-server", "--stdio" },
+        filetypes = { "json", "jsonc" },
+        root_markers = { ".git", vim.fn.getcwd() },
+        settings = {
+          json = {
+            schemas = require("schemastore").json.schemas(),
+            validate = { enable = true },
+          },
+        },
+      })
+      safe_enable("jsonls")
+    end
+
     if vim.fn.executable("yaml-language-server") == 1 then
       vim.lsp.config("yamlls", {
       cmd = { "yaml-language-server", "--stdio" },
@@ -1265,19 +1281,10 @@ return {
           completion = true,
           validate = true,
           schemaStore = {
-            enable = true,
-            url = "https://www.schemastore.org/api/json/catalog.json",
+            enable = false,
+            url = "",
           },
-          schemas = {
-            ["https://json.schemastore.org/github-workflow.json"] = "/.github/workflows/*",
-            ["https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json"] = "docker-compose*.yml",
-            ["https://json.schemastore.org/chart.json"] = "Chart.yaml",
-            ["https://json.schemastore.org/dependabot-v2"] = ".github/dependabot.yml",
-            ["https://json.schemastore.org/gitlab-ci"] = ".gitlab-ci.yml",
-            ["https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/schemas/v3.0/schema.json"] = "*api*.yml",
-            ["https://raw.githubusercontent.com/ansible-community/schemas/main/f/ansible.json#/$defs/tasks"] = "roles/*/tasks/*.yml",
-            ["https://raw.githubusercontent.com/ansible-community/schemas/main/f/ansible.json#/$defs/playbook"] = "*playbook*.yml",
-          },
+          schemas = require("schemastore").yaml.schemas(),
           format = {
             enable = true,
           },

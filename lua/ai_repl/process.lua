@@ -52,6 +52,8 @@ function Process.new(session_id, opts)
     auto_init = opts.auto_init ~= false,
     load_session_id = opts.load_session_id,
     mcp_servers = normalize_mcp_servers(opts.mcp_servers or EMPTY_ARRAY),
+    profile_id = opts.profile_id,
+    provider = opts.provider,
   }
   self.state = {
     initialized = false,
@@ -607,10 +609,14 @@ function Process:_acp_create_new_session(cwd)
   self:_notify_status("creating_session")
 
   local session_done = false
-  local msg_id = self:_send("session/new", {
+  local session_params = {
     cwd = cwd,
-    mcpServers = self.config.mcp_servers
-  }, function(result, err)
+    mcpServers = self.config.mcp_servers,
+  }
+  if self.config.profile_id and self.config.profile_id ~= "" then
+    session_params.model = self.config.profile_id
+  end
+  local msg_id = self:_send("session/new", session_params, function(result, err)
     if session_done then return end
     session_done = true
     

@@ -76,6 +76,15 @@ local providers = {
     background_permissions = "allow_once",
     mcp_servers = {},
   },
+  cursor = {
+    name = "Cursor",
+    cmd = "agent",
+    args = {"acp"},
+    env = {},
+    permission_mode = "default",
+    background_permissions = "allow_once",
+    mcp_servers = {},
+  },
 }
 
 -- Helper to get provider config with fallback to defaults
