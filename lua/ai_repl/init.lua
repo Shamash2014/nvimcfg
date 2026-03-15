@@ -59,6 +59,18 @@ local function lazy_load_chat_buffer()
   return chat_buffer
 end
 
+local config_mt = {
+  __index = function(_, key)
+    if key == "providers" then
+      local p = {}
+      for _, provider in ipairs(providers.list()) do
+        p[provider.id] = provider
+      end
+      return p
+    end
+  end
+}
+
 local config = setmetatable({
   window = {
     width = 0.45,
@@ -93,17 +105,7 @@ local config = setmetatable({
       send_to_ai = "<leader>af",
     },
   }
-}, {
-  __index = function(_, key)
-    if key == "providers" then
-      local p = {}
-      for _, provider in ipairs(providers.list()) do
-        p[provider.id] = provider
-      end
-      return p
-    end
-  end
-})
+}, config_mt)
 
 local ui = {
   project_root = nil,
@@ -3923,7 +3925,7 @@ function M.setup(opts)
     providers.set_providers(opts.providers)
     opts.providers = nil
   end
-  config = vim.tbl_deep_extend("force", config, opts)
+  config = setmetatable(vim.tbl_deep_extend("force", config, opts), config_mt)
 
   registry.setup({
     sessions_file = config.sessions_file,
