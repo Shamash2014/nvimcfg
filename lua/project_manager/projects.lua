@@ -418,6 +418,16 @@ function M.gather()
   local tab_visible_bufs = collect_open_tabs(projects)
   collect_open_buffers(projects, tab_visible_bufs)
 
+  local ok_mem, memory = pcall(require, "core.memory")
+  if ok_mem then
+    for _, proj in pairs(projects) do
+      if memory.exists(proj.path) then
+        proj.has_memory = true
+        proj.memory_lines = memory.line_count(proj.path)
+      end
+    end
+  end
+
   local sorted = {}
   for _, proj in pairs(projects) do
     table.sort(proj.sessions, function(a, b)

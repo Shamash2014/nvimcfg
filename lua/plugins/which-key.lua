@@ -85,6 +85,20 @@ return {
       desc = "Project Manager (split)",
     },
     {
+      "<leader>fw",
+      function()
+        require("core.memory").open()
+      end,
+      desc = "Project Memory",
+    },
+    {
+      "<leader>fW",
+      function()
+        require("core.memory").open_global()
+      end,
+      desc = "Global Memory",
+    },
+    {
       "<leader>aa",
       function()
         require("ai_repl.annotations").annotate()

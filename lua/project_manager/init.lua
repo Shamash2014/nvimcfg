@@ -20,6 +20,20 @@ local function render()
   local lines = {}
   local entries = {}
 
+  local ok_mem, memory = pcall(require, "core.memory")
+  if ok_mem then
+    if memory.global_exists() then
+      local gl = string.format(" Global Memory (%d lines)", memory.global_line_count())
+      table.insert(lines, gl)
+      table.insert(entries, { type = "global_memory" })
+    else
+      table.insert(lines, " Global Memory (new)")
+      table.insert(entries, { type = "global_memory" })
+    end
+    table.insert(lines, "")
+    table.insert(entries, { type = "separator" })
+  end
+
   if #projects == 0 then
     table.insert(lines, "  No projects found")
     table.insert(lines, "")
@@ -147,6 +161,21 @@ local function render()
             })
           end
         end
+      end
+
+      if proj.has_memory then
+        local line = string.format("   Memory (%d lines)", proj.memory_lines or 0)
+        table.insert(lines, line)
+        table.insert(entries, {
+          type = "memory",
+          project_path = proj.path,
+        })
+      else
+        table.insert(lines, "   Memory (new)")
+        table.insert(entries, {
+          type = "memory",
+          project_path = proj.path,
+        })
       end
 
       if proj.buffers and #proj.buffers > 0 then
@@ -312,6 +341,32 @@ local function render()
         end_col = #lines[line_idx],
         hl_group = "Normal",
       })
+    elseif entry.type == "memory" then
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 2, {
+        end_col = 4,
+        hl_group = "DiagnosticHint",
+      })
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 5, {
+        end_col = 11,
+        hl_group = "Keyword",
+      })
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 11, {
+        end_col = #lines[line_idx],
+        hl_group = "Comment",
+      })
+    elseif entry.type == "global_memory" then
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 0, {
+        end_col = 2,
+        hl_group = "DiagnosticHint",
+      })
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 2, {
+        end_col = 15,
+        hl_group = "Title",
+      })
+      vim.api.nvim_buf_set_extmark(pm_buf, ns_id, line_idx - 1, 15, {
+        end_col = #lines[line_idx],
+        hl_group = "Comment",
+      })
     end
 
     ::continue::
@@ -407,6 +462,20 @@ local function open_selected()
         entry.task_ref:attach()
       end)
     end
+    return
+  end
+
+  if entry.type == "global_memory" then
+    open(function()
+      require("core.memory").open_global()
+    end)
+    return
+  end
+
+  if entry.type == "memory" then
+    open(function()
+      require("core.memory").open(entry.project_path)
+    end)
     return
   end
 
@@ -583,6 +652,9 @@ local function show_help()
     "",
     "  On saved session:",
     "  d            Remove from disk",
+    "",
+    "  On memory:",
+    "  <CR> / l     Open memory file",
     "",
     "  On buffer:",
     "  <CR> / l     Open buffer",
