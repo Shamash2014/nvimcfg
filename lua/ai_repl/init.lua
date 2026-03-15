@@ -3216,8 +3216,8 @@ end
 
 function M.pick_provider(callback)
   local items = {}
-  for id, p in pairs(config.providers) do
-    table.insert(items, { id = id, name = p.name or id })
+  for _, p in ipairs(providers.list()) do
+    table.insert(items, { id = p.id, name = p.name or p.id })
   end
   table.sort(items, function(a, b) return a.name < b.name end)
 

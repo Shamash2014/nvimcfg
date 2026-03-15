@@ -77,7 +77,7 @@ function M.init_buffer(buf, existing_session_id)
   vim.bo[buf].filetype = "chat"  -- Dedicated chat filetype (not markdown to avoid expensive plugins)
   vim.bo[buf].buftype = ""
   vim.bo[buf].bufhidden = ""
-  vim.bo[buf].swapfile = true
+  vim.bo[buf].swapfile = false
   vim.bo[buf].buflisted = true
   vim.bo[buf].modifiable = true
 

@@ -22,9 +22,10 @@ return {
       { "<leader>dR", function() require("dap").run_last() end, desc = "Run Last" },
       { "<leader>dx", function() require("dap").terminate() end, desc = "Terminate Debug" },
 
-      -- DAP View control
-      { "<leader>dv", function() require("dap-view").toggle() end, desc = "Toggle DAP View" },
-      { "<leader>de", function() require("dap-view").eval() end, desc = "Evaluate Expression", mode = { "n", "v" } },
+      -- DAP View (https://igorlfs.github.io/nvim-dap-view): toggle, add watch, jump to view
+      { "<leader>dv", function() require("dap-view").toggle() end, desc = "DAP View: Toggle" },
+      { "<leader>de", function() require("dap-view").add_expr() end, desc = "DAP View: Add to Watch (cursor/selection)", mode = { "n", "v" } },
+      { "<leader>dV", function() require("dap-view").toggle(true) end, desc = "DAP View: Toggle (hide terminal)" },
 
       -- Flutter DAP controls
       { "<localleader>ds", "<cmd>FlutterSelectDevice<cr>", desc = "Select Flutter Device", ft = "dart" },
@@ -125,11 +126,11 @@ return {
         commented = false,
       })
 
-      -- DAP View setup
+      -- nvim-dap-view: https://igorlfs.github.io/nvim-dap-view (opts deep-merged with defaults)
       require("dap-view").setup({
-        winbar = {
-          show = true,
-        },
+        winbar = { show = true },
+        -- auto_toggle = true,  -- open on session start, close when all sessions finish
+        -- windows = { size = 0.25, position = "below" },
       })
 
       -- JavaScript/TypeScript/Node Debug
