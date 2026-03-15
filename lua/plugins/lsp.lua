@@ -1,6 +1,6 @@
 return {
   "neovim/nvim-lspconfig",
-  dependencies = { "b0o/SchemaStore.nvim" },
+  dependencies = { "b0o/SchemaStore.nvim", "mrjones2014/codesettings.nvim" },
   event = "VeryLazy",
   config = function()
     local capabilities = require("blink.cmp").get_lsp_capabilities()
@@ -10,6 +10,9 @@ return {
       flags = {
         debounce_text_changes = 150,
       },
+      before_init = function(_, config)
+        require("codesettings").with_local_settings(config.name, config)
+      end,
     }
 
     vim.lsp.config("*", default_config)

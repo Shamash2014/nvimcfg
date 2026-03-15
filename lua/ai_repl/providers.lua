@@ -67,15 +67,6 @@ local providers = {
     background_permissions = "allow_once",
     mcp_servers = {},
   },
-  pi = {
-    name = "Pi",
-    cmd = "npx",
-    args = {"-y", "pi-acp"},
-    env = {},
-    permission_mode = "default",
-    background_permissions = "allow_once",
-    mcp_servers = {},
-  },
   cursor = {
     name = "Cursor",
     cmd = "agent",
@@ -102,6 +93,7 @@ function M.get_config(id)
     permission_mode = provider.permission_mode or "default",
     background_permissions = provider.background_permissions or "allow_once",
     mcp_servers = provider.mcp_servers or {},
+    extension_handlers = provider.extension_handlers or {},
   }
 end
 

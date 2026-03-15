@@ -580,21 +580,19 @@ local function show_permission_prompt(proc, msg_id, params)
 
     local agent_options = params.options or {}
     local perm_opts = lazy_load_tool_utils().parse_permission_options(agent_options)
-    local first_allow_id = perm_opts.allow
-    local first_deny_id = perm_opts.deny
-    local allow_always_id = perm_opts.always
 
     local provider_id = proc.data.provider or config.default_provider
     local provider_config = config.providers[provider_id] or {}
     local mode = provider_config.permission_mode or config.permission_mode
 
     if mode == "bypassPermissions" or mode == "dontAsk" then
+      local bypass_id = perm_opts.always or perm_opts.allow
       local response = {
         jsonrpc = "2.0",
         id = msg_id,
-        result = { outcome = { outcome = "selected", optionId = allow_always_id or first_allow_id } }
+        result = { outcome = { outcome = "selected", optionId = bypass_id } }
       }
-      if not (allow_always_id or first_allow_id) then
+      if not bypass_id then
         response.result = { outcome = { outcome = "cancelled" } }
       end
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
@@ -669,50 +667,30 @@ local function show_permission_prompt(proc, msg_id, params)
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
     end
 
-    append_to_buffer(buf, { "  [y] Allow  [a] Always  [n] Deny  [c] Cancel" }, { type = "error" })
+    local prompt_line, bindings = lazy_load_tool_utils().build_permission_prompt(perm_opts.entries)
+    append_to_buffer(buf, { prompt_line }, { type = "error" })
 
     local answered = false
     local function cleanup_keymaps()
-      for _, key in ipairs({ "y", "a", "n", "c" }) do
-        pcall(vim.keymap.del, "n", key, { buffer = buf })
+      for _, b in ipairs(bindings) do
+        pcall(vim.keymap.del, "n", b.key, { buffer = buf })
       end
     end
 
-    local function handle_choice(choice)
+    local function handle_choice(binding)
       if answered then return end
       answered = true
       cleanup_keymaps()
 
-      if choice == "y" then
-        -- FIXED: Use agent's allow option, error if not provided
-        if not first_allow_id then
-          append_to_buffer(buf, { "[ERROR] Agent did not provide an allow option" }, { type = "error" })
-          send_cancelled()
-          return
-        end
-        append_to_buffer(buf, { "[+] Allowed" }, { type = "silent" })
-        send_selected(first_allow_id)
-      elseif choice == "a" then
-        -- FIXED: Use agent's allow_always option, error if not provided
-        if not allow_always_id then
-          append_to_buffer(buf, { "[ERROR] Agent did not provide an 'always' option" }, { type = "error" })
-          send_cancelled()
-          return
-        end
-        append_to_buffer(buf, { "[+] Always allowed" }, { type = "silent" })
-        send_selected(allow_always_id)
-      elseif choice == "n" then
-        -- FIXED: Use agent's deny option, error if not provided
-        if not first_deny_id then
-          append_to_buffer(buf, { "[ERROR] Agent did not provide a deny option" }, { type = "error" })
-          send_cancelled()
-          return
-        end
-        append_to_buffer(buf, { "[x] Denied" }, { type = "silent" })
-        send_selected(first_deny_id)
-      else
+      if binding.role == "cancel" or not binding.id then
         append_to_buffer(buf, { "[x] Cancelled" }, { type = "silent" })
         send_cancelled()
+      elseif binding.role == "deny" then
+        append_to_buffer(buf, { "[x] " .. binding.label }, { type = "silent" })
+        send_selected(binding.id)
+      else
+        append_to_buffer(buf, { "[+] " .. binding.label }, { type = "silent" })
+        send_selected(binding.id)
       end
 
       local queue = proc.ui.permission_queue
@@ -725,10 +703,10 @@ local function show_permission_prompt(proc, msg_id, params)
     end
 
     local opts = { buffer = buf, nowait = true }
-    vim.keymap.set("n", "y", function() handle_choice("y") end, opts)
-    vim.keymap.set("n", "a", function() handle_choice("a") end, opts)
-    vim.keymap.set("n", "n", function() handle_choice("n") end, opts)
-    vim.keymap.set("n", "c", function() handle_choice("c") end, opts)
+    for _, b in ipairs(bindings) do
+      local binding = b
+      vim.keymap.set("n", binding.key, function() handle_choice(binding) end, opts)
+    end
   end)
 end
 
@@ -958,41 +936,82 @@ local function handle_method(proc, method, params, msg_id)
       result = { success = true }
     }) .. "\n")
 
-  elseif msg_id then
-    local url = params and (params.url or params.uri)
-    local prompt_text = params and (params.prompt or params.message)
+  else
+    local provider_id = proc.data.provider or config.default_provider
+    local provider_config = config.providers[provider_id] or {}
+    local ext_handlers = provider_config.extension_handlers or {}
 
-    append_to_buffer(buf, {
-      "[*] Agent request: " .. method .. " " .. vim.inspect(params):sub(1, 200)
-    }, { type = "silent" })
-
-    if url then
-      vim.ui.open(url)
-      append_to_buffer(buf, { "[*] Opened: " .. url }, { type = "silent" })
+    local handler = ext_handlers[method]
+    if not handler then
+      for pattern, h in pairs(ext_handlers) do
+        if method:match(pattern) then
+          handler = h
+          break
+        end
+      end
     end
 
-    if prompt_text then
-      append_to_buffer(buf, { "[?] Agent asks: " .. prompt_text }, { type = "error" })
-      vim.ui.input({ prompt = prompt_text .. " " }, function(input)
-        local result = {}
-        if input and input ~= "" then
-          result = { line = input, value = input, input = input }
-          append_to_buffer(buf, { "[+] Sent response" }, { type = "silent" })
-        end
-        if proc.job_id then
+    if handler then
+      local ok, result = pcall(handler, proc, params, msg_id)
+      if msg_id then
+        if ok and result ~= nil then
           vim.fn.chansend(proc.job_id, vim.json.encode({
             jsonrpc = "2.0",
             id = msg_id,
             result = result,
           }) .. "\n")
+        elseif not ok then
+          vim.fn.chansend(proc.job_id, vim.json.encode({
+            jsonrpc = "2.0",
+            id = msg_id,
+            error = { code = -32603, message = tostring(result) },
+          }) .. "\n")
         end
-      end)
-    else
-      vim.fn.chansend(proc.job_id, vim.json.encode({
-        jsonrpc = "2.0",
-        id = msg_id,
-        result = {},
-      }) .. "\n")
+      end
+      if config.debug then
+        append_to_buffer(buf, { "[debug] extension: " .. method .. " handled" }, { type = "silent" })
+      end
+
+    elseif msg_id then
+      local url = params and (params.url or params.uri)
+      local prompt_text = params and (params.prompt or params.message)
+
+      append_to_buffer(buf, {
+        "[*] Agent request: " .. method .. " " .. vim.inspect(params):sub(1, 200)
+      }, { type = "silent" })
+
+      if url then
+        vim.ui.open(url)
+        append_to_buffer(buf, { "[*] Opened: " .. url }, { type = "silent" })
+      end
+
+      if prompt_text then
+        append_to_buffer(buf, { "[?] Agent asks: " .. prompt_text }, { type = "error" })
+        vim.ui.input({ prompt = prompt_text .. " " }, function(input)
+          local result = {}
+          if input and input ~= "" then
+            result = { line = input, value = input, input = input }
+            append_to_buffer(buf, { "[+] Sent response" }, { type = "silent" })
+          end
+          if proc.job_id then
+            vim.fn.chansend(proc.job_id, vim.json.encode({
+              jsonrpc = "2.0",
+              id = msg_id,
+              result = result,
+            }) .. "\n")
+          end
+        end)
+      else
+        vim.fn.chansend(proc.job_id, vim.json.encode({
+          jsonrpc = "2.0",
+          id = msg_id,
+          result = {},
+        }) .. "\n")
+      end
+    elseif config.debug then
+      append_to_buffer(buf, {
+        "[debug] extension notification: " .. method .. " " .. vim.inspect(params):sub(1, 200)
+      }, { type = "silent" })
     end
   end
 end
@@ -3899,7 +3918,12 @@ function M.get_config()
 end
 
 function M.setup(opts)
-  config = vim.tbl_deep_extend("force", config, opts or {})
+  opts = opts or {}
+  if opts.providers then
+    providers.set_providers(opts.providers)
+    opts.providers = nil
+  end
+  config = vim.tbl_deep_extend("force", config, opts)
 
   registry.setup({
     sessions_file = config.sessions_file,

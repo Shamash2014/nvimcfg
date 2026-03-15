@@ -482,11 +482,7 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
 
     local agent_options = params.options or {}
     local perm_opts = tool_utils.parse_permission_options(agent_options)
-    local first_allow_id = perm_opts.allow
-    local first_deny_id = perm_opts.deny
-    local allow_always_id = perm_opts.always
 
-    -- Check bypass mode
     local config_ok, ai_config = pcall(function()
       return require("ai_repl.init").get_config and require("ai_repl.init").get_config() or {}
     end)
@@ -498,12 +494,13 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
       or "default"
 
     if mode == "bypassPermissions" or mode == "dontAsk" then
+      local bypass_id = perm_opts.always or perm_opts.allow
       local response = {
         jsonrpc = "2.0",
         id = msg_id,
-        result = { outcome = { outcome = "selected", optionId = allow_always_id or first_allow_id } }
+        result = { outcome = { outcome = "selected", optionId = bypass_id } }
       }
-      if not (allow_always_id or first_allow_id) then
+      if not bypass_id then
         response.result = { outcome = { outcome = "cancelled" } }
       end
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
@@ -524,22 +521,20 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
       display = display .. ": " .. desc
     end
 
-    local was_modifiable = vim.bo[buf].modifiable
     vim.bo[buf].modifiable = true
+
+    local prompt_line, bindings = tool_utils.build_permission_prompt(perm_opts.entries)
 
     M.append_to_chat_buffer(buf, {
       "",
       "[?] " .. display,
-      "  [y] Allow  [a] Always  [n] Deny  [c] Cancel",
+      prompt_line,
     })
 
-    -- Don't set modifiable back to false - keep it true for voice input
-    -- The permission keymaps will handle preventing editing elsewhere
     vim.bo[buf].modifiable = true
 
     if proc.ui then proc.ui.permission_active = true end
 
-    -- Response helpers
     local function send_selected(option_id)
       local response = {
         jsonrpc = "2.0",
@@ -560,43 +555,25 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
 
     local answered = false
     local function cleanup_keymaps()
-      for _, key in ipairs({ "y", "a", "n", "c" }) do
-        pcall(vim.keymap.del, "n", key, { buffer = buf })
+      for _, b in ipairs(bindings) do
+        pcall(vim.keymap.del, "n", b.key, { buffer = buf })
       end
     end
 
-    local function handle_choice(choice)
+    local function handle_choice(binding)
       if answered then return end
       answered = true
       cleanup_keymaps()
 
-      if choice == "y" then
-        if not first_allow_id then
-          M.append_to_chat_buffer(buf, { "[!] Agent did not provide an allow option" })
-          send_cancelled()
-        else
-          M.append_to_chat_buffer(buf, { "[+] Allowed" })
-          send_selected(first_allow_id)
-        end
-      elseif choice == "a" then
-        if not allow_always_id then
-          M.append_to_chat_buffer(buf, { "[!] Agent did not provide an 'always' option" })
-          send_cancelled()
-        else
-          M.append_to_chat_buffer(buf, { "[+] Always allowed" })
-          send_selected(allow_always_id)
-        end
-      elseif choice == "n" then
-        if not first_deny_id then
-          M.append_to_chat_buffer(buf, { "[!] Agent did not provide a deny option" })
-          send_cancelled()
-        else
-          M.append_to_chat_buffer(buf, { "[x] Denied" })
-          send_selected(first_deny_id)
-        end
-      else
+      if binding.role == "cancel" or not binding.id then
         M.append_to_chat_buffer(buf, { "[x] Cancelled", "", "@You:", "", "" })
         send_cancelled()
+      elseif binding.role == "deny" then
+        M.append_to_chat_buffer(buf, { "[x] " .. binding.label })
+        send_selected(binding.id)
+      else
+        M.append_to_chat_buffer(buf, { "[+] " .. binding.label })
+        send_selected(binding.id)
       end
 
       if decorations_ok then pcall(decorations.start_spinner, buf, "executing") end
@@ -613,10 +590,10 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
     end
 
     local opts = { buffer = buf, nowait = true }
-    vim.keymap.set("n", "y", function() handle_choice("y") end, opts)
-    vim.keymap.set("n", "a", function() handle_choice("a") end, opts)
-    vim.keymap.set("n", "n", function() handle_choice("n") end, opts)
-    vim.keymap.set("n", "c", function() handle_choice("c") end, opts)
+    for _, b in ipairs(bindings) do
+      local binding = b
+      vim.keymap.set("n", binding.key, function() handle_choice(binding) end, opts)
+    end
   end)
 end
 

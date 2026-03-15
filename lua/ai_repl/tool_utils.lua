@@ -65,44 +65,94 @@ function M.get_tool_description(title, input, locations, opts)
 end
 
 function M.parse_permission_options(agent_options)
-  local first_allow_id, first_deny_id, allow_always_id
+  local entries = {}
+  local seen_roles = {}
+
   for _, opt in ipairs(agent_options) do
     local oid = opt.optionId or opt.id
+    if not oid then goto continue end
+
     local okind = opt.kind or ""
-    if oid then
-      if oid:match("allow_always") or oid:match("allowAlways") then
-        allow_always_id = allow_always_id or oid
-      elseif okind:match("allow") or oid:match("allow") or oid:match("yes") or oid:match("approve") then
-        first_allow_id = first_allow_id or oid
-      end
-      if okind:match("deny") or oid:match("deny") or oid:match("no") or oid:match("reject") then
-        first_deny_id = first_deny_id or oid
-      end
+    local label = opt.label or opt.text or opt.name or oid
+    local role
+
+    if oid:match("allow_always") or oid:match("allowAlways") or okind:match("allow_always") then
+      role = "always"
+    elseif okind:match("deny") or oid:match("deny") or oid:match("no") or oid:match("reject") then
+      role = "deny"
+    elseif okind:match("allow") or oid:match("allow") or oid:match("yes") or oid:match("approve") then
+      role = "allow"
+    end
+
+    if role and not seen_roles[role] then
+      seen_roles[role] = true
+      table.insert(entries, { id = oid, label = label, role = role })
+    else
+      table.insert(entries, { id = oid, label = label, role = role or "other" })
+    end
+
+    ::continue::
+  end
+
+  if #entries == 0 and #agent_options >= 1 then
+    local first = agent_options[1]
+    table.insert(entries, { id = first.optionId or first.id, label = first.label or first.text or first.name or "Allow", role = "allow" })
+    if #agent_options >= 2 then
+      local last = agent_options[#agent_options]
+      table.insert(entries, { id = last.optionId or last.id, label = last.label or last.text or last.name or "Deny", role = "deny" })
     end
   end
 
-  -- Positional fallback: if pattern matching found nothing, use first/last options
-  if #agent_options >= 2 then
-    local first_oid = agent_options[1].optionId or agent_options[1].id
-    local last_oid = agent_options[#agent_options].optionId or agent_options[#agent_options].id
-    if not first_allow_id and not allow_always_id then
-      first_allow_id = first_oid
-    end
-    if not first_deny_id then
-      first_deny_id = last_oid
-    end
-  elseif #agent_options == 1 then
-    local oid = agent_options[1].optionId or agent_options[1].id
-    if not first_allow_id and not allow_always_id then
-      first_allow_id = oid
-    end
+  local allow = entries[1] and entries[1].role == "allow" and entries[1] or nil
+  local deny, always
+  for _, e in ipairs(entries) do
+    if e.role == "allow" and not allow then allow = e end
+    if e.role == "deny" and not deny then deny = e end
+    if e.role == "always" and not always then always = e end
   end
 
   return {
-    allow = first_allow_id,
-    deny = first_deny_id,
-    always = allow_always_id,
+    allow = allow and allow.id,
+    deny = deny and deny.id,
+    always = always and always.id,
+    entries = entries,
   }
+end
+
+function M.build_permission_prompt(entries)
+  local keys = {}
+  local bindings = {}
+  local key_order = { "y", "a", "n", "e", "d", "f", "g", "h" }
+  local role_keys = { allow = "y", always = "a", deny = "n" }
+  local used_keys = {}
+  local cancel_key = "c"
+
+  for _, entry in ipairs(entries) do
+    local key = role_keys[entry.role]
+    if key and not used_keys[key] then
+      used_keys[key] = true
+      table.insert(keys, "[" .. key .. "] " .. entry.label)
+      table.insert(bindings, { key = key, id = entry.id, label = entry.label, role = entry.role })
+    end
+  end
+
+  for _, entry in ipairs(entries) do
+    if not vim.tbl_contains(vim.tbl_map(function(b) return b.id end, bindings), entry.id) then
+      for _, k in ipairs(key_order) do
+        if not used_keys[k] and k ~= cancel_key then
+          used_keys[k] = true
+          table.insert(keys, "[" .. k .. "] " .. entry.label)
+          table.insert(bindings, { key = k, id = entry.id, label = entry.label, role = entry.role })
+          break
+        end
+      end
+    end
+  end
+
+  table.insert(keys, "[" .. cancel_key .. "] Cancel")
+  table.insert(bindings, { key = cancel_key, id = nil, label = "Cancel", role = "cancel" })
+
+  return "  " .. table.concat(keys, "  "), bindings
 end
 
 return M
