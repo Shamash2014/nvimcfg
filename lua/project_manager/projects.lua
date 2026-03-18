@@ -41,6 +41,29 @@ local function normalize_path(path)
   return vim.fn.fnamemodify(path, ":p"):gsub("/$", "")
 end
 
+local function get_worktree_parent(path)
+  local git_path = path .. "/.git"
+  local stat = vim.uv.fs_stat(git_path)
+  if not stat or stat.type ~= "file" then return nil end
+
+  local f = io.open(git_path, "r")
+  if not f then return nil end
+  local content = f:read("*a")
+  f:close()
+
+  local gitdir = content:match("gitdir:%s*(.+)")
+  if not gitdir then return nil end
+  gitdir = gitdir:gsub("%s+$", "")
+  if not gitdir:match("^/") then
+    gitdir = vim.fn.fnamemodify(path .. "/" .. gitdir, ":p")
+  end
+  local common = gitdir:match("(.+)/%.git/worktrees/")
+  if common then
+    return vim.fn.fnamemodify(common, ":p"):gsub("/$", "")
+  end
+  return nil
+end
+
 local function relative_time(timestamp)
   if not timestamp then
     return "unknown"
@@ -454,6 +477,14 @@ function M.gather()
     end
     return a.name < b.name
   end)
+
+  for _, proj in ipairs(sorted) do
+    local parent = get_worktree_parent(proj.path)
+    if parent then
+      proj.worktree_parent = normalize_path(parent)
+      proj.name = proj.name .. " (wt)"
+    end
+  end
 
   return sorted
 end

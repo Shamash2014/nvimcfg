@@ -24,6 +24,8 @@ return {
       { "<leader>f", group = "file/find" },
       { "<leader>g", group = "git" },
       { "<leader>gk", group = "stack" },
+      { "<leader>gm", group = "gitlab" },
+      { "<leader>gw", group = "worktree" },
       { "<leader>o", group = "options/config" },
       { "<leader>od", group = "database" },
       { "<leader>p", group = "project" },

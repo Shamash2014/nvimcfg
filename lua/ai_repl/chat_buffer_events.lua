@@ -153,17 +153,43 @@ function M.setup_event_forwarding(buf, proc)
           if not ok then
             vim.notify("[.chat] Error processing update: " .. tostring(err), vim.log.levels.ERROR)
             local session_state = require("ai_repl.session_state")
-            session_state.apply_update(self, params.update)
+            local apply_ok, result = pcall(session_state.apply_update, self, params.update)
+            if apply_ok and result and result.should_process_queue then
+              vim.defer_fn(function()
+                self:process_queued_prompts()
+              end, 200)
+            end
+            local is_stop = params.update and params.update.sessionUpdate == "stop"
+            if is_stop then
+              self.state.busy = false
+              vim.defer_fn(function()
+                if vim.api.nvim_buf_is_valid(buf) then
+                  M.ensure_you_marker(buf)
+                end
+                self:process_queued_prompts()
+              end, 200)
+            end
           end
         else
           -- Buffer closed but we still need to process updates
           local session_state = require("ai_repl.session_state")
-          local result = session_state.apply_update(self, params.update)
-          -- Ensure queue keeps flowing even without a visible buffer
-          if result and result.should_process_queue then
+          local apply_ok, result = pcall(session_state.apply_update, self, params.update)
+          if apply_ok and result and result.should_process_queue then
             vim.defer_fn(function()
               self:process_queued_prompts()
             end, 200)
+          end
+          if not apply_ok or not result then
+            local is_stop = params.update and params.update.sessionUpdate == "stop"
+            if is_stop then
+              self.state.busy = false
+              self.ui.active_tools = {}
+              self.ui.pending_tool_calls = {}
+              self.ui.streaming_response = ""
+              vim.defer_fn(function()
+                self:process_queued_prompts()
+              end, 200)
+            end
           end
         end
         return
@@ -212,17 +238,38 @@ function M.handle_session_update_in_chat(buf, update, proc)
   local apply_ok, result = pcall(session_state.apply_update, proc, update)
   if not apply_ok then
     proc.state.busy = false
+    proc.ui.active_tools = {}
+    proc.ui.pending_tool_calls = {}
+    proc.ui.streaming_response = ""
+    proc.ui.streaming_start_line = nil
     local dec_ok, decorations = pcall(require, "ai_repl.chat_decorations")
     if dec_ok then pcall(decorations.stop_spinner, buf) end
     if is_stop_update then
       vim.defer_fn(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
         M.ensure_you_marker(buf)
-      end, 700)
+        proc:process_queued_prompts()
+      end, 200)
     end
     return
   end
-  if not result then return end
+  if not result then
+    if is_stop_update then
+      proc.state.busy = false
+      proc.ui.active_tools = {}
+      proc.ui.pending_tool_calls = {}
+      proc.ui.streaming_response = ""
+      proc.ui.streaming_start_line = nil
+      local dec_ok, decorations = pcall(require, "ai_repl.chat_decorations")
+      if dec_ok then pcall(decorations.stop_spinner, buf) end
+      vim.defer_fn(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        M.ensure_you_marker(buf)
+        proc:process_queued_prompts()
+      end, 200)
+    end
+    return
+  end
 
   local state = get_state(buf)
   local decorations_ok, decorations = pcall(require, "ai_repl.chat_decorations")
@@ -374,21 +421,19 @@ end
 function M.stop_streaming(buf)
   local state = get_state(buf)
   if not state.streaming then return end
-  
+
   state.streaming = false
-  
+
   flush_streaming_text(buf, state)
-  
+
   state.streaming_text = ""
   state.streaming_insert_line = nil
   state.rendered_line_count = 0
-  
-  -- Ensure buffer is modifiable
+
   if vim.api.nvim_buf_is_valid(buf) then
     vim.bo[buf].modifiable = true
   end
-  
-  -- Stop any active spinner
+
   local decorations_ok, decorations = pcall(require, "ai_repl.chat_decorations")
   if decorations_ok then
     pcall(decorations.stop_spinner, buf)
@@ -422,14 +467,17 @@ function M.ensure_you_marker(buf)
       "",
       "",
     })
+    line_count = vim.api.nvim_buf_line_count(buf)
+  end
 
-    local win = vim.fn.bufwinid(buf)
-    if win ~= -1 then
-      vim.api.nvim_win_set_cursor(win, { line_count + 2, 0 })
-      vim.api.nvim_win_call(win, function()
-        vim.cmd("normal! zb")
-      end)
-    end
+  local win = vim.fn.bufwinid(buf)
+  if win ~= -1 then
+    local target = ends_with_you and (last_marker_line + 1) or (line_count - 1)
+    target = math.min(target, vim.api.nvim_buf_line_count(buf))
+    pcall(vim.api.nvim_win_set_cursor, win, { target, 0 })
+    pcall(vim.api.nvim_win_call, win, function()
+      vim.cmd("normal! zb")
+    end)
   end
 
   vim.bo[buf].modifiable = true
