@@ -35,11 +35,25 @@ function M._create_new_session(cwd, callback)
     end
 
     vim.notify("[Session Strategy] Creating new session...", vim.log.levels.INFO)
-    ai_repl.new_session(provider_id)
 
-    -- Wait for session to be ready
+    local before_ids = {}
+    for sid, _ in pairs(registry.all()) do
+      before_ids[sid] = true
+    end
+
+    ai_repl.new_session(provider_id, nil, { skip_chat_attach = true })
+
     vim.defer_fn(function()
-      local proc = registry.active()
+      local proc = nil
+      for sid, p in pairs(registry.all()) do
+        if not before_ids[sid] then
+          proc = p
+          break
+        end
+      end
+      if not proc then
+        proc = registry.active()
+      end
       if proc then
         M._wait_for_ready(proc, callback)
       else

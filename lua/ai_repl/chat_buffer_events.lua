@@ -117,6 +117,11 @@ function M.setup_event_forwarding(buf, proc)
 
   local state = get_state(buf)
 
+  if proc.ui.chat_buf and proc.ui.chat_buf ~= buf and vim.api.nvim_buf_is_valid(proc.ui.chat_buf) then
+    vim.notify("[.chat] Process already attached to another buffer, skipping", vim.log.levels.WARN)
+    return false
+  end
+
   if not state.original_handlers then
     state.original_handlers = {
       on_method = proc._on_method,

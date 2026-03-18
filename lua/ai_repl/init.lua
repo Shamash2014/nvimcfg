@@ -3216,7 +3216,8 @@ function M.pick_provider(callback)
   end)
 end
 
-function M.new_session(provider_id, profile_id)
+function M.new_session(provider_id, profile_id, opts)
+  opts = opts or {}
   if not provider_id then
     M.pick_provider(function(id)
       M.new_session(id)
@@ -3285,14 +3286,16 @@ function M.new_session(provider_id, profile_id)
 
   proc:start()
 
-  local cur_buf = vim.api.nvim_get_current_buf()
-  local chat_buffer = require("ai_repl.chat_buffer")
-  if chat_buffer.is_chat_buffer(cur_buf) then
-    local chat_buffer_events = require("ai_repl.chat_buffer_events")
-    chat_buffer_events.setup_event_forwarding(cur_buf, proc)
-    chat_buffer.attach_session(cur_buf, session_id)
-  else
-    M.open_chat_buffer(nil, true, session_id)
+  if not opts.skip_chat_attach then
+    local cur_buf = vim.api.nvim_get_current_buf()
+    local chat_buffer = require("ai_repl.chat_buffer")
+    if chat_buffer.is_chat_buffer(cur_buf) then
+      local chat_buffer_events = require("ai_repl.chat_buffer_events")
+      chat_buffer_events.setup_event_forwarding(cur_buf, proc)
+      chat_buffer.attach_session(cur_buf, session_id)
+    else
+      M.open_chat_buffer(nil, true, session_id)
+    end
   end
 end
 
