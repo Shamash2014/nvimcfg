@@ -125,6 +125,17 @@ local function action_step_commit()
   end)
 end
 
+local function action_step_rollback()
+  local wt = require("core.worktrunk")
+  wt.step_rollback(function(ok, msg)
+    if ok then
+      vim.notify("Step rollback done", vim.log.levels.INFO)
+    else
+      vim.notify("Step rollback failed: " .. (msg or "unknown error"), vim.log.levels.ERROR)
+    end
+  end)
+end
+
 return {
   "folke/which-key.nvim",
   optional = true,
@@ -145,5 +156,6 @@ return {
     { "<leader>gwm", action_merge_current, desc = "Merge Current" },
     { "<leader>gwM", action_merge_pick, desc = "Merge (pick)" },
     { "<leader>gws", action_step_commit, desc = "Step Commit" },
+    { "<leader>gwu", action_step_rollback, desc = "Step Rollback (undo)" },
   },
 }

@@ -109,6 +109,12 @@ function M.step_commit(callback)
   end)
 end
 
+function M.step_rollback(callback)
+  run_async("git", { "reset", "--soft", "HEAD~1" }, function(ok, lines, stderr)
+    callback(ok, table.concat(ok and lines or stderr or {}, "\n"))
+  end)
+end
+
 function M.get_worktree_path(branch, callback)
   run_async("git", { "worktree", "list", "--porcelain" }, function(ok, lines)
     if not ok then
