@@ -336,6 +336,96 @@ function M.detach_session(buf)
   state.modified = false
 end
 
+-- Shared helper: create a new ACP session, attach to buffer, sync messages
+-- on_ready_cb(proc) is called after successful attach+sync; on_fail_cb(reason) on failure
+local function create_and_attach_session(buf, provider, profile_id, existing_messages, opts, on_ready_cb, on_fail_cb)
+  opts = opts or {}
+  on_ready_cb = on_ready_cb or function() end
+  on_fail_cb = on_fail_cb or function(reason)
+    vim.notify("[.chat] " .. reason, vim.log.levels.ERROR)
+  end
+
+  local state = get_state(buf)
+  local ai_repl = require("ai_repl.init")
+
+  local extra_args = opts.extra_args
+  local prepend_args = opts.prepend_args
+  if not extra_args and not prepend_args and profile_id then
+    local prof_args, prof_pos = ai_repl.build_profile_args(provider, profile_id)
+    if prof_pos == "prepend" then
+      prepend_args = prof_args
+    else
+      extra_args = prof_args
+    end
+  end
+
+  local display_name = provider
+  if profile_id then
+    display_name = provider .. ":" .. profile_id
+  end
+  vim.notify("[.chat] Creating new session with " .. display_name .. "...", vim.log.levels.INFO)
+
+  local cwd = state.repo_root or get_repo_root(buf) or vim.fn.getcwd()
+  local session_id = registry.generate_unique_session_id()
+  local proc = ai_repl._create_process(session_id, {
+    provider = provider,
+    cwd = cwd,
+    extra_args = extra_args,
+    prepend_args = prepend_args,
+    profile_id = profile_id,
+  })
+
+  ai_repl._registry_set(session_id, proc)
+  ai_repl._registry_set_active(session_id)
+
+  proc:start()
+
+  local has_content = existing_messages and #existing_messages > 0
+  local attempts = 0
+  local max_attempts = 100
+  local function attach_when_ready()
+    if not vim.api.nvim_buf_is_valid(buf) then
+      pcall(function() proc:kill() end)
+      on_fail_cb("Buffer closed during reconnect")
+      return
+    end
+
+    if not proc:is_alive() then
+      on_fail_cb("Process died before becoming ready")
+      return
+    end
+
+    attempts = attempts + 1
+    if attempts > max_attempts then
+      on_fail_cb("Timed out waiting for session")
+      return
+    end
+
+    if proc:is_ready() then
+      chat_buffer_events.setup_event_forwarding(buf, proc)
+      M.attach_session(buf, proc.session_id)
+
+      if has_content then
+        local reg = require("ai_repl.registry")
+        for _, msg in ipairs(existing_messages) do
+          if msg.role == "user" or msg.role == "djinni" or msg.role == "system" then
+            reg.append_message(proc.session_id, msg.role, msg.content, msg.tool_calls)
+          end
+        end
+        vim.notify("[.chat] Synced " .. #existing_messages .. " messages to new session", vim.log.levels.INFO)
+      end
+
+      require("ai_repl.init").update_statusline()
+      on_ready_cb(proc)
+    else
+      vim.defer_fn(attach_when_ready, 100)
+    end
+  end
+
+  attach_when_ready()
+  return proc
+end
+
 -- Restart conversation in chat buffer
 -- opts: { profile_id = string?, extra_args = table? }
 function M.restart_conversation(buf, provider_id, opts)
@@ -346,107 +436,28 @@ function M.restart_conversation(buf, provider_id, opts)
   opts = opts or {}
   local state = get_state(buf)
 
-  -- Capture profile_id from old process before detaching
   local profile_id = opts.profile_id
   if not profile_id and state.process then
     profile_id = state.process.data.profile_id
   end
 
-  -- Detach from current session
   if state.session_id then
     M.detach_session(buf)
   end
 
-  -- Parse existing messages from buffer (don't remove them)
   local parsed = chat_parser.parse_buffer_cached(buf)
   local existing_messages = parsed.messages or {}
-  local has_content = #existing_messages > 0
 
-  -- Update repo root to current; capture fallback before any picker opens
   state.repo_root = get_repo_root(buf) or vim.fn.getcwd()
 
-  local function create_session_with_provider(provider)
-    local ai_repl = require("ai_repl.init")
-
-    local extra_args = opts.extra_args
-    local prepend_args = opts.prepend_args
-    if not extra_args and not prepend_args and profile_id then
-      local prof_args, prof_pos = ai_repl.build_profile_args(provider, profile_id)
-      if prof_pos == "prepend" then
-        prepend_args = prof_args
-      else
-        extra_args = prof_args
-      end
-    end
-
-    local display_name = provider
-    if profile_id then
-      display_name = provider .. ":" .. profile_id
-    end
-    vim.notify("[.chat] Creating new session with " .. display_name .. "...", vim.log.levels.INFO)
-
-    local session_id = registry.generate_unique_session_id()
-    local proc = ai_repl._create_process(session_id, {
-      provider = provider,
-      cwd = state.repo_root,
-      extra_args = extra_args,
-      prepend_args = prepend_args,
-      profile_id = profile_id,
-    })
-
-    ai_repl._registry_set(session_id, proc)
-    ai_repl._registry_set_active(session_id)
-
-    proc:start()
-
-    local attempts = 0
-    local max_attempts = 100
-    local function attach_when_ready()
-      if not vim.api.nvim_buf_is_valid(buf) then
-        return
-      end
-
-      if not proc:is_alive() then
-        vim.notify("[.chat] Restart failed: process died", vim.log.levels.ERROR)
-        return
-      end
-
-      attempts = attempts + 1
-      if attempts > max_attempts then
-        vim.notify("[.chat] Restart timed out waiting for session", vim.log.levels.ERROR)
-        return
-      end
-
-      if proc:is_ready() then
-        chat_buffer_events.setup_event_forwarding(buf, proc)
-        M.attach_session(buf, proc.session_id)
-
-        if has_content then
-          local registry = require("ai_repl.registry")
-          for _, msg in ipairs(existing_messages) do
-            if msg.role == "user" or msg.role == "djinni" or msg.role == "system" then
-              registry.append_message(proc.session_id, msg.role, msg.content, msg.tool_calls)
-            end
-          end
-          vim.notify("[.chat] Synced " .. #existing_messages .. " messages to new session", vim.log.levels.INFO)
-        end
-
-        local provider_id = proc.data.provider or "unknown"
-        local providers = require("ai_repl.providers")
-        local provider_cfg = providers.get(provider_id) or {}
-        local provider_name = provider_cfg.name or provider_id
-        vim.notify("[.chat] Conversation restarted with " .. provider, vim.log.levels.INFO)
-        require("ai_repl.init").update_statusline()
-      else
-        vim.defer_fn(attach_when_ready, 100)
-      end
-    end
-
-    attach_when_ready()
+  local function do_restart(provider)
+    create_and_attach_session(buf, provider, profile_id, existing_messages, opts, function(proc)
+      vim.notify("[.chat] Conversation restarted with " .. provider, vim.log.levels.INFO)
+    end)
   end
 
   if provider_id then
-    create_session_with_provider(provider_id)
+    do_restart(provider_id)
   else
     local ai_repl = require("ai_repl.init")
     ai_repl.pick_provider(function(selected_provider)
@@ -454,11 +465,53 @@ function M.restart_conversation(buf, provider_id, opts)
         vim.notify("[.chat] Restart cancelled", vim.log.levels.INFO)
         return
       end
-      create_session_with_provider(selected_provider)
+      do_restart(selected_provider)
     end)
   end
 
   return true
+end
+
+function M.reconnect_session(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  if not M.is_chat_buffer(buf) then return end
+
+  local state = get_state(buf)
+  local evt_state = chat_buffer_events.get_state and chat_buffer_events.get_state(buf)
+
+  local provider = state.process and state.process.data and state.process.data.provider
+  local profile_id = state.process and state.process.data and state.process.data.profile_id
+
+  if state.session_id then
+    M.detach_session(buf)
+  end
+
+  local parsed = chat_parser.parse_buffer_cached(buf)
+  local existing_messages = parsed.messages or {}
+
+  state.repo_root = get_repo_root(buf) or vim.fn.getcwd()
+
+  create_and_attach_session(buf, provider, profile_id, existing_messages, {}, function()
+    if evt_state then
+      evt_state.reconnect_count = 0
+    end
+    vim.notify("[.chat] Reconnected successfully", vim.log.levels.INFO)
+
+    local last_msg = existing_messages[#existing_messages]
+    local was_interrupted = (last_msg and last_msg.role == "user") or (evt_state and evt_state.was_busy_on_crash)
+    if was_interrupted then
+      vim.defer_fn(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        local cb_state = get_state(buf)
+        if cb_state.process and cb_state.process:is_ready() then
+          local resume_prompt = [[The session crashed and has been automatically reconnected with your conversation history restored. Continue from where you left off. If you were in the middle of a task, pick up from the last step you were working on.]]
+          cb_state.process:send_prompt(resume_prompt, { silent = true })
+        end
+      end, 500)
+    end
+  end, function(reason)
+    vim.notify("[.chat] Reconnect failed: " .. reason, vim.log.levels.ERROR)
+  end)
 end
 
 -- Summarize conversation by sending full content to AI

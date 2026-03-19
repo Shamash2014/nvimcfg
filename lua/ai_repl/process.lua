@@ -67,6 +67,7 @@ function Process.new(session_id, opts)
     supports_load_session = false,
     reconnect_count = 0,
     agents_md_injected = false,
+    agentic_context_injected = false,
   }
   self.data = {
     buf = nil,
@@ -148,10 +149,8 @@ function Process:_recover_stuck(reason)
   self:process_queued_prompts()
   local buf = self.ui.chat_buf
   if buf and vim.api.nvim_buf_is_valid(buf) then
-    local chat_buffer_events = require("ai_repl.chat_buffer_events")
     local chat_buffer = require("ai_repl.chat_buffer")
     if chat_buffer.is_chat_buffer(buf) then
-      chat_buffer_events.ensure_you_marker(buf)
       local ok, decorations = pcall(require, "ai_repl.chat_decorations")
       if ok then
         pcall(decorations.stop_spinner, buf)
@@ -162,6 +161,20 @@ function Process:_recover_stuck(reason)
     end
   end
   vim.notify("[ai_repl] " .. reason, vim.log.levels.WARN)
+
+  if not self.state.busy then
+    local captured_self = self
+    vim.defer_fn(function()
+      if captured_self:is_alive() and not captured_self.state.busy then
+        async.run(function()
+          captured_self:send_prompt(
+            "You appeared to stall with no response. Continue from where you left off. If you are waiting for something, explain what.",
+            { silent = true }
+          )
+        end)
+      end
+    end, 200)
+  end
 end
 
 function Process:_start_stale_callback_timer()
@@ -734,6 +747,11 @@ function Process:send_prompt(prompt, opts)
       return
     end
 
+    if not (opts and opts.silent) then
+      local ok_ag, agentic = pcall(require, "ai_repl.agentic")
+      if ok_ag then agentic.reset_continuation() end
+    end
+
     self.state.busy = true
     self.state.last_activity = os.time()
     self.ui.streaming_response = ""
@@ -754,6 +772,17 @@ function Process:send_prompt(prompt, opts)
         local context = agents_md.get_context_for_session({ cwd = cwd })
         if context then
           prompt = agents_md.inject_into_session_prompt(prompt, context.content)
+        end
+      end
+    end
+
+    if not self.state.agentic_context_injected then
+      self.state.agentic_context_injected = true
+      local ok_ag, agentic = pcall(require, "ai_repl.agentic")
+      if ok_ag then
+        local ctx = agentic.gather_initial_context(self)
+        if ctx then
+          prompt = agentic.inject_context(prompt, ctx)
         end
       end
     end

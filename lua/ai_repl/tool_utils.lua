@@ -64,6 +64,72 @@ function M.get_tool_description(title, input, locations, opts)
   return ""
 end
 
+function M.get_tool_result_summary(tool)
+  if not tool then return "Done" end
+  local title = tool.title or tool.kind or ""
+  local status = tool.status
+  local raw_output = tool.rawOutput
+  local raw_input = tool.rawInput or {}
+  if type(raw_input) == "string" then
+    local ok, parsed = pcall(vim.json.decode, raw_input)
+    raw_input = ok and parsed or {}
+  end
+
+  if status == "failed" then
+    local err_text = raw_output
+    if type(err_text) ~= "string" or err_text == "" then
+      err_text = nil
+    end
+    if err_text then
+      local first_line = err_text:match("^([^\n]*)")
+      if first_line and #first_line > 60 then
+        first_line = first_line:sub(1, 57) .. "..."
+      end
+      return "Error: " .. (first_line or "unknown")
+    end
+    return "Failed"
+  end
+
+  if title == "Read" then
+    if type(raw_output) == "string" then
+      local _, count = raw_output:gsub("\n", "")
+      return "(" .. (count + 1) .. " lines)"
+    end
+    return "Done"
+  elseif title == "Bash" then
+    local output = raw_output
+    if type(output) == "table" then
+      output = output.stdout or output.stderr or output.output or ""
+    end
+    if type(output) == "string" and output ~= "" then
+      local first_line = output:match("^([^\n]*)")
+      if first_line and first_line ~= "" then
+        if #first_line > 60 then
+          first_line = first_line:sub(1, 57) .. "..."
+        end
+        return first_line
+      end
+    end
+    return "Done"
+  elseif title == "Edit" then
+    local path = (type(raw_input) == "table" and raw_input.file_path) or ""
+    return "Updated " .. vim.fn.fnamemodify(path, ":t")
+  elseif title == "Write" then
+    local path = (type(raw_input) == "table" and raw_input.file_path) or ""
+    return "Wrote " .. vim.fn.fnamemodify(path, ":t")
+  elseif title == "Grep" or title == "Glob" then
+    if type(raw_output) == "string" and raw_output ~= "" then
+      local _, count = raw_output:gsub("\n", "")
+      return count .. " files"
+    end
+    return "0 files"
+  elseif title == "Task" or title == "Agent" then
+    return "Done"
+  end
+
+  return "Done"
+end
+
 function M.parse_permission_options(agent_options)
   local entries = {}
   local seen_roles = {}

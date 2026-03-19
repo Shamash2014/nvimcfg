@@ -42,8 +42,10 @@ local function get_state(buf)
       streaming_insert_line = nil,
       render_scheduled = false,
       tool_approvals = {},
+      tool_line_map = {},
       modified = false,
       original_handlers = nil,
+      reconnect_count = 0,
     }
   end
   return buffer_state[buf]
@@ -111,6 +113,8 @@ local function flush_streaming_text(buf, state)
   state.rendered_line_count = #response_lines
 end
 
+M.get_state = get_state
+
 function M.setup_event_forwarding(buf, proc)
   if not proc or not proc:is_alive() then
     return false
@@ -169,10 +173,10 @@ function M.setup_event_forwarding(buf, proc)
             if is_stop then
               self.state.busy = false
               vim.defer_fn(function()
-                if vim.api.nvim_buf_is_valid(buf) then
+                self:process_queued_prompts()
+                if not self.state.busy and vim.api.nvim_buf_is_valid(buf) then
                   M.ensure_you_marker(buf)
                 end
-                self:process_queued_prompts()
               end, 200)
             end
           end
@@ -218,7 +222,47 @@ function M.setup_event_forwarding(buf, proc)
       end
     end,
     on_debug = state.original_handlers.on_debug,
-    on_exit = state.original_handlers.on_exit,
+    on_exit = function(self, code, was_alive)
+      if state.original_handlers.on_exit then
+        pcall(state.original_handlers.on_exit, self, code, was_alive)
+      end
+
+      local should_reconnect = was_alive and code ~= 0
+      if not should_reconnect then
+        state.reconnect_count = 0
+        return
+      end
+
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+
+      local max_reconnect = 5
+      state.reconnect_count = (state.reconnect_count or 0) + 1
+
+      if state.reconnect_count > max_reconnect then
+        M.append_to_chat_buffer(buf, {
+          "",
+          "[!] Process crashed " .. max_reconnect .. " times. Auto-reconnect disabled.",
+          "    Use /restart-chat to manually reconnect.",
+          "",
+        })
+        state.reconnect_count = 0
+        return
+      end
+
+      state.was_busy_on_crash = self.state and self.state.busy
+
+      local attempt = state.reconnect_count
+      M.append_to_chat_buffer(buf, {
+        "[~] Process exited unexpectedly (code " .. code .. "). Reconnecting " .. attempt .. "/" .. max_reconnect .. "...",
+      })
+
+      local delay = attempt * 1000
+      vim.defer_fn(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        local chat_buffer = require("ai_repl.chat_buffer")
+        pcall(chat_buffer.reconnect_session, buf)
+      end, delay)
+    end,
     on_ready = state.original_handlers.on_ready,
   })
 
@@ -249,12 +293,17 @@ function M.handle_session_update_in_chat(buf, update, proc)
     proc.ui.streaming_response = ""
     proc.ui.streaming_start_line = nil
     local dec_ok, decorations = pcall(require, "ai_repl.chat_decorations")
-    if dec_ok then pcall(decorations.stop_spinner, buf) end
+    if dec_ok then
+      pcall(decorations.stop_spinner, buf)
+      pcall(decorations.cleanup_tool_spinners, buf)
+    end
     if is_stop_update then
       vim.defer_fn(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
-        M.ensure_you_marker(buf)
         proc:process_queued_prompts()
+        if not proc.state.busy then
+          M.ensure_you_marker(buf)
+        end
       end, 200)
     end
     return
@@ -267,11 +316,16 @@ function M.handle_session_update_in_chat(buf, update, proc)
       proc.ui.streaming_response = ""
       proc.ui.streaming_start_line = nil
       local dec_ok, decorations = pcall(require, "ai_repl.chat_decorations")
-      if dec_ok then pcall(decorations.stop_spinner, buf) end
+      if dec_ok then
+        pcall(decorations.stop_spinner, buf)
+        pcall(decorations.cleanup_tool_spinners, buf)
+      end
       vim.defer_fn(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
-        M.ensure_you_marker(buf)
         proc:process_queued_prompts()
+        if not proc.state.busy then
+          M.ensure_you_marker(buf)
+        end
       end, 200)
     end
     return
@@ -319,16 +373,53 @@ function M.handle_session_update_in_chat(buf, update, proc)
     local label = friendly
     if desc ~= "" then label = label .. ": " .. desc end
     M.append_to_chat_buffer(buf, { "[*] " .. label })
+    local tool_id = u.toolCallId or u.id
+    if tool_id then
+      state.tool_line_map[tool_id] = vim.api.nvim_buf_line_count(buf) - 1
+      if decorations_ok then
+        pcall(decorations.show_tool_spinner, buf, tool_id, state.tool_line_map[tool_id], friendly)
+      end
+    end
 
   elseif result.type == "tool_call_update" then
     if result.tool_finished then
       if decorations_ok then pcall(decorations.stop_spinner, buf) end
       chat_state.set_activity_phase(buf, "thinking")
       if decorations_ok then pcall(decorations.start_spinner, buf, "thinking") end
-      if result.update.status == "failed" then
-        local tool_name = result.tool.title or result.tool.kind or "tool"
-        M.append_to_chat_buffer(buf, { "[!] " .. tool_name .. " failed" })
-      elseif result.is_edit_tool and result.diff then
+
+      local tool_id = (result.tool and result.tool.id) or (result.update and result.update.toolCallId)
+      local tool_line = tool_id and state.tool_line_map[tool_id]
+      local is_success = result.update.status ~= "failed"
+
+      if decorations_ok and tool_id then
+        pcall(decorations.complete_tool_spinner, buf, tool_id, is_success)
+      end
+
+      if tool_line and vim.api.nvim_buf_is_valid(buf) then
+        local line_idx = tool_line - 1
+        local ok, lines = pcall(vim.api.nvim_buf_get_lines, buf, line_idx, line_idx + 1, false)
+        if ok and lines and lines[1] then
+          local marker = is_success and "[+]" or "[!]"
+          local updated = lines[1]:gsub("%[%*%]", marker, 1)
+          if updated ~= lines[1] then
+            vim.bo[buf].modifiable = true
+            pcall(vim.api.nvim_buf_set_lines, buf, line_idx, line_idx + 1, false, { updated })
+          end
+        end
+      end
+
+      if not (result.is_edit_tool and result.diff) then
+        local summary = tool_utils.get_tool_result_summary(result.tool)
+        if summary and summary ~= "" then
+          M.append_to_chat_buffer(buf, { "  ⎿  " .. summary })
+        end
+      end
+
+      if tool_id then
+        state.tool_line_map[tool_id] = nil
+      end
+
+      if result.is_edit_tool and result.diff then
         local render = require("ai_repl.render")
         render.render_diff(buf, result.diff.path, result.diff.old, result.diff.new)
         M.append_to_chat_buffer(buf, {
@@ -375,6 +466,7 @@ function M.handle_session_update_in_chat(buf, update, proc)
 
   elseif result.type == "stop" then
     state.streaming = false
+    state.tool_line_map = {}
     chat_state.set_activity_phase(buf, nil)
     pcall(flush_streaming_text, buf, state)
     state.streaming_text = ""
@@ -400,13 +492,13 @@ function M.handle_session_update_in_chat(buf, update, proc)
         if not vim.api.nvim_buf_is_valid(buf) then return end
         M.ensure_you_marker(buf)
 
-        -- Autosave after response is complete
         local chat_buffer = require("ai_repl.chat_buffer")
         pcall(chat_buffer.autosave_buffer, buf)
       end, 100)
     end
     if decorations_ok then
       pcall(decorations.stop_spinner, buf)
+      pcall(decorations.cleanup_tool_spinners, buf)
       pcall(decorations.redecorate, buf)
       pcall(decorations.show_tokens, buf, result.usage)
     end

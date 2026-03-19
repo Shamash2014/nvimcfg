@@ -80,6 +80,24 @@ function M.apply_update(proc, update)
     tool.rawOutput = u.rawOutput or tool.rawOutput
     tool.rawInput = tool.rawInput or u.rawInput
 
+    if not tool.rawOutput and u.content and type(u.content) == "table" then
+      local texts = {}
+      for _, block in ipairs(u.content) do
+        if block.type == "text" and block.text then
+          table.insert(texts, block.text)
+        elseif block.type == "tool_result" and block.content then
+          for _, sub in ipairs(block.content) do
+            if sub.type == "text" and sub.text then
+              table.insert(texts, sub.text)
+            end
+          end
+        end
+      end
+      if #texts > 0 then
+        tool.rawOutput = table.concat(texts, "\n")
+      end
+    end
+
     local images = {}
     if u.content and type(u.content) == "table" then
       for _, block in ipairs(u.content) do
@@ -103,6 +121,15 @@ function M.apply_update(proc, update)
     proc.ui.active_tools[u.toolCallId] = tool
 
     local tool_finished = u.status == "completed" or u.status == "failed"
+
+    if tool_finished and u.status == "failed" then
+      local ok_ag, agentic = pcall(require, "ai_repl.agentic")
+      if ok_ag then agentic.on_tool_failure(proc, tool) end
+    elseif tool_finished and u.status == "completed" then
+      local ok_ag, agentic = pcall(require, "ai_repl.agentic")
+      if ok_ag then agentic.on_tool_success() end
+    end
+
     local is_edit_tool = tool.kind == "edit" or tool.kind == "write"
       or tool.title == "Edit" or tool.title == "Write"
 
@@ -229,11 +256,21 @@ function M.apply_update(proc, update)
       end
     end
 
-    local should_process_queue = not ralph_continuing and not user_input_pending
+    local agentic_continuing = false
+    if not ralph_continuing and not user_input_pending then
+      local ok_ag, agentic = pcall(require, "ai_repl.agentic")
+      if ok_ag then
+        agentic_continuing = agentic.check_recovery_prompt(proc)
+          or agentic.maybe_auto_continue(proc, response_text, stop_reason)
+      end
+    end
+
+    local should_process_queue = not ralph_continuing and not agentic_continuing and not user_input_pending
     local usage = u.usage
 
     proc.ui.active_tools = {}
     proc.ui.pending_tool_calls = {}
+    proc.ui.streaming_response = ""
 
     return {
       type = "stop",
@@ -243,6 +280,7 @@ function M.apply_update(proc, update)
       response_text = response_text,
       had_plan = had_plan,
       ralph_continuing = ralph_continuing,
+      agentic_continuing = agentic_continuing,
       should_process_queue = should_process_queue,
     }
 

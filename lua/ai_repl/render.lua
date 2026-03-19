@@ -26,35 +26,33 @@ local streaming_state = {
 
 local function schedule_streaming_update(buf, callback)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
-  
-  -- Clear existing timer for this buffer
+
   if streaming_state.update_timers[buf] then
-    pcall(vim.fn.timer_stop, streaming_state.update_timers[buf])
+    streaming_state.update_timers[buf]:stop()
   end
-  
-  -- Store callback
+
   table.insert(streaming_state.pending_updates, callback)
-  
-  -- Schedule throttled update
-  streaming_state.update_timers[buf] = vim.fn.timer_start(streaming_state.throttle_ms, function()
-    vim.schedule(function()
-      if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
-      
-      -- Execute all pending updates
-      for _, cb in ipairs(streaming_state.pending_updates) do
-        cb()
-      end
-      
-      -- Clear pending updates
-      streaming_state.pending_updates = {}
-      streaming_state.update_timers[buf] = nil
-    end)
-  end)
+
+  local timer = vim.uv.new_timer()
+  streaming_state.update_timers[buf] = timer
+  timer:start(streaming_state.throttle_ms, 0, vim.schedule_wrap(function()
+    timer:stop()
+    timer:close()
+    if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+
+    for _, cb in ipairs(streaming_state.pending_updates) do
+      cb()
+    end
+
+    streaming_state.pending_updates = {}
+    streaming_state.update_timers[buf] = nil
+  end))
 end
 
 local function flush_streaming_updates(buf)
   if streaming_state.update_timers[buf] then
-    pcall(vim.fn.timer_stop, streaming_state.update_timers[buf])
+    streaming_state.update_timers[buf]:stop()
+    pcall(function() streaming_state.update_timers[buf]:close() end)
     streaming_state.update_timers[buf] = nil
   end
   
@@ -179,10 +177,11 @@ function M.cleanup_buffer(buf)
   
   -- Clean up streaming state
   if streaming_state.update_timers[buf] then
-    pcall(vim.fn.timer_stop, streaming_state.update_timers[buf])
+    streaming_state.update_timers[buf]:stop()
+    pcall(function() streaming_state.update_timers[buf]:close() end)
     streaming_state.update_timers[buf] = nil
   end
-  
+
   for _, ns in ipairs({ NS, NS_ANIM, NS_DIFF, NS_PROMPT }) do
     pcall(vim.api.nvim_buf_clear_namespace, buf, ns, 0, -1)
   end
@@ -953,17 +952,20 @@ function M.render_history(buf, messages)
   end)
 end
 
+local function close_uv_timer(timer)
+  if timer then
+    timer:stop()
+    if not timer:is_closing() then timer:close() end
+  end
+end
+
 local function stop_animation()
   animation.active = false
   animation.state = nil
-  if animation.timer then
-    pcall(vim.fn.timer_stop, animation.timer)
-    animation.timer = nil
-  end
-  if animation.idle_timer then
-    pcall(vim.fn.timer_stop, animation.idle_timer)
-    animation.idle_timer = nil
-  end
+  close_uv_timer(animation.timer)
+  animation.timer = nil
+  close_uv_timer(animation.idle_timer)
+  animation.idle_timer = nil
   if animation.extmark_id and animation.buf and vim.api.nvim_buf_is_valid(animation.buf) then
     pcall(vim.api.nvim_buf_del_extmark, animation.buf, NS_ANIM, animation.extmark_id)
     animation.extmark_id = nil
@@ -980,9 +982,10 @@ local function render_anim_frame()
   local win = vim.fn.bufwinid(animation.buf)
   if win == -1 then
     local delay = SPIN_TIMING[animation.state] or 100
-    animation.timer = vim.fn.timer_start(delay, function()
-      vim.schedule(render_anim_frame)
-    end)
+    close_uv_timer(animation.timer)
+    local t = vim.uv.new_timer()
+    animation.timer = t
+    t:start(delay, 0, vim.schedule_wrap(render_anim_frame))
     return
   end
 
@@ -1000,18 +1003,17 @@ local function render_anim_frame()
   })
 
   local delay = SPIN_TIMING[animation.state] or 100
-  animation.timer = vim.fn.timer_start(delay, function()
-    vim.schedule(render_anim_frame)
-  end)
+  close_uv_timer(animation.timer)
+  local t = vim.uv.new_timer()
+  animation.timer = t
+  t:start(delay, 0, vim.schedule_wrap(render_anim_frame))
 end
 
 local function reset_idle_timer()
-  if animation.idle_timer then
-    pcall(vim.fn.timer_stop, animation.idle_timer)
-  end
-  animation.idle_timer = vim.fn.timer_start(1500, function()
-    vim.schedule(stop_animation)
-  end)
+  close_uv_timer(animation.idle_timer)
+  local t = vim.uv.new_timer()
+  animation.idle_timer = t
+  t:start(1500, 0, vim.schedule_wrap(stop_animation))
 end
 
 function M.start_animation(buf, anim_state)
