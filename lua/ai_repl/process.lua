@@ -143,14 +143,34 @@ function Process:start()
   return true
 end
 
+function Process:_recover_stuck(reason)
+  self.state.busy = false
+  self:process_queued_prompts()
+  local buf = self.ui.chat_buf
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    local chat_buffer_events = require("ai_repl.chat_buffer_events")
+    local chat_buffer = require("ai_repl.chat_buffer")
+    if chat_buffer.is_chat_buffer(buf) then
+      chat_buffer_events.ensure_you_marker(buf)
+      local ok, decorations = pcall(require, "ai_repl.chat_decorations")
+      if ok then
+        pcall(decorations.stop_spinner, buf)
+        pcall(decorations.show_status_line, buf, "Agent recovered: " .. reason, 5000)
+      end
+      local cs = require("ai_repl.chat_state")
+      cs.set_activity_phase(buf, nil)
+    end
+  end
+  vim.notify("[ai_repl] " .. reason, vim.log.levels.WARN)
+end
+
 function Process:_start_stale_callback_timer()
   self:_stop_stale_callback_timer()
   self._stale_timer = vim.uv.new_timer()
   local captured_self = self
-  -- Check more frequently (every 30s) to recover stuck agents faster
-  self._stale_timer:start(30000, 30000, vim.schedule_wrap(function()
+  self._stale_timer:start(15000, 15000, vim.schedule_wrap(function()
     if not captured_self.job_id then return end
-    local cleaned = captured_self:cleanup_stale_callbacks(60)
+    local cleaned = captured_self:cleanup_stale_callbacks(30)
     if cleaned > 0 and captured_self.state.busy then
       local has_pending = false
       for _ in pairs(captured_self.conn.callbacks) do
@@ -158,39 +178,38 @@ function Process:_start_stale_callback_timer()
         break
       end
       if not has_pending then
-        captured_self.state.busy = false
-        captured_self:process_queued_prompts()
-
-        local buf = captured_self.ui.chat_buf
-        if buf and vim.api.nvim_buf_is_valid(buf) then
-          local chat_buffer_events = require("ai_repl.chat_buffer_events")
-          local chat_buffer = require("ai_repl.chat_buffer")
-          if chat_buffer.is_chat_buffer(buf) then
-            chat_buffer_events.ensure_you_marker(buf)
-            local ok, decorations = pcall(require, "ai_repl.chat_decorations")
-            if ok then pcall(decorations.stop_spinner, buf) end
-          end
-        end
+        captured_self:_recover_stuck("stale callbacks cleared")
       end
     end
 
     if captured_self.state.busy and captured_self.state.last_activity then
       local inactive_secs = os.time() - captured_self.state.last_activity
+      local has_active_tools = next(captured_self.ui.active_tools) ~= nil
       local no_pending = not next(captured_self.conn.callbacks)
-      if inactive_secs > 180 and no_pending then
-        captured_self.state.busy = false
-        captured_self:process_queued_prompts()
+
+      local timeout = has_active_tools and 120 or 60
+      if not no_pending then timeout = 120 end
+
+      if inactive_secs > timeout and no_pending then
+        captured_self:_recover_stuck(
+          string.format("no activity for %ds (timeout: %ds)", inactive_secs, timeout)
+        )
+      end
+
+      if has_active_tools and inactive_secs > 60 then
         local buf = captured_self.ui.chat_buf
         if buf and vim.api.nvim_buf_is_valid(buf) then
-          local chat_buffer_events = require("ai_repl.chat_buffer_events")
-          local chat_buffer = require("ai_repl.chat_buffer")
-          if chat_buffer.is_chat_buffer(buf) then
-            chat_buffer_events.ensure_you_marker(buf)
-            local ok, decorations = pcall(require, "ai_repl.chat_decorations")
-            if ok then pcall(decorations.stop_spinner, buf) end
+          local ok, decorations = pcall(require, "ai_repl.chat_decorations")
+          if ok then
+            local tool_name = "unknown"
+            for _, t in pairs(captured_self.ui.active_tools) do
+              tool_name = t.title or t.kind or "unknown"
+              break
+            end
+            pcall(decorations.show_status_line, buf,
+              string.format("Tool %s may be stuck (%ds)", tool_name, inactive_secs), 10000)
           end
         end
-        vim.notify("[ai_repl] Agent recovered: no activity for 3m (stuck after tool calls)", vim.log.levels.WARN)
       end
     end
   end))
@@ -858,6 +877,31 @@ function Process:set_config_option(config_id, value)
     end)
   end)
 end
+
+function Process:nudge()
+  local buf = self.ui.chat_buf
+  if self.ui and self.ui.permission_active then
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      local win = vim.fn.bufwinid(buf)
+      if win ~= -1 then
+        local line_count = vim.api.nvim_buf_line_count(buf)
+        pcall(vim.api.nvim_win_set_cursor, win, { line_count, 0 })
+      end
+    end
+    vim.notify("[ai_repl] Permission pending — scroll to chat buffer to respond", vim.log.levels.WARN)
+    return
+  end
+  if not self.state.busy then
+    self:send_prompt("Continue from where you left off. If you are waiting for something, explain what.")
+    return
+  end
+  table.insert(self.data.prompt_queue, {
+    prompt = "Continue from where you left off.",
+    opts = { silent = true },
+  })
+  vim.notify("[ai_repl] Nudge queued — will send when current operation completes", vim.log.levels.INFO)
+end
+
 
 function Process:process_queued_prompts()
   if self.state.busy then return end

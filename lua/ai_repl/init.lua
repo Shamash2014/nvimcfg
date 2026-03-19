@@ -1822,6 +1822,12 @@ function M.handle_command(cmd)
     end
     proc:force_cancel()
     append_to_buffer(buf, { "[!] Session force-cancelled and killed" }, { type = "error" })
+  elseif command == "nudge" then
+    if not proc then
+      append_to_buffer(buf, { "[!] No active session" }, { type = "error" })
+      return
+    end
+    proc:nudge()
   elseif command == "retry-init" then
     if not proc then
       vim.notify("[!] No active session", vim.log.levels.ERROR)

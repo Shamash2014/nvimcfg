@@ -21,13 +21,15 @@ local NS_TOKENS = vim.api.nvim_create_namespace("chat_tokens")
 local NS_LINE_HL = vim.api.nvim_create_namespace("chat_line_hl")
 local NS_TOOL_STATUS = vim.api.nvim_create_namespace("chat_tool_status")
 local NS_MODEL = vim.api.nvim_create_namespace("chat_model")
+local NS_STATUS = vim.api.nvim_create_namespace("chat_status")
+local NS_PERM_BLINK = vim.api.nvim_create_namespace("chat_perm_blink")
 
 local SPINNERS = {
   generating = { "|", "/", "-", "\\" },
-  thinking = { ".", "..", "..." },
+  thinking = { "·", "··", "···", "··" },
   executing = { "[=  ]", "[ = ]", "[  =]", "[ = ]" },
 }
-local SPIN_TIMING = { generating = 100, thinking = 400, executing = 150 }
+local SPIN_TIMING = { generating = 100, thinking = 200, executing = 150 }
 
 local ROLE_HL = {
   user = "ChatRoleYou",
@@ -174,9 +176,26 @@ function M.start_spinner(buf, kind)
 
     vim.api.nvim_buf_clear_namespace(buf, NS_SPIN, 0, -1)
     local frame = frames[frame_idx]
+
+    local elapsed_str = ""
+    local cs = require("ai_repl.chat_state")
+    local elapsed = cs.get_activity_elapsed(buf)
+    if elapsed and elapsed >= 1 then
+      elapsed_str = " " .. math.floor(elapsed) .. "s"
+    end
+
+    local bstate = cs.get_buffer_state(buf)
+    local tool_info = ""
+    if bstate.activity_tool_index > 0 and kind == "executing" then
+      tool_info = " | " .. bstate.activity_tool_index .. "/" .. bstate.activity_tool_total
+      if bstate.activity_tool_name then
+        tool_info = " " .. bstate.activity_tool_name .. tool_info
+      end
+    end
+
     vim.api.nvim_buf_set_extmark(buf, NS_SPIN, last_line, 0, {
-      virt_text = { { ' ' .. frame .. ' ', 'ChatSpinner' } },
-      virt_text_pos = 'eol',
+      virt_text = { { " " .. frame .. elapsed_str .. tool_info .. " ", "ChatSpinner" } },
+      virt_text_pos = "eol",
       priority = 60,
     })
 
@@ -331,7 +350,7 @@ function M.foldtext()
   return line .. " [" .. line_count .. " lines]"
 end
 
-function M.show_tool_spinner(buf, tool_id, line)
+function M.show_tool_spinner(buf, tool_id, line, tool_name)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
   end
@@ -344,9 +363,11 @@ function M.show_tool_spinner(buf, tool_id, line)
 
   local frames = { "◐", "◓", "◑", "◒" }
   local frame_idx = 1
+  local start_time = vim.uv.hrtime()
+  local display_name = tool_name or "Executing"
 
   local extmark_id = vim.api.nvim_buf_set_extmark(buf, NS_TOOL_STATUS, line - 1, 0, {
-    virt_text = { { frames[frame_idx] .. " Executing...", "Comment" } },
+    virt_text = { { frames[frame_idx] .. " " .. display_name .. "...", "Comment" } },
     virt_text_pos = "eol",
     priority = 250,
   })
@@ -354,7 +375,7 @@ function M.show_tool_spinner(buf, tool_id, line)
   local timer = vim.uv.new_timer()
   local tick_count = 0
   local tool_interval = 300
-  local max_ticks = 2000 -- 10 minutes at 300ms intervals
+  local max_ticks = 2000
   timer:start(0, tool_interval, vim.schedule_wrap(function()
     if not vim.api.nvim_buf_is_valid(buf) then
       timer:stop()
@@ -376,11 +397,14 @@ function M.show_tool_spinner(buf, tool_id, line)
       return
     end
 
+    local elapsed = math.floor((vim.uv.hrtime() - start_time) / 1e9)
+    local elapsed_str = elapsed >= 1 and (" " .. elapsed .. "s") or ""
+
     frame_idx = (frame_idx % #frames) + 1
     pcall(vim.api.nvim_buf_set_extmark, buf, NS_TOOL_STATUS, line - 1, 0, {
       id = extmark_id,
-      virt_text = { { frames[frame_idx] .. ' Executing...', 'Comment' } },
-      virt_text_pos = 'eol',
+      virt_text = { { frames[frame_idx] .. " " .. display_name .. "..." .. elapsed_str, "Comment" } },
+      virt_text_pos = "eol",
       priority = 250,
     })
   end))
@@ -436,6 +460,88 @@ function M.cleanup_tool_spinners(buf)
       indicator.timer:close()
     end
     state.tool_indicators[tool_id] = nil
+  end
+end
+
+local status_timers = {}
+
+function M.show_status_line(buf, text, timeout)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  timeout = timeout or 3000
+
+  vim.api.nvim_buf_clear_namespace(buf, NS_STATUS, 0, -1)
+
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  local last_line = math.max(0, line_count - 1)
+
+  vim.api.nvim_buf_set_extmark(buf, NS_STATUS, last_line, 0, {
+    virt_lines = { { { "  " .. text, "Comment" } } },
+    virt_lines_above = false,
+    priority = 55,
+  })
+
+  if status_timers[buf] then
+    status_timers[buf]:stop()
+    status_timers[buf]:close()
+  end
+
+  local timer = vim.uv.new_timer()
+  status_timers[buf] = timer
+  timer:start(timeout, 0, vim.schedule_wrap(function()
+    timer:stop()
+    timer:close()
+    status_timers[buf] = nil
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_clear_namespace(buf, NS_STATUS, 0, -1)
+    end
+  end))
+end
+
+function M.clear_status_line(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  vim.api.nvim_buf_clear_namespace(buf, NS_STATUS, 0, -1)
+  if status_timers[buf] then
+    status_timers[buf]:stop()
+    status_timers[buf]:close()
+    status_timers[buf] = nil
+  end
+end
+
+local perm_blink_timers = {}
+
+function M.start_permission_blink(buf, line)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  M.stop_permission_blink(buf)
+
+  local on = true
+  local timer = vim.uv.new_timer()
+  perm_blink_timers[buf] = timer
+
+  timer:start(0, 500, vim.schedule_wrap(function()
+    if not vim.api.nvim_buf_is_valid(buf) then
+      M.stop_permission_blink(buf)
+      return
+    end
+    vim.api.nvim_buf_clear_namespace(buf, NS_PERM_BLINK, 0, -1)
+    if on then
+      pcall(vim.api.nvim_buf_set_extmark, buf, NS_PERM_BLINK, math.max(0, line - 1), 0, {
+        line_hl_group = "ChatPermissionAlert",
+        priority = 200,
+      })
+    end
+    on = not on
+  end))
+end
+
+function M.stop_permission_blink(buf)
+  local timer = perm_blink_timers[buf]
+  if timer then
+    timer:stop()
+    timer:close()
+    perm_blink_timers[buf] = nil
+  end
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    vim.api.nvim_buf_clear_namespace(buf, NS_PERM_BLINK, 0, -1)
   end
 end
 
@@ -545,6 +651,8 @@ function M.setup_buffer(buf)
     callback = function()
       M.stop_spinner(buf)
       M.cleanup_tool_spinners(buf)
+      M.stop_permission_blink(buf)
+      M.clear_status_line(buf)
       last_role_cache[buf] = nil
       if redecorate_timers[buf] then
         redecorate_timers[buf]:stop()

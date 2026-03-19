@@ -25,6 +25,12 @@ function M.get_buffer_state(buf)
       repo_root = nil,
       creating_session = false,
       system_sent = false,
+      activity_phase = nil,
+      activity_phase_start = nil,
+      activity_total_start = nil,
+      activity_tool_index = 0,
+      activity_tool_total = 0,
+      activity_tool_name = nil,
     }
   end
   return buffer_states[buf]
@@ -78,6 +84,54 @@ function M.decrement_active_buffers()
   if global_state.active_chat_buffers == 0 then
     vim.o.updatetime = global_state.original_updatetime
   end
+end
+
+function M.set_activity_phase(buf, phase, opts)
+  local state = M.get_buffer_state(buf)
+  opts = opts or {}
+  state.activity_phase = phase
+  state.activity_phase_start = vim.uv.hrtime()
+  if phase == nil then
+    state.activity_total_start = nil
+    state.activity_tool_index = 0
+    state.activity_tool_total = 0
+    state.activity_tool_name = nil
+  elseif phase == "thinking" and not state.activity_total_start then
+    state.activity_total_start = vim.uv.hrtime()
+  end
+  if opts.tool_name then
+    state.activity_tool_name = opts.tool_name
+  end
+  if opts.increment_tool then
+    state.activity_tool_index = state.activity_tool_index + 1
+    state.activity_tool_total = state.activity_tool_total + 1
+  end
+end
+
+function M.get_activity_elapsed(buf)
+  local state = buffer_states[buf]
+  if not state or not state.activity_phase_start then return nil end
+  return (vim.uv.hrtime() - state.activity_phase_start) / 1e9
+end
+
+function M.get_statusline_info(buf)
+  local state = buffer_states[buf]
+  if not state then return {} end
+  local proc = state.process
+  local elapsed = state.activity_phase_start
+    and math.floor((vim.uv.hrtime() - state.activity_phase_start) / 1e9) or 0
+  local total_elapsed = state.activity_total_start
+    and math.floor((vim.uv.hrtime() - state.activity_total_start) / 1e9) or 0
+  return {
+    phase = state.activity_phase,
+    elapsed = elapsed,
+    total_elapsed = total_elapsed,
+    tool = state.activity_tool_name,
+    tool_progress = state.activity_tool_index > 0
+      and (state.activity_tool_index .. "/" .. state.activity_tool_total) or nil,
+    busy = proc and proc.state and proc.state.busy or false,
+    permission_pending = proc and proc.ui and proc.ui.permission_active or false,
+  }
 end
 
 function M.set_last_non_chat_file(path)

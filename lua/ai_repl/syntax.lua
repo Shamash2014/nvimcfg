@@ -40,6 +40,7 @@ function M.setup()
   hl(0, "ChatBorder", { fg = "#666666" })
   hl(0, "ChatSpinner", { fg = "#888888", italic = true })
   hl(0, "ChatTokenInfo", { fg = "#666666", italic = true })
+  hl(0, "ChatPermissionAlert", { bg = "#3a2a1a", fg = "#FFB86C", bold = true })
   hl(0, "ChatUserMarker", { fg = "#90EE90", bold = true, bg = "#1a3a1a" })
   hl(0, "ChatDjinniMarker", { fg = "#DDA0DD", bold = true, bg = "#2a1a3a" })
 

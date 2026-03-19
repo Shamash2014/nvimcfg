@@ -1,6 +1,7 @@
 local M = {}
 local chat_parser = require("ai_repl.chat_parser")
 local tool_utils = require("ai_repl.tool_utils")
+local chat_state = require("ai_repl.chat_state")
 local buffer_state = {}
 
 local TOOL_NAMES = {
@@ -285,8 +286,7 @@ function M.handle_session_update_in_chat(buf, update, proc)
   elseif result.type == "agent_message_chunk" then
     if not state.streaming then
       state.streaming = true
-      -- Don't set modifiable = false - keep it true for voice input
-      -- The streaming will update at the @Djinni: marker line
+      chat_state.set_activity_phase(buf, "generating")
       if decorations_ok then pcall(decorations.start_spinner, buf, "generating") end
     end
     M.stream_to_chat_buffer(buf, result.text)
@@ -301,9 +301,10 @@ function M.handle_session_update_in_chat(buf, update, proc)
       return
     end
 
-    if decorations_ok then pcall(decorations.start_spinner, buf, "executing") end
     local u = result.update
     local raw_title = u.title or u.kind or "tool"
+    chat_state.set_activity_phase(buf, "executing", { tool_name = raw_title, increment_tool = true })
+    if decorations_ok then pcall(decorations.start_spinner, buf, "executing") end
     local friendly = TOOL_NAMES[raw_title] or raw_title
     if not TOOL_NAMES[raw_title] and raw_title:match("^mcp__") then
       local provider = raw_title:match("^mcp__([^_]+)__") or "mcp"
@@ -322,6 +323,8 @@ function M.handle_session_update_in_chat(buf, update, proc)
   elseif result.type == "tool_call_update" then
     if result.tool_finished then
       if decorations_ok then pcall(decorations.stop_spinner, buf) end
+      chat_state.set_activity_phase(buf, "thinking")
+      if decorations_ok then pcall(decorations.start_spinner, buf, "thinking") end
       if result.update.status == "failed" then
         local tool_name = result.tool.title or result.tool.kind or "tool"
         M.append_to_chat_buffer(buf, { "[!] " .. tool_name .. " failed" })
@@ -372,6 +375,7 @@ function M.handle_session_update_in_chat(buf, update, proc)
 
   elseif result.type == "stop" then
     state.streaming = false
+    chat_state.set_activity_phase(buf, nil)
     pcall(flush_streaming_text, buf, state)
     state.streaming_text = ""
     state.streaming_insert_line = nil
@@ -414,6 +418,10 @@ function M.handle_session_update_in_chat(buf, update, proc)
     end
 
   elseif result.type == "agent_thought_chunk" then
+    local bstate = chat_state.get_buffer_state(buf)
+    if bstate.activity_phase ~= "thinking" then
+      chat_state.set_activity_phase(buf, "thinking")
+    end
     if decorations_ok then pcall(decorations.start_spinner, buf, "thinking") end
   end
 end
@@ -576,6 +584,17 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
     vim.bo[buf].modifiable = true
 
     if proc.ui then proc.ui.permission_active = true end
+    chat_state.set_activity_phase(buf, "permission")
+
+    vim.notify("[ai_repl] Permission required: " .. display, vim.log.levels.WARN)
+
+    local perm_line = vim.api.nvim_buf_line_count(buf) - 1
+    if decorations_ok then pcall(decorations.start_permission_blink, buf, perm_line) end
+
+    local win = vim.fn.bufwinid(buf)
+    if win ~= -1 then
+      pcall(vim.api.nvim_win_set_cursor, win, { math.max(1, perm_line), 0 })
+    end
 
     local function send_selected(option_id)
       local response = {
@@ -595,10 +614,35 @@ function M.handle_permission_in_chat(buf, proc, msg_id, params)
       vim.fn.chansend(proc.job_id, vim.json.encode(response) .. "\n")
     end
 
+    local perm_notify_timer = vim.uv.new_timer()
+    if perm_notify_timer then
+      perm_notify_timer:start(30000, 30000, vim.schedule_wrap(function()
+        if not vim.api.nvim_buf_is_valid(buf) then
+          perm_notify_timer:stop()
+          perm_notify_timer:close()
+          return
+        end
+        vim.notify("[ai_repl] Still waiting: " .. display, vim.log.levels.WARN)
+        local w = vim.fn.bufwinid(buf)
+        if w ~= -1 then
+          local cursor = vim.api.nvim_win_get_cursor(w)
+          if math.abs(cursor[1] - perm_line) > 5 then
+            pcall(vim.api.nvim_win_set_cursor, w, { math.max(1, perm_line), 0 })
+          end
+        end
+      end))
+    end
+
     local answered = false
     local function cleanup_keymaps()
       for _, b in ipairs(bindings) do
         pcall(vim.keymap.del, "n", b.key, { buffer = buf })
+      end
+      if decorations_ok then pcall(decorations.stop_permission_blink, buf) end
+      if perm_notify_timer then
+        perm_notify_timer:stop()
+        perm_notify_timer:close()
+        perm_notify_timer = nil
       end
     end
 

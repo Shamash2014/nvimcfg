@@ -658,6 +658,12 @@ function M.send_to_process(buf)
     M.autosave_buffer(buf)
   end
 
+  -- Set thinking phase immediately so spinner shows elapsed time
+  local cs = require("ai_repl.chat_state")
+  cs.set_activity_phase(buf, "thinking")
+  local decorations_ok, decorations = pcall(require, "ai_repl.chat_decorations")
+  if decorations_ok then pcall(decorations.start_spinner, buf, "thinking") end
+
   -- Send prompt
   async.run(function()
     proc:send_prompt(prompt)
@@ -1002,6 +1008,16 @@ function M.setup_keymaps(buf)
   end, vim.tbl_extend("force", opts, {
     desc = "Jump to previous permission prompt"
   }))
+
+  -- Nudge: poke the agent to continue
+  vim.keymap.set("n", "<C-n>", function()
+    local state = get_state(buf)
+    if state.process then
+      state.process:nudge()
+    else
+      vim.notify("[.chat] No active session", vim.log.levels.WARN)
+    end
+  end, vim.tbl_extend("force", opts, { desc = "Nudge agent to continue" }))
 
   -- Text objects for messages
   vim.keymap.set("o", "im", function()

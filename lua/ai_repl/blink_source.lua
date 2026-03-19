@@ -80,6 +80,7 @@ function source:get_completions(ctx, callback)
     { name = "init", desc = "Initialize AI session (alias for /start)" },
     { name = "kill", desc = "Kill current session (terminate process)" },
     { name = "force-cancel", desc = "Force cancel + kill (for stuck agents)" },
+    { name = "nudge", desc = "Nudge agent to continue (gentle)" },
     { name = "restart", desc = "Restart session (kill and create fresh)" },
     { name = "mode", desc = "Switch mode or show mode picker" },
     { name = "config", desc = "Show session config options picker" },
