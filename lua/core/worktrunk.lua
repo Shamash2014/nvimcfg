@@ -195,6 +195,11 @@ function M.start_statusline(interval_ms)
   if not timer then return end
   statusline_timer = timer
   statusline_timer:start(interval_ms, interval_ms, vim.schedule_wrap(refresh_statusline))
+
+  vim.api.nvim_create_autocmd({ "FocusGained", "DirChanged" }, {
+    group = vim.api.nvim_create_augroup("worktrunk_statusline", { clear = true }),
+    callback = function() refresh_statusline() end,
+  })
 end
 
 function M.stop_statusline()

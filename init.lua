@@ -127,7 +127,7 @@ opt.ruler = false        -- Don't show cursor position in command line
 opt.shortmess:append("filnxtToOFcI")  -- Shorten messages to fit in one line
 
 -- Performance critical settings
-opt.updatetime = 300     -- Faster completion (default 4000ms)
+opt.updatetime = 500     -- Balance between responsiveness and CPU (default 4000ms)
 opt.timeoutlen = 300     -- Faster key sequence completion
 opt.ttimeoutlen = 10     -- Faster escape key response
 opt.lazyredraw = false   -- Must be false: true causes 100% CPU with terminal buffers and neogit

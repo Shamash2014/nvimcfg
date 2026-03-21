@@ -144,7 +144,7 @@ return {
   end,
   init = function()
     if vim.fn.executable("wt") == 1 then
-      require("core.worktrunk").start_statusline(5000)
+      require("core.worktrunk").start_statusline(30000)
       vim.o.statusline = "%f %m%r%h%w %= %{v:lua.require('core.worktrunk').statusline()} %l:%c %p%%"
     end
   end,

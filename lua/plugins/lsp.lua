@@ -8,7 +8,7 @@ return {
     local default_config = {
       capabilities = capabilities,
       flags = {
-        debounce_text_changes = 150,
+        debounce_text_changes = 500,
       },
       before_init = function(_, config)
         require("codesettings").with_local_settings(config.name, config)

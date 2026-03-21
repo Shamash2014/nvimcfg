@@ -38,7 +38,7 @@ local SPINNERS = {
   thinking = { "·", "··", "···", "··" },
   executing = { "[=  ]", "[ = ]", "[  =]", "[ = ]" },
 }
-local SPIN_TIMING = { generating = 100, thinking = 200, executing = 150 }
+local SPIN_TIMING = { generating = 200, thinking = 200, executing = 200 }
 
 local ROLE_HL = {
   user = "ChatRoleYou",
