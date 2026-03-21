@@ -38,6 +38,8 @@ local MODE_ICONS = {
   chat = "💬", execute = "▶️",
 }
 
+local NS_PLAN_BLOCK = vim.api.nvim_create_namespace("chat_plan_block")
+
 local function get_state(buf)
   if not buffer_state[buf] then
     buffer_state[buf] = {
@@ -55,6 +57,8 @@ local function get_state(buf)
       reconnect_count = 0,
       streaming_split_offset = 0,
       thinking_scan_pos = 0,
+      plan_block_extmark = nil,
+      plan_block_line_count = 0,
     }
   end
   return buffer_state[buf]
@@ -66,6 +70,7 @@ local function render_plan_in_chat(buf, entries)
   local state = get_state(buf)
 
   local prev = state.proc and state.proc.ui and state.proc.ui._prev_plan
+  local diff_summary = nil
   if prev and #prev > 0 then
     local added, changed, removed = 0, 0, 0
     local prev_map = {}
@@ -84,7 +89,7 @@ local function render_plan_in_chat(buf, entries)
       if changed > 0 then table.insert(parts, changed .. " changed") end
       if added > 0 then table.insert(parts, added .. " added") end
       if removed > 0 then table.insert(parts, removed .. " removed") end
-      M.append_to_chat_buffer(buf, { "[~] Plan updated: " .. table.concat(parts, ", ") })
+      diff_summary = "[~] Plan updated: " .. table.concat(parts, ", ")
     end
   end
 
@@ -92,8 +97,34 @@ local function render_plan_in_chat(buf, entries)
     state.proc.ui._prev_plan = entries
   end
 
-  local lines = render_mod.format_plan_lines(entries)
-  M.append_to_chat_buffer(buf, lines)
+  local plan_lines = render_mod.format_plan_lines(entries)
+  local new_block = {}
+  if diff_summary then
+    table.insert(new_block, diff_summary)
+  end
+  for _, l in ipairs(plan_lines) do
+    table.insert(new_block, l)
+  end
+
+  if state.plan_block_extmark then
+    local pos = vim.api.nvim_buf_get_extmark_by_id(buf, NS_PLAN_BLOCK, state.plan_block_extmark, {})
+    if pos and #pos > 0 then
+      local start_row = pos[1]
+      local end_row = start_row + state.plan_block_line_count
+      vim.api.nvim_buf_set_lines(buf, start_row, end_row, false, new_block)
+      state.plan_block_line_count = #new_block
+      vim.api.nvim_buf_set_extmark(buf, NS_PLAN_BLOCK, start_row, 0, {
+        id = state.plan_block_extmark,
+      })
+      return
+    end
+  end
+
+  M.append_to_chat_buffer(buf, new_block)
+  local new_line_count = vim.api.nvim_buf_line_count(buf)
+  local block_start = new_line_count - #new_block
+  state.plan_block_extmark = vim.api.nvim_buf_set_extmark(buf, NS_PLAN_BLOCK, block_start, 0, {})
+  state.plan_block_line_count = #new_block
 
   if not state.plan_discuss then
     state.plan_discuss = true
@@ -119,6 +150,8 @@ local function find_or_create_insert_line(buf, state)
   if djinni_line == -1 then
     vim.api.nvim_buf_set_lines(buf, line_count, -1, false, { "", "@Djinni:" })
     state.streaming_insert_line = line_count + 2
+    state.plan_block_extmark = nil
+    state.plan_block_line_count = 0
   else
     local has_content_after = false
     local lines_after_djinni = djinni_line - scan_from
@@ -131,6 +164,8 @@ local function find_or_create_insert_line(buf, state)
     if has_content_after then
       vim.api.nvim_buf_set_lines(buf, line_count, -1, false, { "", "@Djinni:" })
       state.streaming_insert_line = line_count + 2
+      state.plan_block_extmark = nil
+      state.plan_block_line_count = 0
     else
       state.streaming_insert_line = djinni_line
     end
@@ -228,7 +263,6 @@ function M.setup_event_forwarding(buf, proc)
               self.ui.streaming_response = ""
               self.ui.streaming_start_line = nil
               pcall(chat_decorations.stop_spinner, buf)
-              pcall(chat_decorations.cleanup_tool_spinners, buf)
               M.ensure_you_marker(buf)
               consecutive_errors = 0
             end
@@ -360,7 +394,6 @@ function M.handle_session_update_in_chat(buf, update, proc)
     proc.ui.streaming_response = ""
     proc.ui.streaming_start_line = nil
     pcall(chat_decorations.stop_spinner, buf)
-    pcall(chat_decorations.cleanup_tool_spinners, buf)
     if is_stop_update then
       vim.defer_fn(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
@@ -380,7 +413,6 @@ function M.handle_session_update_in_chat(buf, update, proc)
       proc.ui.streaming_response = ""
       proc.ui.streaming_start_line = nil
       pcall(chat_decorations.stop_spinner, buf)
-      pcall(chat_decorations.cleanup_tool_spinners, buf)
       vim.defer_fn(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
         proc:process_queued_prompts()
@@ -405,11 +437,10 @@ function M.handle_session_update_in_chat(buf, update, proc)
     if state.tool_block_start then
       local tool_start = state.tool_block_start
       state.tool_block_start = nil
-      local tool_end = vim.api.nvim_buf_line_count(buf)
       local win = vim.fn.bufwinid(buf)
       if win ~= -1 then
         pcall(vim.api.nvim_win_call, win, function()
-          pcall(vim.cmd, tool_start .. "," .. tool_end .. "foldclose")
+          pcall(vim.cmd, tool_start .. "foldclose")
         end)
       end
     end
@@ -461,7 +492,6 @@ function M.handle_session_update_in_chat(buf, update, proc)
     local tool_id = u.toolCallId or u.id
     if tool_id then
       state.tool_line_map[tool_id] = vim.api.nvim_buf_line_count(buf) - 1
-      pcall(chat_decorations.show_tool_spinner, buf, tool_id, state.tool_line_map[tool_id], friendly)
     end
 
     local preview = tool_utils.format_tool_preview(raw_title, input)
@@ -485,7 +515,6 @@ function M.handle_session_update_in_chat(buf, update, proc)
       local is_success = result.update.status ~= "failed"
 
       if tool_id then
-        pcall(chat_decorations.complete_tool_spinner, buf, tool_id, is_success)
         local mark_id = state.tool_preview_marks and state.tool_preview_marks[tool_id]
         if mark_id then
           pcall(chat_decorations.clear_tool_preview, buf, mark_id)
@@ -576,11 +605,10 @@ function M.handle_session_update_in_chat(buf, update, proc)
     if state.tool_block_start then
       local tool_start = state.tool_block_start
       state.tool_block_start = nil
-      local tool_end = vim.api.nvim_buf_line_count(buf)
       local win = vim.fn.bufwinid(buf)
       if win ~= -1 then
         pcall(vim.api.nvim_win_call, win, function()
-          pcall(vim.cmd, tool_start .. "," .. tool_end .. "foldclose")
+          pcall(vim.cmd, tool_start .. "foldclose")
         end)
       end
     end
@@ -632,7 +660,6 @@ function M.handle_session_update_in_chat(buf, update, proc)
     end
 
     pcall(chat_decorations.stop_spinner, buf)
-    pcall(chat_decorations.cleanup_tool_spinners, buf)
     pcall(chat_decorations.schedule_redecorate, buf)
 
     if result.usage then

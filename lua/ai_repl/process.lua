@@ -205,8 +205,8 @@ function Process:_start_stale_callback_timer()
       local has_active_tools = next(captured_self.ui.active_tools) ~= nil
       local no_pending = not next(captured_self.conn.callbacks)
 
-      local timeout = has_active_tools and 120 or 60
-      if not no_pending then timeout = 120 end
+      local timeout = has_active_tools and 300 or 180
+      if not no_pending then timeout = 300 end
 
       if inactive_secs > timeout and no_pending then
         captured_self:_recover_stuck(
@@ -214,7 +214,7 @@ function Process:_start_stale_callback_timer()
         )
       end
 
-      if has_active_tools and inactive_secs > 60 then
+      if has_active_tools and inactive_secs > 120 then
         local buf = captured_self.ui.chat_buf
         if buf and vim.api.nvim_buf_is_valid(buf) then
           local ok, decorations = pcall(require, "ai_repl.chat_decorations")

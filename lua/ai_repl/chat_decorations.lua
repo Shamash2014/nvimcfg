@@ -27,10 +27,11 @@ local NS_RULER = vim.api.nvim_create_namespace("chat_ruler")
 local NS_SPIN = vim.api.nvim_create_namespace("chat_spin")
 local NS_TOKENS = vim.api.nvim_create_namespace("chat_tokens")
 local NS_LINE_HL = vim.api.nvim_create_namespace("chat_line_hl")
-local NS_TOOL_STATUS = vim.api.nvim_create_namespace("chat_tool_status")
+
 local NS_MODEL = vim.api.nvim_create_namespace("chat_model")
 local NS_STATUS = vim.api.nvim_create_namespace("chat_status")
 local NS_PERM_BLINK = vim.api.nvim_create_namespace("chat_perm_blink")
+local NS_DIFF = vim.api.nvim_create_namespace("chat_diff")
 
 local SPINNERS = {
   generating = { "|", "/", "-", "\\" },
@@ -64,7 +65,7 @@ end
 -- Cache for last role detection to avoid scanning entire buffer on every spinner tick
 local last_role_cache = {} -- buf -> { last_role = string, line_count = number }
 local fold_cache = {} -- buf -> { line_count=N, levels={} }
-local active_tool_bufs = {} -- buf -> true, only these get spinner updates
+
 
 local function apply_role_highlights(buf)
   -- DISABLED: Highlighting was causing 91% of processing time
@@ -78,10 +79,50 @@ local function apply_rulers(buf)
   return
 end
 
+local function highlight_diffs(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  vim.api.nvim_buf_clear_namespace(buf, NS_DIFF, 0, -1)
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local in_diff = false
+
+  for i, line in ipairs(lines) do
+    local lnum = i - 1
+
+    if line:match("^%-%-%-.*%+%d.*%-%d.*%-%-%-$") then
+      in_diff = true
+      vim.api.nvim_buf_set_extmark(buf, NS_DIFF, lnum, 0, {
+        end_col = #line, hl_group = "AIReplDiffHeader", priority = 100,
+      })
+    elseif in_diff then
+      if line:match("^@@ .* @@") then
+        vim.api.nvim_buf_set_extmark(buf, NS_DIFF, lnum, 0, {
+          end_col = #line, hl_group = "AIReplDiffHunk", priority = 100,
+        })
+      elseif line:match("^%-%s*%d") then
+        vim.api.nvim_buf_set_extmark(buf, NS_DIFF, lnum, 0, {
+          end_col = #line, hl_group = "AIReplDiffDelete", priority = 100,
+        })
+      elseif line:match("^%+%s*%d") then
+        vim.api.nvim_buf_set_extmark(buf, NS_DIFF, lnum, 0, {
+          end_col = #line, hl_group = "AIReplDiffAdd", priority = 100,
+        })
+      elseif line:match("^%s+%d+%s") then
+        vim.api.nvim_buf_set_extmark(buf, NS_DIFF, lnum, 0, {
+          end_col = #line, hl_group = "AIReplDiffContext", priority = 100,
+        })
+      elseif line == "" or line:match("^%[") or line:match("^@%u") then
+        in_diff = false
+      end
+    end
+  end
+end
+
 function M.redecorate(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
   apply_role_highlights(buf)
   apply_rulers(buf)
+  highlight_diffs(buf)
 end
 
 function M.schedule_redecorate(buf)
@@ -290,9 +331,20 @@ function M.foldexpr(lnum)
     local all_lines = vim.api.nvim_buf_get_lines(buf, 0, line_count, false)
     local levels = {}
     local in_tool_block = false
+    local in_frontmatter = false
     for i, line in ipairs(all_lines) do
-      if chat_parser.parse_role_marker(line) then
-        levels[i] = ">1"
+      if i == 1 and line:match("^```") then
+        levels[i] = ">2"
+        in_frontmatter = true
+      elseif in_frontmatter then
+        if line:match("^```") then
+          levels[i] = "1"
+          in_frontmatter = false
+        else
+          levels[i] = "2"
+        end
+      elseif chat_parser.parse_role_marker(line) then
+        levels[i] = "="
         in_tool_block = false
       elseif line:match("^<thinking>") then
         levels[i] = ">2"
@@ -307,13 +359,14 @@ function M.foldexpr(lnum)
         else
           levels[i] = "2"
         end
-      elseif i == 1 and line:match("^```") then
-        levels[i] = ">2"
-        in_tool_block = false
       else
         if in_tool_block then
-          levels[i] = "1"
-          in_tool_block = false
+          if line == "" then
+            levels[i] = "2"
+          else
+            levels[i] = "1"
+            in_tool_block = false
+          end
         else
           levels[i] = "="
         end
@@ -379,129 +432,8 @@ function M.foldtext()
   return line .. " [" .. line_count .. " lines]"
 end
 
-local tool_spinner_timer = nil
-local tool_spinner_frames = { "◐", "◓", "◑", "◒" }
-local tool_spinner_frame_idx = 1
-
-local function ensure_tool_spinner_timer()
-  if tool_spinner_timer then return end
-  tool_spinner_timer = vim.uv.new_timer()
-  tool_spinner_timer:start(0, 300, vim.schedule_wrap(function()
-    tool_spinner_frame_idx = (tool_spinner_frame_idx % #tool_spinner_frames) + 1
-    local has_any = false
-    for buf in pairs(active_tool_bufs) do
-      if not vim.api.nvim_buf_is_valid(buf) then
-        active_tool_bufs[buf] = nil
-      else
-        local state = chat_state.get_buffer_state(buf)
-        if state and state.tool_indicators then
-          local win = vim.fn.bufwinid(buf)
-          for tool_id, indicator in pairs(state.tool_indicators) do
-            has_any = true
-            if win ~= -1 then
-              local elapsed = math.floor((vim.uv.hrtime() - indicator.start_time) / 1e9)
-              local elapsed_str = elapsed >= 1 and (" " .. elapsed .. "s") or ""
-              pcall(vim.api.nvim_buf_set_extmark, buf, NS_TOOL_STATUS, indicator.line - 1, 0, {
-                id = indicator.extmark_id,
-                virt_text = { { tool_spinner_frames[tool_spinner_frame_idx] .. " " .. indicator.display_name .. "..." .. elapsed_str, "Comment" } },
-                virt_text_pos = "eol",
-                priority = 250,
-              })
-            end
-            indicator.tick_count = indicator.tick_count + 1
-            if indicator.tick_count > 2000 then
-              pcall(vim.api.nvim_buf_del_extmark, buf, NS_TOOL_STATUS, indicator.extmark_id)
-              state.tool_indicators[tool_id] = nil
-            end
-          end
-        end
-      end
-    end
-    if not has_any and tool_spinner_timer then
-      safe_close_timer(tool_spinner_timer)
-      tool_spinner_timer = nil
-    end
-  end))
-end
-
-function M.show_tool_spinner(buf, tool_id, line, tool_name)
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then
-    return
-  end
-
-  local state = chat_state.get_buffer_state(buf)
-
-  if not state.tool_indicators then
-    state.tool_indicators = {}
-  end
-
-  local display_name = tool_name or "Executing"
-
-  local extmark_id = vim.api.nvim_buf_set_extmark(buf, NS_TOOL_STATUS, line - 1, 0, {
-    virt_text = { { tool_spinner_frames[1] .. " " .. display_name .. "...", "Comment" } },
-    virt_text_pos = "eol",
-    priority = 250,
-  })
-
-  state.tool_indicators[tool_id] = {
-    extmark_id = extmark_id,
-    line = line,
-    display_name = display_name,
-    start_time = vim.uv.hrtime(),
-    tick_count = 0,
-  }
-
-  active_tool_bufs[buf] = true
-  ensure_tool_spinner_timer()
-end
-
-function M.complete_tool_spinner(buf, tool_id, success)
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then
-    return
-  end
-
-  local state = chat_state.get_buffer_state(buf)
-  local indicator = state.tool_indicators and state.tool_indicators[tool_id]
-
-  if not indicator then
-    return
-  end
-
-  local symbol = success and "✓ Complete" or "✗ Failed"
-  local hl = success and "DiagnosticOk" or "DiagnosticError"
-
-  pcall(vim.api.nvim_buf_set_extmark, buf, NS_TOOL_STATUS, indicator.line - 1, 0, {
-    id = indicator.extmark_id,
-    virt_text = { { symbol, hl } },
-    virt_text_pos = "eol",
-    priority = 250,
-  })
-
-  state.tool_indicators[tool_id] = nil
-  if not next(state.tool_indicators) then
-    active_tool_bufs[buf] = nil
-  end
-
-  vim.defer_fn(function()
-    if vim.api.nvim_buf_is_valid(buf) then
-      pcall(vim.api.nvim_buf_del_extmark, buf, NS_TOOL_STATUS, indicator.extmark_id)
-    end
-  end, 2000)
-end
-
-function M.cleanup_tool_spinners(buf)
-  active_tool_bufs[buf] = nil
-  local state = chat_state.get_buffer_state(buf)
-  if not state.tool_indicators then return end
-  for tool_id, indicator in pairs(state.tool_indicators) do
-    pcall(vim.api.nvim_buf_del_extmark, buf, NS_TOOL_STATUS, indicator.extmark_id)
-    state.tool_indicators[tool_id] = nil
-  end
-end
-
 function M.cleanup_buffer(buf)
   M.stop_spinner(buf)
-  M.cleanup_tool_spinners(buf)
   M.stop_permission_blink(buf)
   M.clear_status_line(buf)
   last_role_cache[buf] = nil
@@ -509,15 +441,11 @@ function M.cleanup_buffer(buf)
   if vim.api.nvim_buf_is_valid(buf) then
     pcall(vim.api.nvim_buf_clear_namespace, buf, NS_CURSOR_BLEND, 0, -1)
     pcall(vim.api.nvim_buf_clear_namespace, buf, NS_TOOL_PREVIEW, 0, -1)
+    pcall(vim.api.nvim_buf_clear_namespace, buf, NS_DIFF, 0, -1)
   end
 
   safe_close_timer(redecorate_timers[buf])
   redecorate_timers[buf] = nil
-
-  if tool_spinner_timer and not next(active_tool_bufs) then
-    safe_close_timer(tool_spinner_timer)
-    tool_spinner_timer = nil
-  end
 end
 
 function M.shutdown()
@@ -536,8 +464,6 @@ function M.shutdown()
     safe_close_timer(timer)
     perm_blink_timers[buf] = nil
   end
-  safe_close_timer(tool_spinner_timer)
-  tool_spinner_timer = nil
 end
 
 local status_timers = {}
@@ -710,6 +636,20 @@ local CURSOR_HL_MAP = {
   system = "ChatCursorLineSystem", System = "ChatCursorLineSystem",
 }
 
+local function fold_tool_blocks(buf)
+  local win = vim.fn.bufwinid(buf)
+  if win == -1 then return end
+  local fc = fold_cache[buf]
+  if not fc then return end
+  pcall(vim.api.nvim_win_call, win, function()
+    for i, level in ipairs(fc.levels) do
+      if level == ">2" and i > 1 then
+        pcall(vim.cmd, i .. "foldclose")
+      end
+    end
+  end)
+end
+
 function M.setup_buffer(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
 
@@ -726,12 +666,13 @@ function M.setup_buffer(buf)
 
   -- For very large buffers, only do minimal setup
   if line_count > 1000 then
-    -- Skip initial redecoration for large buffers
     vim.schedule(function()
       M.redecorate(buf)
+      vim.schedule(function() fold_tool_blocks(buf) end)
     end)
   else
     M.redecorate(buf)
+    vim.schedule(function() fold_tool_blocks(buf) end)
   end
 
   vim.api.nvim_create_autocmd("TextChanged", {
