@@ -1345,8 +1345,7 @@ function M.hybrid_send(buf)
         return
       end
 
-      chat_buffer_events.setup_event_forwarding(buf, proc)
-      M.attach_session(buf, proc.session_id)
+      -- new_session() already attached the ACP process when invoked from this .chat buffer
       ai_repl.update_statusline()
 
       vim.schedule(function()

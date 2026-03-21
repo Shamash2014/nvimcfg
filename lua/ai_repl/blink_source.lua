@@ -34,7 +34,7 @@ function source:get_completions(ctx, callback)
       kind = vim.lsp.protocol.CompletionItemKind.File,
       documentation = {
         kind = "markdown",
-        value = "Current file (this .chat file, or last edited file in REPL)",
+        value = "Current file (this .chat file, or last non-chat file you edited)",
       },
     })
 

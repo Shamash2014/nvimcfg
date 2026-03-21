@@ -41,7 +41,7 @@ function M._create_new_session(cwd, callback)
       before_ids[sid] = true
     end
 
-    ai_repl.new_session(provider_id, nil, { skip_chat_attach = true })
+    ai_repl.new_session(provider_id, nil)
 
     vim.defer_fn(function()
       local proc = nil

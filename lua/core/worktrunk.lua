@@ -3,7 +3,13 @@ local M = {}
 local function run_async(cmd, args, callback)
   local stdout_lines = {}
   local stderr_lines = {}
-  vim.fn.jobstart({ cmd, unpack(args) }, {
+  local function deliver(success)
+    vim.schedule(function()
+      callback(success, stdout_lines, stderr_lines)
+    end)
+  end
+
+  local ok, job_id = pcall(vim.fn.jobstart, { cmd, unpack(args) }, {
     stdout_buffered = true,
     stderr_buffered = true,
     on_stdout = function(_, data)
@@ -17,11 +23,18 @@ local function run_async(cmd, args, callback)
       end
     end,
     on_exit = function(_, code)
-      vim.schedule(function()
-        callback(code == 0, stdout_lines, stderr_lines)
-      end)
+      deliver(code == 0)
     end,
   })
+
+  if not ok then
+    table.insert(stderr_lines, tostring(job_id))
+    deliver(false)
+    return
+  end
+  if type(job_id) ~= "number" or job_id <= 0 then
+    deliver(false)
+  end
 end
 
 function M.is_available(callback)
@@ -149,15 +162,21 @@ end
 
 local statusline_cache = ""
 local statusline_timer = nil
+local statusline_refresh_busy = false
 
 local function refresh_statusline()
+  if statusline_refresh_busy then
+    return
+  end
+  statusline_refresh_busy = true
   run_async("wt", { "list", "statusline", "--format=claude-code" }, function(ok, lines)
+    statusline_refresh_busy = false
     if ok and #lines > 0 then
       statusline_cache = lines[1]
     else
       statusline_cache = ""
     end
-    vim.cmd("redrawstatus")
+    pcall(vim.cmd, "redrawstatus")
   end)
 end
 

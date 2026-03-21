@@ -6,6 +6,7 @@ local ralph_helper = require("ai_repl.ralph_helper")
 function M.apply_update(proc, update)
   if not update then return nil end
   proc.state.last_activity = os.time()
+  proc:touch_session_prompt_callback_age()
   local u = update
   local update_type = u.sessionUpdate
 

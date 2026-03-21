@@ -1,16 +1,13 @@
 local M = {}
 
--- AI REPL - Chat Buffer Only Architecture
+-- AI chat (ACP) — .chat buffers only
 -- =======================================
 -- This module manages AI agent sessions through .chat buffers only.
--- The traditional REPL interface has been removed in favor of the more
--- powerful chat buffer system (Flemma-style UI with @You:, @Djinni: markers).
+-- There is no separate REPL buffer; interaction is always via .chat files.
 --
--- Key changes:
--- - M.new_session() creates a process and opens a chat buffer
--- - M.show() redirects to M.open_chat_buffer()
--- - setup_buffer_keymaps() is minimal (chat buffers have their own setup)
--- - Process buffers are hidden/internal only
+-- Key points:
+-- - M.new_session() starts ACP and opens or attaches a .chat buffer
+-- - M.show() / M.toggle() only navigate .chat buffers (no separate REPL window)
 -- =======================================
 
 local Process = require("ai_repl.process")
@@ -67,7 +64,7 @@ local config = setmetatable({
   window = {
     width = 0.45,
     border = "rounded",
-    title = "AI REPL"
+    title = "AI Chat"
   },
   default_provider = "claude",
   history_size = 1000,
@@ -103,9 +100,8 @@ local ui = {
   project_root = nil,
 }
 
--- Get the REPL window (deprecated - returns nil since we use chat buffers only)
+-- Legacy hook from the old REPL window; chat buffers use normal windows.
 local function get_tab_win()
-  -- No REPL window anymore - all interaction is through chat buffers
   return nil
 end
 
@@ -219,6 +215,14 @@ end
 local function update_statusline()
   local proc = registry.active()
   local win = get_tab_win()
+  if not win and proc and proc.ui and proc.ui.chat_buf and vim.api.nvim_buf_is_valid(proc.ui.chat_buf) then
+    local wid = vim.fn.bufwinid(proc.ui.chat_buf)
+    if wid ~= -1 then
+      win = wid
+    elseif vim.api.nvim_get_current_buf() == proc.ui.chat_buf then
+      win = vim.api.nvim_get_current_win()
+    end
+  end
   if not win then return end
   local provider_id = proc and proc.data.provider or config.default_provider
   local provider = config.providers[provider_id]
@@ -1233,29 +1237,6 @@ local function create_buffer(proc, name)
   return nil
 end
 
-local function setup_buffer_keymaps(buf)
-  -- Minimal setup for internal process buffer (hidden, not used for interaction)
-  -- Chat buffers have their own keymap setup in lazy_load_chat_buffer().lua
-
-  vim.api.nvim_create_autocmd("BufEnter", {
-    buffer = buf,
-    callback = function()
-      local p, sid = registry.get_by_buffer(buf)
-      if p and sid and sid ~= registry.active_session_id() then
-        registry.set_active(sid)
-        update_statusline()
-      end
-    end
-  })
-
-  vim.api.nvim_create_autocmd("BufDelete", {
-    buffer = buf,
-    callback = function()
-      render.cleanup_buffer(buf)
-    end
-  })
-end
-
 function M.send_prompt(content, opts)
   opts = opts or {}
   local proc = registry.active()
@@ -1617,7 +1598,7 @@ function M.handle_command(cmd)
       "  /revoke - Revoke allow rule",
       "  /clear - Clear buffer",
       "  /cancel - Cancel current",
-      "  /quit - Close REPL",
+      "  /quit - Close chat buffer",
       "",
       "Ralph Wiggum (SDLC mode):",
       "  /ralph pause   - Pause looping",
@@ -3029,7 +3010,6 @@ function M.toggle()
 end
 
 -- Open or create .chat buffer
--- Open or create .chat buffer
 function M.open_chat_buffer(file_path, skip_session_check, existing_session_id)
   -- Track source file before switching to chat
   local current_buf = vim.api.nvim_get_current_buf()
@@ -3311,8 +3291,7 @@ function M.pick_provider(callback)
   end)
 end
 
-function M.new_session(provider_id, profile_id, opts)
-  opts = opts or {}
+function M.new_session(provider_id, profile_id)
   if not provider_id then
     M.pick_provider(function(id)
       M.new_session(id)
@@ -3362,16 +3341,14 @@ function M.new_session(provider_id, profile_id, opts)
 
   local session_id, started_proc = M._start_session(provider_id, profile_id, { cwd = ui.project_root })
 
-  if not opts.skip_chat_attach then
-    local cur_buf = vim.api.nvim_get_current_buf()
-    local chat_buffer = require("ai_repl.chat_buffer")
-    if chat_buffer.is_chat_buffer(cur_buf) then
-      local chat_buffer_events = require("ai_repl.chat_buffer_events")
-      chat_buffer_events.setup_event_forwarding(cur_buf, started_proc)
-      chat_buffer.attach_session(cur_buf, session_id)
-    else
-      M.open_chat_buffer(nil, true, session_id)
-    end
+  local attach_buf = vim.api.nvim_get_current_buf()
+  local chat_buffer = require("ai_repl.chat_buffer")
+  if chat_buffer.is_chat_buffer(attach_buf) then
+    local chat_buffer_events = require("ai_repl.chat_buffer_events")
+    chat_buffer_events.setup_event_forwarding(attach_buf, started_proc)
+    chat_buffer.attach_session(attach_buf, session_id)
+  else
+    M.open_chat_buffer(nil, true, session_id)
   end
 end
 
@@ -3592,18 +3569,14 @@ function M.load_session(session_id, opts)
     load_session_id = session_id,
   })
 
-  local buf = create_buffer(proc, session_info and session_info.name or nil)
+  create_buffer(proc, session_info and session_info.name or nil)
 
   registry.set(session_id, proc)
   registry.set_active(session_id)
 
-  setup_buffer_keymaps(buf)
-  append_to_buffer(buf, { "Loading session " .. session_id:sub(1, 8) .. "..." }, { type = "silent" })
-
   proc:start()
 
-  -- Open chat buffer instead of showing REPL buffer
-  M.open_chat_buffer()
+  M.open_chat_buffer(nil, true, session_id)
 end
 
 function M.open_session_picker()
@@ -3672,7 +3645,7 @@ function M.import_chat_from_picker(file_path, session_id)
     cwd = get_current_project_root(),
   })
 
-  local buf = create_buffer(proc, "Imported: " .. session_id:sub(1, 8))
+  create_buffer(proc, "Imported: " .. session_id:sub(1, 8))
 
   registry.set(temp_id, proc)
   registry.set_active(temp_id)
@@ -3682,8 +3655,6 @@ function M.import_chat_from_picker(file_path, session_id)
     for _, msg in ipairs(data.messages) do
       registry.append_message(temp_id, msg.role, msg.content, msg.tool_calls)
     end
-    -- Render the imported messages
-    render.render_history(buf, data.messages)
   end
 
   -- Handle annotations if present
@@ -3705,28 +3676,36 @@ function M.import_chat_from_picker(file_path, session_id)
     end
   end
 
-  -- Show the buffer
-  local win = get_tab_win()
-  if not win or not vim.api.nvim_win_is_valid(win) then
-    M.show()
-    win = get_tab_win()
-  end
+  local abs = vim.fn.fnamemodify(file_path, ":p")
+  vim.cmd("split " .. vim.fn.fnameescape(abs))
+  local buf = vim.api.nvim_get_current_buf()
 
-  if win and vim.api.nvim_win_is_valid(win) then
-    vim.api.nvim_win_set_buf(win, buf)
-  end
-
-  setup_buffer_keymaps(buf)
   proc:start()
 
-  append_to_buffer(buf, {
-    "",
-    "[+] Imported .chat file: " .. vim.fn.fnamemodify(file_path, ":t"),
-    "[+] Session ready",
-    ""
-  }, { type = "silent" })
+  local attempts = 0
+  local function try_attach()
+    attempts = attempts + 1
+    if not vim.api.nvim_buf_is_valid(buf) then
+      return
+    end
+    if not proc:is_alive() then
+      if attempts > 150 then
+        vim.notify("[import] Session failed to start", vim.log.levels.ERROR)
+        return
+      end
+      vim.defer_fn(try_attach, 100)
+      return
+    end
+    local ok, ierr = lazy_load_chat_buffer().init_buffer(buf, temp_id)
+    if not ok then
+      vim.notify("[.chat] Failed to initialize: " .. tostring(ierr), vim.log.levels.ERROR)
+      return
+    end
+    vim.notify("[+] Imported: " .. vim.fn.fnamemodify(file_path, ":t"), vim.log.levels.INFO)
+    update_statusline()
+  end
 
-  update_statusline()
+  vim.defer_fn(try_attach, 50)
 end
 
 function M.pick_process()
@@ -3747,7 +3726,7 @@ function M.pick_process()
     })
   end
 
-  vim.ui.select(extract_labels(items), { prompt = "Select process:" }, function(choice, idx)
+  vim.ui.select(extract_labels(items), { prompt = "Select AI session:" }, function(choice, idx)
     if not choice or not idx then return end
     local item = items[idx]
     if not item.is_current then
@@ -3786,18 +3765,24 @@ function M.switch_to_buffer()
     return a.label < b.label
   end)
 
-  vim.ui.select(extract_labels(items), { prompt = "Switch to buffer:" }, function(choice, idx)
+  vim.ui.select(extract_labels(items), { prompt = "Switch to chat buffer:" }, function(choice, idx)
     if not choice or not idx then return end
     local item = items[idx]
-    local win = get_tab_win()
+    local win_id = vim.fn.bufwinid(item.buf)
     if item.is_current then
-      if win then
-        vim.api.nvim_set_current_win(win)
+      if win_id ~= -1 then
+        vim.api.nvim_set_current_win(win_id)
+      else
+        vim.cmd("vsplit")
+        vim.api.nvim_win_set_buf(0, item.buf)
       end
     else
       registry.set_active(item.session_id)
-      if win then
-        vim.api.nvim_win_set_buf(win, item.buf)
+      if win_id ~= -1 then
+        vim.api.nvim_set_current_win(win_id)
+      else
+        vim.cmd("vsplit")
+        vim.api.nvim_win_set_buf(0, item.buf)
       end
       update_statusline()
     end

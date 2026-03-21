@@ -5,11 +5,22 @@ local async = require("ai_repl.async")
 
 local CLIENT_INFO = {
   name = "ai_repl.nvim",
-  title = "AI REPL for Neovim",
+  title = "AI Chat for Neovim",
   version = "2.0.0"
 }
 
 local EMPTY_ARRAY = setmetatable({}, { __is_list = true })
+
+-- Max age (seconds) before dropping an unanswered JSON-RPC callback. false = never drop by age.
+-- session/prompt only returns when the turn ends; chunks arrive via session/update notifications.
+local CALLBACK_RPC_MAX_AGE = {
+  ["session/prompt"] = false,
+  ["initialize"] = 120,
+  ["authenticate"] = 120,
+  ["session/load"] = 90,
+  ["session/new"] = 180,
+  ["session/set_config_option"] = 120,
+}
 
 local function obj_to_name_value_array(t)
   if type(t) ~= "table" then return setmetatable({}, { __is_list = true }) end
@@ -188,7 +199,7 @@ function Process:_start_stale_callback_timer()
   local captured_self = self
   self._stale_timer:start(15000, 15000, vim.schedule_wrap(function()
     if not captured_self.job_id then return end
-    local cleaned = captured_self:cleanup_stale_callbacks(30)
+    local cleaned = captured_self:cleanup_stale_callbacks(120)
     if cleaned > 0 and captured_self.state.busy then
       local has_pending = false
       for _ in pairs(captured_self.conn.callbacks) do
@@ -1028,13 +1039,32 @@ function Process:remove_queued_item(index)
   return table.remove(self.data.prompt_queue, index)
 end
 
-function Process:cleanup_stale_callbacks(max_age_seconds)
-  max_age_seconds = max_age_seconds or 300 -- Default 5 minutes
+--- Bump RPC callback clock for pending session/prompt (streaming uses notifications, not prompt reply).
+function Process:touch_session_prompt_callback_age()
+  local now = os.time()
+  for _, info in pairs(self.conn.callback_timeouts) do
+    if info.method == "session/prompt" then
+      info.created_at = now
+    end
+  end
+end
+
+function Process:cleanup_stale_callbacks(fallback_max_age_seconds)
+  fallback_max_age_seconds = fallback_max_age_seconds or 300
   local now = os.time()
   local stale_ids = {}
 
   for id, timeout_info in pairs(self.conn.callback_timeouts) do
-    if now - timeout_info.created_at > max_age_seconds then
+    local method = timeout_info.method or ""
+    local max_age = CALLBACK_RPC_MAX_AGE[method]
+    if max_age == false then
+      -- Long-lived request; never remove by age (inactivity handler still recovers stuck busy).
+    elseif max_age == nil then
+      max_age = fallback_max_age_seconds
+      if now - timeout_info.created_at > max_age then
+        table.insert(stale_ids, id)
+      end
+    elseif now - timeout_info.created_at > max_age then
       table.insert(stale_ids, id)
     end
   end

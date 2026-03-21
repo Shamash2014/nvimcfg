@@ -1070,13 +1070,13 @@ function M.pick_tasks_and_commands()
 
     table.insert(items, {
       text = "New AI Session",
-      desc = "Create a new AI REPL session",
+      desc = "Create a new AI chat session",
       is_ai = true,
     })
 
     table.insert(items, {
       text = "Restart AI Session",
-      desc = "Restart current AI REPL session in .chat buffer",
+      desc = "Restart current AI session in .chat buffer",
       is_ai_restart = true,
     })
 

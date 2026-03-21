@@ -58,7 +58,7 @@ return {
         require("ai_repl").toggle()
       end,
       mode = { "n", "v" },
-      desc = "Toggle AI REPL",
+      desc = "Toggle AI chat buffer",
     },
     {
       "<leader>ap",

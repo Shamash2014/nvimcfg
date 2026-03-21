@@ -19,6 +19,7 @@ return {
 
     local original_schedule = vim.schedule
     local lsp_error_suppression_active = false
+    local spawn_error_suppression_active = false
 
     vim.schedule = function(fn)
       return original_schedule(function()
@@ -38,6 +39,22 @@ return {
                 vim.defer_fn(function()
                   lsp_error_suppression_active = false
                 end, 5000)
+              end)
+            end
+            return
+          end
+          if err_str:match("E903") or err_str:match("too many open files") or err_str:match("Process failed to start") then
+            if not spawn_error_suppression_active then
+              spawn_error_suppression_active = true
+              original_schedule(function()
+                vim.notify(
+                  "Process spawn failed (often: too many open files / EMFILE).\n" ..
+                  "Raise `ulimit -n`, close terminals or heavy plugins, or restart Neovim.",
+                  vim.log.levels.WARN
+                )
+                vim.defer_fn(function()
+                  spawn_error_suppression_active = false
+                end, 10000)
               end)
             end
             return
