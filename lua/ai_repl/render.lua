@@ -20,47 +20,63 @@ local streaming_state = {
   pending_updates = {},
   last_update_time = {},
   update_timers = {},
-  throttle_ms = 16,  -- ~60fps
-  batch_size = 500,  -- Batch characters before forcing update
+  throttle_ms = 50,  -- ~20fps, still smooth for text
+  batch_size = 500,
+  active = false,
 }
+
+local function close_uv_timer(timer)
+  if timer then
+    timer:stop()
+    if not timer:is_closing() then timer:close() end
+  end
+end
 
 local function schedule_streaming_update(buf, callback)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
 
-  if streaming_state.update_timers[buf] then
-    streaming_state.update_timers[buf]:stop()
+  streaming_state.active = true
+
+  local timer = streaming_state.update_timers[buf]
+  if timer then
+    timer:stop()
+  else
+    timer = vim.uv.new_timer()
+    streaming_state.update_timers[buf] = timer
   end
 
-  table.insert(streaming_state.pending_updates, callback)
+  streaming_state.pending_updates[buf] = callback
 
-  local timer = vim.uv.new_timer()
-  streaming_state.update_timers[buf] = timer
   timer:start(streaming_state.throttle_ms, 0, vim.schedule_wrap(function()
     timer:stop()
-    timer:close()
-    if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
-
-    for _, cb in ipairs(streaming_state.pending_updates) do
-      cb()
+    if not buf or not vim.api.nvim_buf_is_valid(buf) then
+      close_uv_timer(timer)
+      streaming_state.update_timers[buf] = nil
+      streaming_state.pending_updates[buf] = nil
+      return
     end
 
-    streaming_state.pending_updates = {}
-    streaming_state.update_timers[buf] = nil
+    local cb = streaming_state.pending_updates[buf]
+    if cb then
+      cb()
+      streaming_state.pending_updates[buf] = nil
+    end
   end))
 end
 
 local function flush_streaming_updates(buf)
   if streaming_state.update_timers[buf] then
-    streaming_state.update_timers[buf]:stop()
-    pcall(function() streaming_state.update_timers[buf]:close() end)
+    close_uv_timer(streaming_state.update_timers[buf])
     streaming_state.update_timers[buf] = nil
   end
-  
-  for _, cb in ipairs(streaming_state.pending_updates) do
+
+  streaming_state.active = false
+
+  local cb = streaming_state.pending_updates[buf]
+  if cb then
     cb()
   end
-  
-  streaming_state.pending_updates = {}
+  streaming_state.pending_updates[buf] = nil
 end
 
 local function get_cache_key(old_content, new_content)
@@ -174,13 +190,10 @@ end
 
 function M.cleanup_buffer(buf)
   buffer_state[buf] = nil
-  
+
   -- Clean up streaming state
-  if streaming_state.update_timers[buf] then
-    streaming_state.update_timers[buf]:stop()
-    pcall(function() streaming_state.update_timers[buf]:close() end)
-    streaming_state.update_timers[buf] = nil
-  end
+  close_uv_timer(streaming_state.update_timers[buf])
+  streaming_state.update_timers[buf] = nil
 
   for _, ns in ipairs({ NS, NS_ANIM, NS_DIFF, NS_PROMPT }) do
     pcall(vim.api.nvim_buf_clear_namespace, buf, ns, 0, -1)
@@ -285,10 +298,18 @@ function M.update_streaming(buf, text, process_ui)
 end
 
 function M.finish_streaming(buf, process_ui)
-  -- Flush any pending updates immediately
   flush_streaming_updates(buf)
   process_ui.streaming_response = ""
   process_ui.streaming_start_line = nil
+
+  vim.schedule(function()
+    if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+    local decorations = require("ai_repl.chat_decorations")
+    decorations.invalidate_role_cache(buf)
+    decorations.schedule_redecorate(buf)
+    local chat_buffer = require("ai_repl.chat_buffer")
+    chat_buffer.autosave_buffer(buf)
+  end)
 end
 
 function M.get_prompt_input(buf)
@@ -361,19 +382,25 @@ function M.render_tool(buf, tool)
     line = line .. ": " .. desc
   end
 
-  M.append_content(buf, { line })
+  local output_lines = tool_utils.format_tool_output_lines(tool)
+  if #output_lines > 0 then
+    local all = { line }
+    for _, ol in ipairs(output_lines) do
+      table.insert(all, ol)
+    end
+    M.append_content(buf, all)
+  else
+    M.append_content(buf, { line })
+  end
 end
 
-function M.render_plan(buf, plan)
-  if #plan == 0 then return end
-  
-  -- Detect if this is a spec mode plan (has structured metadata)
+function M.format_plan_lines(plan)
+  if #plan == 0 then return {} end
+
   local is_spec_mode = false
-  local has_metadata = false
   local plan_title = "Plan"
   local plan_description = nil
-  
-  -- Check for spec mode metadata
+
   for _, item in ipairs(plan) do
     if type(item) == "table" then
       if item.isSpecMode or item.spec_mode then
@@ -381,32 +408,27 @@ function M.render_plan(buf, plan)
       end
       if item.title or item.name then
         plan_title = item.title or item.name
-        has_metadata = true
       end
       if item.description then
         plan_description = item.description
       end
     end
   end
-  
+
   local lines = { "" }
-  
-  -- Add header with appropriate icon
   local header_icon = is_spec_mode and "📝" or "📋"
   table.insert(lines, "━━━ " .. header_icon .. " " .. plan_title .. " ━━━")
-  
-  -- Add description if available
+
   if plan_description then
     table.insert(lines, " " .. plan_description)
     table.insert(lines, "━━━━━━━━━━━━━━━━━━━━━━")
   end
-  
+
   for i, item in ipairs(plan) do
     local icon = tool_utils.STATUS_ICONS[item.status] or "○"
     local pri = item.priority == "high" and "! " or ""
     local text = item.content or item.text or item.activeForm or item.description or tostring(item)
-    
-    -- Add special formatting for spec mode items
+
     local prefix = ""
     if is_spec_mode then
       if item.type == "requirement" then
@@ -419,12 +441,17 @@ function M.render_plan(buf, plan)
         prefix = "➤ "
       end
     end
-    
+
     table.insert(lines, string.format(" %s %d.%s%s%s", icon, i, prefix, pri, text))
   end
   table.insert(lines, "━━━━━━━━━━━━")
   table.insert(lines, "")
-  M.append_content(buf, lines)
+  return lines
+end
+
+function M.render_plan(buf, plan)
+  local lines = M.format_plan_lines(plan)
+  if #lines > 0 then M.append_content(buf, lines) end
 end
 
 function M.parse_markdown_plan(text)
@@ -952,13 +979,6 @@ function M.render_history(buf, messages)
   end)
 end
 
-local function close_uv_timer(timer)
-  if timer then
-    timer:stop()
-    if not timer:is_closing() then timer:close() end
-  end
-end
-
 local function stop_animation()
   animation.active = false
   animation.state = nil
@@ -1122,6 +1142,10 @@ function M.goto_prompt(buf, win)
   vim.bo[buf].modifiable = true
   vim.api.nvim_win_set_cursor(win, { prompt_line, #line })
   vim.cmd("startinsert!")
+end
+
+function M.is_streaming()
+  return streaming_state.active
 end
 
 return M

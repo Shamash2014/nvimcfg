@@ -46,6 +46,8 @@ function source:complete(params, callback)
     { label = "/chat", detail = "Open/create .chat buffer" },
     { label = "/chat-new", detail = "Start chat in current buffer or create new" },
     { label = "/restart-chat", detail = "Restart conversation in current .chat buffer" },
+    { label = "/discuss", detail = "Enter plan discussion mode" },
+    { label = "/approve", detail = "Approve plan and exit discussion mode" },
     { label = "/summarize", detail = "Summarize current conversation" },
     { label = "/cwd", detail = "Show/change working directory" },
     { label = "/strategy", detail = "Show/set session strategy (new/latest/prompt/new-deferred)" },

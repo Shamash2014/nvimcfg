@@ -167,7 +167,7 @@ function M.setup_auto_cleanup()
 
   if stale_cleanup_timer then
     stale_cleanup_timer:stop()
-    stale_cleanup_timer:close()
+    if not stale_cleanup_timer:is_closing() then stale_cleanup_timer:close() end
   end
   stale_cleanup_timer = vim.uv.new_timer()
   stale_cleanup_timer:start(300000, 300000, vim.schedule_wrap(function()
@@ -184,7 +184,7 @@ end
 function M.cleanup_timers()
   if stale_cleanup_timer then
     stale_cleanup_timer:stop()
-    stale_cleanup_timer:close()
+    if not stale_cleanup_timer:is_closing() then stale_cleanup_timer:close() end
     stale_cleanup_timer = nil
   end
 end

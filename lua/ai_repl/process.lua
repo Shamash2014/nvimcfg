@@ -67,6 +67,7 @@ function Process.new(session_id, opts)
     supports_load_session = false,
     reconnect_count = 0,
     agents_md_injected = false,
+    last_stop_reason = nil,
     agentic_context_injected = false,
   }
   self.data = {
@@ -99,6 +100,10 @@ function Process:start()
   local mise_env = mise.get_env(cwd)
   local env = vim.tbl_extend("force", vim.fn.environ(), mise_env, self.config.env)
   local captured_self = self
+
+  self._fd_check_counter = 0
+  self._fd_warned = false
+  self._last_fd_count = 0
 
   self.job_id = vim.fn.jobstart({ self.config.cmd, unpack(self.config.args) }, {
     cwd = cwd,
@@ -225,15 +230,45 @@ function Process:_start_stale_callback_timer()
         end
       end
     end
+
+    captured_self._fd_check_counter = (captured_self._fd_check_counter or 0) + 1
+    if captured_self._fd_check_counter % 8 == 0 then
+      local ok, pid = pcall(vim.fn.jobpid, captured_self.job_id)
+      if ok and pid and pid > 0 then
+        vim.fn.jobstart({ "lsof", "-p", tostring(pid) }, {
+          stdout_buffered = true,
+          on_stdout = function(_, data)
+            local count = 0
+            for _, line in ipairs(data or {}) do
+              if line ~= "" then count = count + 1 end
+            end
+            captured_self._last_fd_count = count
+            if count > 5000 and not captured_self._fd_warned then
+              captured_self._fd_warned = true
+              vim.schedule(function()
+                vim.notify(
+                  string.format("[ai_repl] ACP process FD count: %d — consider restarting session", count),
+                  vim.log.levels.WARN
+                )
+              end)
+            end
+          end,
+        })
+      end
+    end
   end))
 end
 
 function Process:_stop_stale_callback_timer()
   if self._stale_timer then
     self._stale_timer:stop()
-    self._stale_timer:close()
+    if not self._stale_timer:is_closing() then self._stale_timer:close() end
     self._stale_timer = nil
   end
+end
+
+function Process:get_fd_count()
+  return self._last_fd_count or 0
 end
 
 function Process:_send(method, params, callback)
@@ -283,7 +318,7 @@ function Process:send(method, params, timeout_ms)
       completed = true
       if timer then
         timer:stop()
-        timer:close()
+        if not timer:is_closing() then timer:close() end
       end
       cb(result, err)
     end
@@ -292,7 +327,7 @@ function Process:send(method, params, timeout_ms)
       if not completed then
         completed = true
         timer:stop()
-        timer:close()
+        if not timer:is_closing() then timer:close() end
         cb(nil, { code = "TIMEOUT", message = string.format("%s timed out after %dms", method, timeout_ms) })
       end
     end))
@@ -302,7 +337,7 @@ function Process:send(method, params, timeout_ms)
       if not completed then
         completed = true
         timer:stop()
-        timer:close()
+        if not timer:is_closing() then timer:close() end
         cb(nil, { code = "SEND_FAILED", message = "Failed to send message" })
       end
     end
@@ -364,6 +399,9 @@ function Process:kill()
   self.ui.pending_tool_calls = {}
   self.ui.active_tools = {}
   self.ui.current_plan = {}
+  self._fd_check_counter = 0
+  self._fd_warned = false
+  self._last_fd_count = 0
 end
 
 function Process:cleanup()
@@ -921,11 +959,15 @@ function Process:nudge()
     return
   end
   if not self.state.busy then
-    self:send_prompt("Continue from where you left off. If you are waiting for something, explain what.")
+    if self.state.last_stop_reason == "end_turn" then
+      vim.notify("[ai_repl] Agent completed normally — nothing to nudge", vim.log.levels.INFO)
+      return
+    end
+    self:send_prompt("Continue.")
     return
   end
   table.insert(self.data.prompt_queue, {
-    prompt = "Continue from where you left off.",
+    prompt = "Continue.",
     opts = { silent = true },
   })
   vim.notify("[ai_repl] Nudge queued — will send when current operation completes", vim.log.levels.INFO)

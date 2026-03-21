@@ -233,16 +233,23 @@ local function update_statusline()
   local queue_count = proc and #proc.data.prompt_queue or 0
   local queue_str = queue_count > 0 and (" Q:" .. queue_count) or ""
 
+  local cost_str = ""
+  if proc and proc.ui.session_cost and proc.ui.session_cost > 0 then
+    local cost_mod = require("ai_repl.cost")
+    cost_str = " " .. cost_mod.format(proc.ui.session_cost)
+  end
+
   local ok, sp = pcall(vim.fn.winlayout)
   if ok and sp and sp[1] == "leaf" then
     vim.api.nvim_set_option_value(
       'statusline',
       string.format(
-        "%%#StatusLine# %s | %%#Title#%s%s %%#Comment#%s",
+        "%%#StatusLine# %s | %%#Title#%s%s %%#Comment#%s%%#WarningMsg#%s",
         mode_display,
         agent_name,
         queue_str,
-        provider_name
+        provider_name,
+        cost_str
       ),
       { scope = 'local', win = win }
     )
@@ -362,13 +369,17 @@ local function handle_session_update(proc, params)
       append_to_buffer(buf, { "", "[▶] " .. mode_display .. " mode: Starting execution...", "" }, { type = "silent" })
       return
     else
-      render.start_animation(buf, "executing")
+      render.stop_animation()
       render.render_tool(buf, result.tool)
+      local hooks = require("ai_repl.hooks")
+      hooks.pre_tool_use(result.tool and result.tool.name, result.tool and result.tool.input)
     end
 
   elseif result.type == "tool_call_update" then
     if result.tool_finished then
       render.stop_animation()
+      local hooks = require("ai_repl.hooks")
+      hooks.post_tool_use(result.tool and result.tool.name, result.tool and result.tool.input)
 
       if result.diff then
         render.render_diff(buf, result.diff.path, result.diff.old, result.diff.new)
@@ -447,13 +458,27 @@ local function handle_session_update(proc, params)
       end
       table.insert(usage_parts, "Total: " .. fmt(total))
 
-      -- Show floating notification with cost if available
+      local cost_mod = require("ai_repl.cost")
+      local model_id = proc.config.profile_id or proc.data.provider
+      local cost = cost_mod.calculate(model_id, input_tokens, output_tokens)
+      if cost then
+        proc.ui.session_cost = (proc.ui.session_cost or 0) + cost
+        table.insert(usage_parts, cost_mod.format(cost) .. " (session: " .. cost_mod.format(proc.ui.session_cost) .. ")")
+      end
+
       local notification_text = table.concat(usage_parts, " | ")
       vim.notify(notification_text, vim.log.levels.INFO, {
         title = "AI Response",
         timeout = 5000,
       })
+
+      if input_tokens > 100000 then
+        vim.notify("[ai_repl] Context getting large — consider /compact", vim.log.levels.WARN)
+      end
     end
+
+    local hooks = require("ai_repl.hooks")
+    hooks.on_complete(result.response_text, proc and proc.session_id)
 
     -- Clear slash command state if this was a response to a slash command
     if proc.data.pending_slash_command then
@@ -1578,6 +1603,8 @@ function M.handle_command(cmd)
       "  /start, /init - Start AI session for current .chat buffer",
       "  /chat-new - Start chat in current buffer (if .chat file) or create new one (session starts on C-])",
       "  /restart-chat - Restart conversation in current .chat buffer",
+      "  /discuss - Enter plan discussion mode",
+      "  /approve - Approve plan and exit discussion mode",
       "  /summarize - Summarize current conversation",
       "  /spec export - Export spec to markdown",
       "  /cwd [path] - Show/change working directory",
@@ -1845,7 +1872,6 @@ function M.handle_command(cmd)
       proc:start()
     end, 100)
   elseif command == "summarize" or command == "summary" then
-    -- Summarize current chat buffer
     local current_buf = vim.api.nvim_get_current_buf()
     if lazy_load_chat_buffer().is_chat_buffer(current_buf) then
       local ok = lazy_load_chat_buffer().summarize_conversation(current_buf)
@@ -1855,6 +1881,48 @@ function M.handle_command(cmd)
     else
       append_to_buffer(buf, { "[!] Not a .chat buffer" }, { type = "error" })
     end
+  elseif command == "compact" then
+    if not proc then
+      append_to_buffer(buf, { "[!] No active session" }, { type = "error" })
+      return
+    end
+    if not proc.data.messages or #proc.data.messages == 0 then
+      append_to_buffer(buf, { "[!] No conversation to compact" }, { type = "error" })
+      return
+    end
+    local focus = table.concat(args, " ")
+    if focus == "" then focus = "general" end
+    append_to_buffer(buf, { "", "[~] Compacting context (focus: " .. focus .. ")..." }, { type = "silent" })
+    local summary_prompt = string.format(
+      "Summarize this conversation concisely for context continuity. Preserve:\n"
+      .. "- File paths modified and their changes\n"
+      .. "- Key decisions made and reasoning\n"
+      .. "- Current task state and next steps\n"
+      .. "- Errors encountered and how they were resolved\n"
+      .. "Focus: %s\n\n"
+      .. "Conversation to summarize:\n",
+      focus
+    )
+    local msg_texts = {}
+    for _, msg in ipairs(proc.data.messages) do
+      local role = msg.role or "unknown"
+      local text = type(msg.content) == "string" and msg.content or vim.inspect(msg.content)
+      if #text > 2000 then text = text:sub(1, 2000) .. "..." end
+      table.insert(msg_texts, role .. ": " .. text)
+    end
+    summary_prompt = summary_prompt .. table.concat(msg_texts, "\n---\n")
+    local async = require("ai_repl.async")
+    async.run(function()
+      local ok_reset, err = proc:reset_session_with_context(summary_prompt)
+      vim.schedule(function()
+        if ok_reset then
+          proc.ui.session_cost = proc.ui.session_cost or 0
+          append_to_buffer(buf, { "[~] Context compacted (manual)", "" }, { type = "silent" })
+        else
+          append_to_buffer(buf, { "[!] Compact failed: " .. tostring(err) }, { type = "error" })
+        end
+      end)
+    end)
   elseif command == "cwd" then
     if args[1] then
       local new_cwd = vim.fn.expand(args[1])
@@ -2010,6 +2078,26 @@ function M.handle_command(cmd)
       M.verify_all_skills()
     else
       M.show_skill_picker()
+    end
+  elseif command == "hooks" then
+    local hooks_mod = require("ai_repl.hooks")
+    if args[1] == "setup" then
+      append_to_buffer(buf, {
+        "Configure hooks in your ai_repl config:",
+        "  hooks = {",
+        '    PreToolUse = { { match_tool = "Edit", command = "stylua {file}" } },',
+        '    PostToolUse = { { match_tool = "Write", command = "stylua {file}" } },',
+        '    OnComplete = { { command = "terminal-notifier -message {summary}" } },',
+        "  }",
+      }, { type = "silent" })
+    else
+      local config = require("ai_repl.config")
+      if config.hooks then
+        hooks_mod.setup(config.hooks)
+        append_to_buffer(buf, { "[+] Hooks loaded from config" }, { type = "silent" })
+      else
+        append_to_buffer(buf, { "No hooks configured. Use /hooks setup for help." }, { type = "silent" })
+      end
     end
   elseif command == "ext" or command == "extensions" then
     M.show_extensions_picker(args[1])
@@ -2199,6 +2287,7 @@ function M.handle_command(cmd)
     else
       append_to_buffer(buf, { "", "[i] Ralph Loop not active" }, { type = "silent" })
     end
+
   else
     if not proc then
       append_to_buffer(buf, { "[!] No active session" }, { type = "error" })
@@ -3271,14 +3360,29 @@ function M.new_session(provider_id, profile_id, opts)
   end
   ui.project_root = get_project_root(ui.source_buf or cur_buf)
 
+  local session_id, started_proc = M._start_session(provider_id, profile_id, { cwd = ui.project_root })
+
+  if not opts.skip_chat_attach then
+    local cur_buf = vim.api.nvim_get_current_buf()
+    local chat_buffer = require("ai_repl.chat_buffer")
+    if chat_buffer.is_chat_buffer(cur_buf) then
+      local chat_buffer_events = require("ai_repl.chat_buffer_events")
+      chat_buffer_events.setup_event_forwarding(cur_buf, started_proc)
+      chat_buffer.attach_session(cur_buf, session_id)
+    else
+      M.open_chat_buffer(nil, true, session_id)
+    end
+  end
+end
+
+function M._start_session(provider_id, profile_id, opts)
+  opts = opts or {}
   local profile_args, profile_pos = M.build_profile_args(provider_id, profile_id)
-
-  -- Create actual ACP process with unique session ID
   local session_id = registry.generate_unique_session_id()
+  local cwd = opts.cwd or get_current_project_root()
 
-  local cwd = ui.project_root
-  proc = create_process(session_id, {
-    provider = provider_id,
+  local proc = create_process(session_id, {
+    provider = provider_id or config.default_provider,
     extra_args = profile_pos ~= "prepend" and profile_args or nil,
     prepend_args = profile_pos == "prepend" and profile_args or nil,
     profile_id = profile_id,
@@ -3286,23 +3390,68 @@ function M.new_session(provider_id, profile_id, opts)
   })
 
   create_buffer(proc, nil)
-
   registry.set(session_id, proc)
-  registry.set_active(session_id)
+  if not opts.background then
+    registry.set_active(session_id)
+  end
 
   proc:start()
+  return session_id, proc
+end
 
-  if not opts.skip_chat_attach then
-    local cur_buf = vim.api.nvim_get_current_buf()
-    local chat_buffer = require("ai_repl.chat_buffer")
-    if chat_buffer.is_chat_buffer(cur_buf) then
-      local chat_buffer_events = require("ai_repl.chat_buffer_events")
-      chat_buffer_events.setup_event_forwarding(cur_buf, proc)
-      chat_buffer.attach_session(cur_buf, session_id)
-    else
-      M.open_chat_buffer(nil, true, session_id)
-    end
+function M.create_background_session(opts)
+  opts = opts or {}
+  local provider_id = opts.provider or config.default_provider
+  local session_id, proc = M._start_session(provider_id, opts.profile_id, {
+    cwd = opts.cwd,
+    background = true,
+  })
+
+  local cwd = opts.cwd or get_current_project_root()
+  local chat_buf_mod = lazy_load_chat_buffer()
+  local chat_parser = require("ai_repl.chat_parser")
+  local template = chat_parser.generate_template({
+    session_id = session_id,
+    provider = proc.data.provider or config.default_provider,
+  })
+
+  local buf = vim.api.nvim_create_buf(true, false)
+  local timestamp = os.date("%Y-%m-%d-%H%M")
+  local random = math.floor(math.random() * 100)
+  local chat_id = string.format("bg-%s-%02d.chat", timestamp, random)
+  local new_path = cwd .. "/" .. chat_id
+  vim.api.nvim_buf_set_name(buf, new_path)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(template, "\n"))
+
+  local ok, err = chat_buf_mod.init_buffer(buf, session_id)
+  if not ok then
+    vim.notify("[bg] Failed to initialize chat buffer: " .. tostring(err), vim.log.levels.ERROR)
+    return nil
   end
+
+  local chat_buffer_events = require("ai_repl.chat_buffer_events")
+  chat_buffer_events.setup_event_forwarding(buf, proc)
+  chat_buf_mod.attach_session(buf, session_id)
+
+  local prompt = opts.prompt
+  if prompt then
+    local poll_count = 0
+    local timer = vim.uv.new_timer()
+    timer:start(100, 100, vim.schedule_wrap(function()
+      poll_count = poll_count + 1
+      if proc:is_ready() then
+        timer:stop()
+        if not timer:is_closing() then timer:close() end
+        proc:send_prompt(prompt)
+      elseif poll_count > 100 then
+        timer:stop()
+        if not timer:is_closing() then timer:close() end
+        vim.notify("[bg] Session failed to become ready", vim.log.levels.ERROR)
+      end
+    end))
+  end
+
+  return proc, session_id, buf
 end
 
 function M._create_process(session_id, opts)
@@ -3927,6 +4076,12 @@ function M.setup(opts)
 
   registry.start_autosave()
 
+  if config.hooks then
+    require("ai_repl.hooks").setup(config.hooks)
+  end
+
+  require("ai_repl.scheduler").init()
+
   -- Auto-initialize .chat buffers
   vim.api.nvim_create_autocmd("BufReadPost", {
     pattern = "*.chat",
@@ -3947,7 +4102,24 @@ function M.setup(opts)
         session_id = "chat_" .. os.time(),
         provider = config.default_provider,
       })
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(template, "\n"))
+      local tpl_lines = vim.split(template, "\n")
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, tpl_lines)
+
+      local has_you = false
+      for _, l in ipairs(tpl_lines) do
+        if l:match("^@You:") then has_you = true; break end
+      end
+      if not has_you then
+        local last = vim.api.nvim_buf_line_count(buf)
+        vim.api.nvim_buf_set_lines(buf, last, last, false, { "", "@You:", "" })
+        vim.schedule(function()
+          if vim.api.nvim_buf_is_valid(buf) then
+            local lc = vim.api.nvim_buf_line_count(buf)
+            pcall(vim.api.nvim_win_set_cursor, 0, { lc, 0 })
+            vim.cmd("startinsert")
+          end
+        end)
+      end
     end,
   })
 
@@ -3996,6 +4168,18 @@ function M.setup(opts)
   if config.annotations and config.annotations.enabled then
     require("ai_repl.annotations").setup(config.annotations)
   end
+
+  -- Centralized VimLeave cleanup for all module-level timers
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = vim.api.nvim_create_augroup("AiReplTimerCleanup", { clear = true }),
+    callback = function()
+      pcall(function() require("ai_repl.chat_decorations").shutdown() end)
+      pcall(function() require("ai_repl.ralph_helper").shutdown() end)
+      pcall(function() require("core.worktrunk").shutdown() end)
+      pcall(function() require("ai_repl.client_lifecycle").cleanup_timers() end)
+      pcall(function() require("ai_repl.scheduler").shutdown() end)
+    end,
+  })
 end
 
 return M

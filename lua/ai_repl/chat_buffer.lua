@@ -225,6 +225,7 @@ function M.init_buffer(buf, existing_session_id)
   vim.api.nvim_create_autocmd("TextChanged", {
     buffer = buf,
     callback = function()
+      if render.is_streaming() then return end
       chat_parser.invalidate_cache(buf)
     end,
   })
@@ -561,6 +562,18 @@ function M.summarize_conversation(buf)
   return true
 end
 
+function M.format_plan_context(entries)
+  local lines = { "<current-plan>" }
+  for i, item in ipairs(entries) do
+    local status = item.status or "pending"
+    local text = item.content or item.text or item.activeForm or item.description or tostring(item)
+    table.insert(lines, string.format("%d. [%s] %s", i, status, text))
+  end
+  table.insert(lines, "</current-plan>")
+  table.insert(lines, "<system>When updating plan items, re-render the full updated plan. For clarifying questions without plan changes, respond conversationally.</system>")
+  return table.concat(lines, "\n")
+end
+
 -- Send buffer content to ACP process
 function M.send_to_process(buf)
   local state = get_state(buf)
@@ -631,6 +644,45 @@ function M.send_to_process(buf)
 
   -- Check if this is a slash command
   if trimmed_content:sub(1, 1) == "/" then
+    local cbe_state = chat_buffer_events.get_state(buf)
+
+    if trimmed_content == "/discuss" then
+      cbe_state.plan_discuss = true
+      M.append_djinni_marker(buf)
+      chat_buffer_events.append_to_chat_buffer(buf, { "[📋] Plan discussion mode ON" })
+      local dec_ok, dec = pcall(require, "ai_repl.chat_decorations")
+      if dec_ok then pcall(dec.show_plan_discuss_indicator, buf) end
+      chat_buffer_events.ensure_you_marker(buf)
+      return true
+    end
+
+    if trimmed_content == "/approve" then
+      cbe_state.plan_discuss = false
+      if cbe_state.proc and cbe_state.proc.ui then
+        cbe_state.proc.ui.current_plan = {}
+        cbe_state.proc.ui.plan_mode = false
+      end
+      M.append_djinni_marker(buf)
+      chat_buffer_events.append_to_chat_buffer(buf, { "[✓] Plan approved — ready to execute" })
+      local dec_ok, dec = pcall(require, "ai_repl.chat_decorations")
+      if dec_ok then pcall(dec.clear_plan_discuss_indicator, buf) end
+      chat_buffer_events.ensure_you_marker(buf)
+      return true
+    end
+
+    if trimmed_content == "/plan" then
+      local plan = cbe_state.proc and cbe_state.proc.ui and cbe_state.proc.ui.current_plan
+      if plan and #plan > 0 then
+        M.append_djinni_marker(buf)
+        local lines = require("ai_repl.render").format_plan_lines(plan)
+        chat_buffer_events.append_to_chat_buffer(buf, lines)
+      else
+        chat_buffer_events.append_to_chat_buffer(buf, { "[~] No active plan" })
+      end
+      chat_buffer_events.ensure_you_marker(buf)
+      return true
+    end
+
     -- Extract command (remove leading /)
     local cmd_with_args = trimmed_content:sub(2)
 
@@ -669,6 +721,13 @@ function M.send_to_process(buf)
     end)
 
     return true
+  end
+
+  -- Plan discussion: prepend plan context to user messages
+  local cbe_state = chat_buffer_events.get_state(buf)
+  local plan = cbe_state.proc and cbe_state.proc.ui and cbe_state.proc.ui.current_plan
+  if cbe_state.plan_discuss and plan and #plan > 0 then
+    content = M.format_plan_context(plan) .. "\n\n" .. content
   end
 
   -- Resolve @file references and @{file}
@@ -1348,22 +1407,26 @@ function M.setup_autocmds(buf)
   vim.api.nvim_create_autocmd("TextChanged", {
     buffer = buf,
     callback = function()
+      local render = require("ai_repl.render")
+      if render.is_streaming() then return end
+
       local state = get_state(buf)
       state.modified = true
 
-      -- Debounced autosave after text changes
       if config.auto_save and config.auto_save_delay > 0 then
         if autosave_timer then
           autosave_timer:stop()
-          autosave_timer:close()
+        else
+          autosave_timer = vim.uv.new_timer()
         end
-        autosave_timer = vim.uv.new_timer()
         autosave_timer:start(config.auto_save_delay, 0, vim.schedule_wrap(function()
           if autosave_timer then
             autosave_timer:stop()
-            autosave_timer:close()
-            autosave_timer = nil
+            if not autosave_timer:is_closing() then
+              autosave_timer:close()
+            end
           end
+          autosave_timer = nil
           if vim.api.nvim_buf_is_valid(buf) then
             M.autosave_buffer(buf)
           end
@@ -1391,7 +1454,9 @@ function M.setup_autocmds(buf)
       -- Clean up autosave timer
       if autosave_timer then
         autosave_timer:stop()
-        autosave_timer:close()
+        if not autosave_timer:is_closing() then
+          autosave_timer:close()
+        end
         autosave_timer = nil
       end
 
@@ -1399,6 +1464,15 @@ function M.setup_autocmds(buf)
       if config.auto_save then
         M.autosave_buffer(buf)
       end
+
+      -- Clean up timer-holding modules
+      -- Note: chat_decorations cleanup is handled by its own BufDelete autocmd
+      pcall(function()
+        require("ai_repl.render").cleanup_buffer(buf)
+      end)
+      pcall(function()
+        require("ai_repl.chat_buffer_events").cleanup_buffer(buf)
+      end)
 
       -- Kill the session process if this buffer is attached to one
       local state = get_state(buf)

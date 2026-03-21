@@ -17,16 +17,6 @@ function M.find_agents_md(cwd)
     end
   end
 
-  local git_root = vim.fn.systemlist("git -C " .. vim.fn.shellescape(cwd) .. " rev-parse --show-toplevel 2>/dev/null")[1]
-  if git_root and git_root ~= "" then
-    for _, path in ipairs(DEFAULT_SEARCH_PATHS) do
-      local full_path = vim.fn.fnamemodify(git_root .. "/" .. path, ":p")
-      if vim.fn.filereadable(full_path) == 1 then
-        return full_path
-      end
-    end
-  end
-
   return nil
 end
 
@@ -48,13 +38,11 @@ function M.get_context_for_session(opts)
   local cwd = opts.cwd or vim.fn.getcwd()
 
   local agents_md_path = M.find_agents_md(cwd)
-  if not agents_md_path then
-    return nil
-  end
+  if not agents_md_path then return nil end
 
   local content, err = M.read_agents_md(agents_md_path)
-  if err then
-    if opts.debug then
+  if not content then
+    if err and opts.debug then
       vim.notify("[agents_md] " .. err, vim.log.levels.WARN)
     end
     return nil
@@ -143,11 +131,11 @@ end
 
 function M.get_status(cwd)
   cwd = cwd or vim.fn.getcwd()
-  local path = M.find_agents_md(cwd)
+  local agents_path = M.find_agents_md(cwd)
 
   return {
-    found = path ~= nil,
-    path = path,
+    found = agents_path ~= nil,
+    path = agents_path,
   }
 end
 

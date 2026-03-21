@@ -349,6 +349,17 @@ function M.verify_skill_accessible(skill_name, provider_id)
   return false, "Skill not accessible to " .. provider_id
 end
 
+function M.format_skill_catalog()
+  local skills = M.list_skills()
+  if #skills == 0 then return nil end
+
+  local lines = { "Available skills (use /skill <name>):" }
+  for _, s in ipairs(skills) do
+    table.insert(lines, "- " .. s.name .. ": " .. s.description)
+  end
+  return table.concat(lines, "\n")
+end
+
 function M.create_skill_selector_ui()
   local skills = M.list_skills()
 

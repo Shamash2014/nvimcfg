@@ -44,6 +44,14 @@ function M.setup()
   hl(0, "ChatUserMarker", { fg = "#90EE90", bold = true, bg = "#1a3a1a" })
   hl(0, "ChatDjinniMarker", { fg = "#DDA0DD", bold = true, bg = "#2a1a3a" })
 
+  -- CursorLine blending for role lines
+  hl(0, "ChatCursorLineYou", { bg = "#243a24", bold = true })
+  hl(0, "ChatCursorLineDjinni", { bg = "#3a2a4a", bold = true })
+  hl(0, "ChatCursorLineSystem", { bg = "#3f3f2a", bold = true })
+
+  -- Tool inline preview
+  hl(0, "ChatToolPreview", { fg = "#666688", italic = true })
+
   -- Enhanced markdown-specific highlights for chat buffers
   -- Code blocks
   hl(0, "RenderMarkdownCode", { bg = "#1a1a2e", fg = "#a9b1d6" })

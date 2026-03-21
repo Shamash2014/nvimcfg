@@ -10,13 +10,16 @@ function M.apply_update(proc, update)
   local update_type = u.sessionUpdate
 
   if u.type == "system" and u.subtype == "compact_boundary" then
-    local tokens = u.compactMetadata and u.compactMetadata.preTokens
+    local pre_tokens = u.compactMetadata and u.compactMetadata.preTokens
+    local post_tokens = u.compactMetadata and u.compactMetadata.postTokens
     local trigger = u.compactMetadata and u.compactMetadata.trigger or "auto"
-    local info = tokens and string.format(" (%s, %dk tokens)", trigger, math.floor(tokens / 1000)) or ""
+    local info = pre_tokens and string.format(" (%s, %dk tokens)", trigger, math.floor(pre_tokens / 1000)) or ""
     return {
       type = "compact_boundary",
       update = u,
       compact_info = info,
+      pre_tokens = pre_tokens,
+      post_tokens = post_tokens,
     }
   end
 
@@ -60,7 +63,9 @@ function M.apply_update(proc, update)
       proc.ui.current_plan = u.rawInput.todos
     end
 
+    local is_enter_plan = u.title == "EnterPlanMode"
     local is_exit_plan = u.title == "ExitPlanMode"
+    if is_enter_plan then proc.ui.plan_mode = true end
 
     return {
       type = "tool_call",
@@ -68,6 +73,7 @@ function M.apply_update(proc, update)
       tool = tool,
       is_plan_tool = is_plan_tool,
       plan_entries = is_plan_tool and u.rawInput.todos or nil,
+      is_enter_plan = is_enter_plan,
       is_exit_plan = is_exit_plan,
     }
 
@@ -188,6 +194,7 @@ function M.apply_update(proc, update)
     end
 
     local is_exit_plan_complete = tool.title == "ExitPlanMode" and u.status == "completed"
+    if is_exit_plan_complete then proc.ui.plan_mode = false end
 
     return {
       type = "tool_call_update",
@@ -229,6 +236,9 @@ function M.apply_update(proc, update)
   elseif update_type == "stop" then
     proc.state.busy = false
 
+    local stop_reason = u.stopReason or "end_turn"
+    proc.state.last_stop_reason = stop_reason
+
     local had_plan = #proc.ui.current_plan > 0
     local response_text = proc.ui.streaming_response or ""
 
@@ -241,8 +251,6 @@ function M.apply_update(proc, update)
     end
 
     local user_input_pending = proc.ui and proc.ui.permission_active
-
-    local stop_reason = u.stopReason or "end_turn"
 
     local ralph_continuing = false
     if not user_input_pending then

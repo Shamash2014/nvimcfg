@@ -139,7 +139,7 @@ end
 
 function M._wait_for_ready(proc, callback, attempts)
   attempts = attempts or 0
-  local max_attempts = 100
+  local max_attempts = 600
 
   if attempts >= max_attempts then
     vim.notify("[Session Strategy] Session creation timeout", vim.log.levels.ERROR)
@@ -147,9 +147,18 @@ function M._wait_for_ready(proc, callback, attempts)
     return
   end
 
+  if not proc:is_alive() then
+    vim.notify("[Session Strategy] Process died during session creation", vim.log.levels.ERROR)
+    callback(nil)
+    return
+  end
+
   if proc:is_ready() then
     callback(proc)
   else
+    if attempts == 100 then
+      vim.notify("[Session Strategy] Still waiting for session...", vim.log.levels.INFO)
+    end
     vim.defer_fn(function()
       M._wait_for_ready(proc, callback, attempts + 1)
     end, 100)

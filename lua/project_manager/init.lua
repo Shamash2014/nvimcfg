@@ -592,8 +592,15 @@ local function delete_selected()
     if choice ~= 1 then
       return
     end
-    if entry.task_ref and entry.task_ref.term then
-      pcall(function() entry.task_ref.term:close() end)
+    if entry.task_ref then
+      if entry.task_ref.ai_session and entry.task_ref.proc then
+        pcall(function() entry.task_ref.proc:kill() end)
+        if entry.task_ref.chat_buf and vim.api.nvim_buf_is_valid(entry.task_ref.chat_buf) then
+          vim.api.nvim_buf_delete(entry.task_ref.chat_buf, { force = true })
+        end
+      elseif entry.task_ref.term then
+        pcall(function() entry.task_ref.term:close() end)
+      end
     end
     render()
     return

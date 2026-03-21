@@ -1215,6 +1215,7 @@ function M.transition_to_phase(target_phase)
   end
   ralph_state.phase = target_phase
   ralph_state.stuck_count = 0
+  ralph_state.phase_iterations = 0
   ralph_state.last_response_hash = nil
   local gate = PHASE_GATES[target_phase]
   if gate then
@@ -1274,6 +1275,15 @@ function M.should_continue(response_text)
     return false, "paused"
   end
 
+  if ralph_state.current_iteration >= ralph_state.max_iterations then
+    return false, "max_iterations"
+  end
+
+  local phase_iterations = ralph_state.phase_iterations or 0
+  if phase_iterations >= 20 then
+    return false, "phase_max_iterations"
+  end
+
   local phase = ralph_state.phase
   local phase_checks = {
     [PHASE.REQUIREMENTS] = "requirements",
@@ -1301,10 +1311,6 @@ function M.should_continue(response_text)
     return false, "completed:completion_phase"
   end
 
-  if ralph_state.current_iteration >= ralph_state.max_iterations then
-    return false, "max_iterations"
-  end
-
   local completed, pattern = M.check_completion(response_text)
   if completed then
     return false, "completed:" .. (pattern or "unknown")
@@ -1320,6 +1326,7 @@ end
 
 function M.record_iteration(response)
   ralph_state.current_iteration = ralph_state.current_iteration + 1
+  ralph_state.phase_iterations = (ralph_state.phase_iterations or 0) + 1
 
   if M.is_planning_phase() then
     ralph_state.planning_iteration = ralph_state.planning_iteration + 1

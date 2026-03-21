@@ -1,17 +1,27 @@
-local Job = require("plenary.job")
-
 local M = {}
 
 local function run_async(cmd, args, callback)
-  Job:new({
-    command = cmd,
-    args = args,
-    on_exit = function(j, code)
+  local stdout_lines = {}
+  local stderr_lines = {}
+  vim.fn.jobstart({ cmd, unpack(args) }, {
+    stdout_buffered = true,
+    stderr_buffered = true,
+    on_stdout = function(_, data)
+      for _, line in ipairs(data or {}) do
+        if line ~= "" then table.insert(stdout_lines, line) end
+      end
+    end,
+    on_stderr = function(_, data)
+      for _, line in ipairs(data or {}) do
+        if line ~= "" then table.insert(stderr_lines, line) end
+      end
+    end,
+    on_exit = function(_, code)
       vim.schedule(function()
-        callback(code == 0, j:result(), j:stderr_result())
+        callback(code == 0, stdout_lines, stderr_lines)
       end)
     end,
-  }):start()
+  })
 end
 
 function M.is_available(callback)
@@ -175,6 +185,10 @@ function M.stop_statusline()
     statusline_timer = nil
   end
   statusline_cache = ""
+end
+
+function M.shutdown()
+  M.stop_statusline()
 end
 
 return M

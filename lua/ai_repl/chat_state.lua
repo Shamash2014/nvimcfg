@@ -42,13 +42,13 @@ function M.cleanup_buffer_state(buf)
 
   if state.spinner_timer then
     state.spinner_timer:stop()
-    state.spinner_timer:close()
+    if not state.spinner_timer:is_closing() then state.spinner_timer:close() end
   end
 
   for _, indicator in pairs(state.tool_indicators or {}) do
     if indicator.timer then
       indicator.timer:stop()
-      indicator.timer:close()
+      if not indicator.timer:is_closing() then indicator.timer:close() end
     end
   end
 
@@ -73,9 +73,9 @@ end
 
 function M.increment_active_buffers()
   global_state.active_chat_buffers = global_state.active_chat_buffers + 1
-  if global_state.active_chat_buffers == 1 and vim.o.updatetime > 100 then
+  if global_state.active_chat_buffers == 1 and vim.o.updatetime > 300 then
     global_state.original_updatetime = vim.o.updatetime
-    vim.o.updatetime = 100
+    vim.o.updatetime = 300
   end
 end
 
@@ -122,6 +122,12 @@ function M.get_statusline_info(buf)
     and math.floor((vim.uv.hrtime() - state.activity_phase_start) / 1e9) or 0
   local total_elapsed = state.activity_total_start
     and math.floor((vim.uv.hrtime() - state.activity_total_start) / 1e9) or 0
+  local session_cost = proc and proc.ui and proc.ui.session_cost
+  local cost_str = nil
+  if session_cost and session_cost > 0 then
+    local cost_mod = require("ai_repl.cost")
+    cost_str = cost_mod.format(session_cost)
+  end
   return {
     phase = state.activity_phase,
     elapsed = elapsed,
@@ -131,6 +137,7 @@ function M.get_statusline_info(buf)
       and (state.activity_tool_index .. "/" .. state.activity_tool_total) or nil,
     busy = proc and proc.state and proc.state.busy or false,
     permission_pending = proc and proc.ui and proc.ui.permission_active or false,
+    cost = cost_str,
   }
 end
 

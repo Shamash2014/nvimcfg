@@ -1,8 +1,9 @@
 local M = {}
+local async = require("ai_repl.async")
 
 local state = {
   continuation_count = 0,
-  max_continuations = 5,
+  max_continuations = 8,
   tool_failure_counts = {},
   consecutive_failures = 0,
   max_consecutive_failures = 3,
@@ -13,17 +14,30 @@ local state = {
 local INCOMPLETE_SIGNALS = {
   "Let me", "I'll now", "Next,", "I need to", "I'll ", "Now I",
   "Moving on", "Continuing", "Let's ", "I will ",
+  "First,", "Second,", "Third,", "Step ", "After that",
+  "Additionally,", "Furthermore,", "Here's", "The next",
+  "To do this", "We need to", "Finally,", "Then ",
+  "In order to", "Before we",
 }
 
 local QUESTION_SIGNALS = {
   "let me know", "would you like", "shall I", "what do you think",
   "do you want", "should I", "would you prefer", "any preference",
+  "can you", "could you", "how about", "thoughts?",
 }
 
 local TRANSIENT_PATTERNS = {
   "timeout", "ECONNRESET", "rate limit", "503", "502",
   "connection refused", "ETIMEDOUT", "ECONNREFUSED",
 }
+
+local function get_last_line(text)
+  local last_line = ""
+  for line in text:gmatch("[^\n]+") do
+    if line:match("%S") then last_line = line end
+  end
+  return (last_line:match("^%s*(.-)%s*$") or "")
+end
 
 local function looks_complete(text)
   local trimmed = text:match("(.-)%s*$") or text
@@ -34,13 +48,18 @@ local function looks_complete(text)
   if trimmed:sub(-3) == "```" then return true end
   if trimmed:match("%-%-%-$") or trimmed:match("%*%*%*$") then return true end
 
-  local last_line = ""
-  for line in trimmed:gmatch("[^\n]+") do
-    if line:match("%S") then last_line = line end
-  end
-  local ll = last_line:match("^%s*(.-)%s*$") or ""
+  local ll = get_last_line(trimmed)
   if ll:match("%.$") or ll:match("%?$") or ll:match("!$") then return true end
   if ll:match("^```") then return true end
+  if ll:match("^[%)%]%}]$") then return true end
+
+  local fence_count = 0
+  for _ in trimmed:gmatch("\n```") do fence_count = fence_count + 1 end
+  if trimmed:match("^```") then fence_count = fence_count + 1 end
+  if fence_count % 2 == 1 then return false end
+
+  if ll:match(":$") then return false end
+  if ll:match("%.%.$") or ll:match("%.%.%.$") then return false end
 
   return false
 end
@@ -62,6 +81,7 @@ local function has_question_signals(text)
       return true
     end
   end
+  if text:match("%?%s*$") then return true end
   return false
 end
 
@@ -78,7 +98,10 @@ end
 
 function M.maybe_auto_continue(proc, response_text, stop_reason)
   if stop_reason ~= "end_turn" then return false end
-  if state.continuation_count >= state.max_continuations then return false end
+  if state.continuation_count >= state.max_continuations then
+    vim.notify("[agentic] Max continuations reached", vim.log.levels.WARN)
+    return false
+  end
   if not response_text or response_text == "" then return false end
   if #response_text < 80 then return false end
   if has_question_signals(response_text) then return false end
@@ -89,12 +112,23 @@ function M.maybe_auto_continue(proc, response_text, stop_reason)
   if not dominated_by_incomplete then return false end
 
   state.continuation_count = state.continuation_count + 1
+  local last_line = get_last_line(response_text)
+  local snippet = last_line:sub(1, 80)
+  local prompt = string.format(
+    'Continue from where you left off (stopped at: "%s"). Complete the task.',
+    snippet
+  )
+
+  vim.notify(
+    string.format("[agentic] Auto-continuing (%d/%d)", state.continuation_count, state.max_continuations),
+    vim.log.levels.INFO
+  )
+
   vim.defer_fn(function()
     if proc:is_alive() and not proc.state.busy then
-      proc:send_prompt(
-        "Continue from where you left off. Complete the task you were working on.",
-        { silent = true }
-      )
+      async.run(function()
+        proc:send_prompt(prompt, { silent = true })
+      end)
     end
   end, 200)
   return true
@@ -123,9 +157,14 @@ function M.check_recovery_prompt(proc)
   if not state.recovery_prompt then return false end
   local prompt = state.recovery_prompt
   state.recovery_prompt = nil
+
+  vim.notify("[agentic] Retrying after transient error", vim.log.levels.WARN)
+
   vim.defer_fn(function()
     if proc:is_alive() and not proc.state.busy then
-      proc:send_prompt(prompt, { silent = true })
+      async.run(function()
+        proc:send_prompt(prompt, { silent = true })
+      end)
     end
   end, 200)
   return true
@@ -179,6 +218,14 @@ function M.gather_initial_context(proc)
       table.insert(limited, "... (" .. (#entries - 30) .. " more)")
     end
     table.insert(parts, "Structure:\n" .. table.concat(limited, ", "))
+  end
+
+  local ok_skills, skills = pcall(require, "ai_repl.skills")
+  if ok_skills then
+    local catalog = skills.format_skill_catalog()
+    if catalog then
+      table.insert(parts, catalog)
+    end
   end
 
   if #parts == 0 then return nil end

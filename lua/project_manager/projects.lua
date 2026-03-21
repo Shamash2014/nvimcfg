@@ -294,6 +294,10 @@ local function collect_running_tasks(projects, seen_paths)
   if not ok_tasks then return end
 
   for _, task in ipairs(tasks_mod.running_tasks) do
+    if task.ai_session then
+      goto continue
+    end
+
     if not task:is_alive() then
       goto continue
     end

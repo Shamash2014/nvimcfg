@@ -668,6 +668,101 @@ function M.run_task(task, opts)
   return task_entry
 end
 
+function M.run_ai_task(prompt, opts)
+  opts = opts or {}
+  local ai_repl = require("ai_repl")
+  local proc, session_id, chat_buf = ai_repl.create_background_session({
+    prompt = prompt,
+    cwd = opts.cwd,
+    provider = opts.provider,
+  })
+
+  if not proc then
+    vim.notify("Failed to create AI task", vim.log.levels.ERROR)
+    return nil
+  end
+
+  M.task_counter = (M.task_counter or 0) + 1
+  local task_id = string.format("ai_%d_%d_%d", os.time(), vim.loop.hrtime(), M.task_counter)
+  local short_prompt = #prompt > 40 and prompt:sub(1, 37) .. "..." or prompt
+
+  local task_entry = {
+    name = "ai: " .. short_prompt,
+    id = task_id,
+    cmd = prompt,
+    ai_session = true,
+    session_id = session_id,
+    proc = proc,
+    chat_buf = chat_buf,
+    background = not opts.foreground,
+    cwd = opts.cwd or vim.fn.getcwd(),
+    start_time = os.time(),
+    scheduled = opts.scheduled or false,
+
+    attach = function(self)
+      if not self.chat_buf or not vim.api.nvim_buf_is_valid(self.chat_buf) then
+        vim.notify(string.format("AI task '%s' buffer is gone", self.name), vim.log.levels.WARN)
+        return false
+      end
+
+      local win = vim.fn.bufwinid(self.chat_buf)
+      if win == -1 then
+        vim.cmd("vsplit")
+        win = vim.api.nvim_get_current_win()
+        vim.api.nvim_win_set_buf(win, self.chat_buf)
+        vim.wo[win].wrap = true
+        vim.wo[win].linebreak = true
+        vim.wo[win].breakindent = true
+      else
+        vim.api.nvim_set_current_win(win)
+      end
+
+      self.background = false
+      vim.notify(string.format("Attached to AI task '%s'", self.name), vim.log.levels.INFO)
+      return true
+    end,
+
+    detach = function(self)
+      if self.chat_buf and vim.api.nvim_buf_is_valid(self.chat_buf) then
+        local wins = vim.fn.win_findbuf(self.chat_buf)
+        for _, w in ipairs(wins) do
+          if #vim.api.nvim_list_wins() > 1 then
+            vim.api.nvim_win_close(w, false)
+          end
+        end
+      end
+      self.background = true
+      vim.notify(string.format("AI task '%s' detached to background", self.name), vim.log.levels.INFO)
+    end,
+
+    is_alive = function(self)
+      if not self.proc then return false end
+      return self.proc:is_alive()
+    end,
+  }
+
+  table.insert(M.running_tasks, task_entry)
+
+  if not opts.foreground then
+    local idle_check = vim.uv.new_timer()
+    task_entry._idle_timer = idle_check
+    idle_check:start(2000, 2000, vim.schedule_wrap(function()
+      if not task_entry:is_alive() then
+        idle_check:stop()
+        if not idle_check:is_closing() then idle_check:close() end
+        task_entry._idle_timer = nil
+        vim.notify(string.format("AI task completed: %s", short_prompt), vim.log.levels.INFO)
+      end
+    end))
+
+    vim.notify(string.format("[BG] AI task started: %s (use task picker to attach)", short_prompt), vim.log.levels.INFO)
+  else
+    task_entry:attach()
+  end
+
+  return task_entry
+end
+
 -- Function to list and attach to background tasks
 function M.attach_to_task()
   local attachable_tasks = {}
@@ -986,6 +1081,24 @@ function M.pick_tasks_and_commands()
     })
 
     table.insert(items, {
+      text = "AI Background Task",
+      desc = "Run AI task in background",
+      is_ai_bg = true,
+    })
+
+    table.insert(items, {
+      text = "AI Foreground Task",
+      desc = "Run AI task in foreground",
+      is_ai_fg = true,
+    })
+
+    table.insert(items, {
+      text = "Manage Schedules",
+      desc = "View and manage recurring AI schedules",
+      is_schedules = true,
+    })
+
+    table.insert(items, {
       text = "Toggle REPL",
       desc = "Toggle code REPL window",
       is_repl = true,
@@ -1112,6 +1225,26 @@ function M.pick_tasks_and_commands()
         vim.schedule(function()
           require("ai_repl").restart_session()
         end)
+      elseif item.is_ai_bg then
+        vim.schedule(function()
+          vim.ui.input({ prompt = "Background AI prompt: " }, function(prompt)
+            if prompt and prompt ~= "" then
+              M.run_ai_task(prompt, { foreground = false })
+            end
+          end)
+        end)
+      elseif item.is_ai_fg then
+        vim.schedule(function()
+          vim.ui.input({ prompt = "Foreground AI prompt: " }, function(prompt)
+            if prompt and prompt ~= "" then
+              M.run_ai_task(prompt, { foreground = true })
+            end
+          end)
+        end)
+      elseif item.is_schedules then
+        vim.schedule(function()
+          M.pick_schedules()
+        end)
       elseif item.is_repl then
         require("code_repl").toggle_repl()
       elseif item.is_remote_connect then
@@ -1153,6 +1286,62 @@ function M.pick_tasks_and_commands()
   end)
 end
 
+function M.pick_schedules()
+  local scheduler = require("ai_repl.scheduler")
+  local schedules = scheduler.list()
+
+  local items = {
+    {
+      text = "Add new schedule...",
+      desc = "Create a recurring AI task",
+      action = "add",
+    },
+  }
+
+  for _, s in ipairs(schedules) do
+    local last = s.last_run and os.date("%H:%M:%S", s.last_run) or "never"
+    table.insert(items, {
+      text = string.format("#%d  every %s → %s", s.id, s.interval_str, s.prompt),
+      desc = string.format("runs: %d, last: %s", s.run_count, last),
+      schedule_id = s.id,
+    })
+  end
+
+  vim.ui.select(items, {
+    prompt = "Schedules:",
+    format_item = function(item)
+      if item.desc and item.desc ~= "" then
+        return item.text .. " • " .. item.desc
+      end
+      return item.text
+    end,
+  }, function(item)
+    if not item then return end
+    if item.action == "add" then
+      vim.ui.input({ prompt = "Interval (e.g. 30m, 1h, 60s): " }, function(interval)
+        if not interval or interval == "" then return end
+        vim.ui.input({ prompt = "Prompt: " }, function(prompt)
+          if not prompt or prompt == "" then return end
+          local id, err = scheduler.add(interval, prompt)
+          if id then
+            vim.notify(string.format("[schedule] Added #%d: every %s → %s", id, interval, prompt), vim.log.levels.INFO)
+          else
+            vim.notify("[schedule] " .. (err or "Failed"), vim.log.levels.ERROR)
+          end
+        end)
+      end)
+    elseif item.schedule_id then
+      vim.ui.select({ "Remove", "Cancel" }, { prompt = "Action for schedule #" .. item.schedule_id .. ":" }, function(choice)
+        if choice == "Remove" then
+          if scheduler.remove(item.schedule_id) then
+            vim.notify(string.format("[schedule] Removed #%d", item.schedule_id), vim.log.levels.INFO)
+          end
+        end
+      end)
+    end
+  end)
+end
+
 -- Get command history
 function M.get_history()
   return M.command_history
@@ -1163,8 +1352,11 @@ function M.show_running_tasks()
   -- Clean up finished tasks
   local active_tasks = {}
   for _, task in ipairs(M.running_tasks) do
-    -- Check if terminal is still valid
-    if task.term and task.term.buf and vim.api.nvim_buf_is_valid(task.term.buf) then
+    if task.ai_session then
+      if task:is_alive() or (task.chat_buf and vim.api.nvim_buf_is_valid(task.chat_buf)) then
+        table.insert(active_tasks, task)
+      end
+    elseif task.term and task.term.buf and vim.api.nvim_buf_is_valid(task.term.buf) then
       table.insert(active_tasks, task)
     end
   end
@@ -1214,15 +1406,18 @@ function M.show_running_tasks()
 
     if item.action == "kill_all" then
       for _, task in ipairs(M.running_tasks) do
-        if task.term then
+        if task.ai_session and task.proc then
+          pcall(function() task.proc:kill() end)
+        elseif task.term then
           pcall(function() task.term:close() end)
         end
       end
       M.running_tasks = {}
       vim.notify("All tasks killed", vim.log.levels.INFO)
     elseif item.task then
-      -- If background task, attach it; if foreground, focus it
       if item.task.background then
+        item.task:attach()
+      elseif item.task.ai_session and item.task.chat_buf then
         item.task:attach()
       elseif item.task.term then
         item.task.term:focus()
@@ -1295,6 +1490,12 @@ function M.kill_all_tasks()
   -- Kill ALL tasks - background and foreground
   for _, task in ipairs(M.running_tasks) do
     pcall(function()
+      if task._idle_timer then
+        task._idle_timer:stop()
+        if not task._idle_timer:is_closing() then task._idle_timer:close() end
+        task._idle_timer = nil
+      end
+
       -- Handle background tasks
       if task.background and task.job_id then
         vim.fn.jobstop(task.job_id)

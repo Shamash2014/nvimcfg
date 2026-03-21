@@ -84,7 +84,7 @@ end
 function M.stop_response_monitoring()
   if ralph_loop.response_timer then
     ralph_loop.response_timer:stop()
-    ralph_loop.response_timer:close()
+    if not ralph_loop.response_timer:is_closing() then ralph_loop.response_timer:close() end
     ralph_loop.response_timer = nil
   end
 end
@@ -962,11 +962,14 @@ function M.check_and_continue(proc, response_text)
       return false
     end
 
-    if reason == "max_iterations" then
+    if reason == "max_iterations" or reason == "phase_max_iterations" then
       vim.schedule(function()
+        local msg = reason == "phase_max_iterations"
+          and "[⚠️ Ralph Wiggum: Phase iteration limit reached (20 iterations in " .. (status.phase_name or status.phase) .. ")]"
+          or "[⚠️ Ralph Wiggum: Max iterations reached (" .. status.iteration .. "/" .. status.max_iterations .. ")]"
         render.append_content(buf, {
           "",
-          "[⚠️ Ralph Wiggum: Max iterations reached (" .. status.iteration .. "/" .. status.max_iterations .. ")]",
+          msg,
         })
         show_summary(buf, ralph)
       end)
@@ -1073,6 +1076,10 @@ function M.check_and_continue(proc, response_text)
   deferred_send(proc, continuation_prompt, delay)
 
   return true
+end
+
+function M.shutdown()
+  M.stop_response_monitoring()
 end
 
 return M

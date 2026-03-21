@@ -124,10 +124,81 @@ function M.get_tool_result_summary(tool)
     end
     return "0 files"
   elseif title == "Task" or title == "Agent" then
+    local output = raw_output
+    if type(output) == "table" then
+      output = output.stdout or output.output or ""
+    end
+    if type(output) == "string" and output ~= "" then
+      local first_line = output:match("^%s*\n?([^\n]*)")
+      if first_line and first_line ~= "" then
+        if #first_line > 60 then
+          first_line = first_line:sub(1, 57) .. "..."
+        end
+        return first_line
+      end
+    end
     return "Done"
   end
 
   return "Done"
+end
+
+function M.format_tool_output_lines(tool, opts)
+  if not tool then return {} end
+  opts = opts or {}
+  local prefix = opts.prefix or "  \xe2\x8e\xbf  "
+
+  local title = tool.title or tool.kind or ""
+  local status = tool.status
+  local raw_output = tool.rawOutput
+
+  local wants_output = (title == "Bash" or title == "Task" or title == "Agent" or status == "failed")
+  if not wants_output then return {} end
+
+  local output = raw_output
+  if type(output) == "table" then
+    output = output.stdout or output.stderr or output.output or ""
+  end
+  if type(output) ~= "string" or output == "" then return {} end
+
+  local all_lines = vim.split(output, "\n", { trimempty = false })
+  while #all_lines > 0 and all_lines[#all_lines]:match("^%s*$") do
+    table.remove(all_lines)
+  end
+  if #all_lines == 0 then return {} end
+
+  local max_lines, mode
+  if status == "failed" then
+    max_lines = opts.max_lines or 5
+    mode = "tail"
+  elseif title == "Bash" then
+    max_lines = opts.max_lines or 8
+    mode = "tail"
+  else
+    max_lines = opts.max_lines or 5
+    mode = "head"
+  end
+
+  local selected
+  local truncated = #all_lines > max_lines
+  if not truncated then
+    selected = all_lines
+  elseif mode == "tail" then
+    selected = vim.list_slice(all_lines, #all_lines - max_lines + 1, #all_lines)
+  else
+    selected = vim.list_slice(all_lines, 1, max_lines)
+  end
+
+  local result = {}
+  for _, line in ipairs(selected) do
+    table.insert(result, prefix .. line)
+  end
+  if truncated then
+    local remaining = #all_lines - max_lines
+    table.insert(result, prefix .. "... (" .. remaining .. " more lines)")
+  end
+
+  return result
 end
 
 function M.parse_permission_options(agent_options)
@@ -219,6 +290,86 @@ function M.build_permission_prompt(entries)
   table.insert(bindings, { key = cancel_key, id = nil, label = "Cancel", role = "cancel" })
 
   return "  " .. table.concat(keys, "  "), bindings
+end
+
+function M.format_tool_preview(title, input)
+  if not input or type(input) ~= "table" then return {} end
+  local lines = {}
+  local max = 80
+
+  local function trunc(s)
+    if #s > max then return s:sub(1, max - 3) .. "..." end
+    return s
+  end
+
+  if title == "Read" then
+    local path = input.file_path or input.path or ""
+    local extra = ""
+    if input.offset then extra = extra .. " +" .. input.offset end
+    if input.limit then extra = extra .. "," .. input.limit end
+    table.insert(lines, trunc("  \xe2\x96\xb8 " .. path .. extra))
+
+  elseif title == "Edit" then
+    local path = input.file_path or input.path or ""
+    table.insert(lines, trunc("  \xe2\x96\xb8 " .. path))
+    if input.old_string then
+      local first = input.old_string:match("^([^\n]*)")
+      table.insert(lines, trunc("  \xe2\x96\xb8 old: " .. (first or "")))
+    end
+    if input.new_string then
+      local first = input.new_string:match("^([^\n]*)")
+      table.insert(lines, trunc("  \xe2\x96\xb8 new: " .. (first or "")))
+    end
+
+  elseif title == "Write" then
+    local path = input.file_path or input.path or ""
+    local size = input.content and #input.content or 0
+    table.insert(lines, trunc("  \xe2\x96\xb8 " .. path .. " (" .. size .. " bytes)"))
+
+  elseif title == "Bash" then
+    local cmd = input.command or ""
+    table.insert(lines, trunc("  \xe2\x96\xb8 $ " .. cmd))
+
+  elseif title == "Glob" then
+    local pattern = input.pattern or ""
+    local path = input.path or ""
+    local text = pattern
+    if path ~= "" then text = text .. " in " .. path end
+    table.insert(lines, trunc("  \xe2\x96\xb8 " .. text))
+
+  elseif title == "Grep" then
+    local pattern = input.pattern or ""
+    local path = input.path or ""
+    local text = "/" .. pattern .. "/"
+    if path ~= "" then text = text .. " in " .. path end
+    table.insert(lines, trunc("  \xe2\x96\xb8 " .. text))
+
+  elseif title == "WebFetch" then
+    local url = input.url or ""
+    local domain = url:match("://([^/]+)") or url:sub(1, 40)
+    table.insert(lines, trunc("  \xe2\x96\xb8 " .. domain))
+
+  elseif title == "Task" or title == "Agent" then
+    local desc = input.description or input.prompt or ""
+    if desc ~= "" then
+      table.insert(lines, trunc("  \xe2\x96\xb8 " .. desc))
+    end
+
+  else
+    local parts = {}
+    local count = 0
+    for k, v in pairs(input) do
+      if count >= 3 then break end
+      local val = type(v) == "string" and v:sub(1, 20) or tostring(v)
+      table.insert(parts, k .. "=" .. val)
+      count = count + 1
+    end
+    if #parts > 0 then
+      table.insert(lines, trunc("  \xe2\x96\xb8 " .. table.concat(parts, ", ")))
+    end
+  end
+
+  return lines
 end
 
 return M
