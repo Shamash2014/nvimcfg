@@ -1,12 +1,13 @@
 return {
   "saghen/blink.cmp",
   event = "InsertEnter",
-  version = "v0.*",
+  version = "v1.*",
   dependencies = {
     "L3MON4D3/LuaSnip",
     "rafamadriz/friendly-snippets",
   },
   opts = {
+    snippets = { preset = "luasnip" },
     keymap = {
       preset = "default",
       ["<C-space>"] = { "show", "show_documentation", "hide_documentation" },
@@ -14,25 +15,30 @@ return {
       ["<Tab>"] = { "select_next", "fallback" },
       ["<S-Tab>"] = { "select_prev", "fallback" },
       ["<CR>"] = { "accept", "fallback" },
-      ["<C-j>"] = { "select_next", "fallback" },
-      ["<C-k>"] = { "select_prev", "fallback" },
+      ["<C-j>"] = { "snippet_forward", "fallback" },
+      ["<C-k>"] = { "snippet_backward", "fallback" },
       ["<C-b>"] = { "scroll_documentation_up", "fallback" },
       ["<C-f>"] = { "scroll_documentation_down", "fallback" },
     },
-
     appearance = {
       use_nvim_cmp_as_default = true,
       nerd_font_variant = "mono",
     },
-
     sources = {
-      default = { "lsp", "path", "snippets", "buffer", "ai_repl_commands" },
+      default = { "lsp", "snippets", "path", "buffer", "djinni", "dadbod" },
+      per_filetype = {
+        ["nowork-chat"] = { "djinni" },
+      },
       providers = {
-        ai_repl_commands = {
-          name = "AI Commands",
+        djinni = {
+          name = "Djinni",
           enabled = true,
-          module = "ai_repl.blink_source",
+          module = "djinni.nowork.blink_source",
           score_offset = 90,
+        },
+        dadbod = {
+          name = "Dadbod",
+          module = "vim_dadbod_completion.blink",
         },
         lsp = {
           name = "LSP",
@@ -73,7 +79,6 @@ return {
           module = "blink.cmp.sources.buffer",
           score_offset = -3,
           opts = {
-            -- Only search current buffer for performance
             get_bufnrs = function()
               return vim.api.nvim_list_bufs()
             end,
@@ -81,13 +86,8 @@ return {
         },
       },
     },
-
     completion = {
-      accept = {
-        auto_brackets = {
-          enabled = true,
-        },
-      },
+      accept = { auto_brackets = { enabled = true } },
       menu = {
         enabled = true,
         min_width = 15,
@@ -114,11 +114,8 @@ return {
           scrollbar = true,
         },
       },
-      ghost_text = {
-        enabled = false,
-      },
+      ghost_text = { enabled = true },
     },
-
     signature = {
       enabled = true,
       window = {

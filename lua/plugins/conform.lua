@@ -41,9 +41,6 @@ return {
       dart = { "dart_format" },
       toml = { "taplo" },
     },
-    default_format_opts = {
-      lsp_fallback = true,
-    },
     format_after_save = {
       async = true,
       lsp_fallback = false,
@@ -66,7 +63,6 @@ return {
     },
   },
   init = function()
-    -- If you want the formatexpr, here is the place to set it
     vim.o.formatexpr = "v:lua.require'conform'.formatexpr()"
   end,
 }

@@ -4,12 +4,10 @@ return {
   config = function()
     local lint = require("lint")
 
-    -- Helper function to check if a command exists
     local function command_exists(cmd)
       return vim.fn.executable(cmd) == 1
     end
 
-    -- Only use eslint_d if it's installed
     local js_linters = {}
     if command_exists("eslint_d") then
       js_linters = { "eslint_d" }
@@ -25,7 +23,6 @@ return {
       vue = js_linters,
     }
 
-    -- Remove eslint/eslint_d linters if commands don't exist
     if not command_exists("eslint") and not command_exists("eslint_d") then
       lint.linters_by_ft.javascript = nil
       lint.linters_by_ft.typescript = nil
@@ -34,7 +31,6 @@ return {
       lint.linters_by_ft.vue = nil
     end
 
-    -- Only add linters if they exist
     if command_exists("ruff") then
       lint.linters_by_ft.python = { "ruff" }
     end
@@ -64,7 +60,6 @@ return {
       lint.linters_by_ft.bash = { "shellcheck" }
     end
 
-    -- Custom linter configurations
     if lint.linters.luacheck then
       lint.linters.luacheck.args = {
         "--globals", "vim",
@@ -85,17 +80,14 @@ return {
       }
     end
 
-    -- Auto-lint on save and text change
     local lint_augroup = vim.api.nvim_create_augroup("lint", { clear = true })
 
     vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost", "InsertLeave" }, {
       group = lint_augroup,
       callback = function()
-        -- Only try to lint if linters are configured for this filetype
         local ft = vim.bo.filetype
         local linters = lint.linters_by_ft[ft]
         if linters and #linters > 0 then
-          -- Check if at least one linter command exists
           local linter_available = false
           for _, linter_name in ipairs(linters) do
             if command_exists(linter_name) or command_exists(linter_name:gsub("_", "-")) then
@@ -111,7 +103,6 @@ return {
       end,
     })
 
-    -- Manual lint command
     vim.keymap.set("n", "<leader>cl", function()
       lint.try_lint()
     end, { desc = "Trigger linting for current file" })

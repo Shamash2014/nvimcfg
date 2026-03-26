@@ -20,7 +20,14 @@ return {
       if buftype ~= '' and buftype ~= 'acwrite' then
         return false
       end
-      return vim.bo[bufnr].buflisted
+      if not vim.bo[bufnr].buflisted then
+        return false
+      end
+      local name = vim.api.nvim_buf_get_name(bufnr)
+      if name:match("%.chat$") or name:match("%.chat/") then
+        return false
+      end
+      return true
     end,
     extensions = {
       quickfix = {},

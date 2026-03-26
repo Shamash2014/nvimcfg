@@ -28,11 +28,6 @@ return {
     local function do_setup()
       local token = vim.env.GITLAB_TOKEN
       local url = vim.env.GITLAB_URL
-      if not token then
-        local mise_env = require("core.mise").get_env()
-        token = mise_env.GITLAB_TOKEN
-        url = url or mise_env.GITLAB_URL
-      end
       if not token then return end
       local opts = { auth_token = token }
       if url then opts.gitlab_url = url end

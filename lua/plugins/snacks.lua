@@ -7,7 +7,17 @@ return {
     bigfile = { enabled = true },
     quickfile = { enabled = true },
     words = { enabled = false },
-    terminal = { enabled = true },
+    terminal = {
+      enabled = true,
+      win = {
+        keys = {
+          term_normal = { "jk", function() vim.cmd("stopinsert") end, mode = "t", desc = "Exit terminal mode" },
+        },
+      },
+    },
+    notifier = {
+      enabled = true,
+    },
     input = {
       enabled = true,
     },
@@ -49,6 +59,12 @@ return {
       end, desc = "Find Files" },
     { "<leader>fr", function() Snacks.picker.recent({ layout = { preset = "vscode" } }) end, desc = "Recent Files" },
     { "<leader>bb", function() require("core.tasks").pick_buffers_tabs_tasks() end, desc = "Buffers/Tabs/Tasks" },
+    { "<leader>rt", function() require("core.tasks").pick_task() end, desc = "Pick Task" },
+    { "<leader>rl", function() require("core.tasks").run_last_task() end, desc = "Run Last Task" },
+    { "<leader>ra", function() require("core.tasks").attach_to_task() end, desc = "Attach to Task" },
+    { "<leader>rc", function() require("core.tasks").run_custom_command() end, desc = "Run Custom Command" },
+    { "<leader>rs", function() require("core.tasks").show_running_tasks() end, desc = "Show Running Tasks" },
+    { "<leader>oc", function() require("core.tasks").pick_tasks_and_commands() end, desc = "Run Command" },
     { "<leader>bd", function() Snacks.bufdelete() end, desc = "Delete Buffer" },
     { "<leader>bD", function() Snacks.bufdelete.delete({ force = true }) end, desc = "Force Delete Buffer" },
     { "<leader>pp", function() Snacks.picker.projects({ layout = { preset = "vscode" } }) end, desc = "Select Projects" },
@@ -62,7 +78,7 @@ return {
     { "<leader>ss", function() Snacks.picker.lines({ layout = { preset = "vscode" } }) end, desc = "Search Lines" },
     { "<leader>sr", function() Snacks.picker.resume({ layout = { preset = "vscode" } }) end, desc = "Resume Picker" },
     { "<leader>hh", function() Snacks.picker.help({ layout = { preset = "vscode" } }) end, desc = "Help Tags" },
-    { "<leader>oc", function() require("core.tasks").pick_tasks_and_commands() end, desc = "Run Command" },
+    { "<leader>oC", function() Snacks.picker.commands({ layout = { preset = "vscode" } }) end, desc = "Commands" },
     { "<leader>oq", function() Snacks.picker.qflist({ layout = { preset = "vscode" } }) end, desc = "Quickfix List" },
     { "<leader>ol", function() Snacks.picker.loclist({ layout = { preset = "vscode" } }) end, desc = "Location List" },
     { "<leader>om", function() Snacks.picker.marks({ layout = { preset = "vscode" } }) end, desc = "Marks" },

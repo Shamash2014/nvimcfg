@@ -1,6 +1,6 @@
 local M = {}
 
-local async = require("ai_repl.async")
+local async = require("core.async")
 local uv = vim.uv or vim.loop
 
 -- Track running tasks
@@ -1218,12 +1218,11 @@ function M.pick_tasks_and_commands()
         end)
       elseif item.is_ai then
         vim.schedule(function()
-          local ai_repl = require("ai_repl")
-          ai_repl.new_session()
+          require("djinni.nowork.panel").create_task()
         end)
       elseif item.is_ai_restart then
         vim.schedule(function()
-          require("ai_repl").restart_session()
+          require("djinni.nowork.panel").create_task()
         end)
       elseif item.is_ai_bg then
         vim.schedule(function()

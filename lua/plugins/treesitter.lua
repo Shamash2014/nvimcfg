@@ -28,7 +28,6 @@ return {
 
     require("nvim-treesitter").setup()
 
-    -- Ensure parsers are installed (async, non-blocking)
     local ensure_installed = {
       "lua", "vim", "vimdoc", "query", "markdown", "markdown_inline",
       "json", "yaml", "toml", "bash", "python", "javascript",
@@ -44,7 +43,6 @@ return {
       end
     end)
 
-    -- Treesitter context
     require("treesitter-context").setup({
       enable = true,
       max_lines = 3,

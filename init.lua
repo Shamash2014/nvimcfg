@@ -1,52 +1,8 @@
-local ffi = require("ffi")
-ffi.cdef([[
-  typedef struct { uint64_t rlim_cur; uint64_t rlim_max; } rlimit_t;
-  int setrlimit(int resource, const rlimit_t *rlp);
-]])
-local rlim = ffi.new("rlimit_t", { rlim_cur = 10240, rlim_max = 1048575 })
-ffi.C.setrlimit(8, rlim) -- 8 = RLIMIT_NOFILE on macOS
-
 -- Disable unused providers for faster startup
 vim.g.loaded_python3_provider = 0
 vim.g.loaded_ruby_provider = 0
 vim.g.loaded_perl_provider = 0
 vim.g.loaded_node_provider = 0
-
--- Disable unused built-in plugins
-vim.g.loaded_gzip = 1
-vim.g.loaded_zip = 1
-vim.g.loaded_zipPlugin = 1
-vim.g.loaded_tar = 1
-vim.g.loaded_tarPlugin = 1
-vim.g.loaded_getscript = 1
-vim.g.loaded_getscriptPlugin = 1
-vim.g.loaded_vimball = 1
-vim.g.loaded_vimballPlugin = 1
-vim.g.loaded_2html_plugin = 1
-vim.g.loaded_matchit = 1
-vim.g.loaded_matchparen = 1
-vim.g.loaded_logiPat = 1
-vim.g.loaded_rrhelper = 1
-vim.g.loaded_netrw = 1
-vim.g.loaded_netrwPlugin = 1
-vim.g.loaded_netrwSettings = 1
-
--- Bootstrap lazy.nvim
-local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
-if not (vim.uv or vim.loop).fs_stat(lazypath) then
-  local lazyrepo = "https://github.com/folke/lazy.nvim.git"
-  local out = vim.fn.system({ "git", "clone", "--filter=blob:none", "--branch=stable", lazyrepo, lazypath })
-  if vim.v.shell_error ~= 0 then
-    vim.api.nvim_echo({
-      { "Failed to clone lazy.nvim:\n", "ErrorMsg" },
-      { out, "WarningMsg" },
-      { "\nPress any key to exit..." },
-    }, true, {})
-    vim.fn.getchar()
-    os.exit(1)
-  end
-end
-vim.opt.rtp:prepend(lazypath)
 
 -- Leaders
 vim.g.mapleader = " "
@@ -55,191 +11,146 @@ vim.g.maplocalleader = "\\"
 -- Add mise shims to PATH for LSP and tool access
 vim.env.PATH = vim.env.HOME .. "/.local/share/mise/shims:" .. vim.env.PATH
 
--- Setup lazy with plugins from lua/plugins directory
+local o = vim.opt
+
+-- Core
+o.number = true
+o.relativenumber = true
+o.signcolumn = "yes"
+o.tabstop = 2
+o.shiftwidth = 2
+o.expandtab = true
+o.smartindent = true
+o.wrap = false
+
+-- File handling
+o.swapfile = false
+o.backup = false
+o.undofile = true
+o.undodir = os.getenv("HOME") .. "/.vim/undodir"
+
+-- Search
+o.hlsearch = false
+o.incsearch = true
+o.ignorecase = true
+o.smartcase = true
+
+-- UI
+o.termguicolors = true
+o.scrolloff = 8
+o.sidescrolloff = 8
+o.colorcolumn = "80"
+o.cursorline = false
+o.equalalways = true
+o.eadirection = "both"
+
+-- Command line and messages
+o.cmdheight = 1
+o.showmode = false
+o.showcmd = false
+o.ruler = false
+o.shortmess:append("filnxtToOFcI")
+
+-- Performance
+o.updatetime = 500
+o.timeoutlen = 300
+o.ttimeoutlen = 10
+o.synmaxcol = 300
+o.redrawtime = 10000
+o.hidden = true
+
+-- Clipboard
+o.clipboard = "unnamedplus"
+
+-- Completion
+o.completeopt = "menu,menuone,noselect"
+o.pumheight = 10
+
+-- Splits
+o.splitbelow = true
+o.splitright = true
+
+-- Mouse
+o.mouse = "a"
+
+local map = vim.keymap.set
+
+-- Better escape
+map("i", "jk", "<Esc>", { desc = "Exit insert mode" })
+map("t", "jk", "<C-\\><C-n>", { desc = "Exit terminal mode" })
+
+-- Window navigation
+map("n", "<leader>wh", "<C-w>h", { desc = "Window left" })
+map("n", "<leader>wj", "<C-w>j", { desc = "Window down" })
+map("n", "<leader>wk", "<C-w>k", { desc = "Window up" })
+map("n", "<leader>wl", "<C-w>l", { desc = "Window right" })
+
+-- Window resizing
+map("n", "<leader>wH", "<C-w><", { desc = "Decrease width" })
+map("n", "<leader>wL", "<C-w>>", { desc = "Increase width" })
+map("n", "<leader>wJ", "<C-w>-", { desc = "Decrease height" })
+map("n", "<leader>wK", "<C-w>+", { desc = "Increase height" })
+
+-- Window splitting
+map("n", "<leader>ws", "<C-w>s", { desc = "Split horizontal" })
+map("n", "<leader>wv", "<C-w>v", { desc = "Split vertical" })
+map("n", "<leader>wq", "<C-w>q", { desc = "Close window" })
+
+-- Buffer navigation
+map("n", "<S-h>", "<cmd>bprevious<cr>", { desc = "Prev buffer" })
+map("n", "<S-l>", "<cmd>bnext<cr>", { desc = "Next buffer" })
+
+-- Tab navigation
+map("n", "[t", "<cmd>tabprevious<cr>", { desc = "Previous tab" })
+map("n", "]t", "<cmd>tabnext<cr>", { desc = "Next tab" })
+
+-- Clear search highlights
+map("n", "<Esc>", ":nohlsearch<CR>", { desc = "Clear highlights" })
+
+-- Stay in indent mode
+map("v", "<", "<gv")
+map("v", ">", ">gv")
+
+local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
+if not vim.uv.fs_stat(lazypath) then
+  vim.fn.system({
+    "git", "clone", "--filter=blob:none",
+    "https://github.com/folke/lazy.nvim.git",
+    "--branch=stable", lazypath,
+  })
+end
+vim.opt.rtp:prepend(lazypath)
+
 require("lazy").setup("plugins", {
-  -- Lazy.nvim performance settings
+  defaults = { lazy = false },
   performance = {
-    cache = {
-      enabled = true,
-    },
+    cache = { enabled = true },
     reset_packpath = true,
     rtp = {
       reset = true,
-      paths = {},
       disabled_plugins = {
-        "gzip",
-        "matchit",
-        "matchparen",
-        "netrwPlugin",
-        "tarPlugin",
-        "tohtml",
-        "tutor",
-        "zipPlugin",
+        "gzip", "matchit", "matchparen", "netrwPlugin",
+        "tarPlugin", "tohtml", "tutor", "zipPlugin",
       },
     },
   },
-  -- Default lazy load settings
-  defaults = {
-    lazy = false,
-    version = nil,
-  },
 })
 
--- Performance optimized options
-local opt = vim.opt
-
--- Core settings
-opt.number = true
-opt.relativenumber = true
-opt.tabstop = 2
-opt.shiftwidth = 2
-opt.expandtab = true
-opt.smartindent = true
-opt.wrap = false
-
--- File handling
-opt.swapfile = false
-opt.backup = false
-opt.undofile = true
-opt.undodir = os.getenv("HOME") .. "/.vim/undodir"
-
--- Search
-opt.hlsearch = false
-opt.incsearch = true
-opt.ignorecase = true
-opt.smartcase = true
-
--- UI
-opt.termguicolors = (vim.env.COLORTERM == "truecolor") or vim.o.t_Co >= 256
-opt.scrolloff = 8
-opt.sidescrolloff = 8
-opt.signcolumn = "yes"
-opt.colorcolumn = "80"
-opt.cursorline = false  -- Disable for performance
-opt.equalalways = true   -- Auto-equalize split sizes (cmux-style fixed columns)
-opt.eadirection = "both" -- Equalize in both directions
-
--- Command line and messages
-opt.cmdheight = 1        -- Keep command line at exactly 1 line
-opt.showmode = false     -- Don't show mode in command line (shown in statusline)
-opt.showcmd = false      -- Don't show partial commands in command line
-opt.ruler = false        -- Don't show cursor position in command line
-opt.shortmess:append("filnxtToOFcI")  -- Shorten messages to fit in one line
-
--- Performance critical settings
-opt.updatetime = 500     -- Balance between responsiveness and CPU (default 4000ms)
-opt.timeoutlen = 300     -- Faster key sequence completion
-opt.ttimeoutlen = 10     -- Faster escape key response
-opt.lazyredraw = false   -- Must be false: true causes 100% CPU with terminal buffers and neogit
-opt.synmaxcol = 300      -- Limit syntax highlighting for long lines
-opt.redrawtime = 10000   -- Time before redraw timeout
-opt.maxmempattern = 20000 -- Max memory for pattern matching
-opt.history = 1000       -- Command history
-opt.hidden = true        -- Allow hidden buffers
-
--- Clipboard support
-opt.clipboard = "unnamedplus"
-
--- Completion behavior
-opt.completeopt = "menu,menuone,noselect"
-opt.pumheight = 10       -- Limit completion menu height
-
--- Split behavior
-opt.splitbelow = true
-opt.splitright = true
-
--- Window movement keymaps (from current nvim config)
--- Better escape
-vim.keymap.set('i', 'jk', '<Esc>', { desc = 'Exit insert mode' })
-
--- Terminal mode exit with jk (same as insert mode)
-vim.keymap.set('t', 'jk', '<C-\\><C-n>', { desc = "Exit terminal mode to normal mode" })
-
--- Window navigation
-vim.keymap.set('n', '<leader>wh', '<C-w>h', { desc = "Go to left window" })
-vim.keymap.set('n', '<leader>wj', '<C-w>j', { desc = "Go to bottom window" })
-vim.keymap.set('n', '<leader>wk', '<C-w>k', { desc = "Go to top window" })
-vim.keymap.set('n', '<leader>wl', '<C-w>l', { desc = "Go to right window" })
-
--- Window resizing
-vim.keymap.set('n', '<leader>wH', '<C-w><', { desc = "Decrease window width" })
-vim.keymap.set('n', '<leader>wL', '<C-w>>', { desc = "Increase window width" })
-vim.keymap.set('n', '<leader>wJ', '<C-w>-', { desc = "Decrease window height" })
-vim.keymap.set('n', '<leader>wK', '<C-w>+', { desc = "Increase window height" })
-
--- Window splitting
-vim.keymap.set('n', '<leader>ws', '<C-w>s', { desc = "Split horizontally" })
-vim.keymap.set('n', '<leader>wv', '<C-w>v', { desc = "Split vertically" })
-vim.keymap.set('n', '<leader>wq', '<C-w>q', { desc = "Close window" })
-
--- Clear highlights
-vim.keymap.set('n', '<Esc>', ':nohlsearch<CR>', { desc = "Clear search highlights" })
-
--- Stay in indent mode
-vim.keymap.set('v', '<', '<gv')
-vim.keymap.set('v', '>', '>gv')
-
--- Tab navigation
-vim.keymap.set('n', '[t', '<cmd>tabprevious<cr>', { desc = 'Previous Tab' })
-vim.keymap.set('n', ']t', '<cmd>tabnext<cr>', { desc = 'Next Tab' })
-
--- Tab management with leader
-vim.keymap.set('n', '<leader>tt', '<cmd>tabnew<cr>', { desc = 'New Tab' })
-vim.keymap.set('n', '<leader>tj', '<cmd>tabnext<cr>', { desc = 'Next Tab' })
-vim.keymap.set('n', '<leader>tk', '<cmd>tabprevious<cr>', { desc = 'Previous Tab' })
-
--- Config management with leader
-vim.keymap.set('n', '<leader>or', function()
-  local success, err = pcall(function()
-    -- Reload init.lua
-    vim.cmd('source ~/.config/nvim/init.lua')
-    -- Sync lazy.nvim plugins
-    vim.cmd('Lazy sync')
-    -- Clear caches and reload
-    vim.cmd('silent! lua package.loaded[vim.fn.expand("%:t")] = nil')
-  end)
-
-  if success then
-    vim.notify('Config reloaded successfully', vim.log.levels.INFO)
-  else
-    vim.notify('Error reloading config: ' .. tostring(err), vim.log.levels.ERROR)
-  end
-end, { desc = 'Reload config' })
-
--- Load core modules
+-- Core modules
 require("core.utils").setup_auto_root()
-require("core.tasks").setup()
-
--- Load command modules
-require("commands.lsp-debug")
 
 -- LSP keymaps (only active when LSP is attached)
 vim.api.nvim_create_autocmd("LspAttach", {
   group = vim.api.nvim_create_augroup("UserLspConfig", {}),
   callback = function(ev)
-    -- Print which LSP attached for debugging
-    -- Silent LSP attach (don't print to avoid expanding command line)
-    local client = vim.lsp.get_client_by_id(ev.data.client_id)
-    -- Comment out the print to keep command line at 1 line
-    -- if client then
-    --   print("LSP attached: " .. client.name)
-    -- end
-
     local opts = { buffer = ev.buf, noremap = true, silent = true }
     vim.keymap.set("n", "gD", vim.lsp.buf.declaration, opts)
     vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
     vim.keymap.set("n", "K", vim.lsp.buf.hover, opts)
     vim.keymap.set("n", "gi", vim.lsp.buf.implementation, opts)
-    vim.keymap.set("n", "<leader>cr", function()
-      return ":IncRename " .. vim.fn.expand("<cword>")
-    end, { buffer = ev.buf, expr = true, desc = "LSP Rename" })
-    vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, opts)
     vim.keymap.set("n", "gr", vim.lsp.buf.references, opts)
-    vim.keymap.set("n", "<leader>f", function()
-      vim.lsp.buf.format { async = true }
-    end, opts)
-
-    -- Additional helpful keymaps
+    vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, opts)
+    vim.keymap.set("n", "<leader>cr", vim.lsp.buf.rename, opts)
     vim.keymap.set("n", "<leader>D", vim.lsp.buf.type_definition, opts)
     vim.keymap.set("n", "<leader>ds", vim.lsp.buf.document_symbol, opts)
     vim.keymap.set("n", "<leader>e", vim.diagnostic.open_float, opts)

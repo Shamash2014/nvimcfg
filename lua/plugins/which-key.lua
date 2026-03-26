@@ -3,140 +3,39 @@ return {
   event = "VeryLazy",
   opts = {
     preset = "helix",
-    delay = 300,
-    win = {
-      border = "single",
-      padding = { 1, 2 },
-    },
-    layout = {
-      height = { min = 4, max = 25 },
-      width = { min = 20, max = 50 },
-      spacing = 3,
-      align = "center",
-    },
-    icons = {
-      breadcrumb = "»",
-      separator = "➜",
-      group = "+",
-    },
     spec = {
-      { "<leader>c", group = "code" },
-      { "<leader>f", group = "file/find" },
-      { "<leader>g", group = "git" },
-      { "<leader>gk", group = "stack" },
-      { "<leader>gm", group = "services" },
-      { "<leader>gmm", group = "gitlab" },
-      { "<leader>gmn", group = "github" },
-      { "<leader>gw", group = "worktree" },
-      { "<leader>o", group = "options/config" },
-      { "<leader>od", group = "database" },
-      { "<leader>p", group = "project" },
+      { "<leader>b", group = "Buffer" },
+      { "<leader>c", group = "Code" },
+      { "<leader>f", group = "Find" },
+      { "<leader>g", group = "Git" },
+      { "<leader>d", group = "Debug" },
+      { "<leader>gx", group = "Conflict" },
+      { "<leader>o", group = "Nowork" },
+      { "<leader>ow", group = "Worktrunk" },
       { "<leader>r", group = "run/tasks" },
-      { "<leader>t", group = "tabs" },
-      { "<leader>w", group = "windows" },
-      { "<leader>b", group = "buffers" },
-      { "<leader>d", group = "debug/diagnostics" },
-      { "<leader>s", group = "search" },
-      { "<leader>a", group = "ai" },
-      { "<leader>n", group = "android" },
-      { "[", group = "prev" },
-      { "]", group = "next" },
-      { "g", group = "goto" },
-    },
-  },
-  keys = {
-    {
-      "<leader>?",
-      function()
-        require("which-key").show({ global = false })
-      end,
-      desc = "Buffer Keymaps",
-    },
-    {
-      "<leader>ar",
-      function()
-        require("ai_repl").toggle()
-      end,
-      mode = { "n", "v" },
-      desc = "Toggle AI chat buffer",
-    },
-    {
-      "<leader>ap",
-      function()
-        require("ai_repl").open_session_picker()
-      end,
-      desc = "Session Picker",
-    },
-    {
-      "<leader>ab",
-      function()
-        require("project_manager").toggle()
-      end,
-      desc = "Project Manager",
-    },
-    {
-      "<leader>fp",
-      function()
-        require("project_manager").toggle_split()
-      end,
-      desc = "Project Manager (split)",
-    },
-    {
-      "<leader>fo",
-      function()
-        require("project_manager").toggle_split()
-      end,
-      desc = "Project Manager (split)",
-    },
-    {
-      "<leader>fw",
-      function()
-        require("core.memory").open()
-      end,
-      desc = "Project Memory",
-    },
-    {
-      "<leader>fW",
-      function()
-        require("core.memory").open_global()
-      end,
-      desc = "Global Memory",
-    },
-    {
-      "<leader>aa",
-      function()
-        require("ai_repl.annotations").annotate()
-      end,
-      mode = "v",
-      desc = "Add Annotation",
-    },
-    {
-      "<leader>as",
-      function()
-        require("ai_repl.annotations").start_session()
-      end,
-      desc = "Start Annotation Session",
-    },
-    {
-      "<leader>aq",
-      function()
-        require("ai_repl.annotations").stop_session()
-      end,
-      desc = "Stop Annotation Session",
-    },
-    {
-      "<leader>aw",
-      function()
-        require("ai_repl.annotations").toggle_window()
-      end,
-      desc = "Toggle Annotation Window",
-    },
-    {
-      "<leader>af",
-      function()
-        require("ai_repl.annotations").send_annotation_to_ai()
-      end,
-      desc = "Send Annotations to AI",
+      { "<leader>t", group = "Tab" },
+      { "<leader>tt", "<cmd>tabnew<cr>", desc = "New tab" },
+      { "<leader>td", "<cmd>tabclose<cr>", desc = "Close tab" },
+      { "<leader>yf", function()
+        local path = vim.fn.expand("%:.")
+        vim.fn.setreg("+", path)
+        vim.fn.setreg('"', path)
+      end, desc = "Yank file path" },
+      { "<leader>w", group = "Window" },
+      { "<leader>wh", "<C-w>h", desc = "Window left" },
+      { "<leader>wj", "<C-w>j", desc = "Window down" },
+      { "<leader>wk", "<C-w>k", desc = "Window up" },
+      { "<leader>wl", "<C-w>l", desc = "Window right" },
+      { "<leader>ws", "<C-w>s", desc = "Split horizontal" },
+      { "<leader>wv", "<C-w>v", desc = "Split vertical" },
+      { "<leader>wq", "<C-w>q", desc = "Close window" },
+      { "<leader>wH", "<C-w><", desc = "Decrease width" },
+      { "<leader>wL", "<C-w>>", desc = "Increase width" },
+      { "<leader>wJ", "<C-w>-", desc = "Decrease height" },
+      { "<leader>wK", "<C-w>+", desc = "Increase height" },
+      { "[", group = "Prev" },
+      { "]", group = "Next" },
+      { "g", group = "Goto" },
     },
   },
 }

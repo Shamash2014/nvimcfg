@@ -43,6 +43,9 @@ return {
             end
             return
           end
+          if err_str:match("Terminal already connected to buffer") then
+            return
+          end
           if err_str:match("E903") or err_str:match("too many open files") or err_str:match("Process failed to start") then
             if not spawn_error_suppression_active then
               spawn_error_suppression_active = true
@@ -1214,8 +1217,9 @@ return {
       })
       safe_enable("expert")
     else
-      print("Expert LSP not found at " .. expert_path .. ", falling back to ElixirLS")
-      safe_enable("elixirls")
+      if vim.fn.executable("elixir-ls") == 1 then
+        safe_enable("elixirls")
+      end
     end
 
     if vim.fn.executable("jdtls") == 1 then

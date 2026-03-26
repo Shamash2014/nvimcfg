@@ -14,7 +14,6 @@ return {
       move = { set_jumps = true },
     })
 
-    -- Repeatable move: ; goes to the direction you were moving
     vim.keymap.set({ "n", "x", "o" }, ";", ts_repeat_move.repeat_last_move)
     vim.keymap.set({ "n", "x", "o" }, ",", ts_repeat_move.repeat_last_move_opposite)
     vim.keymap.set({ "n", "x", "o" }, "f", ts_repeat_move.builtin_f_expr, { expr = true })
@@ -22,7 +21,6 @@ return {
     vim.keymap.set({ "n", "x", "o" }, "t", ts_repeat_move.builtin_t_expr, { expr = true })
     vim.keymap.set({ "n", "x", "o" }, "T", ts_repeat_move.builtin_T_expr, { expr = true })
 
-    -- Select textobjects
     for _, mapping in ipairs({
       { "af", "@function.outer" },
       { "if", "@function.inner" },
@@ -40,7 +38,6 @@ return {
       end)
     end
 
-    -- Swap parameters
     vim.keymap.set("n", "<leader>a", function()
       swap.swap_next("@parameter.inner")
     end)
@@ -48,7 +45,6 @@ return {
       swap.swap_previous("@parameter.inner")
     end)
 
-    -- Move to next/prev textobject
     for _, mapping in ipairs({
       { "]f", "goto_next_start", "@function.outer" },
       { "]c", "goto_next_start", "@class.outer" },
