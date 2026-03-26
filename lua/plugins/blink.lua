@@ -125,7 +125,7 @@ return {
         border = "rounded",
         winblend = 0,
         scrollbar = false,
-        direction_priority = { "cursor", "above", "below" },
+        direction_priority = { "n", "s" },
       },
     },
   },

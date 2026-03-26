@@ -1063,86 +1063,21 @@ function M.pick_tasks_and_commands()
     local items = {}
 
     table.insert(items, {
-      text = "Project Manager",
-      desc = "Browse projects and AI sessions",
-      is_project_manager = true,
+      text = "Nowork Panel",
+      desc = "Toggle nowork task panel",
+      is_nowork_panel = true,
     })
 
     table.insert(items, {
-      text = "New AI Session",
-      desc = "Create a new AI chat session",
-      is_ai = true,
+      text = "New Nowork Task",
+      desc = "Create a new nowork task",
+      is_nowork_new = true,
     })
 
     table.insert(items, {
-      text = "Restart AI Session",
-      desc = "Restart current AI session in .chat buffer",
-      is_ai_restart = true,
-    })
-
-    table.insert(items, {
-      text = "AI Background Task",
-      desc = "Run AI task in background",
-      is_ai_bg = true,
-    })
-
-    table.insert(items, {
-      text = "AI Foreground Task",
-      desc = "Run AI task in foreground",
-      is_ai_fg = true,
-    })
-
-    table.insert(items, {
-      text = "Manage Schedules",
-      desc = "View and manage recurring AI schedules",
-      is_schedules = true,
-    })
-
-    table.insert(items, {
-      text = "Toggle REPL",
-      desc = "Toggle code REPL window",
-      is_repl = true,
-    })
-
-    table.insert(items, {
-      text = "── Remote SSH ──",
-      is_separator = true,
-    })
-
-    table.insert(items, {
-      text = "Connect to Remote Host",
-      desc = "Connect to remote SSH host",
-      is_remote_connect = true,
-    })
-
-    table.insert(items, {
-      text = "Edit Remote File",
-      desc = "Edit file on remote host",
-      is_remote_edit = true,
-    })
-
-    table.insert(items, {
-      text = "Find Remote Files",
-      desc = "Find files on remote host",
-      is_remote_find = true,
-    })
-
-    table.insert(items, {
-      text = "Explore Remote Directory",
-      desc = "Browse remote directory with Oil",
-      is_remote_explore = true,
-    })
-
-    table.insert(items, {
-      text = "Execute Remote Command",
-      desc = "Run command on remote host",
-      is_remote_exec = true,
-    })
-
-    table.insert(items, {
-      text = "Open Remote Terminal",
-      desc = "Open SSH terminal to remote host",
-      is_remote_term = true,
+      text = "Browse Nowork Tasks",
+      desc = "Pick and open a nowork task",
+      is_nowork_browse = true,
     })
 
     table.insert(items, {
@@ -1212,63 +1147,43 @@ function M.pick_tasks_and_commands()
       picker:close()
       if not item then return end
       if item.is_separator then return end
-      if item.is_project_manager then
+      if item.is_nowork_panel then
         vim.schedule(function()
-          require("project_manager").open()
+          require("djinni.nowork.panel").toggle()
         end)
-      elseif item.is_ai then
+      elseif item.is_nowork_new then
         vim.schedule(function()
           require("djinni.nowork.panel").create_task()
         end)
-      elseif item.is_ai_restart then
+      elseif item.is_nowork_browse then
         vim.schedule(function()
-          require("djinni.nowork.panel").create_task()
-        end)
-      elseif item.is_ai_bg then
-        vim.schedule(function()
-          vim.ui.input({ prompt = "Background AI prompt: " }, function(prompt)
-            if prompt and prompt ~= "" then
-              M.run_ai_task(prompt, { foreground = false })
+          local panel = require("djinni.nowork.panel")
+          panel._scan_tasks()
+          local groups = panel._get_grouped_tasks()
+          local browse_items = {}
+          for _, group in ipairs(groups) do
+            if #group.tasks > 0 then
+              table.insert(browse_items, { text = group.name, is_header = true })
+              for _, task in ipairs(group.tasks) do
+                local fname = vim.fn.fnamemodify(task.file_path, ":t"):gsub("%.md$", "")
+                table.insert(browse_items, { text = fname, file = task.file_path })
+              end
             end
-          end)
-        end)
-      elseif item.is_ai_fg then
-        vim.schedule(function()
-          vim.ui.input({ prompt = "Foreground AI prompt: " }, function(prompt)
-            if prompt and prompt ~= "" then
-              M.run_ai_task(prompt, { foreground = true })
-            end
-          end)
-        end)
-      elseif item.is_schedules then
-        vim.schedule(function()
-          M.pick_schedules()
-        end)
-      elseif item.is_repl then
-        require("code_repl").toggle_repl()
-      elseif item.is_remote_connect then
-        vim.schedule(function()
-          require("tramp").connect()
-        end)
-      elseif item.is_remote_edit then
-        vim.schedule(function()
-          require("tramp").edit_remote()
-        end)
-      elseif item.is_remote_find then
-        vim.schedule(function()
-          require("tramp").find_remote()
-        end)
-      elseif item.is_remote_explore then
-        vim.schedule(function()
-          require("tramp").explore_remote()
-        end)
-      elseif item.is_remote_exec then
-        vim.schedule(function()
-          require("tramp").exec_remote("")
-        end)
-      elseif item.is_remote_term then
-        vim.schedule(function()
-          require("tramp").open_remote_terminal()
+          end
+          Snacks.picker({
+            title = "Nowork Tasks",
+            items = browse_items,
+            layout = { preset = "vscode", preview = false },
+            format = function(bi, _)
+              if bi.is_header then return { { bi.text, "Title" } } end
+              return { { bi.text, "Normal" } }
+            end,
+            confirm = function(bp, bi)
+              bp:close()
+              if not bi or bi.is_header then return end
+              require("djinni.nowork.chat").open(bi.file)
+            end,
+          })
         end)
       elseif item.is_task then
         if item.task.cmd == "custom" then
