@@ -25,6 +25,7 @@ M._plan_path = {} -- buf -> plan file path
 M._usage = {} -- buf -> { input_tokens, output_tokens, cost }
 M._attached = {} -- buf -> true
 M._last_code_buf = nil
+M._compact_restart = {} -- buf -> true when restart-after-compact is pending
 
 vim.api.nvim_create_autocmd("BufLeave", {
   callback = function(ev)
@@ -393,6 +394,13 @@ function M.attach(buf)
   map("n", "dd", function()
     M._delete_block(buf)
   end)
+  map("n", "<C-d>", function()
+    local path = vim.api.nvim_buf_get_name(buf)
+    vim.api.nvim_buf_delete(buf, { force = true })
+    if path and path ~= "" then
+      os.remove(path)
+    end
+  end)
   map("n", "e", function()
     M._edit_block(buf)
   end)
@@ -522,6 +530,7 @@ function M.foldexpr(lnum)
   if line:match("^- %[") then return "0" end
   if line:match("^- ") then return ">1" end
   if line:match("^  %S") then return "1" end
+  if line:match("^%*%*Thinking") then return ">1" end
   if line:match("^> ") then return "1" end
   return "0"
 end
@@ -1192,7 +1201,8 @@ function M._read_frontmatter_csv(buf, key)
 end
 
 function M._set_frontmatter_field(buf, key, value)
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local limit = math.min(20, vim.api.nvim_buf_line_count(buf))
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, limit, false)
   local closing_idx = nil
   for i, line in ipairs(lines) do
     if i == 1 and line == "---" then
@@ -1249,61 +1259,98 @@ end
 
 function M.restart_session(buf)
   local root = M.get_project_root(buf)
-  if not root then
+  if not root then return end
+
+  local sid = M.get_session_id(buf) or M._sessions[buf]
+
+  if sid and sid ~= "" and not M._streaming[buf] then
+    M._compact_and_restart(buf, root)
     return
   end
 
-  local old_sid = M.get_session_id(buf) or M._sessions[buf]
+  mcp.clear_cache(root)
+  session.shutdown_project(root)
+  local sess_opts = build_session_opts(buf, root)
+  local lc = vim.api.nvim_buf_line_count(buf)
+  vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@System", "Restarting session...", "" })
+  session.create_task_session(root, function(err, new_sid)
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      if err or not new_sid then
+        M._update_system_block(buf, "Session failed: " .. (err and err.message or "unknown"))
+        return
+      end
+      M._set_frontmatter_field(buf, "session", new_sid)
+      M._sessions[buf] = new_sid
+      M._update_system_block(buf, "Session ready (ACP)")
+      vim.notify("[djinni] Session ready", vim.log.levels.INFO)
+    end)
+  end, sess_opts)
+end
+
+function M._compact_and_restart(buf, root)
+  M.send(buf, "/compact")
+  local orig_cleanup = M._stream_cleanup[buf]
+  M._stream_cleanup[buf] = function()
+    if orig_cleanup then orig_cleanup() end
+    vim.schedule(function()
+      M._finish_compact_restart(buf, root)
+    end)
+  end
+end
+
+function M._finish_compact_restart(buf, root)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local parsed = blocks.parse(lines)
+
+  local summary = ""
+  for i = #parsed, 1, -1 do
+    if parsed[i].type == "djinni" then
+      summary = parsed[i].content
+      break
+    end
+  end
+
+  local fm_end = 0
+  for _, b in ipairs(parsed) do
+    if b.type == "frontmatter" then fm_end = b.end_line break end
+  end
+
+  local new_lines = {}
+  for i = 1, fm_end do
+    new_lines[#new_lines + 1] = lines[i]
+  end
+  vim.list_extend(new_lines, { "", "---", "", "@System", "Compact summary", "" })
+  if summary ~= "" then
+    for line in (summary .. "\n"):gmatch("([^\n]*)\n") do
+      new_lines[#new_lines + 1] = line
+    end
+  end
+  vim.list_extend(new_lines, { "", "~~~~~", "", "@You", "", "", "---", "" })
+
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, new_lines)
+  vim.cmd("silent! write")
+
+  M._set_frontmatter_field(buf, "session", "")
+  M._sessions[buf] = nil
   mcp.clear_cache(root)
   session.shutdown_project(root)
 
   local sess_opts = build_session_opts(buf, root)
-  local msg = old_sid and old_sid ~= "" and "Restarting process (resuming session)..." or "Restarting session..."
-  local lines = { "", "---", "", "@System", msg, "" }
-  input.insert_above_separator(buf, lines)
-
-  if old_sid and old_sid ~= "" then
-    session.load_task_session(root, old_sid, function(err, _result)
-      vim.schedule(function()
-        if not vim.api.nvim_buf_is_valid(buf) then return end
-        if err then
-          M._set_frontmatter_field(buf, "session", "")
-          M._sessions[buf] = nil
-          M._update_system_block(buf, "Resume failed, creating new session...")
-          session.create_task_session(root, function(err2, new_sid)
-            vim.schedule(function()
-              if not vim.api.nvim_buf_is_valid(buf) then return end
-              if err2 or not new_sid then
-                M._update_system_block(buf, "Session failed: " .. (err2 and err2.message or "unknown"))
-                return
-              end
-              M._set_frontmatter_field(buf, "session", new_sid)
-              M._sessions[buf] = new_sid
-              M._update_system_block(buf, "Session ready (ACP)")
-              vim.notify("[djinni] Session ready", vim.log.levels.INFO)
-            end)
-          end, sess_opts)
-          return
-        end
-        M._update_system_block(buf, "Session resumed (ACP)")
-        vim.notify("[djinni] Session resumed", vim.log.levels.INFO)
-      end)
+  session.create_task_session(root, function(err, new_sid)
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      if err or not new_sid then
+        vim.notify("[djinni] Session restart failed: " .. (err and err.message or "unknown"), vim.log.levels.ERROR)
+        return
+      end
+      M._set_frontmatter_field(buf, "session", new_sid)
+      M._sessions[buf] = new_sid
+      vim.notify("[djinni] Session restarted (compacted)", vim.log.levels.INFO)
     end)
-  else
-    session.create_task_session(root, function(err, new_sid)
-      vim.schedule(function()
-        if not vim.api.nvim_buf_is_valid(buf) then return end
-        if err or not new_sid then
-          M._update_system_block(buf, "Session failed: " .. (err and err.message or "unknown"))
-          return
-        end
-        M._set_frontmatter_field(buf, "session", new_sid)
-        M._sessions[buf] = new_sid
-        M._update_system_block(buf, "Session ready (ACP)")
-        vim.notify("[djinni] Session ready", vim.log.levels.INFO)
-      end)
-    end, sess_opts)
-  end
+  end, sess_opts)
 end
 
 function M.select_provider(buf)

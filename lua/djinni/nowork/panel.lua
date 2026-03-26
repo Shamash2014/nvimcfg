@@ -547,7 +547,7 @@ function M.create_task()
   local root = project_at_cursor()
   if not root or root == "" then
     local projects = require("djinni.integrations.projects")
-    root = projects.find_git_root() or vim.fn.getcwd()
+    root = projects.find_root() or vim.fn.getcwd()
   end
 
   vim.ui.input({ prompt = "Task: " }, function(prompt)

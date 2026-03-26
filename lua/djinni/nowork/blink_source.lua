@@ -1,5 +1,8 @@
 local source = {}
 
+local _file_cache = {}
+local _FILE_TTL = 3
+
 function source.new()
   return setmetatable({}, { __index = source })
 end
@@ -35,23 +38,34 @@ function source:get_completions(ctx, callback)
     })
 
     local root = vim.fn.getcwd()
-    local pattern = root .. "/" .. (at_typed == "" and "*" or at_typed .. "*")
-    local files = vim.fn.glob(pattern, false, true)
-    local count = 0
-    for _, filepath in ipairs(files) do
-      if count >= 30 then break end
-      local rel = filepath:sub(#root + 2)
-      if not rel:match("^%.git/") and not rel:match("^%.chat/") then
-        count = count + 1
-        local is_dir = vim.fn.isdirectory(filepath) == 1
-        table.insert(items, {
-          label = "@./" .. rel .. (is_dir and "/" or ""),
-          filterText = "@./" .. rel,
-          kind = is_dir and vim.lsp.protocol.CompletionItemKind.Folder
-            or vim.lsp.protocol.CompletionItemKind.File,
-        })
+    local cache_key = root .. ":" .. at_typed
+    local now = os.time()
+    local cached = _file_cache[cache_key]
+    local file_items
+    if cached and (now - cached.ts) < _FILE_TTL then
+      file_items = cached.items
+    else
+      file_items = {}
+      local pattern = root .. "/" .. (at_typed == "" and "*" or at_typed .. "*")
+      local files = vim.fn.glob(pattern, false, true)
+      local count = 0
+      for _, filepath in ipairs(files) do
+        if count >= 30 then break end
+        local rel = filepath:sub(#root + 2)
+        if not rel:match("^%.git/") and not rel:match("^%.chat/") then
+          count = count + 1
+          local is_dir = vim.fn.isdirectory(filepath) == 1
+          table.insert(file_items, {
+            label = "@./" .. rel .. (is_dir and "/" or ""),
+            filterText = "@./" .. rel,
+            kind = is_dir and vim.lsp.protocol.CompletionItemKind.Folder
+              or vim.lsp.protocol.CompletionItemKind.File,
+          })
+        end
       end
+      _file_cache[cache_key] = { items = file_items, ts = now }
     end
+    for _, item in ipairs(file_items) do table.insert(items, item) end
 
     callback({ items = items, is_incomplete_backward = true, is_incomplete_forward = true })
     return
@@ -72,31 +86,28 @@ function source:get_completions(ctx, callback)
     return
   end
 
-  local skill_arg = before_cursor:match("^%s*/skill%s+(.*)$")
-  if skill_arg then
-    local skills = require("djinni.nowork.skills")
-    local root = vim.fn.getcwd()
-    for _, name in ipairs(skills.list_names(root)) do
-      if name:find(skill_arg, 1, true) == 1 or skill_arg == "" then
-        table.insert(items, {
-          label = name,
-          kind = vim.lsp.protocol.CompletionItemKind.EnumMember,
-        })
-      end
-    end
-    callback({ items = items, is_incomplete_backward = false, is_incomplete_forward = false })
-    return
-  end
-
   if before_cursor:match("^%s*/") then
     local typed = before_cursor:match("/(.*)$") or ""
     local commands = require("djinni.nowork.commands")
+    local skills = require("djinni.nowork.skills")
+    local root = vim.fn.getcwd()
     for _, cmd in ipairs(commands.commands) do
       if cmd.name:find("/" .. typed, 1, true) == 1 then
         table.insert(items, {
           label = cmd.name,
           kind = vim.lsp.protocol.CompletionItemKind.Function,
           documentation = cmd.args and { kind = "markdown", value = "Takes arguments" } or nil,
+        })
+      end
+    end
+    local discovered = skills.discover(root)
+    for _, skill in ipairs(discovered) do
+      local slash_name = "/" .. skill.name
+      if slash_name:find("/" .. typed, 1, true) == 1 then
+        table.insert(items, {
+          label = slash_name,
+          kind = vim.lsp.protocol.CompletionItemKind.EnumMember,
+          documentation = skill.description ~= "" and { kind = "markdown", value = skill.description } or nil,
         })
       end
     end

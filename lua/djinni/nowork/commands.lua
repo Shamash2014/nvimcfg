@@ -13,7 +13,6 @@ M.commands = {
   { name = "/cost", args = false, forward = true },
   { name = "/mode", args = true, forward = false },
   { name = "/skill", args = true, forward = false },
-  { name = "/skills", args = true, forward = false },
   { name = "/mcp", args = true, forward = false },
   { name = "/help", args = false, forward = false },
 }
@@ -39,7 +38,18 @@ end
 
 function M.execute(buf, text)
   local cmd, args = M.match(text)
-  if not cmd then return false end
+  if not cmd then
+    local skill_name = text:match("^%s*/([%w%-_]+)%s*$")
+    if skill_name then
+      local skills_mod = require("djinni.nowork.skills")
+      local chat = require("djinni.nowork.chat")
+      local root = chat.get_project_root(buf)
+      if skills_mod.get(skill_name, root) then
+        return M.execute(buf, "/skill " .. skill_name)
+      end
+    end
+    return false
+  end
 
   local chat = require("djinni.nowork.chat")
 
@@ -94,44 +104,6 @@ function M.execute(buf, text)
   end
 
   if cmd.name == "/skill" then
-    local skills = require("djinni.nowork.skills")
-    local root = chat.get_project_root(buf)
-    if args and args ~= "" then
-      local content = skills.get(args, root)
-      if content then
-        local lc = vim.api.nvim_buf_line_count(buf)
-        vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
-          "", "---", "", "@System", content, "",
-        })
-      else
-        vim.notify("Skill not found: " .. args, vim.log.levels.WARN)
-      end
-    else
-      local discovered = skills.discover(root)
-      if #discovered == 0 then
-        vim.notify("No skills found", vim.log.levels.INFO)
-        return true
-      end
-      vim.ui.select(discovered, {
-        prompt = "Select skill",
-        format_item = function(item)
-          return item.name .. (item.description ~= "" and (" - " .. item.description) or "")
-        end,
-      }, function(choice)
-        if not choice then return end
-        local content = skills.get(choice.name, root)
-        if content then
-          local lc = vim.api.nvim_buf_line_count(buf)
-          vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
-            "", "---", "", "@System", content, "",
-          })
-        end
-      end)
-    end
-    return true
-  end
-
-  if cmd.name == "/skills" then
     local skills_mod = require("djinni.nowork.skills")
     local root = chat.get_project_root(buf)
     local current = chat._read_frontmatter_csv(buf, "skills")
@@ -141,11 +113,18 @@ function M.execute(buf, text)
       for i, s in ipairs(current) do
         if s == name then table.remove(current, i); found = true; break end
       end
-      if not found then table.insert(current, name) end
+      if not found then
+        if not skills_mod.get(name, root) then
+          vim.notify("[djinni] Skill not found: " .. name, vim.log.levels.WARN)
+          return true
+        end
+        table.insert(current, name)
+      end
       chat._set_frontmatter_field(buf, "skills", table.concat(current, ", "))
       chat._set_frontmatter_field(buf, "session", "")
       chat._sessions[buf] = nil
-      vim.notify("[djinni] Skills: " .. table.concat(current, ", "), vim.log.levels.INFO)
+      local status = found and "removed" or "added"
+      vim.notify("[djinni] Skill " .. status .. ": " .. name, vim.log.levels.INFO)
     else
       local discovered = skills_mod.discover(root)
       if #discovered == 0 then
@@ -158,12 +137,12 @@ function M.execute(buf, text)
         prompt = "Toggle skill",
         format_item = function(item)
           local mark = current_set[item.name] and "[x] " or "[ ] "
-          return mark .. item.name .. (item.description ~= "" and (" - " .. item.description) or "")
+          return mark .. item.name .. (item.description ~= "" and (" — " .. item.description) or "")
         end,
       }, function(choice)
         if not choice then return end
         vim.schedule(function()
-          M.execute(buf, "/skills " .. choice.name)
+          M.execute(buf, "/skill " .. choice.name)
         end)
       end)
     end
