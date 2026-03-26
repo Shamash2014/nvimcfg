@@ -69,6 +69,10 @@ local function build_session_opts(buf, root)
   if next(resolved) then
     opts.mcpServers = resolved
   end
+  local model = read_frontmatter_field(buf, "model")
+  if model and model ~= "" then
+    opts.model = model
+  end
   return opts
 end
 
@@ -124,6 +128,9 @@ function M.create(project_root, opts)
 
   local prompt = opts.prompt or ""
 
+  local auto_mcps = mcp.list(project_root)
+  local mcp_value = #auto_mcps > 0 and table.concat(auto_mcps, ", ") or ""
+
   local content = table.concat({
     "---",
     "project: " .. project_name(project_root),
@@ -131,8 +138,7 @@ function M.create(project_root, opts)
     "session:",
     "provider: claude-code",
     "model:",
-    "skills:",
-    "mcp:",
+    "mcp: " .. mcp_value,
     "status:",
     "created: " .. iso_timestamp(),
     "---",
@@ -211,6 +217,7 @@ function M.open(file_path)
   if sid and sid ~= "" then
     session.get_or_create(root)
   else
+    local sess_opts = build_session_opts(buf, root)
     session.create_task_session(root, function(err, new_sid)
       if err or not new_sid then
         vim.schedule(function()
@@ -230,7 +237,7 @@ function M.open(file_path)
         if saved_mode then session.set_mode(root, new_sid, saved_mode) end
         M._update_system_block(buf, "Session ready (ACP)")
       end)
-    end)
+    end, sess_opts)
   end
 
   return buf

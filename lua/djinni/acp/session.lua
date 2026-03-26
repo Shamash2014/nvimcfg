@@ -83,7 +83,9 @@ function M.create_task_session(project_root, callback, opts)
       return
     end
     local mcp_servers = opts.mcpServers or {}
-    client:request("session/new", { cwd = project_root, mcpServers = mcp_servers }, function(err, result)
+    local req = { cwd = project_root, mcpServers = mcp_servers }
+    if opts.model and opts.model ~= "" then req.model = opts.model end
+    client:request("session/new", req, function(err, result)
       if err then
         vim.schedule(function() end)
         if callback then
