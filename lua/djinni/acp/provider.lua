@@ -9,6 +9,10 @@ M.providers = {
     command = "opencode-acp",
     args = {},
   },
+  ["cursor"] = {
+    command = "cursor-acp",
+    args = {},
+  },
 }
 
 function M.list()

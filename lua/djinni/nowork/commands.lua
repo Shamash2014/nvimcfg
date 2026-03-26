@@ -50,6 +50,7 @@ function M.execute(buf, text)
 
   if cmd.name == "/model" and args and args ~= "" then
     chat._set_frontmatter_field(buf, "model", args)
+    vim.notify("[djinni] Model: " .. args, vim.log.levels.INFO)
     local lc = vim.api.nvim_buf_line_count(buf)
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
       "", "---", "", "@System", "Model: " .. args, "",
@@ -78,6 +79,7 @@ function M.execute(buf, text)
             session.set_mode(root, sid, m.id)
             chat._current_mode[buf] = m.id
             chat._set_frontmatter_field(buf, "mode", m.id)
+            vim.notify("[djinni] Mode: " .. (m.displayName or m.name or m.id), vim.log.levels.INFO)
             local lc = vim.api.nvim_buf_line_count(buf)
             vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
               "", "---", "", "@System", "Mode: " .. (m.displayName or m.name or m.id), "",
@@ -224,6 +226,7 @@ function M.execute(buf, text)
     if root then mcp_mod.clear_cache(root) end
     chat._set_frontmatter_field(buf, "session", "")
     chat._sessions[buf] = nil
+    vim.notify("[djinni] Session stopped", vim.log.levels.INFO)
     local lc = vim.api.nvim_buf_line_count(buf)
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
       "", "---", "", "@System", "New session", "",

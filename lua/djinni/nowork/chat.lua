@@ -218,7 +218,7 @@ function M.open(file_path)
     session.get_or_create(root)
   else
     local sess_opts = build_session_opts(buf, root)
-    session.create_task_session(root, function(err, new_sid)
+    session.create_task_session(root, function(err, new_sid, result)
       if err or not new_sid then
         vim.schedule(function()
           if vim.api.nvim_buf_is_valid(buf) then
@@ -231,6 +231,7 @@ function M.open(file_path)
         if not vim.api.nvim_buf_is_valid(buf) then
           return
         end
+        M._extract_modes(buf, result)
         M._set_frontmatter_field(buf, "session", new_sid)
         M._sessions[buf] = new_sid
         local saved_mode = M._current_mode[buf]
@@ -372,6 +373,9 @@ function M.attach(buf)
   end)
   map("n", "<S-Tab>", function()
     M.pick_mode(buf)
+  end)
+  map("n", "<C-m>", function()
+    M.pick_model(buf)
   end)
   map("n", "<C-r>", function()
     M.restart_session(buf)
@@ -1371,6 +1375,16 @@ function M.pick_mode(buf)
     local name = mode.displayName or mode.name or mode.id
     vim.notify(icon .. " " .. name, vim.log.levels.INFO)
   end
+end
+
+function M.pick_model(buf)
+  vim.ui.select(commands.models, {
+    prompt = "Select model",
+  }, function(choice)
+    if not choice then return end
+    M._set_frontmatter_field(buf, "model", choice)
+    M.restart_session(buf)
+  end)
 end
 
 function M.show_help()
