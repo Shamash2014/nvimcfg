@@ -5,6 +5,7 @@ return {
   lazy = false,
   opts = {
     bigfile = { enabled = true },
+    zoom = { enabled = true },
     quickfile = { enabled = true },
     words = { enabled = false },
     terminal = {
@@ -65,6 +66,7 @@ return {
     { "<leader>rc", function() require("core.tasks").run_custom_command() end, desc = "Run Custom Command" },
     { "<leader>rs", function() require("core.tasks").show_running_tasks() end, desc = "Show Running Tasks" },
     { "<leader>oc", function() require("core.tasks").pick_tasks_and_commands() end, desc = "Run Command" },
+    { "<leader>wm", function() Snacks.zoom() end, desc = "Maximize/restore window" },
     { "<leader>bd", function() Snacks.bufdelete() end, desc = "Delete Buffer" },
     { "<leader>bD", function() Snacks.bufdelete.delete({ force = true }) end, desc = "Force Delete Buffer" },
     { "<leader>pp", function() Snacks.picker.projects({ layout = { preset = "vscode" } }) end, desc = "Select Projects" },

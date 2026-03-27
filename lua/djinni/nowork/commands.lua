@@ -65,6 +65,7 @@ function M.execute(buf, text)
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
       "", "---", "", "@System", "Model: " .. args, "",
     })
+    chat.restart_session(buf)
     return true
   end
 

@@ -25,7 +25,8 @@ M._plan_path = {} -- buf -> plan file path
 M._usage = {} -- buf -> { input_tokens, output_tokens, cost }
 M._attached = {} -- buf -> true
 M._last_code_buf = nil
-M._compact_restart = {} -- buf -> true when restart-after-compact is pending
+M._cleanup_deferred = {} -- buf -> true when stream_cleanup was called but blocked by pending permission
+M._tool_log = {} -- buf -> list of {name, kind, input, output, images}
 
 vim.api.nvim_create_autocmd("BufLeave", {
   callback = function(ev)
@@ -291,17 +292,22 @@ function M.attach(buf)
 
   local win = vim.fn.bufwinid(buf)
   if win ~= -1 then
-    vim.wo[win].foldmethod = "expr"
-    vim.wo[win].foldexpr = "v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)"
-    vim.wo[win].foldenable = true
-    vim.wo[win].foldlevel = 0
-    vim.wo[win].foldminlines = 1
     vim.wo[win].wrap = true
     vim.wo[win].linebreak = true
     vim.wo[win].statusline = "%{%v:lua.require('djinni.nowork.chat').statusline()%} %f %m"
     vim.wo[win].conceallevel = 2
     local ok, rm = pcall(require, "render-markdown")
     if ok then rm.enable() end
+    local win2 = vim.fn.bufwinid(buf)
+    if win2 ~= -1 then
+      pcall(function()
+        vim.wo[win2].foldmethod = "expr"
+        vim.wo[win2].foldexpr = "v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)"
+        vim.wo[win2].foldenable = true
+        vim.wo[win2].foldlevel = 0
+        vim.wo[win2].foldminlines = 1
+      end)
+    end
   end
 
   local function map(mode, lhs, rhs)
@@ -425,6 +431,9 @@ function M.attach(buf)
   map("n", "L", function()
     log.show()
   end)
+  map("n", "<C-o>", function()
+    M._open_tool_log(buf)
+  end)
   local function smart_insert(buf)
     local cursor = vim.api.nvim_win_get_cursor(0)
     local row = cursor[1]
@@ -525,13 +534,27 @@ function M.attach(buf)
   })
 end
 
+local function _is_fold_content(l)
+  return l:match("^  ") or l:match("^> ") or l:match("^%*%*Thinking") or (l:match("^- ") and not l:match("^- %["))
+end
+
 function M.foldexpr(lnum)
   local line = vim.fn.getline(lnum)
   if line:match("^- %[") then return "0" end
-  if line:match("^- ") then return ">1" end
-  if line:match("^  %S") then return "1" end
   if line:match("^%*%*Thinking") then return ">1" end
-  if line:match("^> ") then return "1" end
+  if line:match("^- ") then return ">1" end
+  if line:match("^  ") or line:match("^> ") then return "1" end
+  if line == "" then
+    for i = lnum - 1, math.max(1, lnum - 20), -1 do
+      local prev = vim.fn.getline(i)
+      if prev == "" then
+      elseif _is_fold_content(prev) then
+        return "1"
+      else
+        return "0"
+      end
+    end
+  end
   return "0"
 end
 
@@ -771,6 +794,7 @@ function M._start_streaming(buf)
   local function cleanup()
     M._streaming[buf] = nil
     M._stream_cleanup[buf] = nil
+    M._cleanup_deferred[buf] = nil
     if timer and not timer:is_closing() then
       timer:stop()
       timer:close()
@@ -798,7 +822,10 @@ function M._start_streaming(buf)
 
   M._stream_cleanup[buf] = function()
     if not M._streaming[buf] then return end
-    if M._pending_permission and M._pending_permission[buf] then return end
+    if M._pending_permission and M._pending_permission[buf] then
+      M._cleanup_deferred[buf] = true
+      return
+    end
     log.info("stream_cleanup called")
     cleanup()
     flush()
@@ -861,9 +888,15 @@ function M._start_streaming(buf)
         local project = vim.fn.fnamemodify(M.get_project_root(buf) or "", ":t")
         vim.notify("[djinni] Done: " .. task_name .. " (" .. project .. ")", vim.log.levels.INFO)
         if vim.api.nvim_buf_is_valid(buf) then
+          local win = vim.fn.bufwinid(buf)
+          if win ~= -1 then
+            vim.api.nvim_win_call(win, function()
+              vim.cmd("normal! zx")
+              vim.wo[win].foldlevel = 0
+            end)
+          end
           local lc = vim.api.nvim_buf_line_count(buf)
           vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@You", "", "", "---", "" })
-          local win = vim.fn.bufwinid(buf)
           if win ~= -1 then
             vim.api.nvim_win_set_cursor(win, { lc + 5, 0 })
           end
@@ -928,6 +961,8 @@ function M._start_streaming(buf)
         else
           local title = update.title or kind
           append_line("- " .. title)
+          M._tool_log[buf] = M._tool_log[buf] or {}
+          table.insert(M._tool_log[buf], { name = title, kind = kind, input = nil, output = nil, images = {} })
         end
 
       elseif update_type == "tool_call_update" then
@@ -967,11 +1002,11 @@ function M._start_streaming(buf)
           local text = nil
           if type(update.content) == "table" then
             if update.content.text then
-              text = tostring(update.content.text):gsub("\n", " "):sub(1, 80)
+              text = tostring(update.content.text)
             elseif #update.content > 0 then
               for _, c in ipairs(update.content) do
                 if c.content and c.content.text then
-                  text = tostring(c.content.text):gsub("\n", " "):sub(1, 80)
+                  text = tostring(c.content.text)
                   break
                 end
               end
@@ -1008,12 +1043,49 @@ function M._start_streaming(buf)
                 append_line("  " .. file_path)
               end
             elseif text and text ~= "" then
-              append_line("  " .. text)
+              for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+                append_line("> " .. line)
+              end
+              append_line("")
             elseif last_tool_title then
               append_line("  done")
             end
           elseif status == "error" then
             append_line("  error: " .. (text or ""))
+          end
+          if status == "completed" or status == "error" or status == "failed" then
+            local log = M._tool_log[buf]
+            if log and #log > 0 then
+              local entry = log[#log]
+              if entry.input == nil and update.rawInput then
+                entry.input = update.rawInput
+              end
+              if entry.output == nil then
+                local out_parts = {}
+                local imgs = {}
+                if type(update.content) == "table" then
+                  if update.content.text then
+                    table.insert(out_parts, update.content.text)
+                  else
+                    for _, c in ipairs(update.content) do
+                      if c.type == "image" then
+                        local src = c.source or {}
+                        table.insert(imgs, { media_type = src.media_type, data = src.data, url = src.url })
+                      elseif c.content and c.content.text then
+                        table.insert(out_parts, c.content.text)
+                      elseif c.text then
+                        table.insert(out_parts, c.text)
+                      elseif c.path then
+                        table.insert(out_parts, c.path)
+                      end
+                    end
+                  end
+                end
+                entry.output = table.concat(out_parts, "\n")
+                entry.images = imgs
+                entry.status = status
+              end
+            end
           end
         end
 
@@ -1257,101 +1329,89 @@ function M._jump_turn(buf, direction)
   end
 end
 
+function M._fresh_restart(buf, root)
+  M._streaming[buf] = nil
+  M._stream_cleanup[buf] = nil
+  M._cleanup_deferred[buf] = nil
+
+  local old_sid = M.get_session_id(buf) or M._sessions[buf]
+  local sess_opts = build_session_opts(buf, root)
+
+  local history_msg = (function()
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local parsed = blocks.parse(lines)
+    local parts = {}
+    for _, b in ipairs(parsed) do
+      if (b.type == "you" or b.type == "djinni") and b.content and b.content ~= "" then
+        local role = b.type == "you" and "User" or "Assistant"
+        local content = b.content
+          :gsub("^%- .+\n?", "")
+          :gsub("\n%- .+", "")
+          :gsub("^%*%*Thinking%.%.%.%*%*.-\n?", "")
+          :gsub("\n?> [^\n]*", "")
+          :gsub("%s+$", "")
+        if content ~= "" then
+          parts[#parts + 1] = role .. ": " .. content
+        end
+      end
+    end
+    if #parts == 0 then return nil end
+    return "[Previous conversation - session restarted]\n\n"
+      .. table.concat(parts, "\n\n")
+      .. "\n\n[End of context. Continue from here.]"
+  end)()
+
+  local function do_fresh()
+    M._set_frontmatter_field(buf, "session", "")
+    M._sessions[buf] = nil
+    mcp.clear_cache(root)
+    session.shutdown_project(root)
+    local lc = vim.api.nvim_buf_line_count(buf)
+    vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@System", "Restarting session...", "" })
+    session.create_task_session(root, function(err, new_sid)
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        if err or not new_sid then
+          local row = vim.api.nvim_buf_line_count(buf) - 1
+          vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { "Session failed: " .. (err and err.message or "unknown") })
+          return
+        end
+        M._set_frontmatter_field(buf, "session", new_sid)
+        M._sessions[buf] = new_sid
+        local row = vim.api.nvim_buf_line_count(buf) - 1
+        vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { "Session ready" })
+        vim.notify("[djinni] Session restarted (fresh)", vim.log.levels.INFO)
+        if history_msg then
+          session.send_message(root, new_sid, history_msg, function() end)
+        end
+      end)
+    end, sess_opts)
+  end
+
+  if old_sid and old_sid ~= "" then
+    session.close_task_session(root, old_sid)
+    session.load_task_session(root, old_sid, function(err, result)
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        if not err and result then
+          M._sessions[buf] = old_sid
+          vim.notify("[djinni] Session resumed (context preserved)", vim.log.levels.INFO)
+        else
+          do_fresh()
+        end
+      end)
+    end)
+  else
+    do_fresh()
+  end
+end
+
 function M.restart_session(buf)
   local root = M.get_project_root(buf)
   if not root then return end
-
-  local sid = M.get_session_id(buf) or M._sessions[buf]
-
-  if sid and sid ~= "" and not M._streaming[buf] then
-    M._compact_and_restart(buf, root)
-    return
-  end
-
-  mcp.clear_cache(root)
-  session.shutdown_project(root)
-  local sess_opts = build_session_opts(buf, root)
-  local lc = vim.api.nvim_buf_line_count(buf)
-  vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@System", "Restarting session...", "" })
-  session.create_task_session(root, function(err, new_sid)
-    vim.schedule(function()
-      if not vim.api.nvim_buf_is_valid(buf) then return end
-      if err or not new_sid then
-        M._update_system_block(buf, "Session failed: " .. (err and err.message or "unknown"))
-        return
-      end
-      M._set_frontmatter_field(buf, "session", new_sid)
-      M._sessions[buf] = new_sid
-      M._update_system_block(buf, "Session ready (ACP)")
-      vim.notify("[djinni] Session ready", vim.log.levels.INFO)
-    end)
-  end, sess_opts)
+  M._fresh_restart(buf, root)
 end
 
-function M._compact_and_restart(buf, root)
-  M.send(buf, "/compact")
-  local orig_cleanup = M._stream_cleanup[buf]
-  M._stream_cleanup[buf] = function()
-    if orig_cleanup then orig_cleanup() end
-    vim.schedule(function()
-      M._finish_compact_restart(buf, root)
-    end)
-  end
-end
-
-function M._finish_compact_restart(buf, root)
-  if not vim.api.nvim_buf_is_valid(buf) then return end
-
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = blocks.parse(lines)
-
-  local summary = ""
-  for i = #parsed, 1, -1 do
-    if parsed[i].type == "djinni" then
-      summary = parsed[i].content
-      break
-    end
-  end
-
-  local fm_end = 0
-  for _, b in ipairs(parsed) do
-    if b.type == "frontmatter" then fm_end = b.end_line break end
-  end
-
-  local new_lines = {}
-  for i = 1, fm_end do
-    new_lines[#new_lines + 1] = lines[i]
-  end
-  vim.list_extend(new_lines, { "", "---", "", "@System", "Compact summary", "" })
-  if summary ~= "" then
-    for line in (summary .. "\n"):gmatch("([^\n]*)\n") do
-      new_lines[#new_lines + 1] = line
-    end
-  end
-  vim.list_extend(new_lines, { "", "~~~~~", "", "@You", "", "", "---", "" })
-
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, new_lines)
-  vim.cmd("silent! write")
-
-  M._set_frontmatter_field(buf, "session", "")
-  M._sessions[buf] = nil
-  mcp.clear_cache(root)
-  session.shutdown_project(root)
-
-  local sess_opts = build_session_opts(buf, root)
-  session.create_task_session(root, function(err, new_sid)
-    vim.schedule(function()
-      if not vim.api.nvim_buf_is_valid(buf) then return end
-      if err or not new_sid then
-        vim.notify("[djinni] Session restart failed: " .. (err and err.message or "unknown"), vim.log.levels.ERROR)
-        return
-      end
-      M._set_frontmatter_field(buf, "session", new_sid)
-      M._sessions[buf] = new_sid
-      vim.notify("[djinni] Session restarted (compacted)", vim.log.levels.INFO)
-    end)
-  end, sess_opts)
-end
 
 function M.select_provider(buf)
   local Provider = require("djinni.acp.provider")
@@ -1615,6 +1675,97 @@ end
 
 function M._context_action(_buf) end
 
+function M._open_tool_log(buf)
+  local log = M._tool_log[buf]
+  if not log or #log == 0 then
+    vim.notify("[djinni] No tool calls recorded", vim.log.levels.INFO)
+    return
+  end
+
+  local lines = {}
+  for i, entry in ipairs(log) do
+    local status_mark = entry.status == "error" or entry.status == "failed" and " ✗" or " ✓"
+    table.insert(lines, ("## [%d] %s%s"):format(i, entry.name or entry.kind or "?", status_mark))
+    table.insert(lines, "")
+
+    if entry.input and next(entry.input) then
+      table.insert(lines, "### Input")
+      local ok, encoded = pcall(vim.fn.json_encode, entry.input)
+      if ok then
+        local decoded_ok, decoded = pcall(vim.fn.json_decode, encoded)
+        if decoded_ok then
+          for k, v in pairs(entry.input) do
+            local val = type(v) == "table" and vim.fn.json_encode(v) or tostring(v)
+            if #val > 2000 then val = val:sub(1, 2000) .. " …" end
+            table.insert(lines, ("  %s: %s"):format(k, val))
+          end
+        end
+      end
+      table.insert(lines, "")
+    end
+
+    table.insert(lines, "### Output")
+    if entry.output and entry.output ~= "" then
+      for line in (entry.output .. "\n"):gmatch("([^\n]*)\n") do
+        table.insert(lines, "  " .. line)
+      end
+    else
+      table.insert(lines, "  (empty)")
+    end
+
+    if entry.images and #entry.images > 0 then
+      table.insert(lines, "")
+      table.insert(lines, "### Images")
+      for j, img in ipairs(entry.images) do
+        if img.url then
+          table.insert(lines, ("  [image %d] url: %s"):format(j, img.url))
+        elseif img.data then
+          local kb = math.floor(#img.data * 3 / 4 / 1024)
+          table.insert(lines, ("  [image %d] %s ~%d KB"):format(j, img.media_type or "image", kb))
+        end
+      end
+    end
+
+    table.insert(lines, "")
+    table.insert(lines, "---")
+    table.insert(lines, "")
+  end
+
+  local vw = vim.o.columns
+  local vh = vim.o.lines
+  local w = math.floor(vw * 0.88)
+  local h = math.floor(vh * 0.85)
+  local row = math.floor((vh - h) / 2)
+  local col = math.floor((vw - w) / 2)
+
+  local fbuf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(fbuf, 0, -1, false, lines)
+  vim.bo[fbuf].filetype = "markdown"
+  vim.bo[fbuf].modifiable = false
+  vim.bo[fbuf].bufhidden = "wipe"
+
+  local win = vim.api.nvim_open_win(fbuf, true, {
+    relative = "editor",
+    row = row,
+    col = col,
+    width = w,
+    height = h,
+    style = "minimal",
+    border = "rounded",
+    title = " Tool Log ",
+    title_pos = "center",
+  })
+  vim.wo[win].wrap = true
+  vim.wo[win].conceallevel = 0
+
+  vim.keymap.set("n", "q", function()
+    vim.api.nvim_win_close(win, true)
+  end, { buffer = fbuf, silent = true, nowait = true })
+  vim.keymap.set("n", "<Esc>", function()
+    vim.api.nvim_win_close(win, true)
+  end, { buffer = fbuf, silent = true, nowait = true })
+end
+
 function M._edit_block(_buf) end
 
 function M._retry_block(buf)
@@ -1684,7 +1835,14 @@ function M._permission_action(buf, action)
     vim.ui.select(labels, { prompt = "Permission:" }, function(choice, idx)
       if not choice or not idx then return end
       M._pending_permission[buf] = nil
+      local deferred = M._cleanup_deferred[buf]
+      M._cleanup_deferred[buf] = nil
       perm.respond({ outcome = { outcome = "selected", optionId = perm.options[idx].id } })
+      if deferred and M._stream_cleanup[buf] then
+        vim.schedule(function()
+          if M._stream_cleanup[buf] then M._stream_cleanup[buf]() end
+        end)
+      end
       local lc = vim.api.nvim_buf_line_count(buf)
       vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "@System", "OK:" .. choice, "" })
     end)
@@ -1692,6 +1850,8 @@ function M._permission_action(buf, action)
   end
 
   M._pending_permission[buf] = nil
+  local deferred = M._cleanup_deferred[buf]
+  M._cleanup_deferred[buf] = nil
 
   local action_to_kind = {
     allow = "allow_once",
@@ -1733,6 +1893,9 @@ function M._permission_action(buf, action)
   })
   if not ok_resp then
     log.err("respond failed: " .. tostring(resp_err))
+    M._streaming[buf] = nil
+    M._stream_cleanup[buf] = nil
+    M._continuation_count[buf] = nil
     vim.defer_fn(function()
       if vim.api.nvim_buf_is_valid(buf) then
         M.send(buf, "yes, continue")
@@ -1740,6 +1903,11 @@ function M._permission_action(buf, action)
     end, 100)
   else
     log.info("respond sent OK")
+    if deferred and M._stream_cleanup[buf] then
+      vim.schedule(function()
+        if M._stream_cleanup[buf] then M._stream_cleanup[buf]() end
+      end)
+    end
   end
 
   local lc = vim.api.nvim_buf_line_count(buf)

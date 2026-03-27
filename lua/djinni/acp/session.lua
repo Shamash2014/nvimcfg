@@ -1,6 +1,7 @@
 local Client = require("djinni.acp.client")
 local Provider = require("djinni.acp.provider")
 
+
 local M = {}
 M.sessions = {}
 
@@ -82,9 +83,21 @@ function M.create_task_session(project_root, callback, opts)
       if callback then callback(ready_err, nil) end
       return
     end
-    local mcp_servers = opts.mcpServers or {}
+    local mcp_dict = opts.mcpServers or {}
+    local mcp_servers = {}
+    for name, cfg in pairs(mcp_dict) do
+      local env = {}
+      for k, v in pairs(cfg.env or {}) do
+        env[#env + 1] = { name = k, value = v }
+      end
+      mcp_servers[#mcp_servers + 1] = {
+        name    = name,
+        command = cfg.command,
+        args    = cfg.args or {},
+        env     = env,
+      }
+    end
     local req = { cwd = project_root, mcpServers = mcp_servers }
-    if opts.model and opts.model ~= "" then req.model = opts.model end
     client:request("session/new", req, function(err, result)
       if err then
         vim.schedule(function() end)
@@ -100,6 +113,13 @@ function M.create_task_session(project_root, callback, opts)
         if session then
           session.task_sessions[session_id] = true
         end
+        if opts.model and opts.model ~= "" then
+          local config = get_config()
+          local model_id = Provider.resolve_model(config.provider, opts.model, result and result.models)
+          if model_id then
+            M.set_model(project_root, session_id, model_id)
+          end
+        end
       end
 
       if callback then
@@ -107,6 +127,12 @@ function M.create_task_session(project_root, callback, opts)
       end
     end)
   end)
+end
+
+function M.set_model(project_root, session_id, model_id)
+  local client = M.get_or_create(project_root)
+  touch_activity(project_root)
+  client:request("session/set_model", { sessionId = session_id, modelId = model_id }, function() end)
 end
 
 function M.load_task_session(project_root, session_id, callback)
