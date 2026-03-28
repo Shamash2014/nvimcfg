@@ -138,12 +138,37 @@ function M.set_model(project_root, session_id, model_id)
   client:request("session/set_model", { sessionId = session_id, modelId = model_id }, function() end)
 end
 
-function M.load_task_session(project_root, session_id, callback)
+function M.load_task_session(project_root, session_id, callback, opts)
   local client = M.get_or_create(project_root)
   touch_activity(project_root)
 
   client:when_ready(function()
-    client:request("session/resume", { sessionId = session_id }, function(err, result)
+    local config = get_config()
+    local provider = Provider.get(config.provider)
+    local resume_cfg = provider.resume or { method = "session/resume" }
+
+    local params
+    if resume_cfg.needs_cwd then
+      local mcp_dict = (opts and opts.mcpServers) or {}
+      local mcp_servers = {}
+      for name, cfg in pairs(mcp_dict) do
+        local env = {}
+        for k, v in pairs(cfg.env or {}) do
+          env[#env + 1] = { name = k, value = v }
+        end
+        mcp_servers[#mcp_servers + 1] = {
+          name    = name,
+          command = cfg.command,
+          args    = cfg.args or {},
+          env     = env,
+        }
+      end
+      params = { sessionId = session_id, cwd = project_root, mcpServers = mcp_servers }
+    else
+      params = { sessionId = session_id }
+    end
+
+    client:request(resume_cfg.method, params, function(err, result)
       if not err then
         local session = M.sessions[project_root]
         if session then

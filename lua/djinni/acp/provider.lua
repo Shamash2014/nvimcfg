@@ -5,16 +5,19 @@ M.providers = {
     command = "claude-agent-acp",
     args = {},
     models = {},
+    resume = { method = "session/resume" },
   },
   ["opencode"] = {
-    command = "opencode-acp",
-    args = {},
+    command = "opencode",
+    args = { "acp" },
     models = {},
+    resume = { method = "session/load", needs_cwd = true },
   },
   ["cursor"] = {
     command = "cursor-acp",
     args = {},
     models = {},
+    resume = { method = "session/resume" },
   },
 }
 

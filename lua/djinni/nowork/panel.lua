@@ -553,8 +553,14 @@ function M.create_task()
   vim.ui.input({ prompt = "Task: " }, function(prompt)
     if not prompt or prompt == "" then return end
     vim.schedule(function()
-      require("djinni.nowork.chat").create(root, { prompt = prompt, no_open = true })
+      local filepath = require("djinni.nowork.chat").create(root, { prompt = prompt, no_open = true })
       M.render()
+      local win = get_assoc_win()
+      if win and filepath then
+        vim.api.nvim_win_call(win, function()
+          require("djinni.nowork.chat").open(filepath)
+        end)
+      end
     end)
   end)
 end

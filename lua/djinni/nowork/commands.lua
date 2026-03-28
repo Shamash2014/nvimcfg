@@ -275,6 +275,20 @@ function M.omnifunc(findstart, base)
       })
     end
   end
+
+  local ok_chat, chat = pcall(require, "djinni.nowork.chat")
+  local ok_skills, skills_mod = pcall(require, "djinni.nowork.skills")
+  if ok_chat and ok_skills then
+    local root = chat.get_project_root(vim.api.nvim_get_current_buf())
+    local discovered = skills_mod.discover(root)
+    for _, skill in ipairs(discovered) do
+      local word = "/" .. skill.name
+      if word:find(base, 1, true) == 1 then
+        table.insert(matches, { word = word, menu = skill.description or "" })
+      end
+    end
+  end
+
   return matches
 end
 

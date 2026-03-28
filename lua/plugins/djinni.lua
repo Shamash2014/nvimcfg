@@ -21,12 +21,14 @@ return {
       end
       local items = {}
       for _, group in ipairs(groups) do
-        if #group.tasks > 0 then
-          table.insert(items, { text = group.name, is_header = true })
-          for _, task in ipairs(group.tasks) do
-            local fname = vim.fn.fnamemodify(task.file_path, ":t"):gsub("%.md$", "")
-            table.insert(items, { text = group.name .. " " .. fname, file = task.file_path, display = "  " .. fname })
-          end
+        for _, task in ipairs(group.tasks) do
+          local fname = vim.fn.fnamemodify(task.file_path, ":t"):gsub("%.md$", "")
+          table.insert(items, {
+            text = group.name .. "/" .. fname,
+            project = group.name,
+            task = fname,
+            file = task.file_path,
+          })
         end
       end
       Snacks.picker({
@@ -34,14 +36,15 @@ return {
         items = items,
         layout = { preset = "vscode", preview = false },
         format = function(item, _)
-          if item.is_header then
-            return { { item.text, "Title" } }
-          end
-          return { { item.display, "Normal" } }
+          return {
+            { item.project, "Comment" },
+            { " / ", "Comment" },
+            { item.task, "Normal" },
+          }
         end,
         confirm = function(picker, item)
           picker:close()
-          if not item or item.is_header then return end
+          if not item then return end
           require("djinni.nowork.chat").open(item.file)
         end,
       })

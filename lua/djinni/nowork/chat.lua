@@ -1493,7 +1493,7 @@ function M._fresh_restart(buf, root)
           do_fresh()
         end
       end)
-    end)
+    end, sess_opts)
   else
     do_fresh()
   end
