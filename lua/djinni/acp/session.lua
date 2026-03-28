@@ -5,6 +5,20 @@ local Provider = require("djinni.acp.provider")
 local M = {}
 M.sessions = {}
 
+local function extract_model_config_option(config_options)
+  if not config_options then return nil end
+  for _, opt in ipairs(config_options) do
+    if opt.category == "model" and opt.value and opt.value.type == "select" then
+      return {
+        optionId = opt.id,
+        options = opt.value.options or {},
+        currentValue = opt.value.currentValue,
+      }
+    end
+  end
+  return nil
+end
+
 local function get_config()
   local ok, djinni = pcall(require, "djinni")
   if ok and djinni.config and djinni.config.acp then
@@ -112,7 +126,10 @@ function M.create_task_session(project_root, callback, opts)
         local session = M.sessions[project_root]
         if session then
           session.task_sessions[session_id] = true
-          if result and result.models then
+          local model_opt = result and extract_model_config_option(result.configOptions)
+          if model_opt then
+            session.model_config_option = model_opt
+          elseif result and result.models then
             session.available_models = result.models
           end
         end
@@ -135,7 +152,16 @@ end
 function M.set_model(project_root, session_id, model_id)
   local client = M.get_or_create(project_root)
   touch_activity(project_root)
-  client:request("session/set_model", { sessionId = session_id, modelId = model_id }, function() end)
+  local session = M.sessions[project_root]
+  if session and session.model_config_option then
+    client:request("session/set_config_option", {
+      sessionId = session_id,
+      optionId = session.model_config_option.optionId,
+      value = model_id,
+    }, function() end)
+  else
+    client:request("session/set_model", { sessionId = session_id, modelId = model_id }, function() end)
+  end
 end
 
 function M.load_task_session(project_root, session_id, callback, opts)
@@ -173,6 +199,18 @@ function M.load_task_session(project_root, session_id, callback, opts)
         local session = M.sessions[project_root]
         if session then
           session.task_sessions[session_id] = true
+          local model_opt = result and extract_model_config_option(result.configOptions)
+          if model_opt then
+            session.model_config_option = model_opt
+          end
+        end
+      end
+
+      if not err and opts and opts.model and opts.model ~= "" then
+        local config = get_config()
+        local model_id = Provider.resolve_model(config.provider, opts.model, nil)
+        if model_id then
+          M.set_model(project_root, session_id, model_id)
         end
       end
 
@@ -259,7 +297,8 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 
 function M.get_available_models(project_root)
   local s = M.sessions[project_root]
-  return s and s.available_models or nil
+  if not s then return nil end
+  return s.model_config_option or s.available_models or nil
 end
 
 return M

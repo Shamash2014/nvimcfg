@@ -423,10 +423,18 @@ function M.attach(buf)
   end)
   map("n", "<C-d>", function()
     local path = vim.api.nvim_buf_get_name(buf)
-    vim.api.nvim_buf_delete(buf, { force = true })
-    if path and path ~= "" then
-      os.remove(path)
-    end
+    local name = vim.fn.fnamemodify(path, ":t")
+    vim.ui.select(
+      { "Delete " .. name, "Cancel" },
+      { prompt = "Delete this chat file?" },
+      function(choice)
+        if not choice or choice == "Cancel" then return end
+        vim.api.nvim_buf_delete(buf, { force = true })
+        if path and path ~= "" then
+          os.remove(path)
+        end
+      end
+    )
   end)
   map("n", "e", function()
     M._edit_block(buf)
@@ -450,7 +458,11 @@ function M.attach(buf)
     M.show_help()
   end)
   map("n", "L", function()
-    log.show()
+    if M._pending_permission and M._pending_permission[buf] then
+      M._permission_action(buf, "allow")
+    else
+      log.show()
+    end
   end)
   map("n", "<C-o>", function()
     M._open_tool_log(buf)
@@ -1292,7 +1304,7 @@ function M._start_streaming(buf)
       for _, opt in ipairs(params.options) do
         local id = opt.optionId or opt.kind or ""
         local kind = opt.kind or ""
-        local label = opt.name or kind_labels[kind] or opt.label or id
+        local label = (opt.name or kind_labels[kind] or opt.label or id):gsub("[\n\r]", " ")
         table.insert(options, { id = id, kind = kind, label = label })
         table.insert(option_labels, "[" .. label .. "]")
       end
@@ -1301,7 +1313,23 @@ function M._start_streaming(buf)
     flush()
     vim.schedule(function()
       if not vim.api.nvim_buf_is_valid(buf) then return end
-      vim.notify("[djinni] Permission: " .. tool_desc, vim.log.levels.WARN)
+      local ok_snacks, Snacks = pcall(require, "snacks")
+      local notif_id = "djinni_perm_" .. tostring(buf)
+      if ok_snacks and Snacks.notify then
+        Snacks.notify.warn("Permission: " .. tool_desc, {
+          title = "djinni",
+          id = notif_id,
+          timeout = 0,
+          actions = {
+            { label = "Allow (ya)", key = "a", fn = function() M._permission_action(buf, "allow") end },
+            { label = "Always (yA)", key = "A", fn = function() M._permission_action(buf, "always") end },
+            { label = "Deny (yn)", key = "d", fn = function() M._permission_action(buf, "deny") end },
+          },
+        })
+      else
+        notif_id = nil
+        vim.notify("[djinni] Permission: " .. tool_desc, vim.log.levels.WARN)
+      end
       local lc = vim.api.nvim_buf_line_count(buf)
       local perm_lines = {
         "",
@@ -1315,7 +1343,7 @@ function M._start_streaming(buf)
       vim.api.nvim_buf_set_lines(buf, lc, lc, false, perm_lines)
 
       M._pending_permission = M._pending_permission or {}
-      M._pending_permission[buf] = { respond = respond, options = options, tool_desc = tool_desc, tool_kind = tool_kind }
+      M._pending_permission[buf] = { respond = respond, options = options, tool_desc = tool_desc, tool_kind = tool_kind, notif_id = notif_id }
     end)
   end
   if M._perm_handler[buf] then
@@ -1592,10 +1620,21 @@ end
 
 function M.pick_model(buf)
   vim.schedule(function()
-    vim.ui.select(commands.get_models(buf), {
-      prompt = "Select model",
-    }, function(choice)
+    local models = commands.get_models(buf)
+    local current = read_frontmatter_field(buf, "model") or ""
+    local items = { "[type manually…]" }
+    for _, m in ipairs(models) do items[#items + 1] = m end
+
+    vim.ui.select(items, { prompt = "Select model" }, function(choice)
       if not choice then return end
+      if choice == "[type manually…]" then
+        vim.ui.input({ prompt = "Model: ", default = current }, function(input)
+          if not input or input == "" then return end
+          M._set_frontmatter_field(buf, "model", input)
+          M.restart_session(buf)
+        end)
+        return
+      end
       M._set_frontmatter_field(buf, "model", choice)
       M.restart_session(buf)
     end)
@@ -1934,6 +1973,13 @@ function M._permission_action(buf, action)
   end
 
   local perm = M._pending_permission[buf]
+
+  if perm.notif_id then
+    local ok_snacks, Snacks = pcall(require, "snacks")
+    if ok_snacks and Snacks.notifier then
+      Snacks.notifier.hide(perm.notif_id)
+    end
+  end
 
   if action == "select" then
     local labels = {}

@@ -38,29 +38,46 @@ function M.register(name, config)
   M.providers[name] = config
 end
 
+local function iter_model_ids(session_models)
+  if not session_models then return {} end
+  if session_models.optionId and session_models.options then
+    local ids = {}
+    for _, opt in ipairs(session_models.options) do
+      if opt.id then ids[#ids + 1] = opt.id end
+    end
+    return ids
+  end
+  if session_models.availableModels then
+    local ids = {}
+    for _, m in ipairs(session_models.availableModels) do
+      if m.modelId then ids[#ids + 1] = m.modelId end
+    end
+    return ids
+  end
+  return {}
+end
+
 function M.resolve_model(provider_name, alias, session_models)
   if not alias or alias == "" then return nil end
   local p = M.providers[provider_name]
   local expanded = (p and p.models and p.models[alias]) or alias
-  if session_models and session_models.availableModels then
-    for _, m in ipairs(session_models.availableModels) do
-      if m.modelId == alias then return alias end
+  if session_models then
+    local ids = iter_model_ids(session_models)
+    if #ids > 0 then
+      for _, id in ipairs(ids) do
+        if id == alias then return alias end
+      end
+      for _, id in ipairs(ids) do
+        if id == expanded then return expanded end
+      end
+      return nil
     end
-    for _, m in ipairs(session_models.availableModels) do
-      if m.modelId == expanded then return expanded end
-    end
-    return nil
   end
   return expanded
 end
 
 function M.list_models(session_models)
-  if not session_models or not session_models.availableModels then return {} end
-  local result = {}
-  for _, m in ipairs(session_models.availableModels) do
-    result[#result + 1] = m.modelId
-  end
-  return result
+  return iter_model_ids(session_models)
 end
 
 return M
