@@ -250,11 +250,15 @@ function M.open(file_path)
         if not vim.api.nvim_buf_is_valid(buf) then
           return
         end
+        local saved_mode = M._current_mode[buf]
         M._extract_modes(buf, result)
         M._set_frontmatter_field(buf, "session", new_sid)
         M._sessions[buf] = new_sid
-        local saved_mode = M._current_mode[buf]
-        if saved_mode then session.set_mode(root, new_sid, saved_mode) end
+        if saved_mode then
+          session.set_mode(root, new_sid, saved_mode)
+          M._current_mode[buf] = saved_mode
+          M._set_frontmatter_field(buf, "mode", saved_mode)
+        end
         M._update_system_block(buf, "Session ready (ACP)")
       end)
     end, sess_opts)
@@ -702,9 +706,13 @@ function M.send(buf, text)
           session.interrupt(root, new_sid)
           return
         end
-        M._extract_modes(buf, result)
         local saved_mode = M._current_mode[buf]
-        if saved_mode then session.set_mode(root, new_sid, saved_mode) end
+        M._extract_modes(buf, result)
+        if saved_mode then
+          session.set_mode(root, new_sid, saved_mode)
+          M._current_mode[buf] = saved_mode
+          M._set_frontmatter_field(buf, "mode", saved_mode)
+        end
         M._set_frontmatter_field(buf, "session", new_sid)
         M._sessions[buf] = new_sid
         vim.notify("[djinni] Session ready", vim.log.levels.INFO)
@@ -1275,7 +1283,7 @@ function M._start_streaming(buf)
     local tool_desc = "tool"
     local tool_kind = ""
     if params.toolCall then
-      tool_desc = params.toolCall.title or params.toolCall.kind or "tool"
+      tool_desc = (params.toolCall.title or params.toolCall.kind or "tool"):gsub("[\n\r]", " ")
       tool_kind = params.toolCall.kind or ""
     end
     local options = {}
