@@ -55,6 +55,71 @@ function M.pick_task(opts)
   })
 end
 
+function M.pick_sessions()
+  local chat = require("djinni.nowork.chat")
+  local items = {}
+
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.bo[buf].filetype == "nowork-chat" and vim.api.nvim_buf_is_valid(buf) then
+      local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t:r")
+      local streaming = chat._streaming[buf] == true
+      table.insert(items, {
+        text = name,
+        buf = buf,
+        kind = "chat",
+        streaming = streaming,
+      })
+    end
+  end
+
+  local ok, terms = pcall(function() return require("snacks.terminal")._terms end)
+  if ok and terms then
+    for _, term in pairs(terms) do
+      if term.buf and vim.api.nvim_buf_is_valid(term.buf) then
+        local cmd = type(term.cmd) == "table" and table.concat(term.cmd, " ") or tostring(term.cmd or "terminal")
+        table.insert(items, {
+          text = cmd,
+          buf = term.buf,
+          kind = "terminal",
+          streaming = false,
+        })
+      end
+    end
+  end
+
+  if #items == 0 then
+    M.notify("No background sessions", vim.log.levels.INFO)
+    return
+  end
+
+  Snacks.picker({
+    title = "Background Sessions",
+    items = items,
+    format = function(item)
+      local icon = item.kind == "terminal" and ">" or (item.streaming and "~" or "+")
+      local hl = item.streaming and "DiagnosticWarn" or "Comment"
+      return {
+        { "[" .. icon .. "] ", hl },
+        { item.text, "Normal" },
+        { "  " .. item.kind, "Comment" },
+      }
+    end,
+    confirm = function(picker, item)
+      picker:close()
+      if item and item.buf then
+        vim.schedule(function()
+          local win = vim.fn.bufwinid(item.buf)
+          if win ~= -1 then
+            vim.api.nvim_set_current_win(win)
+          else
+            vim.cmd("buffer " .. item.buf)
+          end
+        end)
+      end
+    end,
+  })
+end
+
 function M.pick_project(callback)
   Snacks.picker.projects({
     title = "Add Project",

@@ -27,6 +27,9 @@ M._attached = {} -- buf -> true
 M._last_code_buf = nil
 M._cleanup_deferred = {} -- buf -> true when stream_cleanup was called but blocked by pending permission
 M._tool_log = {} -- buf -> list of {name, kind, input, output, images}
+M._interrupt_pending = {} -- buf -> true when interrupt fired before session was created
+M._hidden_pending = {} -- buf -> accumulated text not yet rendered (buffer was hidden)
+M._timer_scheduled = {} -- buf -> true when a vim.schedule is already pending for the timer
 
 vim.api.nvim_create_autocmd("BufLeave", {
   callback = function(ev)
@@ -36,6 +39,20 @@ vim.api.nvim_create_autocmd("BufLeave", {
       and vim.bo[b].buftype == ""
       and vim.api.nvim_buf_get_name(b) ~= "" then
       M._last_code_buf = b
+    end
+  end,
+})
+
+vim.api.nvim_create_autocmd("BufWinEnter", {
+  callback = function(ev)
+    local b = ev.buf
+    if vim.bo[b].filetype ~= "nowork-chat" then return end
+    local hp = M._hidden_pending[b]
+    if hp and hp ~= "" then
+      M._hidden_pending[b] = nil
+      if vim.api.nvim_buf_is_valid(b) then
+        M._apply_stream_chunk(b, hp)
+      end
     end
   end,
 })
@@ -530,18 +547,24 @@ function M.attach(buf)
       M._last_tool_failed[buf] = nil
       M._last_perm_tool[buf] = nil
       M._attached[buf] = nil
+      M._hidden_pending[buf] = nil
     end,
   })
 end
 
+local function _is_tool_line(l)
+  return l:match("^%[%*%]") or l:match("^%[%+%]") or l:match("^%[!%]")
+end
+
 local function _is_fold_content(l)
-  return l:match("^  ") or l:match("^> ") or l:match("^%*%*Thinking") or (l:match("^- ") and not l:match("^- %["))
+  return l:match("^  ") or l:match("^> ") or l:match("^%*%*Thinking") or _is_tool_line(l) or (l:match("^- ") and not l:match("^- %["))
 end
 
 function M.foldexpr(lnum)
   local line = vim.fn.getline(lnum)
   if line:match("^- %[") then return "0" end
   if line:match("^%*%*Thinking") then return ">1" end
+  if _is_tool_line(line) then return ">1" end
   if line:match("^- ") then return ">1" end
   if line:match("^  ") or line:match("^> ") then return "1" end
   if line == "" then
@@ -674,6 +697,11 @@ function M.send(buf, text)
       end
       vim.schedule(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
+        if M._interrupt_pending[buf] then
+          M._interrupt_pending[buf] = nil
+          session.interrupt(root, new_sid)
+          return
+        end
         M._extract_modes(buf, result)
         local saved_mode = M._current_mode[buf]
         if saved_mode then session.set_mode(root, new_sid, saved_mode) end
@@ -733,9 +761,15 @@ function M.interrupt(buf)
   local sid = M.get_session_id(buf) or M._sessions[buf]
   if root and sid then
     session.interrupt(root, sid)
+  else
+    M._interrupt_pending[buf] = true
   end
+  if M._pending_permission then
+    M._pending_permission[buf] = nil
+  end
+  M._cleanup_deferred[buf] = nil
   if M._stream_cleanup[buf] then
-    M._stream_cleanup[buf]()
+    M._stream_cleanup[buf](true)
   else
     M._streaming[buf] = nil
     M._cleanup_empty_djinni(buf)
@@ -795,6 +829,7 @@ function M._start_streaming(buf)
     M._streaming[buf] = nil
     M._stream_cleanup[buf] = nil
     M._cleanup_deferred[buf] = nil
+    M._interrupt_pending[buf] = nil
     if timer and not timer:is_closing() then
       timer:stop()
       timer:close()
@@ -811,6 +846,16 @@ function M._start_streaming(buf)
 
   local function flush()
     if pending == "" then return end
+    if vim.fn.bufwinid(buf) == -1 then
+      M._hidden_pending[buf] = (M._hidden_pending[buf] or "") .. pending
+      pending = ""
+      return
+    end
+    local hp = M._hidden_pending[buf]
+    if hp then
+      M._hidden_pending[buf] = nil
+      pending = hp .. pending
+    end
     local chunk = pending
     pending = ""
     if not vim.api.nvim_buf_is_valid(buf) then
@@ -820,12 +865,15 @@ function M._start_streaming(buf)
     M._apply_stream_chunk(buf, chunk)
   end
 
-  M._stream_cleanup[buf] = function()
+  M._stream_cleanup[buf] = function(force)
     if not M._streaming[buf] then return end
-    if M._pending_permission and M._pending_permission[buf] then
+    if not force and M._pending_permission and M._pending_permission[buf] then
       M._cleanup_deferred[buf] = true
       return
     end
+    M._timer_scheduled[buf] = nil
+    pending_lines = {}
+    lines_flush_scheduled = false
     log.info("stream_cleanup called")
     cleanup()
     flush()
@@ -906,28 +954,63 @@ function M._start_streaming(buf)
     M._process_queue(buf)
   end
 
+  local last_event_time = vim.uv.now()
+  local watchdog_timeout = 60000
+
   timer:start(100, 100, function()
     M._spinner_frame = M._spinner_frame + 1
-    vim.schedule(flush)
+    if M._timer_scheduled[buf] then return end
+    M._timer_scheduled[buf] = true
+    vim.schedule(function()
+      M._timer_scheduled[buf] = nil
+      flush()
+      if not M._streaming[buf] then return end
+      local dead = not client:is_alive()
+      local stale = (vim.uv.now() - last_event_time) > watchdog_timeout
+      if dead or stale then
+        if M._stream_cleanup[buf] then
+          M._stream_cleanup[buf](true)
+        end
+      end
+    end)
   end)
 
   local plan_start_line = nil
   local plan_end_line = nil
   local last_tool_title = nil
 
-  local function append_line(line)
-    flush()
+  local pending_lines = {}
+  local lines_flush_scheduled = false
+
+  local function flush_lines()
+    if lines_flush_scheduled then return end
+    if #pending_lines == 0 then return end
+    lines_flush_scheduled = true
+    local lines = pending_lines
+    pending_lines = {}
     vim.schedule(function()
+      lines_flush_scheduled = false
       if not vim.api.nvim_buf_is_valid(buf) then return end
       local lc = vim.api.nvim_buf_line_count(buf)
-      vim.api.nvim_buf_set_lines(buf, lc, lc, false, { line })
+      vim.api.nvim_buf_set_lines(buf, lc, lc, false, lines)
     end)
+  end
+
+  local function append_line(line)
+    flush()
+    if vim.fn.bufwinid(buf) == -1 then
+      M._hidden_pending[buf] = (M._hidden_pending[buf] or "") .. "\n" .. line
+      return
+    end
+    pending_lines[#pending_lines + 1] = line
+    flush_lines()
   end
 
   handler = function(data)
     local ok, err = pcall(function()
       if not data then return end
       if data.sessionId and sid and data.sessionId ~= sid then return end
+      last_event_time = vim.uv.now()
 
       local update = data.update or data
       local update_type = update.sessionUpdate
@@ -984,11 +1067,13 @@ function M._start_streaming(buf)
               if update.content.text then
                 text = update.content.text
               elseif #update.content > 0 then
+                local parts = {}
                 for _, c in ipairs(update.content) do
                   if c.content and c.content.text then
-                    text = (text or "") .. c.content.text
+                    parts[#parts + 1] = c.content.text
                   end
                 end
+                if #parts > 0 then text = table.concat(parts) end
               end
             end
             if text then
@@ -1149,6 +1234,10 @@ function M._start_streaming(buf)
     -- Completion is handled by session/prompt callback, not by session/update events
   end
 
+  if M._event_handler[buf] then
+    local ok, c = pcall(session.get_or_create, root)
+    if ok and c then c:off("session/update", M._event_handler[buf]) end
+  end
   M._event_handler[buf] = handler
   session.on_event(root, "session/update", handler)
 
@@ -1217,6 +1306,10 @@ function M._start_streaming(buf)
       M._pending_permission = M._pending_permission or {}
       M._pending_permission[buf] = { respond = respond, options = options, tool_desc = tool_desc, tool_kind = tool_kind }
     end)
+  end
+  if M._perm_handler[buf] then
+    local ok, c = pcall(session.get_or_create, root)
+    if ok and c then c:off("permission_request", M._perm_handler[buf]) end
   end
   M._perm_handler[buf] = perm_handler
   session.on_event(root, "permission_request", perm_handler)
@@ -1417,37 +1510,39 @@ function M.select_provider(buf)
   local Provider = require("djinni.acp.provider")
   local providers = Provider.list()
 
-  vim.ui.select(providers, { prompt = "Select provider:" }, function(choice)
-    if not choice then return end
-    vim.schedule(function()
-      if not vim.api.nvim_buf_is_valid(buf) then return end
-      local root = M.get_project_root(buf)
-      if root then
-        session.shutdown_project(root)
-      end
-      M._set_frontmatter_field(buf, "provider", choice)
-      M._set_frontmatter_field(buf, "session", "")
+  vim.schedule(function()
+    vim.ui.select(providers, { prompt = "Select provider:" }, function(choice)
+      if not choice then return end
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        local root = M.get_project_root(buf)
+        if root then
+          session.shutdown_project(root)
+        end
+        M._set_frontmatter_field(buf, "provider", choice)
+        M._set_frontmatter_field(buf, "session", "")
 
-      local lines = { "", "---", "", "@System", "Provider changed to " .. choice, "" }
-      input.insert_above_separator(buf, lines)
+        local lines = { "", "---", "", "@System", "Provider changed to " .. choice, "" }
+        input.insert_above_separator(buf, lines)
 
-      if root then
-        session.create_task_session(root, function(err, new_sid)
-          if err or not new_sid then
+        if root then
+          session.create_task_session(root, function(err, new_sid)
+            if err or not new_sid then
+              vim.schedule(function()
+                if vim.api.nvim_buf_is_valid(buf) then
+                  M._update_system_block(buf, "Session failed: " .. (err and err.message or "unknown"))
+                end
+              end)
+              return
+            end
             vim.schedule(function()
               if vim.api.nvim_buf_is_valid(buf) then
-                M._update_system_block(buf, "Session failed: " .. (err and err.message or "unknown"))
+                M._set_frontmatter_field(buf, "session", new_sid)
               end
             end)
-            return
-          end
-          vim.schedule(function()
-            if vim.api.nvim_buf_is_valid(buf) then
-              M._set_frontmatter_field(buf, "session", new_sid)
-            end
           end)
-        end)
-      end
+        end
+      end)
     end)
   end)
 end
@@ -1485,12 +1580,14 @@ function M.pick_mode(buf)
 end
 
 function M.pick_model(buf)
-  vim.ui.select(commands.models, {
-    prompt = "Select model",
-  }, function(choice)
-    if not choice then return end
-    M._set_frontmatter_field(buf, "model", choice)
-    M.restart_session(buf)
+  vim.schedule(function()
+    vim.ui.select(commands.get_models(buf), {
+      prompt = "Select model",
+    }, function(choice)
+      if not choice then return end
+      M._set_frontmatter_field(buf, "model", choice)
+      M.restart_session(buf)
+    end)
   end)
 end
 
@@ -1832,19 +1929,21 @@ function M._permission_action(buf, action)
     for _, opt in ipairs(perm.options) do
       table.insert(labels, opt.label)
     end
-    vim.ui.select(labels, { prompt = "Permission:" }, function(choice, idx)
-      if not choice or not idx then return end
-      M._pending_permission[buf] = nil
-      local deferred = M._cleanup_deferred[buf]
-      M._cleanup_deferred[buf] = nil
-      perm.respond({ outcome = { outcome = "selected", optionId = perm.options[idx].id } })
-      if deferred and M._stream_cleanup[buf] then
-        vim.schedule(function()
-          if M._stream_cleanup[buf] then M._stream_cleanup[buf]() end
-        end)
-      end
-      local lc = vim.api.nvim_buf_line_count(buf)
-      vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "@System", "OK:" .. choice, "" })
+    vim.schedule(function()
+      vim.ui.select(labels, { prompt = "Permission:" }, function(choice, idx)
+        if not choice or not idx then return end
+        M._pending_permission[buf] = nil
+        local deferred = M._cleanup_deferred[buf]
+        M._cleanup_deferred[buf] = nil
+        perm.respond({ outcome = { outcome = "selected", optionId = perm.options[idx].id } })
+        if deferred and M._stream_cleanup[buf] then
+          vim.schedule(function()
+            if M._stream_cleanup[buf] then M._stream_cleanup[buf]() end
+          end)
+        end
+        local lc = vim.api.nvim_buf_line_count(buf)
+        vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "@System", "OK:" .. choice, "" })
+      end)
     end)
     return
   end

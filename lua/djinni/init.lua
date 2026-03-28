@@ -45,6 +45,10 @@ function M.setup(opts)
     require("djinni.integrations.snacks").pick_task()
   end, {})
 
+  vim.api.nvim_create_user_command("NoworkSessions", function()
+    require("djinni.integrations.snacks").pick_sessions()
+  end, {})
+
   vim.keymap.set("n", "<leader>oac", function()
     require("djinni.code").create_with_file()
   end, { desc = "Task with file context" })

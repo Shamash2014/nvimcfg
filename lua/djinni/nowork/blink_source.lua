@@ -74,7 +74,8 @@ function source:get_completions(ctx, callback)
   local model_arg = before_cursor:match("^%s*/model%s+(.*)$")
   if model_arg then
     local commands = require("djinni.nowork.commands")
-    for _, model in ipairs(commands.models) do
+    local buf = vim.api.nvim_get_current_buf()
+    for _, model in ipairs(commands.get_models(buf)) do
       if model:find(model_arg, 1, true) == 1 or model_arg == "" then
         table.insert(items, {
           label = model,

@@ -4,11 +4,7 @@ M.providers = {
   ["claude-code"] = {
     command = "claude-agent-acp",
     args = {},
-    models = {
-      opus   = "claude-opus-4-6",
-      sonnet = "claude-sonnet-4-6",
-      haiku  = "claude-haiku-4-5",
-    },
+    models = {},
   },
   ["opencode"] = {
     command = "opencode-acp",

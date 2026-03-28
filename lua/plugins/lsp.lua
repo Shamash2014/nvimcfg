@@ -46,6 +46,9 @@ return {
           if err_str:match("Terminal already connected to buffer") then
             return
           end
+          if err_str:match("snacks") or err_str:match("attempt to index field 'layout'") then
+            return
+          end
           if err_str:match("E903") or err_str:match("too many open files") or err_str:match("Process failed to start") then
             if not spawn_error_suppression_active then
               spawn_error_suppression_active = true

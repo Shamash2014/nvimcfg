@@ -1,9 +1,13 @@
 local M = {}
 
-M.models = {
-  "opus", "sonnet", "haiku",
-  "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
-}
+function M.get_models(buf)
+  local chat = require("djinni.nowork.chat")
+  local session = require("djinni.acp.session")
+  local provider = require("djinni.acp.provider")
+  local root = chat.get_project_root(buf)
+  local available = session.get_available_models(root)
+  return provider.list_models(available)
+end
 
 M.commands = {
   { name = "/model", args = true, forward = true },
@@ -58,14 +62,18 @@ function M.execute(buf, text)
     return true
   end
 
-  if cmd.name == "/model" and args and args ~= "" then
-    chat._set_frontmatter_field(buf, "model", args)
-    vim.notify("[djinni] Model: " .. args, vim.log.levels.INFO)
-    local lc = vim.api.nvim_buf_line_count(buf)
-    vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
-      "", "---", "", "@System", "Model: " .. args, "",
-    })
-    chat.restart_session(buf)
+  if cmd.name == "/model" then
+    if args and args ~= "" then
+      chat._set_frontmatter_field(buf, "model", args)
+      vim.notify("[djinni] Model: " .. args, vim.log.levels.INFO)
+      local lc = vim.api.nvim_buf_line_count(buf)
+      vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
+        "", "---", "", "@System", "Model: " .. args, "",
+      })
+      chat.restart_session(buf)
+    else
+      chat.pick_model(buf)
+    end
     return true
   end
 
@@ -204,12 +212,18 @@ function M.execute(buf, text)
     local mcp_mod = require("djinni.nowork.mcp")
     local root = chat.get_project_root(buf)
     if root then mcp_mod.clear_cache(root) end
+    if chat._streaming[buf] then
+      if chat._stream_cleanup[buf] then chat._stream_cleanup[buf](true) end
+    end
     chat._set_frontmatter_field(buf, "session", "")
     chat._sessions[buf] = nil
+    chat._continuation_count[buf] = 0
+    chat._last_tool_failed[buf] = false
+    chat._queue[buf] = nil
     vim.notify("[djinni] Session stopped", vim.log.levels.INFO)
     local lc = vim.api.nvim_buf_line_count(buf)
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
-      "", "---", "", "@System", "New session", "",
+      "", "---", "", "@System", "New session", "", "---", "", "@You", "", "", "---", "",
     })
     return true
   end
@@ -244,7 +258,7 @@ function M.omnifunc(findstart, base)
   local line = vim.api.nvim_get_current_line()
   if line:match("^%s*/model%s") then
     local matches = {}
-    for _, model in ipairs(M.models) do
+    for _, model in ipairs(M.get_models(vim.api.nvim_get_current_buf())) do
       if model:find(base, 1, true) == 1 then
         table.insert(matches, { word = model })
       end

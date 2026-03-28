@@ -112,6 +112,9 @@ function M.create_task_session(project_root, callback, opts)
         local session = M.sessions[project_root]
         if session then
           session.task_sessions[session_id] = true
+          if result and result.models then
+            session.available_models = result.models
+          end
         end
         if opts.model and opts.model ~= "" then
           local config = get_config()
@@ -228,5 +231,10 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
     M.shutdown_all()
   end,
 })
+
+function M.get_available_models(project_root)
+  local s = M.sessions[project_root]
+  return s and s.available_models or nil
+end
 
 return M
