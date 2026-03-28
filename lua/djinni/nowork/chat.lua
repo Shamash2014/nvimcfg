@@ -947,6 +947,9 @@ function M._start_streaming(buf)
           vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@You", "", "", "---", "" })
           if win ~= -1 then
             vim.api.nvim_win_set_cursor(win, { lc + 5, 0 })
+            if win == vim.api.nvim_get_current_win() then
+              vim.cmd("startinsert")
+            end
           end
         end
       end, 100)
