@@ -692,10 +692,33 @@ function M.quick_input(buf)
     if not text or text == "" then return end
     vim.schedule(function()
       if not vim.api.nvim_buf_is_valid(buf) then return end
+      local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+      local you_line = nil
+      for i = #lines, 1, -1 do
+        local l = lines[i]
+        if l:match("^@Djinni") or l:match("^@System") then break end
+        if l:match("^@You%s*$") then you_line = i; break end
+      end
+      if you_line then
+        local empty = true
+        for i = you_line + 1, #lines do
+          if lines[i]:match("^%-%-%-$") then break end
+          if lines[i]:match("%S") then empty = false; break end
+        end
+        if empty then
+          vim.api.nvim_buf_set_lines(buf, you_line - 1, you_line, false, { "@You", text })
+          if M._streaming[buf] then
+            if not M._queue[buf] then M._queue[buf] = {} end
+            table.insert(M._queue[buf], text)
+          else
+            M.send(buf, text)
+          end
+          return
+        end
+      end
       local line_count = vim.api.nvim_buf_line_count(buf)
       local you_block = { "", "---", "", "@You", text }
       vim.api.nvim_buf_set_lines(buf, line_count, line_count, false, you_block)
-
       if M._streaming[buf] then
         if not M._queue[buf] then M._queue[buf] = {} end
         table.insert(M._queue[buf], text)

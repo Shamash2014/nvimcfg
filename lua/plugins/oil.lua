@@ -57,12 +57,14 @@ local function parse_ssh_config_async(callback)
         if hostname then current.hostname = vim.trim(hostname) end
         local user = line:match("^%s*[Uu]ser%s+(.+)$")
         if user then current.user = vim.trim(user) end
+        local port = line:match("^%s*[Pp]ort%s+(%d+)$")
+        if port then current.port = tonumber(port) end
       end
     end
     return hosts
   end
 
-  local function read_file(path, slot)
+  local function read_file(path, slot, local_only)
     vim.uv.fs_open(path, "r", 438, function(err, fd)
       if err or not fd then
         vim.schedule(function() all_hosts[slot] = {}; try_done() end)
@@ -77,7 +79,11 @@ local function parse_ssh_config_async(callback)
         vim.uv.fs_read(fd, stat.size, 0, function(_, data)
           vim.uv.fs_close(fd, function() end)
           vim.schedule(function()
-            all_hosts[slot] = data and parse_content(data) or {}
+            local hosts = data and parse_content(data) or {}
+            if local_only then
+              for _, h in ipairs(hosts) do h.local_only = true end
+            end
+            all_hosts[slot] = hosts
             try_done()
           end)
         end)
@@ -85,8 +91,8 @@ local function parse_ssh_config_async(callback)
     end)
   end
 
-  read_file(vim.fn.expand("~/.ssh/config"), 1)
-  read_file(vim.fn.getcwd() .. "/.ssh-config", 2)
+  read_file(vim.fn.expand("~/.ssh/config"), 1, false)
+  read_file(vim.fn.getcwd() .. "/.ssh-config", 2, true)
 end
 
 return {
@@ -110,6 +116,9 @@ return {
               return {
                 text = (h.user and h.user .. "@" or "") .. h.alias .. detail,
                 alias = h.alias,
+                hostname = h.hostname,
+                local_only = h.local_only,
+                port = h.port,
                 user = h.user,
               }
             end, hosts),
@@ -123,7 +132,9 @@ return {
             confirm = function(picker, item)
               picker:close()
               if not item then return end
-              local url = "oil-ssh://" .. (item.user and item.user .. "@" or "") .. item.alias .. "/"
+              local host = item.local_only and (item.hostname or item.alias) or item.alias
+              local port_suffix = item.local_only and item.port and (":" .. item.port) or ""
+              local url = "oil-ssh://" .. (item.user and item.user .. "@" or "") .. host .. port_suffix .. "/"
               require("oil").open(url)
             end,
           })
@@ -134,9 +145,6 @@ return {
   },
   config = function()
     require("oil").setup({
-      adapters = {
-        ["oil-ssh"] = require("oil.adapters.ssh"),
-      },
       default_file_explorer = true,
       delete_to_trash = true,
       skip_confirm_for_simple_edits = true,
