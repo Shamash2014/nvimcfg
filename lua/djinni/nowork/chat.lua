@@ -111,6 +111,29 @@ local function inject_skills(buf, root, prompt)
   return prompt
 end
 
+local function build_history_context(buf, current_text)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local parsed = blocks.parse(lines)
+  local msgs = {}
+  for _, block in ipairs(parsed) do
+    if (block.type == "you" or block.type == "djinni") and block.content and block.content ~= "" then
+      msgs[#msgs + 1] = block
+    end
+  end
+  if #msgs > 0 and msgs[#msgs].type == "you" then
+    msgs[#msgs] = nil
+  end
+  if #msgs == 0 then return current_text end
+  local parts = { "<previous_conversation>" }
+  for _, block in ipairs(msgs) do
+    local role = block.type == "you" and "user" or "assistant"
+    parts[#parts + 1] = "<" .. role .. ">\n" .. block.content .. "\n</" .. role .. ">"
+  end
+  parts[#parts + 1] = "</previous_conversation>\n"
+  parts[#parts + 1] = current_text
+  return table.concat(parts, "\n")
+end
+
 local function slug(text)
   if not text or text == "" then
     return "chat"
@@ -760,7 +783,7 @@ function M.send(buf, text)
         vim.notify("[djinni] Session ready", vim.log.levels.INFO)
         M._streaming[buf] = true
         M._start_streaming(buf)
-        local msg = inject_skills(buf, root, text)
+        local msg = inject_skills(buf, root, build_history_context(buf, text))
         session.send_message(root, new_sid, msg, function(_err, prompt_result)
           vim.schedule(function()
             M._accumulate_usage(buf, prompt_result)
