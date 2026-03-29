@@ -27,6 +27,44 @@ local status_order = { running = 1, input = 2, idle = 3, done = 4 }
 
 local ns = vim.api.nvim_create_namespace("nowork_panel")
 
+local _wt_dirty = {}
+local _wt_dirty_ttl = 30
+
+local function write_frontmatter_to_file(file_path, key, value)
+  local chat = require("djinni.nowork.chat")
+  local bufnr = vim.fn.bufnr(file_path)
+  if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
+    chat._set_frontmatter_field(bufnr, key, value)
+    vim.api.nvim_buf_call(bufnr, function() vim.cmd("silent! write") end)
+    return
+  end
+  bufnr = vim.fn.bufadd(file_path)
+  vim.bo[bufnr].buflisted = false
+  vim.fn.bufload(bufnr)
+  chat._set_frontmatter_field(bufnr, key, value)
+  vim.api.nvim_buf_call(bufnr, function() vim.cmd("silent! write") end)
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+local function _refresh_wt_dirty(tasks)
+  local worktrunk = require("djinni.integrations.worktrunk")
+  if not worktrunk.available() then return end
+  for _, task in ipairs(tasks) do
+    local branch = task.worktree
+    if branch and branch ~= "" then
+      local entry = _wt_dirty[branch]
+      if not entry or (os.time() - entry.at) >= _wt_dirty_ttl then
+        worktrunk.is_dirty(branch, function(dirty)
+          _wt_dirty[branch] = { dirty = dirty, at = os.time() }
+          if M._buf and vim.api.nvim_buf_is_valid(M._buf) then
+            M.render()
+          end
+        end)
+      end
+    end
+  end
+end
+
 local function get_config()
   local ok, djinni = pcall(require, "djinni")
   if ok and djinni.config then
@@ -120,6 +158,7 @@ function M._scan_tasks()
             local cost = ""
             local task_skills = ""
             local task_mcp = ""
+            local task_worktree = ""
             local in_frontmatter = false
             local fm_count = 0
             for line in f:lines() do
@@ -141,6 +180,7 @@ function M._scan_tasks()
                 if k == "cost" then cost = v end
                 if k == "skills" then task_skills = v end
                 if k == "mcp" then task_mcp = v end
+                if k == "worktree" then task_worktree = v end
               end
             end
             f:close()
@@ -157,6 +197,7 @@ function M._scan_tasks()
               cost = cost,
               skills = task_skills,
               mcp = task_mcp,
+              worktree = task_worktree,
               file_path = path,
             })
           end
@@ -193,6 +234,7 @@ function M._scan_tasks()
   end
 
   M._tasks = tasks
+  _refresh_wt_dirty(tasks)
 end
 
 local function format_model(model)
@@ -283,6 +325,14 @@ function M.render()
         local count = select(2, task.mcp:gsub(",", ",")) + 1
         table.insert(vt, { count .. " mcp", "Special" })
       end
+      if task.worktree and task.worktree ~= "" then
+        if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
+        local entry = _wt_dirty[task.worktree]
+        local label = "⎇ " .. task.worktree
+        if entry and entry.dirty then label = label .. "*" end
+        local hl = (entry and entry.dirty) and "DiagnosticWarn" or "DiagnosticHint"
+        table.insert(vt, { label, hl })
+      end
       if #vt > 0 then
         virt_texts[tline_nr - 1] = vt
       end
@@ -356,6 +406,8 @@ function M.open()
 
   map("<CR>", M.open_task)
   map("c", M.create_task)
+  map("<C-w>", M.gen_worktree)
+  map("m", M.merge_worktree)
   map("P", M.add_project)
   map("Z", M.maximize)
   map("d", M.archive_task)
@@ -565,6 +617,61 @@ function M.create_task()
   end)
 end
 
+function M.merge_worktree()
+  local task = task_at_cursor()
+  if not task then return end
+
+  local branch = task.worktree
+  if not branch or branch == "" then
+    vim.notify("[djinni] no worktree set for this task", vim.log.levels.WARN)
+    return
+  end
+
+  local worktrunk = require("djinni.integrations.worktrunk")
+  vim.ui.input({ prompt = "Merge into (empty = trunk): " }, function(target)
+    if target == nil then return end
+    worktrunk.merge(target, branch, function(ok, out)
+      vim.schedule(function()
+        if ok then
+          vim.notify("[djinni] merged " .. branch .. (target ~= "" and " → " .. target or ""), vim.log.levels.INFO)
+        else
+          vim.notify("[djinni] merge failed: " .. tostring(out), vim.log.levels.ERROR)
+        end
+      end)
+    end)
+  end)
+end
+
+function M.gen_worktree()
+  local task = task_at_cursor()
+  if not task then return end
+
+  local worktrunk = require("djinni.integrations.worktrunk")
+  if not worktrunk.available() then
+    vim.notify("[djinni] worktrunk not available", vim.log.levels.WARN)
+    return
+  end
+
+  local branch = task.title:lower():gsub("[^%w%-]", "-"):gsub("%-+", "-"):gsub("^%-", ""):gsub("%-$", "")
+  if branch == "" then branch = "task" end
+
+  vim.ui.select({ "Normal (default branch)", "Stacked (from current HEAD)" }, { prompt = "Worktree base:" }, function(choice)
+    if not choice then return end
+    local opts = choice:match("Stacked") and { base = "@" } or {}
+    worktrunk.create(branch, opts, function(ok, path_or_err)
+      vim.schedule(function()
+        if not ok then
+          vim.notify("[djinni] worktree failed: " .. tostring(path_or_err), vim.log.levels.ERROR)
+          return
+        end
+        write_frontmatter_to_file(task.file_path, "worktree", branch)
+        vim.notify("[djinni] worktree: " .. branch, vim.log.levels.INFO)
+        M.render()
+      end)
+    end)
+  end)
+end
+
 function M.add_project()
   local ok, snacks = pcall(require, "djinni.integrations.snacks")
   if ok and snacks.pick_project then
@@ -607,6 +714,8 @@ function M.show_help()
     "Nowork Keybinds",
     "",
     "  c       Create task",
+    "  <C-w>   Gen worktree",
+    "  m       Merge worktree",
     "  P       Add project",
     "  Z       Maximize / restore",
     "  d       Delete task",

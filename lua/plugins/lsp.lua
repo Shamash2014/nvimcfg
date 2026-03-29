@@ -258,6 +258,32 @@ return {
     end
 
     if vim.fn.executable("dart") == 1 then
+      local closing_label_ns = vim.api.nvim_create_namespace("flutter_closing_labels")
+      local guide_ns = vim.api.nvim_create_namespace("flutter_widget_guides")
+
+      local function render_widget_guides(buf, outline)
+        vim.api.nvim_buf_clear_namespace(buf, guide_ns, 0, -1)
+        local function draw(node)
+          if not node.children or #node.children == 0 then return end
+          local range = node.codeRange or node.range
+          if range then
+            local col = range.start.character
+            for line = range.start.line + 1, range["end"].line do
+              local text = vim.api.nvim_buf_get_lines(buf, line, line + 1, false)[1] or ""
+              if #text > col and text:sub(col + 1, col + 1):match("%s") then
+                vim.api.nvim_buf_set_extmark(buf, guide_ns, line, col, {
+                  virt_text = { { "│", "NonText" } },
+                  virt_text_pos = "overlay",
+                  hl_mode = "combine",
+                })
+              end
+            end
+          end
+          for _, child in ipairs(node.children) do draw(child) end
+        end
+        draw(outline)
+      end
+
       vim.lsp.config("dartls", {
       cmd = { "dart", "language-server", "--protocol=lsp" },
       filetypes = { "dart" },
@@ -289,50 +315,38 @@ return {
           enableSnippets = true,
         },
       },
-      on_attach = function(client, bufnr)
-        vim.b[bufnr].flutter_outline = nil
-
-        local namespace = vim.api.nvim_create_namespace("flutter_closing_labels")
-
-        local handlers = client.handlers or {}
-
-        handlers["dart/textDocument/publishFlutterOutline"] = function(err, result, ctx)
+      handlers = {
+        ["dart/textDocument/publishFlutterOutline"] = function(err, result, ctx)
           if err then return end
-          local uri = result.uri
-          local buf = vim.uri_to_bufnr(uri)
-          if result and result.outline and vim.api.nvim_buf_is_valid(buf) then
+          local buf = vim.uri_to_bufnr(result.uri)
+          if result.outline and vim.api.nvim_buf_is_valid(buf) then
             vim.b[buf].flutter_outline = result.outline
+            vim.schedule(function()
+              if vim.api.nvim_buf_is_valid(buf) then
+                render_widget_guides(buf, result.outline)
+              end
+            end)
           end
-        end
-
-        handlers["dart/textDocument/publishClosingLabels"] = function(err, result, ctx)
-          local uri = result.uri
-          local buf = vim.uri_to_bufnr(uri)
-
-          if not vim.api.nvim_buf_is_valid(buf) then
-            return
-          end
-
-          if err or not result or not result.labels then
-            vim.api.nvim_buf_clear_namespace(buf, namespace, 0, -1)
-            return
-          end
-
-          vim.api.nvim_buf_clear_namespace(buf, namespace, 0, -1)
-
+        end,
+        ["dart/textDocument/publishClosingLabels"] = function(err, result, ctx)
+          local buf = vim.uri_to_bufnr(result.uri)
+          if not vim.api.nvim_buf_is_valid(buf) then return end
+          vim.api.nvim_buf_clear_namespace(buf, closing_label_ns, 0, -1)
+          if err or not result or not result.labels then return end
           for _, label in ipairs(result.labels) do
             local line = label.range["end"].line
             if line then
-              vim.api.nvim_buf_set_extmark(buf, namespace, line, 0, {
+              vim.api.nvim_buf_set_extmark(buf, closing_label_ns, line, 0, {
                 virt_text = { { "  // " .. label.label, "Comment" } },
                 virt_text_pos = "eol",
                 hl_mode = "combine",
               })
             end
           end
-        end
-
-        client.handlers = handlers
+        end,
+      },
+      on_attach = function(client, bufnr)
+        vim.b[bufnr].flutter_outline = nil
 
         vim.keymap.set("n", "<localleader>r", ":FlutterReload<CR>", { buffer = bufnr, desc = "Flutter Hot Reload" })
         vim.keymap.set("n", "<localleader>R", ":FlutterRestart<CR>", { buffer = bufnr, desc = "Flutter Hot Restart" })

@@ -1,6 +1,15 @@
 local M = {}
 
-local function run_async(cmd, args, callback)
+local function run_async(cmd, args, opts_or_cb, cb)
+  local opts, callback
+  if type(opts_or_cb) == "function" then
+    opts = {}
+    callback = opts_or_cb
+  else
+    opts = opts_or_cb or {}
+    callback = cb
+  end
+
   local stdout_lines = {}
   local stderr_lines = {}
   local function deliver(success)
@@ -9,7 +18,7 @@ local function run_async(cmd, args, callback)
     end)
   end
 
-  local ok, job_id = pcall(vim.fn.jobstart, { cmd, unpack(args) }, {
+  local job_opts = {
     stdout_buffered = true,
     stderr_buffered = true,
     on_stdout = function(_, data)
@@ -25,8 +34,10 @@ local function run_async(cmd, args, callback)
     on_exit = function(_, code)
       deliver(code == 0)
     end,
-  })
+  }
+  if opts.cwd then job_opts.cwd = opts.cwd end
 
+  local ok, job_id = pcall(vim.fn.jobstart, { cmd, unpack(args) }, job_opts)
   if not ok then
     table.insert(stderr_lines, tostring(job_id))
     deliver(false)
@@ -81,8 +92,20 @@ function M.parse_list(lines)
   return entries
 end
 
-function M.create(branch, callback)
-  run_async("wt", { "switch", "--create", branch }, function(ok, lines, stderr)
+function M.create(branch, opts_or_callback, callback)
+  local opts, cb
+  if type(opts_or_callback) == "function" then
+    opts = {}
+    cb = opts_or_callback
+  else
+    opts = opts_or_callback or {}
+    cb = callback
+  end
+  local args = { "switch", "--create", branch }
+  if opts.base then
+    table.insert(args, "--base=" .. opts.base)
+  end
+  run_async("wt", args, function(ok, lines, stderr)
     if ok then
       local path = nil
       for _, line in ipairs(lines) do
@@ -92,9 +115,9 @@ function M.create(branch, callback)
           break
         end
       end
-      callback(true, path)
+      cb(true, path)
     else
-      callback(false, table.concat(stderr or lines or {}, "\n"))
+      cb(false, table.concat(stderr or lines or {}, "\n"))
     end
   end)
 end
@@ -110,7 +133,10 @@ function M.remove(branch, callback)
 end
 
 function M.merge(target, branch, callback)
-  local args = { "merge", target }
+  local args = { "merge" }
+  if target and target ~= "" then
+    table.insert(args, target)
+  end
   if branch then
     table.insert(args, "--branch")
     table.insert(args, branch)
@@ -139,6 +165,22 @@ function M.get_path(branch, callback)
       end
     end
     callback(nil)
+  end)
+end
+
+function M.is_dirty(branch, callback)
+  M.get_path(branch, function(path)
+    if not path then
+      callback(nil)
+      return
+    end
+    run_async("git", { "-C", path, "status", "--porcelain" }, function(ok, lines)
+      if not ok then
+        callback(nil)
+        return
+      end
+      callback(#lines > 0)
+    end)
   end)
 end
 
@@ -181,6 +223,82 @@ function M.step_rollback(callback)
   run_async("git", { "reset", "--soft", "HEAD~1" }, function(ok, lines, stderr)
     callback(ok, table.concat(ok and lines or stderr or {}, "\n"))
   end)
+end
+
+function M.commit(branch, callback)
+  M.get_path(branch, function(path)
+    if not path then callback(false, "worktree path not found") return end
+    run_async("wt", { "commit" }, { cwd = path }, callback)
+  end)
+end
+
+function M.squash(branch, callback)
+  M.get_path(branch, function(path)
+    if not path then callback(false, "worktree path not found") return end
+    run_async("wt", { "squash" }, { cwd = path }, callback)
+  end)
+end
+
+function M.rebase(target, branch, callback)
+  local args = { "rebase" }
+  if target and target ~= "" then table.insert(args, target) end
+  if branch then
+    table.insert(args, "--branch")
+    table.insert(args, branch)
+  end
+  run_async("wt", args, callback)
+end
+
+function M.push(target, branch, callback)
+  local args = { "push" }
+  if target and target ~= "" then table.insert(args, target) end
+  if branch then
+    table.insert(args, "--branch")
+    table.insert(args, branch)
+  end
+  run_async("wt", args, callback)
+end
+
+function M.diff(branch, callback)
+  local args = { "diff" }
+  if branch then
+    table.insert(args, "--branch")
+    table.insert(args, branch)
+  end
+  run_async("wt", args, callback)
+end
+
+function M.copy_ignored(src, dst, callback)
+  run_async("wt", { "copy-ignored", src, dst }, callback)
+end
+
+function M.eval(expr, callback)
+  run_async("wt", { "eval", expr }, callback)
+end
+
+function M.for_each(cmd, callback)
+  local args = { "for-each" }
+  for part in cmd:gmatch("%S+") do
+    table.insert(args, part)
+  end
+  run_async("wt", args, callback)
+end
+
+function M.promote(branch, callback)
+  local args = { "promote" }
+  if branch then
+    table.insert(args, "--branch")
+    table.insert(args, branch)
+  end
+  run_async("wt", args, callback)
+end
+
+function M.prune(callback)
+  run_async("wt", { "prune" }, callback)
+end
+
+function M.relocate(callback)
+  run_async("wt", { "relocate" }, callback)
 end
 
 local statusline_cache = ""
@@ -230,6 +348,124 @@ function M.stop_statusline()
     statusline_timer = nil
   end
   statusline_cache = ""
+end
+
+local function open_diff_buf(lines)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].filetype = "diff"
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  local width = math.floor(vim.o.columns * 0.9)
+  local height = math.min(#lines + 2, math.floor(vim.o.lines * 0.8))
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    col = math.floor((vim.o.columns - width) / 2),
+    row = math.floor((vim.o.lines - height) / 2),
+    style = "minimal",
+    border = "rounded",
+    title = " wt diff ",
+    title_pos = "center",
+  })
+  vim.keymap.set("n", "q", function() vim.api.nvim_win_close(win, true) end, { buffer = buf, nowait = true })
+  vim.keymap.set("n", "<Esc>", function() vim.api.nvim_win_close(win, true) end, { buffer = buf, nowait = true })
+end
+
+local wt_ops = {
+  { key = "commit",       label = "commit — stage & commit (LLM msg)",       branch_only = true  },
+  { key = "squash",       label = "squash — squash all commits into one",     branch_only = true  },
+  { key = "rebase",       label = "rebase — rebase onto target branch",       branch_only = false, prompt = "Rebase onto:" },
+  { key = "push",         label = "push — fast-forward target to branch",     branch_only = false, prompt = "Push to target (empty=trunk):" },
+  { key = "diff",         label = "diff — all changes since branch point",    branch_only = false },
+  { key = "promote",      label = "promote — swap branch into main worktree", branch_only = false },
+  { key = "copy-ignored", label = "copy-ignored — copy gitignored files",     branch_only = false, prompt2 = { "From worktree:", "To worktree:" } },
+  { key = "eval",         label = "eval — evaluate a template expression",    branch_only = false, prompt = "Expression:" },
+  { key = "for-each",     label = "for-each — run command in every worktree", branch_only = false, prompt = "Command:" },
+  { key = "prune",        label = "prune — remove merged worktrees/branches", branch_only = false },
+  { key = "relocate",     label = "relocate — move worktrees to expected paths", branch_only = false },
+}
+
+local function notify_result(op, ok, lines, stderr)
+  if ok then
+    local out = table.concat(lines or {}, "\n")
+    vim.notify("[wt] " .. op .. (out ~= "" and ": " .. out or " done"), vim.log.levels.INFO)
+  else
+    vim.notify("[wt] " .. op .. " failed: " .. table.concat(stderr or {}, "\n"), vim.log.levels.ERROR)
+  end
+end
+
+function M.pick_op(branch)
+  local items = {}
+  for _, op in ipairs(wt_ops) do
+    if not op.branch_only or (branch and branch ~= "") then
+      table.insert(items, op)
+    end
+  end
+
+  local labels = vim.tbl_map(function(op) return op.label end, items)
+  local title = branch and ("wt ops — " .. branch) or "wt ops (global)"
+
+  vim.ui.select(labels, { prompt = title .. ":" }, function(choice)
+    if not choice then return end
+    local op
+    for _, item in ipairs(items) do
+      if item.label == choice then op = item break end
+    end
+    if not op then return end
+
+    local function run_op(args_extra)
+      if op.key == "commit" then
+        M.commit(branch, function(ok, lines, stderr) notify_result("commit", ok, lines, stderr) end)
+      elseif op.key == "squash" then
+        M.squash(branch, function(ok, lines, stderr) notify_result("squash", ok, lines, stderr) end)
+      elseif op.key == "rebase" then
+        M.rebase(args_extra, branch, function(ok, lines, stderr) notify_result("rebase", ok, lines, stderr) end)
+      elseif op.key == "push" then
+        M.push(args_extra, branch, function(ok, lines, stderr) notify_result("push", ok, lines, stderr) end)
+      elseif op.key == "diff" then
+        M.diff(branch, function(ok, lines, stderr)
+          vim.schedule(function()
+            if ok and #lines > 0 then open_diff_buf(lines)
+            elseif ok then vim.notify("[wt] diff: no changes", vim.log.levels.INFO)
+            else vim.notify("[wt] diff failed: " .. table.concat(stderr or {}, "\n"), vim.log.levels.ERROR)
+            end
+          end)
+        end)
+      elseif op.key == "promote" then
+        M.promote(branch, function(ok, lines, stderr) notify_result("promote", ok, lines, stderr) end)
+      elseif op.key == "copy-ignored" then
+        local parts = type(args_extra) == "table" and args_extra or {}
+        M.copy_ignored(parts[1] or "", parts[2] or "", function(ok, lines, stderr) notify_result("copy-ignored", ok, lines, stderr) end)
+      elseif op.key == "eval" then
+        M.eval(args_extra or "", function(ok, lines, stderr) notify_result("eval", ok, lines, stderr) end)
+      elseif op.key == "for-each" then
+        M.for_each(args_extra or "", function(ok, lines, stderr) notify_result("for-each", ok, lines, stderr) end)
+      elseif op.key == "prune" then
+        M.prune(function(ok, lines, stderr) notify_result("prune", ok, lines, stderr) end)
+      elseif op.key == "relocate" then
+        M.relocate(function(ok, lines, stderr) notify_result("relocate", ok, lines, stderr) end)
+      end
+    end
+
+    if op.prompt2 then
+      vim.ui.input({ prompt = op.prompt2[1] }, function(a)
+        if a == nil then return end
+        vim.ui.input({ prompt = op.prompt2[2] }, function(b)
+          if b == nil then return end
+          run_op({ a, b })
+        end)
+      end)
+    elseif op.prompt then
+      vim.ui.input({ prompt = op.prompt }, function(arg)
+        if arg == nil then return end
+        run_op(arg)
+      end)
+    else
+      run_op(nil)
+    end
+  end)
 end
 
 return M

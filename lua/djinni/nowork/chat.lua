@@ -408,6 +408,36 @@ function M.attach(buf)
   map("n", "<C-r>", function()
     M.restart_session(buf)
   end)
+  map("n", "gW", function()
+    local branch = read_frontmatter_field(buf, "worktree")
+    require("djinni.integrations.worktrunk").pick_op(branch and branch ~= "" and branch or nil)
+  end)
+  map("n", "<C-w>", function()
+    local worktrunk = require("djinni.integrations.worktrunk")
+    if not worktrunk.available() then
+      vim.notify("[djinni] worktrunk not available", vim.log.levels.WARN)
+      return
+    end
+    local path = vim.api.nvim_buf_get_name(buf)
+    local title = vim.fn.fnamemodify(path, ":t:r")
+    local branch = title:lower():gsub("[^%w%-]", "-"):gsub("%-+", "-"):gsub("^%-", ""):gsub("%-$", "")
+    if branch == "" then branch = "task" end
+    vim.ui.select({ "Normal (default branch)", "Stacked (from current HEAD)" }, { prompt = "Worktree base:" }, function(choice)
+      if not choice then return end
+      local opts = choice:match("Stacked") and { base = "@" } or {}
+      worktrunk.create(branch, opts, function(ok, path_or_err)
+        vim.schedule(function()
+          if not ok then
+            vim.notify("[djinni] worktree failed: " .. tostring(path_or_err), vim.log.levels.ERROR)
+            return
+          end
+          M._set_frontmatter_field(buf, "worktree", branch)
+          vim.api.nvim_buf_call(buf, function() vim.cmd("silent! write") end)
+          vim.notify("[djinni] worktree: " .. branch, vim.log.levels.INFO)
+        end)
+      end)
+    end)
+  end)
   map("n", "D", function()
     local line = vim.api.nvim_get_current_line()
     local file = line:match("^%- .+%((.-)%)") or line:match("^  .* %((.-)%)")

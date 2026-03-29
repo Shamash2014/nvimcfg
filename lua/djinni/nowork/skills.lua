@@ -43,6 +43,15 @@ function M.discover(project_root)
   local skills = {}
   local seen = {}
 
+  local src = debug.getinfo(1, "S").source:sub(2)
+  local bundled_dir = vim.fn.fnamemodify(src, ":h:h:h:h") .. "/djinni-skills"
+  for _, s in ipairs(scan_dir(bundled_dir)) do
+    if not seen[s.name] then
+      seen[s.name] = true
+      table.insert(skills, s)
+    end
+  end
+
   local global_dir = vim.fn.expand("~/.claude/skills")
   for _, s in ipairs(scan_dir(global_dir)) do
     if not seen[s.name] then
