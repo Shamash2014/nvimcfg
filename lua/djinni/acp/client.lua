@@ -36,11 +36,12 @@ function M.new(cmd, args, cwd)
       self.job_id = nil
       self._ready = false
       self:_flush_ready_error("process exited with code " .. tostring(code))
-      for id, cb in pairs(self.pending_requests) do
+      local pending = self.pending_requests
+      self.pending_requests = {}
+      for _, cb in pairs(pending) do
         vim.schedule(function()
           cb({ code = -1, message = "process exited" }, nil)
         end)
-        self.pending_requests[id] = nil
       end
     end,
     stdin = "pipe",

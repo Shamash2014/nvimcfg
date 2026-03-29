@@ -16,6 +16,7 @@ return {
       { "<leader>t", group = "Tab" },
       { "<leader>tt", "<cmd>tabnew<cr>", desc = "New tab" },
       { "<leader>td", "<cmd>tabclose<cr>", desc = "Close tab" },
+      { "<leader>tk", "<cmd>tabclose<cr>", desc = "Kill tab" },
       { "<leader>yf", function()
         local path = vim.fn.expand("%:.")
         vim.fn.setreg("+", path)

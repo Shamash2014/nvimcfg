@@ -224,25 +224,29 @@ function M.create(project_root, opts)
   local sess_opts = build_session_opts(buf, project_root)
   session.create_task_session(project_root, function(err, sid, result)
     if err or not sid then return end
-    M._restore_mode(buf, project_root, sid, result)
-    M._set_frontmatter_field(buf, "session", sid)
-    M._sessions[buf] = sid
-    M._streaming[buf] = true
-    M._start_streaming(buf)
-    local msg = inject_skills(buf, project_root, prompt .. context_refs)
-    session.send_message(project_root, sid, msg, function(_err, prompt_result)
-      log.info("session/prompt callback: " .. (_err and ("err=" .. vim.inspect(_err)) or "ok"))
-      if prompt_result then
-        local keys = {}
-        for k, _ in pairs(prompt_result) do keys[#keys + 1] = k end
-        log.info("prompt_result keys: " .. table.concat(keys, ", "))
-        if prompt_result.usage then log.info("usage: " .. vim.inspect(prompt_result.usage)) end
-      end
-      vim.schedule(function()
-        M._accumulate_usage(buf, prompt_result)
-        if M._stream_cleanup[buf] then
-          M._stream_cleanup[buf]()
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      M._restore_mode(buf, project_root, sid, result)
+      M._set_frontmatter_field(buf, "session", sid)
+      M._sessions[buf] = sid
+      M._streaming[buf] = true
+      M._start_streaming(buf)
+      local msg = inject_skills(buf, project_root, prompt .. context_refs)
+      session.send_message(project_root, sid, msg, function(_err, prompt_result)
+        log.info("session/prompt callback: " .. (_err and ("err=" .. vim.inspect(_err)) or "ok"))
+        if prompt_result then
+          local keys = {}
+          for k, _ in pairs(prompt_result) do keys[#keys + 1] = k end
+          log.info("prompt_result keys: " .. table.concat(keys, ", "))
+          if prompt_result.usage then log.info("usage: " .. vim.inspect(prompt_result.usage)) end
         end
+        vim.schedule(function()
+          if not vim.api.nvim_buf_is_valid(buf) then return end
+          M._accumulate_usage(buf, prompt_result)
+          if M._stream_cleanup[buf] then
+            M._stream_cleanup[buf]()
+          end
+        end)
       end)
     end)
   end, sess_opts)
@@ -596,10 +600,11 @@ function M.attach(buf)
       local sid = M.get_session_id(buf) or M._sessions[buf]
       if root then
         if M._event_handler[buf] or M._perm_handler[buf] then
-          local ok, client = pcall(session.get_or_create, root)
-          if ok and client then
-            if M._event_handler[buf] then client:off("session/update", M._event_handler[buf]) end
-            if M._perm_handler[buf] then client:off("permission_request", M._perm_handler[buf]) end
+          local s = session.sessions[root]
+          if s and s.client and s.client:is_alive() then
+            local c = s.client
+            if M._event_handler[buf] then c:off("session/update", M._event_handler[buf]) end
+            if M._perm_handler[buf] then c:off("permission_request", M._perm_handler[buf]) end
           end
         end
         if sid and sid ~= "" then
@@ -807,6 +812,7 @@ function M.send(buf, text)
         local msg = inject_skills(buf, root, build_history_context(buf, text))
         session.send_message(root, new_sid, msg, function(_err, prompt_result)
           vim.schedule(function()
+            if not vim.api.nvim_buf_is_valid(buf) then return end
             M._accumulate_usage(buf, prompt_result)
             if M._stream_cleanup[buf] then
               M._stream_cleanup[buf]()
@@ -831,6 +837,7 @@ function M.send(buf, text)
     if err and err.data and err.data.details == "Session not found" then
       vim.schedule(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
+        if not M._streaming[buf] then return end
         if M._stream_cleanup[buf] then
           M._stream_cleanup[buf]()
         end
@@ -844,6 +851,7 @@ function M.send(buf, text)
     elseif err then
       vim.schedule(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
+        if not M._streaming[buf] then return end
         if M._stream_cleanup[buf] then
           M._stream_cleanup[buf]()
         end
@@ -857,6 +865,7 @@ function M.send(buf, text)
       end)
     else
       vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
         M._accumulate_usage(buf, prompt_result)
         if M._stream_cleanup[buf] then
           M._stream_cleanup[buf]()
@@ -929,13 +938,17 @@ function M._cleanup_empty_djinni(buf)
 end
 
 function M._start_streaming(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local root = M.get_project_root(buf)
+  if not root then return end
+  local client = session.get_or_create(root)
+  if not client then return end
+
   local streaming_lines = { "", "---", "", "@Djinni", "" }
   local line_count = vim.api.nvim_buf_line_count(buf)
   vim.api.nvim_buf_set_lines(buf, line_count, line_count, false, streaming_lines)
 
-  local root = M.get_project_root(buf)
   local sid = M.get_session_id(buf) or M._sessions[buf]
-  local client = session.get_or_create(root)
 
   if M._event_handler[buf] then
     client:off("session/update", M._event_handler[buf])
@@ -992,6 +1005,10 @@ function M._start_streaming(buf)
 
   M._stream_cleanup[buf] = function(force)
     if not M._streaming[buf] then return end
+    if not vim.api.nvim_buf_is_valid(buf) then
+      cleanup()
+      return
+    end
     if not force and M._pending_permission and M._pending_permission[buf] then
       M._cleanup_deferred[buf] = true
       return
@@ -1089,6 +1106,7 @@ function M._start_streaming(buf)
   end
 
   local last_event_time = vim.uv.now()
+  local events_received = false
   local watchdog_timeout = 60000
 
   timer:start(100, 100, function()
@@ -1097,20 +1115,28 @@ function M._start_streaming(buf)
     M._timer_scheduled[buf] = true
     vim.schedule(function()
       M._timer_scheduled[buf] = nil
+      if not vim.api.nvim_buf_is_valid(buf) then
+        cleanup()
+        return
+      end
       flush()
       if not M._streaming[buf] then return end
-      local dead = not client:is_alive()
+      local ok_alive, alive = pcall(function() return client:is_alive() end)
+      local dead = not ok_alive or not alive
       local has_pending_perm = M._pending_permission and M._pending_permission[buf]
-      local stale = not has_pending_perm and (vim.uv.now() - last_event_time) > watchdog_timeout
+      local timeout = events_received and 900000 or watchdog_timeout
+      local stale = not has_pending_perm and (vim.uv.now() - last_event_time) > timeout
       if dead or stale then
-        local reason = dead and "Process died" or "No events for " .. (watchdog_timeout / 1000) .. "s"
+        local reason = dead and "Process died" or "No events for " .. (timeout / 1000) .. "s"
         log.warn("watchdog triggered: " .. reason)
         pending = pending .. "\n\n**" .. reason .. "**\n"
+        M._sessions[buf] = nil
+        M._set_frontmatter_field(buf, "session", "")
+        M._last_tool_failed[buf] = false
+        M._continuation_count[buf] = 0
         if M._stream_cleanup[buf] then
           M._stream_cleanup[buf](true)
         end
-        M._sessions[buf] = nil
-        M._set_frontmatter_field(buf, "session", "")
       end
     end)
   end)
@@ -1157,6 +1183,7 @@ function M._start_streaming(buf)
       if not data then return end
       if data.sessionId and sid and data.sessionId ~= sid then return end
       last_event_time = vim.uv.now()
+      events_received = true
 
       local update = data.update or data
       local update_type = update.sessionUpdate
@@ -1383,8 +1410,8 @@ function M._start_streaming(buf)
   end
 
   if M._event_handler[buf] then
-    local ok, c = pcall(session.get_or_create, root)
-    if ok and c then c:off("session/update", M._event_handler[buf]) end
+    local s = session.sessions[root]
+    if s and s.client then s.client:off("session/update", M._event_handler[buf]) end
   end
   M._event_handler[buf] = handler
   session.on_event(root, "session/update", handler)
@@ -1473,8 +1500,8 @@ function M._start_streaming(buf)
     end)
   end
   if M._perm_handler[buf] then
-    local ok, c = pcall(session.get_or_create, root)
-    if ok and c then c:off("permission_request", M._perm_handler[buf]) end
+    local s = session.sessions[root]
+    if s and s.client then s.client:off("permission_request", M._perm_handler[buf]) end
   end
   M._perm_handler[buf] = perm_handler
   session.on_event(root, "permission_request", perm_handler)
@@ -1531,6 +1558,7 @@ function M._read_frontmatter_csv(buf, key)
 end
 
 function M._set_frontmatter_field(buf, key, value)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
   local limit = math.min(20, vim.api.nvim_buf_line_count(buf))
   local lines = vim.api.nvim_buf_get_lines(buf, 0, limit, false)
   local closing_idx = nil
@@ -2177,8 +2205,11 @@ function M._permission_action(buf, action)
     local ok_resp, resp_err = pcall(perm.respond, response)
     if not ok_resp then
       log.err("respond failed: " .. tostring(resp_err))
-      M._streaming[buf] = nil
-      M._stream_cleanup[buf] = nil
+      if M._stream_cleanup[buf] then
+        M._stream_cleanup[buf](true)
+      else
+        M._streaming[buf] = nil
+      end
       M._continuation_count[buf] = nil
       vim.defer_fn(function()
         if vim.api.nvim_buf_is_valid(buf) then
