@@ -4,6 +4,7 @@ local Provider = require("djinni.acp.provider")
 
 local M = {}
 M.sessions = {}
+M.idle_guards = {}
 
 local function extract_model_config_option(config_options)
   if not config_options then return nil end
@@ -50,7 +51,19 @@ local function schedule_idle_check(project_root)
 
     local elapsed = vim.uv.now() - session.last_activity
     if elapsed >= timeout then
-      M.shutdown_project(project_root)
+      local guarded = false
+      for _, guard in ipairs(M.idle_guards) do
+        if guard(project_root) then
+          guarded = true
+          break
+        end
+      end
+      if guarded then
+        touch_activity(project_root)
+        schedule_idle_check(project_root)
+      else
+        M.shutdown_project(project_root)
+      end
     else
       schedule_idle_check(project_root)
     end
@@ -114,7 +127,6 @@ function M.create_task_session(project_root, callback, opts)
     local req = { cwd = project_root, mcpServers = mcp_servers }
     client:request("session/new", req, function(err, result)
       if err then
-        vim.schedule(function() end)
         if callback then
           callback(err, nil)
         end
@@ -129,13 +141,13 @@ function M.create_task_session(project_root, callback, opts)
           local model_opt = result and extract_model_config_option(result.configOptions)
           if model_opt then
             session.model_config_option = model_opt
-          elseif result and result.models then
-            session.available_models = result.models
+          elseif result and (result.models or result.availableModels) then
+            session.available_models = result.models or result.availableModels
           end
         end
         if opts.model and opts.model ~= "" then
           local config = get_config()
-          local model_id = Provider.resolve_model(config.provider, opts.model, result and result.models)
+          local model_id = Provider.resolve_model(config.provider, opts.model, M.get_available_models(project_root))
           if model_id then
             M.set_model(project_root, session_id, model_id)
           end
@@ -202,13 +214,15 @@ function M.load_task_session(project_root, session_id, callback, opts)
           local model_opt = result and extract_model_config_option(result.configOptions)
           if model_opt then
             session.model_config_option = model_opt
+          elseif result and (result.models or result.availableModels) then
+            session.available_models = result.models or result.availableModels
           end
         end
       end
 
       if not err and opts and opts.model and opts.model ~= "" then
         local config = get_config()
-        local model_id = Provider.resolve_model(config.provider, opts.model, nil)
+        local model_id = Provider.resolve_model(config.provider, opts.model, M.get_available_models(project_root))
         if model_id then
           M.set_model(project_root, session_id, model_id)
         end

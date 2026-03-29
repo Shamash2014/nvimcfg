@@ -47,10 +47,17 @@ local function iter_model_ids(session_models)
     end
     return ids
   end
-  if session_models.availableModels then
+  local models = session_models.availableModels or session_models
+  if type(models) == "table" and #models > 0 then
     local ids = {}
-    for _, m in ipairs(session_models.availableModels) do
-      if m.modelId then ids[#ids + 1] = m.modelId end
+    for _, m in ipairs(models) do
+      if type(m) == "string" then
+        ids[#ids + 1] = m
+      elseif m.modelId then
+        ids[#ids + 1] = m.modelId
+      elseif m.id then
+        ids[#ids + 1] = m.id
+      end
     end
     return ids
   end

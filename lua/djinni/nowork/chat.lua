@@ -31,6 +31,16 @@ M._interrupt_pending = {} -- buf -> true when interrupt fired before session was
 M._hidden_pending = {} -- buf -> accumulated text not yet rendered (buffer was hidden)
 M._timer_scheduled = {} -- buf -> true when a vim.schedule is already pending for the timer
 
+local function hide_snacks_notif(id)
+  if not id then return end
+  local ok, Snacks = pcall(require, "snacks")
+  if ok and Snacks.notifier then Snacks.notifier.hide(id) end
+end
+
+local function you_block()
+  return { "", "---", "", "@You", "", "", "---", "" }
+end
+
 vim.api.nvim_create_autocmd("BufLeave", {
   callback = function(ev)
     local b = ev.buf
@@ -214,7 +224,7 @@ function M.create(project_root, opts)
   local sess_opts = build_session_opts(buf, project_root)
   session.create_task_session(project_root, function(err, sid, result)
     if err or not sid then return end
-    M._extract_modes(buf, result)
+    M._restore_mode(buf, project_root, sid, result)
     M._set_frontmatter_field(buf, "session", sid)
     M._sessions[buf] = sid
     M._streaming[buf] = true
@@ -273,15 +283,9 @@ function M.open(file_path)
         if not vim.api.nvim_buf_is_valid(buf) then
           return
         end
-        local saved_mode = M._current_mode[buf]
-        M._extract_modes(buf, result)
+        M._restore_mode(buf, root, new_sid, result)
         M._set_frontmatter_field(buf, "session", new_sid)
         M._sessions[buf] = new_sid
-        if saved_mode then
-          session.set_mode(root, new_sid, saved_mode)
-          M._current_mode[buf] = saved_mode
-          M._set_frontmatter_field(buf, "mode", saved_mode)
-        end
         M._update_system_block(buf, "Session ready (ACP)")
       end)
     end, sess_opts)
@@ -545,7 +549,7 @@ function M.attach(buf)
       if has_border then
         new_lines = { "", "@You", "", "", "---", "" }
       else
-        new_lines = { "", "---", "", "@You", "", "", "---", "" }
+        new_lines = you_block()
       end
       vim.api.nvim_buf_set_lines(buf, lc, lc, false, new_lines)
       local you_offset = has_border and 2 or 4
@@ -794,13 +798,7 @@ function M.send(buf, text)
           session.interrupt(root, new_sid)
           return
         end
-        local saved_mode = M._current_mode[buf]
-        M._extract_modes(buf, result)
-        if saved_mode then
-          session.set_mode(root, new_sid, saved_mode)
-          M._current_mode[buf] = saved_mode
-          M._set_frontmatter_field(buf, "mode", saved_mode)
-        end
+        M._restore_mode(buf, root, new_sid, result)
         M._set_frontmatter_field(buf, "session", new_sid)
         M._sessions[buf] = new_sid
         vim.notify("[djinni] Session ready", vim.log.levels.INFO)
@@ -839,6 +837,22 @@ function M.send(buf, text)
         M._cleanup_empty_djinni(buf)
         M._sessions[buf] = nil
         M._set_frontmatter_field(buf, "session", "")
+        local lc = vim.api.nvim_buf_line_count(buf)
+        vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "@System", "Session expired, reconnecting...", "" })
+        M.send(buf, text)
+      end)
+    elseif err then
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        if M._stream_cleanup[buf] then
+          M._stream_cleanup[buf]()
+        end
+        M._cleanup_empty_djinni(buf)
+        local msg = err.message or (err.data and err.data.details) or vim.inspect(err)
+        local lc = vim.api.nvim_buf_line_count(buf)
+        vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "@System", "Error: " .. msg .. " — reconnecting...", "" })
+        M._sessions[buf] = nil
+        M._set_frontmatter_field(buf, "session", "")
         M.send(buf, text)
       end)
     else
@@ -860,10 +874,25 @@ function M.interrupt(buf)
   else
     M._interrupt_pending[buf] = true
   end
-  if M._pending_permission then
+  if M._pending_permission and M._pending_permission[buf] then
+    local perm = M._pending_permission[buf]
+    hide_snacks_notif(perm.notif_id)
+    local reject_id = nil
+    if perm.options then
+      for _, opt in ipairs(perm.options) do
+        if opt.kind == "reject_once" then reject_id = opt.id; break end
+      end
+    end
+    if reject_id and perm.respond then
+      pcall(perm.respond, { outcome = { outcome = "selected", optionId = reject_id } })
+    end
     M._pending_permission[buf] = nil
   end
   M._cleanup_deferred[buf] = nil
+  M._last_tool_failed[buf] = false
+  M._last_perm_tool[buf] = nil
+  M._continuation_count[buf] = 0
+  M._queue[buf] = nil
   if M._stream_cleanup[buf] then
     M._stream_cleanup[buf](true)
   else
@@ -994,6 +1023,12 @@ function M._start_streaming(buf)
     local function auto_continue(msg)
       if count >= M._max_continuations then
         log.warn("max continuations (" .. M._max_continuations .. ") reached")
+        if vim.api.nvim_buf_is_valid(buf) then
+          local lc = vim.api.nvim_buf_line_count(buf)
+          vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
+            "", "@System", "Max auto-continuations (" .. M._max_continuations .. ") reached. Send a message to continue.", ""
+          })
+        end
       elseif vim.api.nvim_buf_is_valid(buf) then
         M._continuation_count[buf] = count + 1
         log.info("auto-continue [" .. (count + 1) .. "/" .. M._max_continuations .. "]: " .. msg)
@@ -1008,7 +1043,7 @@ function M._start_streaming(buf)
     if last_perm and (last_perm.action == "reject_once" or last_perm.action == "reject_always") then
       if vim.api.nvim_buf_is_valid(buf) then
         local lc = vim.api.nvim_buf_line_count(buf)
-        vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@You", "", "", "---", "" })
+        vim.api.nvim_buf_set_lines(buf, lc, lc, false, you_block())
         local win = vim.fn.bufwinid(buf)
         if win ~= -1 then
           vim.api.nvim_win_set_cursor(win, { lc + 5, 0 })
@@ -1040,7 +1075,7 @@ function M._start_streaming(buf)
             end)
           end
           local lc = vim.api.nvim_buf_line_count(buf)
-          vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@You", "", "", "---", "" })
+          vim.api.nvim_buf_set_lines(buf, lc, lc, false, you_block())
           if win ~= -1 then
             vim.api.nvim_win_set_cursor(win, { lc + 5, 0 })
             if win == vim.api.nvim_get_current_win() then
@@ -1067,9 +1102,14 @@ function M._start_streaming(buf)
       local dead = not client:is_alive()
       local stale = (vim.uv.now() - last_event_time) > watchdog_timeout
       if dead or stale then
+        local reason = dead and "Process died" or "No events for " .. (watchdog_timeout / 1000) .. "s"
+        log.warn("watchdog triggered: " .. reason)
+        pending = pending .. "\n\n**" .. reason .. "**\n"
         if M._stream_cleanup[buf] then
           M._stream_cleanup[buf](true)
         end
+        M._sessions[buf] = nil
+        M._set_frontmatter_field(buf, "session", "")
       end
     end)
   end)
@@ -1101,7 +1141,13 @@ function M._start_streaming(buf)
       M._hidden_pending[buf] = (M._hidden_pending[buf] or "") .. "\n" .. line
       return
     end
-    pending_lines[#pending_lines + 1] = line
+    if line:find("\n") then
+      for part in (line .. "\n"):gmatch("([^\n]*)\n") do
+        pending_lines[#pending_lines + 1] = part
+      end
+    else
+      pending_lines[#pending_lines + 1] = line
+    end
     flush_lines()
   end
 
@@ -1321,13 +1367,15 @@ function M._start_streaming(buf)
       if usage or cost_val then
         M._accumulate_usage(buf, { tokenUsage = usage, cost = cost_val })
       end
+      local result_text = update.resultText or update.message
+      if result_text and result_text ~= "" then
+        pending = pending .. "\n" .. result_text
+      end
     end
     end) -- pcall
 
     if not ok then
-      vim.schedule(function()
-        -- handler error silenced
-      end)
+      log.warn("session/update handler error: " .. tostring(err))
     end
 
     -- Completion is handled by session/prompt callback, not by session/update events
@@ -1400,6 +1448,7 @@ function M._start_streaming(buf)
             { label = "Allow (ya)", key = "a", fn = function() M._permission_action(buf, "allow") end },
             { label = "Always (yA)", key = "A", fn = function() M._permission_action(buf, "always") end },
             { label = "Deny (yn)", key = "d", fn = function() M._permission_action(buf, "deny") end },
+            { label = "Pick (s)", key = "s", fn = function() M._permission_action(buf, "select") end },
           },
         })
       else
@@ -1576,7 +1625,7 @@ function M._fresh_restart(buf, root)
     session.shutdown_project(root)
     local lc = vim.api.nvim_buf_line_count(buf)
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@System", "Restarting session...", "" })
-    session.create_task_session(root, function(err, new_sid)
+    session.create_task_session(root, function(err, new_sid, result)
       vim.schedule(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
         if err or not new_sid then
@@ -1584,6 +1633,7 @@ function M._fresh_restart(buf, root)
           vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { "Session failed: " .. (err and err.message or "unknown") })
           return
         end
+        M._restore_mode(buf, root, new_sid, result)
         M._set_frontmatter_field(buf, "session", new_sid)
         M._sessions[buf] = new_sid
         local row = vim.api.nvim_buf_line_count(buf) - 1
@@ -1602,6 +1652,7 @@ function M._fresh_restart(buf, root)
       vim.schedule(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
         if not err and result then
+          M._restore_mode(buf, root, old_sid, result)
           M._sessions[buf] = old_sid
           vim.notify("[djinni] Session resumed (context preserved)", vim.log.levels.INFO)
         else
@@ -2050,12 +2101,7 @@ function M._permission_action(buf, action)
 
   local perm = M._pending_permission[buf]
 
-  if perm.notif_id then
-    local ok_snacks, Snacks = pcall(require, "snacks")
-    if ok_snacks and Snacks.notifier then
-      Snacks.notifier.hide(perm.notif_id)
-    end
-  end
+  hide_snacks_notif(perm.notif_id)
 
   if action == "select" then
     local labels = {}
@@ -2115,46 +2161,65 @@ function M._permission_action(buf, action)
     reject_always = "Never allowed",
   }
 
-  M._last_perm_tool[buf] = { desc = perm.tool_desc, kind = perm.tool_kind, action = selected_kind }
-  log.info("permission response: " .. option_id .. " tool=" .. (perm.tool_desc or "?") .. " kind=" .. (perm.tool_kind or "?"))
-  local ok_resp, resp_err = pcall(perm.respond, {
-    outcome = {
-      outcome = "selected",
-      optionId = option_id,
-    },
-  })
-  if not ok_resp then
-    log.err("respond failed: " .. tostring(resp_err))
-    M._streaming[buf] = nil
-    M._stream_cleanup[buf] = nil
-    M._continuation_count[buf] = nil
+  local function send_perm_response(reason)
+    M._last_perm_tool[buf] = { desc = perm.tool_desc, kind = perm.tool_kind, action = selected_kind }
+    log.info("permission response: " .. option_id .. " tool=" .. (perm.tool_desc or "?") .. " kind=" .. (perm.tool_kind or "?") .. (reason and (" reason=" .. reason) or ""))
+    local response = {
+      outcome = {
+        outcome = "selected",
+        optionId = option_id,
+      },
+    }
+    if reason and reason ~= "" then
+      response.outcome.message = reason
+    end
+    local ok_resp, resp_err = pcall(perm.respond, response)
+    if not ok_resp then
+      log.err("respond failed: " .. tostring(resp_err))
+      M._streaming[buf] = nil
+      M._stream_cleanup[buf] = nil
+      M._continuation_count[buf] = nil
+      vim.defer_fn(function()
+        if vim.api.nvim_buf_is_valid(buf) then
+          M.send(buf, "yes, continue")
+        end
+      end, 100)
+    else
+      log.info("respond sent OK")
+      if deferred and M._stream_cleanup[buf] then
+        vim.schedule(function()
+          if M._stream_cleanup[buf] then M._stream_cleanup[buf]() end
+        end)
+      end
+    end
+
+    local suffix = reason and reason ~= "" and (" (" .. reason .. ")") or ""
+    local lc = vim.api.nvim_buf_line_count(buf)
+    vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
+      "",
+      "@System",
+      "OK:" .. (kind_labels[selected_kind] or option_id) .. suffix,
+      "",
+    })
+
     vim.defer_fn(function()
       if vim.api.nvim_buf_is_valid(buf) then
         M.send(buf, "yes, continue")
       end
-    end, 100)
-  else
-    log.info("respond sent OK")
-    if deferred and M._stream_cleanup[buf] then
-      vim.schedule(function()
-        if M._stream_cleanup[buf] then M._stream_cleanup[buf]() end
-      end)
-    end
+    end, 500)
   end
 
-  local lc = vim.api.nvim_buf_line_count(buf)
-  vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
-    "",
-    "@System",
-    "OK:" .. (kind_labels[selected_kind] or option_id),
-    "",
-  })
-
-  vim.defer_fn(function()
-    if vim.api.nvim_buf_is_valid(buf) then
-      M.send(buf, "yes, continue")
-    end
-  end, 500)
+  if selected_kind == "reject_once" or selected_kind == "reject_always" then
+    local ok_snacks, Snacks = pcall(require, "snacks")
+    local input_fn = (ok_snacks and Snacks.input) and Snacks.input or vim.ui.input
+    input_fn({ prompt = "Rejection reason (optional): " }, function(input)
+      vim.schedule(function()
+        send_perm_response(input)
+      end)
+    end)
+  else
+    send_perm_response(nil)
+  end
 end
 
 function M._on_save(buf)
@@ -2179,6 +2244,16 @@ function M._extract_modes(buf, result)
       M._current_mode[buf] = modes.currentModeId
       M._set_frontmatter_field(buf, "mode", modes.currentModeId)
     end
+  end
+end
+
+function M._restore_mode(buf, root, sid, result)
+  local saved_mode = M._current_mode[buf]
+  M._extract_modes(buf, result)
+  if saved_mode then
+    session.set_mode(root, sid, saved_mode)
+    M._current_mode[buf] = saved_mode
+    M._set_frontmatter_field(buf, "mode", saved_mode)
   end
 end
 
@@ -2237,6 +2312,18 @@ function M.statusline()
   end
   local idx = (M._spinner_frame % #M._spinner_chars) + 1
   return "djinni" .. mode_str .. " " .. M._spinner_chars[idx] .. usage_str
+end
+
+session.idle_guards[#session.idle_guards + 1] = function(project_root)
+  for buf, _ in pairs(M._streaming) do
+    if vim.api.nvim_buf_is_valid(buf) and M.get_project_root(buf) == project_root then return true end
+  end
+  if M._pending_permission then
+    for buf, _ in pairs(M._pending_permission) do
+      if vim.api.nvim_buf_is_valid(buf) and M.get_project_root(buf) == project_root then return true end
+    end
+  end
+  return false
 end
 
 return M
