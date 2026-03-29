@@ -41,6 +41,8 @@ return {
       dart = { "dart_format" },
       toml = { "taplo" },
     },
+    notify_on_error = true,
+    notify_no_formatters = true,
     format_after_save = {
       async = true,
       lsp_fallback = false,

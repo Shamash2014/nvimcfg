@@ -142,7 +142,7 @@ function M:_handle_message(line)
     local rh = self.request_handlers[msg.method]
     if rh then
       local respond = function(result)
-        if not self:is_alive() then return end
+        if not self:is_alive() then error("client is not alive") end
         local resp = vim.json.encode({
           jsonrpc = "2.0",
           id = msg.id,

@@ -1100,7 +1100,8 @@ function M._start_streaming(buf)
       flush()
       if not M._streaming[buf] then return end
       local dead = not client:is_alive()
-      local stale = (vim.uv.now() - last_event_time) > watchdog_timeout
+      local has_pending_perm = M._pending_permission and M._pending_permission[buf]
+      local stale = not has_pending_perm and (vim.uv.now() - last_event_time) > watchdog_timeout
       if dead or stale then
         local reason = dead and "Process died" or "No events for " .. (watchdog_timeout / 1000) .. "s"
         log.warn("watchdog triggered: " .. reason)
@@ -2202,11 +2203,6 @@ function M._permission_action(buf, action)
       "",
     })
 
-    vim.defer_fn(function()
-      if vim.api.nvim_buf_is_valid(buf) then
-        M.send(buf, "yes, continue")
-      end
-    end, 500)
   end
 
   if selected_kind == "reject_once" or selected_kind == "reject_always" then

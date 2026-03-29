@@ -97,7 +97,10 @@ return {
           end
 
           if linter_available then
-            pcall(lint.try_lint)
+            local ok, err = pcall(lint.try_lint)
+            if not ok then
+              vim.notify("Lint failed: " .. tostring(err), vim.log.levels.WARN)
+            end
           end
         end
       end,
