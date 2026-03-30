@@ -8,6 +8,8 @@ local skills = require("djinni.nowork.skills")
 
 local ns_id = vim.api.nvim_create_namespace("djinni_chat")
 
+local get_provider
+
 local M = {}
 M._streaming = {} -- buf -> true when streaming
 M._queue = {} -- buf -> { text1, text2, ... }
@@ -199,7 +201,7 @@ local function parse_csv(str)
   return result
 end
 
-local function get_provider(buf)
+get_provider = function(buf)
   return read_frontmatter_field(buf, "provider")
 end
 

@@ -14,8 +14,8 @@ M.providers = {
     resume = { method = "session/load", needs_cwd = true },
   },
   ["cursor"] = {
-    command = "cursor-acp",
-    args = {},
+    command = "cursor",
+    args = { "agent", "acp" },
     models = {},
     resume = { method = "session/resume" },
   },
@@ -23,8 +23,10 @@ M.providers = {
 
 function M.list()
   local names = {}
-  for name in pairs(M.providers) do
-    table.insert(names, name)
+  for name, cfg in pairs(M.providers) do
+    if vim.fn.executable(cfg.command) == 1 then
+      table.insert(names, name)
+    end
   end
   table.sort(names)
   return names
