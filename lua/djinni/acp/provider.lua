@@ -14,8 +14,8 @@ M.providers = {
     resume = { method = "session/load", needs_cwd = true },
   },
   ["cursor"] = {
-    command = "cursor",
-    args = { "agent", "acp" },
+    command = "agent",
+    args = { "acp" },
     models = {},
     resume = { method = "session/resume" },
   },
