@@ -17,7 +17,7 @@ M.providers = {
     command = "agent",
     args = { "acp" },
     models = {},
-    resume = { method = "session/resume" },
+    resume = { method = "session/load", needs_cwd = true },
   },
 }
 
