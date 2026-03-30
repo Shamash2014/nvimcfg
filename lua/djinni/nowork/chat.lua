@@ -30,11 +30,51 @@ M._tool_log = {} -- buf -> list of {name, kind, input, output, images}
 M._interrupt_pending = {} -- buf -> true when interrupt fired before session was created
 M._hidden_pending = {} -- buf -> accumulated text not yet rendered (buffer was hidden)
 M._timer_scheduled = {} -- buf -> true when a vim.schedule is already pending for the timer
+M._pending_images = {} -- buf -> list of { data = base64, media_type = "image/png" }
+M._stream_gen = {} -- buf -> generation counter to detect stale callbacks
+
+session.idle_guards[#session.idle_guards + 1] = function(project_root)
+  for b, _ in pairs(M._sessions) do
+    if vim.api.nvim_buf_is_valid(b) and M.get_project_root(b) == project_root then
+      return true
+    end
+  end
+  return false
+end
 
 local function hide_snacks_notif(id)
   if not id then return end
   local ok, Snacks = pcall(require, "snacks")
   if ok and Snacks.notifier then Snacks.notifier.hide(id) end
+end
+
+local function get_clipboard_image(callback)
+  local pngpaste = vim.fn.exepath("pngpaste")
+  if pngpaste == "" then
+    callback(nil)
+    return
+  end
+  vim.system({ pngpaste, "/dev/stdout" }, { text = false }, function(result)
+    if result.code ~= 0 or not result.stdout or #result.stdout == 0 then
+      vim.schedule(function() callback(nil) end)
+      return
+    end
+    local raw = result.stdout
+    vim.system({ "base64" }, { stdin = raw, text = true }, function(b64_result)
+      vim.schedule(function()
+        if b64_result.code ~= 0 or not b64_result.stdout then
+          callback(nil)
+          return
+        end
+        local data = b64_result.stdout:gsub("%s+", "")
+        if data == "" then
+          callback(nil)
+          return
+        end
+        callback({ data = data, media_type = "image/png", raw = raw })
+      end)
+    end)
+  end)
 end
 
 local function you_block()
@@ -479,6 +519,45 @@ function M.attach(buf)
       end
     end
   end)
+  map("n", "p", function()
+    get_clipboard_image(function(img)
+      if not img then
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('"_p', true, false, true), "n", false)
+        return
+      end
+      local chat_path = vim.api.nvim_buf_get_name(buf)
+      local chat_dir = vim.fn.fnamemodify(chat_path, ":h")
+      local img_dir = chat_dir .. "/images"
+      vim.fn.mkdir(img_dir, "p")
+      local ts = os.date("%Y%m%d-%H%M%S")
+      local filename = ts .. ".png"
+      local filepath = img_dir .. "/" .. filename
+      local f = io.open(filepath, "wb")
+      if f then
+        f:write(img.raw)
+        f:close()
+      end
+      if not M._pending_images[buf] then M._pending_images[buf] = {} end
+      table.insert(M._pending_images[buf], { data = img.data, media_type = img.media_type })
+      local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+      local insert_row = vim.api.nvim_win_get_cursor(0)[1]
+      for i = insert_row, 1, -1 do
+        if lines[i] and lines[i]:match("^@You%s*$") then
+          for j = i + 1, #lines do
+            if lines[j] == "" or lines[j]:match("^%-%-%-$") or lines[j]:match("^@%w+") then
+              insert_row = j
+              break
+            end
+            insert_row = j + 1
+          end
+          break
+        end
+      end
+      local ref = "![image](images/" .. filename .. ")"
+      vim.api.nvim_buf_set_lines(buf, insert_row - 1, insert_row - 1, false, { ref })
+      vim.notify("[djinni] Image pasted: " .. filename, vim.log.levels.INFO)
+    end)
+  end)
   map("n", "dd", function()
     M._delete_block(buf)
   end)
@@ -626,6 +705,8 @@ function M.attach(buf)
       M._last_perm_tool[buf] = nil
       M._attached[buf] = nil
       M._hidden_pending[buf] = nil
+      M._pending_images[buf] = nil
+      M._stream_gen[buf] = nil
     end,
   })
 end
@@ -743,6 +824,9 @@ function M.send(buf, text)
     return
   end
 
+  local images = M._pending_images[buf]
+  M._pending_images[buf] = nil
+
   if text ~= "yes, continue" and not text:match("^The previous tool") then
     M._continuation_count[buf] = 0
     M._last_tool_failed[buf] = false
@@ -807,23 +891,28 @@ function M.send(buf, text)
         M._set_frontmatter_field(buf, "session", new_sid)
         M._sessions[buf] = new_sid
         vim.notify("[djinni] Session ready", vim.log.levels.INFO)
+        M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
+        local gen = M._stream_gen[buf]
         M._streaming[buf] = true
         M._start_streaming(buf)
         local msg = inject_skills(buf, root, build_history_context(buf, text))
         session.send_message(root, new_sid, msg, function(_err, prompt_result)
           vim.schedule(function()
+            if M._stream_gen[buf] ~= gen then return end
             if not vim.api.nvim_buf_is_valid(buf) then return end
             M._accumulate_usage(buf, prompt_result)
             if M._stream_cleanup[buf] then
               M._stream_cleanup[buf]()
             end
           end)
-        end)
+        end, images)
       end)
     end, sess_opts)
     return
   end
 
+  M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
+  local gen = M._stream_gen[buf]
   M._streaming[buf] = true
   M._start_streaming(buf)
   session.send_message(root, sid, text, function(err, prompt_result)
@@ -836,8 +925,8 @@ function M.send(buf, text)
     end
     if err and err.data and err.data.details == "Session not found" then
       vim.schedule(function()
+        if M._stream_gen[buf] ~= gen then return end
         if not vim.api.nvim_buf_is_valid(buf) then return end
-        if not M._streaming[buf] then return end
         if M._stream_cleanup[buf] then
           M._stream_cleanup[buf]()
         end
@@ -850,8 +939,8 @@ function M.send(buf, text)
       end)
     elseif err then
       vim.schedule(function()
+        if M._stream_gen[buf] ~= gen then return end
         if not vim.api.nvim_buf_is_valid(buf) then return end
-        if not M._streaming[buf] then return end
         if M._stream_cleanup[buf] then
           M._stream_cleanup[buf]()
         end
@@ -865,6 +954,7 @@ function M.send(buf, text)
       end)
     else
       vim.schedule(function()
+        if M._stream_gen[buf] ~= gen then return end
         if not vim.api.nvim_buf_is_valid(buf) then return end
         M._accumulate_usage(buf, prompt_result)
         if M._stream_cleanup[buf] then
@@ -872,7 +962,7 @@ function M.send(buf, text)
         end
       end)
     end
-  end)
+  end, images)
 end
 
 function M.interrupt(buf)
@@ -880,8 +970,10 @@ function M.interrupt(buf)
   local sid = M.get_session_id(buf) or M._sessions[buf]
   if root and sid then
     session.interrupt(root, sid)
+    vim.notify("[djinni] Interrupted", vim.log.levels.WARN)
   else
     M._interrupt_pending[buf] = true
+    vim.notify("[djinni] Interrupt pending", vim.log.levels.WARN)
   end
   if M._pending_permission and M._pending_permission[buf] then
     local perm = M._pending_permission[buf]
@@ -1107,6 +1199,7 @@ function M._start_streaming(buf)
 
   local last_event_time = vim.uv.now()
   local events_received = false
+  local active_tool_count = 0
   local watchdog_timeout = 60000
 
   timer:start(100, 100, function()
@@ -1124,10 +1217,13 @@ function M._start_streaming(buf)
       local ok_alive, alive = pcall(function() return client:is_alive() end)
       local dead = not ok_alive or not alive
       local has_pending_perm = M._pending_permission and M._pending_permission[buf]
-      local timeout = events_received and 900000 or watchdog_timeout
-      local stale = not has_pending_perm and (vim.uv.now() - last_event_time) > timeout
-      if dead or stale then
-        local reason = dead and "Process died" or "No events for " .. (timeout / 1000) .. "s"
+      local has_active_tool = active_tool_count > 0
+      local timeout = events_received and 120000 or watchdog_timeout
+      local tool_stuck = has_active_tool and (vim.uv.now() - last_event_time) > 300000
+      local stale = not has_pending_perm and not has_active_tool and (vim.uv.now() - last_event_time) > timeout
+      if dead or stale or tool_stuck then
+        local exit_info = dead and client.exit_code and " (exit " .. tostring(client.exit_code) .. ")" or ""
+        local reason = dead and ("Process died" .. exit_info) or "No events for " .. (timeout / 1000) .. "s"
         log.warn("watchdog triggered: " .. reason)
         pending = pending .. "\n\n**" .. reason .. "**\n"
         M._sessions[buf] = nil
@@ -1215,6 +1311,7 @@ function M._start_streaming(buf)
           append_line("")
           append_line("**Thinking...**")
         else
+          active_tool_count = active_tool_count + 1
           local title = update.title or kind
           append_line("- " .. title)
           M._tool_log[buf] = M._tool_log[buf] or {}
@@ -1229,8 +1326,10 @@ function M._start_streaming(buf)
         if title ~= "" then last_tool_title = title end
         if status == "failed" then
           M._last_tool_failed[buf] = true
+          if not is_think then active_tool_count = math.max(0, active_tool_count - 1) end
         elseif status == "completed" then
           M._last_tool_failed[buf] = false
+          if not is_think then active_tool_count = math.max(0, active_tool_count - 1) end
         end
 
         if is_think then
@@ -1650,7 +1749,6 @@ function M._fresh_restart(buf, root)
   local function do_fresh()
     M._set_frontmatter_field(buf, "session", "")
     M._sessions[buf] = nil
-    mcp.clear_cache(root)
     session.shutdown_project(root)
     local lc = vim.api.nvim_buf_line_count(buf)
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@System", "Restarting session...", "" })
@@ -1778,10 +1876,14 @@ function M.pick_model(buf)
   vim.schedule(function()
     local models = commands.get_models(buf)
     local current = read_frontmatter_field(buf, "model") or ""
-    local items = { "[type manually…]" }
-    for _, m in ipairs(models) do items[#items + 1] = m end
+    local labels = { "[type manually…]" }
+    local id_map = {}
+    for _, m in ipairs(models) do
+      labels[#labels + 1] = m.label or m.id
+      id_map[m.label or m.id] = m.id
+    end
 
-    vim.ui.select(items, { prompt = "Select model" }, function(choice)
+    vim.ui.select(labels, { prompt = "Select model" }, function(choice)
       if not choice then return end
       if choice == "[type manually…]" then
         vim.ui.input({ prompt = "Model: ", default = current }, function(input)
@@ -1791,7 +1893,8 @@ function M.pick_model(buf)
         end)
         return
       end
-      M._set_frontmatter_field(buf, "model", choice)
+      local model_id = id_map[choice] or choice
+      M._set_frontmatter_field(buf, "model", model_id)
       M.restart_session(buf)
     end)
   end)

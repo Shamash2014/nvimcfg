@@ -9,11 +9,11 @@ M.idle_guards = {}
 local function extract_model_config_option(config_options)
   if not config_options then return nil end
   for _, opt in ipairs(config_options) do
-    if opt.category == "model" and opt.value and opt.value.type == "select" then
+    if opt.category == "model" and opt.type == "select" then
       return {
         optionId = opt.id,
-        options = opt.value.options or {},
-        currentValue = opt.value.currentValue,
+        options = opt.options or {},
+        currentValue = opt.currentValue,
       }
     end
   end
@@ -157,7 +157,7 @@ function M.create_task_session(project_root, callback, opts)
       if callback then
         callback(nil, session_id, result)
       end
-    end)
+    end, { timeout = 30000 })
   end)
 end
 
@@ -231,11 +231,11 @@ function M.load_task_session(project_root, session_id, callback, opts)
       if callback then
         callback(err, result)
       end
-    end)
+    end, { timeout = 30000 })
   end)
 end
 
-function M.send_message(project_root, session_id, content, callback)
+function M.send_message(project_root, session_id, content, callback, images)
   local client = M.get_or_create(project_root)
   touch_activity(project_root)
 
@@ -244,9 +244,18 @@ function M.send_message(project_root, session_id, content, callback)
       if callback then callback(ready_err, nil) end
       return
     end
+    local prompt = { { type = "text", text = content } }
+    if images then
+      for _, img in ipairs(images) do
+        prompt[#prompt + 1] = {
+          type = "image",
+          source = { type = "base64", media_type = img.media_type, data = img.data },
+        }
+      end
+    end
     client:request("session/prompt", {
       sessionId = session_id,
-      prompt = { { type = "text", text = content } },
+      prompt = prompt,
     }, function(err, result)
       touch_activity(project_root)
       if callback then

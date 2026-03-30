@@ -1,7 +1,7 @@
 local M = {}
 M.__index = M
 
-local function log(_msg, _level) end
+local log = require("djinni.nowork.log")
 
 function M.new(cmd, args, cwd)
   local self = setmetatable({}, M)
@@ -14,7 +14,7 @@ function M.new(cmd, args, cwd)
   self._ready_callbacks = {}
   self.request_handlers = {}
 
-  log("spawning: " .. cmd .. " " .. table.concat(args, " ") .. " cwd=" .. (cwd or "nil"))
+  log.info("spawning: " .. cmd .. " " .. table.concat(args, " ") .. " cwd=" .. (cwd or "nil"))
 
   self.job_id = vim.fn.jobstart(vim.list_extend({ cmd }, args), {
     cwd = cwd,
@@ -25,13 +25,13 @@ function M.new(cmd, args, cwd)
       if data then
         for _, line in ipairs(data) do
           if line ~= "" and not line:match("^%s") and not line:match("%[Object%]") then
-            log("stderr: " .. line, vim.log.levels.WARN)
+            log.warn("stderr: " .. line)
           end
         end
       end
     end,
     on_exit = function(_, code)
-      log("process exited with code " .. tostring(code))
+      log.warn("process exited with code " .. tostring(code))
       self.exit_code = code
       self.job_id = nil
       self._ready = false
@@ -49,7 +49,7 @@ function M.new(cmd, args, cwd)
   })
 
   if self.job_id and self.job_id > 0 then
-    log("job started, id=" .. tostring(self.job_id))
+    log.info("job started, id=" .. tostring(self.job_id))
     vim.defer_fn(function()
       self:_initialize()
     end, 50)
@@ -59,7 +59,7 @@ function M.new(cmd, args, cwd)
       end
     end, 10000)
   else
-    log("job failed to start, job_id=" .. tostring(self.job_id), vim.log.levels.ERROR)
+    log.err("job failed to start, job_id=" .. tostring(self.job_id))
     self.job_id = nil
   end
 
@@ -67,18 +67,18 @@ function M.new(cmd, args, cwd)
 end
 
 function M:_initialize()
-  log("sending initialize request")
+  log.info("sending initialize request")
   self:request("initialize", {
     protocolVersion = 1,
     clientInfo = { name = "djinni.nvim", version = "0.1.0" },
     clientCapabilities = vim.empty_dict(),
   }, function(err, result)
     if err then
-      log("initialize failed: " .. vim.inspect(err), vim.log.levels.WARN)
+      log.warn("initialize failed: " .. vim.inspect(err))
       self:_flush_ready_error("initialize failed: " .. (err.message or "unknown"))
       return
     end
-    log("initialize OK")
+    log.info("initialize OK")
     self._ready = true
     for _, cb in ipairs(self._ready_callbacks) do
       cb(nil)
@@ -88,7 +88,7 @@ function M:_initialize()
 end
 
 function M:_flush_ready_error(msg)
-  log(msg, vim.log.levels.WARN)
+  log.warn(msg)
   local cbs = self._ready_callbacks
   self._ready_callbacks = {}
   for _, cb in ipairs(cbs) do
@@ -152,7 +152,10 @@ function M:_handle_message(line)
         vim.fn.chansend(self.job_id, resp .. "\n")
       end
       vim.schedule(function()
-        rh(msg.params, respond)
+        local ok, err = pcall(rh, msg.params, respond)
+        if not ok then
+          log.err("request handler error: " .. tostring(err))
+        end
       end)
     end
   elseif msg.method and not msg.id then
@@ -160,14 +163,17 @@ function M:_handle_message(line)
     if handlers then
       vim.schedule(function()
         for _, handler in ipairs(handlers) do
-          handler(msg.params)
+          local ok, err = pcall(handler, msg.params)
+          if not ok then
+            log.err("event handler error: " .. tostring(err))
+          end
         end
       end)
     end
   end
 end
 
-function M:request(method, params, callback)
+function M:request(method, params, callback, opts)
   if not self:is_alive() then
     if callback then
       vim.schedule(function()
@@ -182,6 +188,17 @@ function M:request(method, params, callback)
 
   if callback then
     self.pending_requests[id] = callback
+
+    local timeout_ms = opts and opts.timeout
+    if timeout_ms then
+      vim.defer_fn(function()
+        local cb = self.pending_requests[id]
+        if cb then
+          self.pending_requests[id] = nil
+          cb({ code = -1, message = "request timeout (" .. (timeout_ms / 1000) .. "s)" }, nil)
+        end
+      end, timeout_ms)
+    end
   end
 
   local msg = vim.json.encode({

@@ -3,7 +3,10 @@ return {
   dependencies = { "b0o/SchemaStore.nvim", "mrjones2014/codesettings.nvim" },
   event = "VeryLazy",
   config = function()
-    local capabilities = require("blink.cmp").get_lsp_capabilities()
+    local ok_blink, blink = pcall(require, "blink.cmp")
+    local capabilities = ok_blink and blink.get_lsp_capabilities() or {}
+
+    local ok_cs, codesettings = pcall(require, "codesettings")
 
     local default_config = {
       capabilities = capabilities,
@@ -11,64 +14,13 @@ return {
         debounce_text_changes = 500,
       },
       before_init = function(_, config)
-        require("codesettings").with_local_settings(config.name, config)
+        if ok_cs then
+          codesettings.with_local_settings(config.name, config)
+        end
       end,
     }
 
     vim.lsp.config("*", default_config)
-
-    local original_schedule = vim.schedule
-    local lsp_error_suppression_active = false
-    local spawn_error_suppression_active = false
-
-    vim.schedule = function(fn)
-      return original_schedule(function()
-        local ok, err = pcall(fn)
-        if not ok then
-          local err_str = tostring(err)
-          if err_str:match("unhandled method") or err_str:match("code = 123") or err_str:match("code_name = unknown") then
-            if not lsp_error_suppression_active then
-              lsp_error_suppression_active = true
-              original_schedule(function()
-                vim.notify(
-                  "LSP initialization error suppressed.\n" ..
-                  "A language server failed to respond to the initialize method.\n" ..
-                  "This is usually safe to ignore. Check :LspLog if needed.",
-                  vim.log.levels.WARN
-                )
-                vim.defer_fn(function()
-                  lsp_error_suppression_active = false
-                end, 5000)
-              end)
-            end
-            return
-          end
-          if err_str:match("Terminal already connected to buffer") then
-            return
-          end
-          if err_str:match("snacks") or err_str:match("attempt to index field 'layout'") then
-            return
-          end
-          if err_str:match("E903") or err_str:match("too many open files") or err_str:match("Process failed to start") then
-            if not spawn_error_suppression_active then
-              spawn_error_suppression_active = true
-              original_schedule(function()
-                vim.notify(
-                  "Process spawn failed (often: too many open files / EMFILE).\n" ..
-                  "Raise `ulimit -n`, close terminals or heavy plugins, or restart Neovim.",
-                  vim.log.levels.WARN
-                )
-                vim.defer_fn(function()
-                  spawn_error_suppression_active = false
-                end, 10000)
-              end)
-            end
-            return
-          end
-          error(err)
-        end
-      end)
-    end
 
     local function safe_enable(server_name)
       local ok, err = pcall(vim.lsp.enable, server_name)

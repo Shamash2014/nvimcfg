@@ -43,7 +43,8 @@ local function iter_model_ids(session_models)
   if session_models.optionId and session_models.options then
     local ids = {}
     for _, opt in ipairs(session_models.options) do
-      if opt.id then ids[#ids + 1] = opt.id end
+      local id = opt.value or opt.id
+      if id then ids[#ids + 1] = id end
     end
     return ids
   end
@@ -84,7 +85,27 @@ function M.resolve_model(provider_name, alias, session_models)
 end
 
 function M.list_models(session_models)
-  return iter_model_ids(session_models)
+  if not session_models then return {} end
+  if session_models.optionId and session_models.options then
+    local items = {}
+    for _, opt in ipairs(session_models.options) do
+      local id = opt.value or opt.id
+      if id then
+        local label = opt.name or id
+        if opt.description and opt.description ~= "" then
+          label = label .. " — " .. opt.description
+        end
+        items[#items + 1] = { id = id, label = label }
+      end
+    end
+    return items
+  end
+  local ids = iter_model_ids(session_models)
+  local items = {}
+  for _, id in ipairs(ids) do
+    items[#items + 1] = { id = id, label = id }
+  end
+  return items
 end
 
 return M

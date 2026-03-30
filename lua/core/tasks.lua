@@ -1458,7 +1458,7 @@ function M.kill_all_tasks()
   end
 
   -- Kill child processes
-  vim.fn.system('pkill -P ' .. vim.fn.getpid())
+  vim.system({'pkill', '-P', tostring(vim.fn.getpid())}, { text = true })
 
   M.running_tasks = {}
 end
