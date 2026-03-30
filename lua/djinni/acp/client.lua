@@ -3,28 +3,61 @@ M.__index = M
 
 local log = require("djinni.nowork.log")
 
+local STDERR_IGNORE = {
+  "consuming background task",
+  "Session not found",
+  "session/prompt",
+  "Spawning Claude Code",
+  "No onPostToolUseHook",
+  "Experiments loaded",
+  "%[Object%]",
+  "^%s",
+}
+
+local MAX_RECONNECT = 3
+local RECONNECT_DELAY = 2000
+
 function M.new(cmd, args, cwd)
   local self = setmetatable({}, M)
+  self._cmd = cmd
+  self._args = args
   self.cwd = cwd
   self.request_id = 0
   self.pending_requests = {}
   self.event_handlers = {}
   self._buffer = ""
+  self.state = "disconnected"
   self._ready = false
   self._ready_callbacks = {}
   self.request_handlers = {}
+  self.subscribers = {}
+  self._reconnect_count = 0
+  self._shutting_down = false
 
-  log.info("spawning: " .. cmd .. " " .. table.concat(args, " ") .. " cwd=" .. (cwd or "nil"))
+  self:_spawn()
+  return self
+end
 
-  self.job_id = vim.fn.jobstart(vim.list_extend({ cmd }, args), {
-    cwd = cwd,
+function M:_spawn()
+  self.state = "connecting"
+  self._buffer = ""
+
+  log.info("spawning: " .. self._cmd .. " " .. table.concat(self._args, " ") .. " cwd=" .. (self.cwd or "nil"))
+
+  self.job_id = vim.fn.jobstart(vim.list_extend({ self._cmd }, self._args), {
+    cwd = self.cwd,
     on_stdout = function(_, data)
       self:_on_stdout(data)
     end,
     on_stderr = function(_, data)
-      if data then
-        for _, line in ipairs(data) do
-          if line ~= "" and not line:match("^%s") and not line:match("%[Object%]") and not line:match("consuming background task") then
+      if not data then return end
+      for _, line in ipairs(data) do
+        if line ~= "" then
+          local ignore = false
+          for _, pat in ipairs(STDERR_IGNORE) do
+            if line:match(pat) then ignore = true; break end
+          end
+          if not ignore then
             log.warn("stderr: " .. line)
           end
         end
@@ -34,6 +67,7 @@ function M.new(cmd, args, cwd)
       log.warn("process exited with code " .. tostring(code))
       self.exit_code = code
       self.job_id = nil
+      self.state = "disconnected"
       self._ready = false
       self:_flush_ready_error("process exited with code " .. tostring(code))
       local pending = self.pending_requests
@@ -43,12 +77,22 @@ function M.new(cmd, args, cwd)
           cb({ code = -1, message = "process exited" }, nil)
         end)
       end
+      if not self._shutting_down and self._reconnect_count < MAX_RECONNECT then
+        self._reconnect_count = self._reconnect_count + 1
+        log.info("auto-reconnect attempt " .. self._reconnect_count .. "/" .. MAX_RECONNECT)
+        vim.defer_fn(function()
+          if self.state == "disconnected" and not self._shutting_down then
+            self:_spawn()
+          end
+        end, RECONNECT_DELAY)
+      end
     end,
     stdin = "pipe",
     stdout_buffered = false,
   })
 
   if self.job_id and self.job_id > 0 then
+    self.state = "connected"
     log.info("job started, id=" .. tostring(self.job_id))
     vim.defer_fn(function()
       self:_initialize()
@@ -61,9 +105,8 @@ function M.new(cmd, args, cwd)
   else
     log.err("job failed to start, job_id=" .. tostring(self.job_id))
     self.job_id = nil
+    self.state = "error"
   end
-
-  return self
 end
 
 function M:_initialize()
@@ -79,11 +122,27 @@ function M:_initialize()
       return
     end
     log.info("initialize OK")
+    if result then
+      self.agent_capabilities = result.agentCapabilities
+      self.agent_info = result.agentInfo
+      self.auth_methods = result.authMethods
+    end
+    local was_reconnect = self._reconnect_count > 0
+    self.state = "ready"
     self._ready = true
+    self._reconnect_count = 0
     for _, cb in ipairs(self._ready_callbacks) do
       cb(nil)
     end
     self._ready_callbacks = {}
+    if was_reconnect then
+      local handlers = self.event_handlers["client_reconnected"]
+      if handlers then
+        for _, handler in ipairs(handlers) do
+          pcall(handler)
+        end
+      end
+    end
   end)
 end
 
@@ -140,31 +199,49 @@ function M:_handle_message(line)
       end
     end)
   elseif msg.method and msg.id then
-    local rh = self.request_handlers[msg.method]
-    if rh then
-      local respond = function(result)
-        if not self:is_alive() then error("client is not alive") end
-        local resp = vim.json.encode({
-          jsonrpc = "2.0",
-          id = msg.id,
-          result = result,
-        })
-        vim.fn.chansend(self.job_id, resp .. "\n")
-      end
+    local respond = function(result)
+      if not self:is_alive() then error("client is not alive") end
+      local resp = vim.json.encode({
+        jsonrpc = "2.0",
+        id = msg.id,
+        result = result,
+      })
+      vim.fn.chansend(self.job_id, resp .. "\n")
+    end
+    local sid = msg.params and msg.params.sessionId
+    local sub = sid and self.subscribers[sid]
+    if sub and sub.on_permission and msg.method == "session/request_permission" then
       vim.schedule(function()
-        local ok, err = pcall(rh, msg.params, respond)
-        if not ok then
+        local s_ok, err = pcall(sub.on_permission, msg.params, respond)
+        if not s_ok then
+          log.err("subscriber permission error: " .. tostring(err))
+        end
+      end)
+    elseif self.request_handlers[msg.method] then
+      vim.schedule(function()
+        local s_ok, err = pcall(self.request_handlers[msg.method], msg.params, respond)
+        if not s_ok then
           log.err("request handler error: " .. tostring(err))
         end
       end)
     end
   elseif msg.method and not msg.id then
+    local sid = msg.params and msg.params.sessionId
+    local sub = sid and self.subscribers[sid]
+    if sub and sub.on_update and msg.method == "session/update" then
+      vim.schedule(function()
+        local h_ok, err = pcall(sub.on_update, msg.params)
+        if not h_ok then
+          log.err("subscriber update error: " .. tostring(err))
+        end
+      end)
+    end
     local handlers = self.event_handlers[msg.method]
     if handlers then
       vim.schedule(function()
         for _, handler in ipairs(handlers) do
-          local ok, err = pcall(handler, msg.params)
-          if not ok then
+          local h_ok, err = pcall(handler, msg.params)
+          if not h_ok then
             log.err("event handler error: " .. tostring(err))
           end
         end
@@ -248,11 +325,20 @@ function M:off(event, handler)
   end
 end
 
+function M:subscribe(session_id, handlers)
+  self.subscribers[session_id] = handlers
+end
+
+function M:unsubscribe(session_id)
+  self.subscribers[session_id] = nil
+end
+
 function M:is_alive()
   return self.job_id ~= nil
 end
 
 function M:shutdown(force)
+  self._shutting_down = true
   if not self:is_alive() then
     return
   end

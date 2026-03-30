@@ -581,7 +581,27 @@ function M.archive_task()
   if not task then return end
 
   local bufnr = vim.fn.bufnr(task.file_path)
-  if bufnr ~= -1 then
+  if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+    local chat = require("djinni.nowork.chat")
+    local session = require("djinni.acp.session")
+    if chat._streaming[bufnr] and chat._stream_cleanup[bufnr] then
+      pcall(chat._stream_cleanup[bufnr], true)
+    end
+    local root = chat.get_project_root(bufnr)
+    local sid = chat.get_session_id(bufnr) or chat._sessions[bufnr]
+    if root and sid and sid ~= "" then
+      local provider = chat._read_frontmatter_csv and nil
+      local prov_field = nil
+      pcall(function()
+        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, 20, false)
+        for _, line in ipairs(lines) do
+          local k, v = line:match("^([%w_]+):%s*(.*)")
+          if k == "provider" and v and v ~= "" then prov_field = v end
+        end
+      end)
+      session.unsubscribe_session(root, sid, prov_field)
+      session.close_task_session(root, sid, prov_field)
+    end
     pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
   end
   os.remove(task.file_path)
