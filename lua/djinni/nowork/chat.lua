@@ -133,6 +133,10 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
   callback = function(ev)
     local b = ev.buf
     if vim.bo[b].filetype ~= "nowork-chat" then return end
+    local win = vim.fn.bufwinid(b)
+    if win ~= -1 and (vim.wo[win].statusline or "") == "" then
+      vim.wo[win].statusline = "%{%v:lua.require('djinni.nowork.chat').statusline()%} %f %m"
+    end
     local hp = M._hidden_pending[b]
     if hp and hp ~= "" then
       M._hidden_pending[b] = nil
@@ -508,6 +512,7 @@ function M.attach(buf)
   if vim.bo[buf].filetype ~= "nowork-chat" then
     vim.bo[buf].filetype = "nowork-chat"
   end
+  vim.bo[buf].modifiable = true
   vim.bo[buf].buftype = ""
   vim.bo[buf].fileencoding = "utf-8"
   vim.bo[buf].textwidth = 120
@@ -2816,23 +2821,27 @@ function M._accumulate_usage(buf, result)
 end
 
 function M.statusline()
-  local buf = vim.api.nvim_get_current_buf()
-  local mode = M._current_mode[buf]
-  local mode_str = mode and (" [" .. mode .. "]") or ""
-  local usage = M._usage[buf]
-  local usage_str = ""
-  if usage and usage.cost and usage.cost > 0 then
-    usage_str = string.format(" $%.2f", usage.cost)
-  elseif usage and (usage.input_tokens + usage.output_tokens) > 0 then
-    local total_k = (usage.input_tokens + usage.output_tokens) / 1000
-    usage_str = string.format(" %.1fk", total_k)
-  end
-  if not M._streaming[buf] then
-    if mode or usage_str ~= "" then return "djinni" .. mode_str .. usage_str end
-    return ""
-  end
-  local idx = (M._spinner_frame % #M._spinner_chars) + 1
-  return "djinni" .. mode_str .. " " .. M._spinner_chars[idx] .. usage_str
+  local ok, result = pcall(function()
+    local buf = vim.api.nvim_get_current_buf()
+    local mode = M._current_mode[buf]
+    local mode_str = mode and (" [" .. tostring(mode) .. "]") or ""
+    local usage = M._usage[buf]
+    local usage_str = ""
+    if usage and usage.cost and usage.cost > 0 then
+      usage_str = string.format(" $%.2f", usage.cost)
+    elseif usage and ((usage.input_tokens or 0) + (usage.output_tokens or 0)) > 0 then
+      local total_k = ((usage.input_tokens or 0) + (usage.output_tokens or 0)) / 1000
+      usage_str = string.format(" %.1fk", total_k)
+    end
+    if not M._streaming[buf] then
+      if mode or usage_str ~= "" then return "djinni" .. mode_str .. usage_str end
+      return ""
+    end
+    local idx = (M._spinner_frame % #M._spinner_chars) + 1
+    return "djinni" .. mode_str .. " " .. M._spinner_chars[idx] .. usage_str
+  end)
+  if ok then return result end
+  return "djinni"
 end
 
 session.idle_guards[#session.idle_guards + 1] = function(project_root, provider_name)
