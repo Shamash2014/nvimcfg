@@ -268,7 +268,10 @@ end
 function M.set_mode(project_root, session_id, mode_id)
   local client = M.get_or_create(project_root)
   touch_activity(project_root)
-  client:notify("session/set_mode", { sessionId = session_id, modeId = mode_id })
+  client:request("session/set_mode", {
+    sessionId = session_id,
+    modeId = mode_id,
+  }, function() end)
 end
 
 function M.interrupt(project_root, session_id)

@@ -32,6 +32,7 @@ M._hidden_pending = {} -- buf -> accumulated text not yet rendered (buffer was h
 M._timer_scheduled = {} -- buf -> true when a vim.schedule is already pending for the timer
 M._pending_images = {} -- buf -> list of { data = base64, media_type = "image/png" }
 M._stream_gen = {} -- buf -> generation counter to detect stale callbacks
+M._creating_session = {} -- buf -> true while create_task_session is in-flight
 
 session.idle_guards[#session.idle_guards + 1] = function(project_root)
   for b, _ in pairs(M._sessions) do
@@ -174,10 +175,18 @@ local function build_history_context(buf, current_text)
     msgs[#msgs] = nil
   end
   if #msgs == 0 then return current_text end
+  local max_msgs = 10
+  if #msgs > max_msgs then
+    msgs = { unpack(msgs, #msgs - max_msgs + 1) }
+  end
   local parts = { "<previous_conversation>" }
   for _, block in ipairs(msgs) do
     local role = block.type == "you" and "user" or "assistant"
-    parts[#parts + 1] = "<" .. role .. ">\n" .. block.content .. "\n</" .. role .. ">"
+    local content = block.content
+    if #content > 2000 then
+      content = content:sub(1, 2000) .. "\n...(truncated)"
+    end
+    parts[#parts + 1] = "<" .. role .. ">\n" .. content .. "\n</" .. role .. ">"
   end
   parts[#parts + 1] = "</previous_conversation>\n"
   parts[#parts + 1] = current_text
@@ -261,23 +270,24 @@ function M.create(project_root, opts)
   local buf = vim.api.nvim_get_current_buf()
   M.attach(buf)
 
+  M._creating_session[buf] = true
   local sess_opts = build_session_opts(buf, project_root)
   session.create_task_session(project_root, function(err, sid, result)
+    M._creating_session[buf] = nil
     if err or not sid then return end
     vim.schedule(function()
       if not vim.api.nvim_buf_is_valid(buf) then return end
-      M._restore_mode(buf, project_root, sid, result)
       M._set_frontmatter_field(buf, "session", sid)
       M._sessions[buf] = sid
       M._streaming[buf] = true
       M._start_streaming(buf)
+      M._restore_mode(buf, project_root, sid, result)
       local msg = inject_skills(buf, project_root, prompt .. context_refs)
+      log.info("sending prompt on sid=" .. tostring(sid) .. " len=" .. tostring(#msg))
       session.send_message(project_root, sid, msg, function(_err, prompt_result)
         log.info("session/prompt callback: " .. (_err and ("err=" .. vim.inspect(_err)) or "ok"))
         if prompt_result then
-          local keys = {}
-          for k, _ in pairs(prompt_result) do keys[#keys + 1] = k end
-          log.info("prompt_result keys: " .. table.concat(keys, ", "))
+          log.info("prompt_result: stopReason=" .. tostring(prompt_result.stopReason))
           if prompt_result.usage then log.info("usage: " .. vim.inspect(prompt_result.usage)) end
         end
         vim.schedule(function()
@@ -312,9 +322,11 @@ function M.open(file_path)
   local sid = M.get_session_id(buf)
   if sid and sid ~= "" then
     session.get_or_create(root)
-  else
+  elseif not M._creating_session[buf] then
+    M._creating_session[buf] = true
     local sess_opts = build_session_opts(buf, root)
     session.create_task_session(root, function(err, new_sid, result)
+      M._creating_session[buf] = nil
       if err or not new_sid then
         vim.schedule(function()
           if vim.api.nvim_buf_is_valid(buf) then
@@ -467,7 +479,7 @@ function M.attach(buf)
   map("n", "<C-c>", function()
     M.interrupt(buf)
   end)
-  map("n", "P", function()
+  map("n", "gP", function()
     M.select_provider(buf)
   end)
   map("n", "<S-Tab>", function()
@@ -872,8 +884,11 @@ function M.send(buf, text)
 
   local sid = M.get_session_id(buf) or M._sessions[buf]
   if not sid or sid == "" then
+    if M._creating_session[buf] then return end
+    M._creating_session[buf] = true
     local sess_opts = build_session_opts(buf, root)
     session.create_task_session(root, function(err, new_sid, result)
+      M._creating_session[buf] = nil
       if err or not new_sid then
         vim.schedule(function()
           vim.notify("[djinni] Session failed", vim.log.levels.ERROR)
@@ -887,7 +902,6 @@ function M.send(buf, text)
           session.interrupt(root, new_sid)
           return
         end
-        M._restore_mode(buf, root, new_sid, result)
         M._set_frontmatter_field(buf, "session", new_sid)
         M._sessions[buf] = new_sid
         vim.notify("[djinni] Session ready", vim.log.levels.INFO)
@@ -895,12 +909,34 @@ function M.send(buf, text)
         local gen = M._stream_gen[buf]
         M._streaming[buf] = true
         M._start_streaming(buf)
+        M._restore_mode(buf, root, new_sid, result)
         local msg = inject_skills(buf, root, build_history_context(buf, text))
+        log.info("new-session send: sid=" .. tostring(new_sid) .. " len=" .. tostring(#msg))
         session.send_message(root, new_sid, msg, function(_err, prompt_result)
+          log.info("new-session callback: " .. (_err and ("err=" .. vim.inspect(_err)) or "ok"))
+          if prompt_result then
+            log.info("prompt_result: stopReason=" .. tostring(prompt_result.stopReason))
+            if prompt_result.usage then log.info("usage: " .. vim.inspect(prompt_result.usage)) end
+          end
           vim.schedule(function()
             if M._stream_gen[buf] ~= gen then return end
             if not vim.api.nvim_buf_is_valid(buf) then return end
             M._accumulate_usage(buf, prompt_result)
+            local tok = prompt_result and (prompt_result.tokenUsage or prompt_result.usage) or {}
+            local total = (tok.inputTokens or 0) + (tok.outputTokens or 0)
+            if total == 0 then
+              log.warn("0-token response on new session, stopReason=" .. tostring(prompt_result and prompt_result.stopReason))
+              if M._stream_cleanup[buf] then
+                M._stream_cleanup[buf]()
+              end
+              M._cleanup_empty_djinni(buf)
+              M._sessions[buf] = nil
+              M._set_frontmatter_field(buf, "session", "")
+              local lc = vim.api.nvim_buf_line_count(buf)
+              vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "@System", "Empty response — reconnecting...", "" })
+              M.send(buf, text)
+              return
+            end
             if M._stream_cleanup[buf] then
               M._stream_cleanup[buf]()
             end
@@ -918,9 +954,7 @@ function M.send(buf, text)
   session.send_message(root, sid, text, function(err, prompt_result)
     log.info("session/prompt callback: " .. (err and ("err=" .. vim.inspect(err)) or "ok"))
     if prompt_result then
-      local keys = {}
-      for k, _ in pairs(prompt_result) do keys[#keys + 1] = k end
-      log.info("prompt_result keys: " .. table.concat(keys, ", "))
+      log.info("prompt_result: stopReason=" .. tostring(prompt_result.stopReason))
       if prompt_result.usage then log.info("usage: " .. vim.inspect(prompt_result.usage)) end
     end
     if err and err.data and err.data.details == "Session not found" then
@@ -933,8 +967,6 @@ function M.send(buf, text)
         M._cleanup_empty_djinni(buf)
         M._sessions[buf] = nil
         M._set_frontmatter_field(buf, "session", "")
-        local lc = vim.api.nvim_buf_line_count(buf)
-        vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "@System", "Session expired, reconnecting...", "" })
         M.send(buf, text)
       end)
     elseif err then
@@ -957,6 +989,21 @@ function M.send(buf, text)
         if M._stream_gen[buf] ~= gen then return end
         if not vim.api.nvim_buf_is_valid(buf) then return end
         M._accumulate_usage(buf, prompt_result)
+        local tok = prompt_result and (prompt_result.tokenUsage or prompt_result.usage) or {}
+        local total = (tok.inputTokens or 0) + (tok.outputTokens or 0)
+        if total == 0 then
+          log.warn("0-token response, stopReason=" .. tostring(prompt_result and prompt_result.stopReason) .. " — invalidating session")
+          if M._stream_cleanup[buf] then
+            M._stream_cleanup[buf]()
+          end
+          M._cleanup_empty_djinni(buf)
+          M._sessions[buf] = nil
+          M._set_frontmatter_field(buf, "session", "")
+          local lc = vim.api.nvim_buf_line_count(buf)
+          vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "@System", "Empty response — reconnecting...", "" })
+          M.send(buf, text)
+          return
+        end
         if M._stream_cleanup[buf] then
           M._stream_cleanup[buf]()
         end
@@ -971,10 +1018,13 @@ function M.interrupt(buf)
   if root and sid then
     session.interrupt(root, sid)
     vim.notify("[djinni] Interrupted", vim.log.levels.WARN)
-  else
+  elseif root then
     M._interrupt_pending[buf] = true
-    vim.notify("[djinni] Interrupt pending", vim.log.levels.WARN)
+    vim.notify("[djinni] Interrupt — clearing stuck session", vim.log.levels.WARN)
+    M._sessions[buf] = nil
+    M._set_frontmatter_field(buf, "session", "")
   end
+  M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
   if M._pending_permission and M._pending_permission[buf] then
     local perm = M._pending_permission[buf]
     hide_snacks_notif(perm.notif_id)
@@ -1226,6 +1276,7 @@ function M._start_streaming(buf)
         local reason = dead and ("Process died" .. exit_info) or "No events for " .. (timeout / 1000) .. "s"
         log.warn("watchdog triggered: " .. reason)
         pending = pending .. "\n\n**" .. reason .. "**\n"
+        M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
         M._sessions[buf] = nil
         M._set_frontmatter_field(buf, "session", "")
         M._last_tool_failed[buf] = false
@@ -1293,6 +1344,7 @@ function M._start_streaming(buf)
       log.dbg("event: " .. (update_type or "nil") .. extra)
 
       if update_type == "agent_message_chunk" then
+        M._last_perm_tool[buf] = nil
         local text = update.content and update.content.text
         if text then
           pending = pending .. text
@@ -1329,7 +1381,12 @@ function M._start_streaming(buf)
           if not is_think then active_tool_count = math.max(0, active_tool_count - 1) end
         elseif status == "completed" then
           M._last_tool_failed[buf] = false
+          M._last_perm_tool[buf] = nil
           if not is_think then active_tool_count = math.max(0, active_tool_count - 1) end
+          if kind == "Agent" then
+            local agent_title = title ~= "" and title or "subagent"
+            vim.notify("[djinni] Agent done: " .. agent_title, vim.log.levels.INFO)
+          end
         end
 
         if is_think then
@@ -1371,9 +1428,17 @@ function M._start_streaming(buf)
           end
           if status == "completed" then
             local file_path = nil
+            local diff_content = nil
             if type(update.content) == "table" then
               for _, c in ipairs(update.content) do
-                if c.path then file_path = c.path; break end
+                if c.type == "diff" then
+                  file_path = c.path
+                  if c.oldText and c.newText then
+                    diff_content = { old = c.oldText, new = c.newText, path = c.path }
+                  end
+                  break
+                end
+                if c.path then file_path = c.path end
               end
             end
             if not file_path and update.rawInput then
@@ -1387,7 +1452,30 @@ function M._start_streaming(buf)
             end
             log.dbg("tool completed: path=" .. (file_path or "nil") .. " from_title=" .. (last_tool_title or ""))
             last_tool_title = nil
-            if file_path then
+            if diff_content then
+              append_line("  " .. diff_content.path)
+              append_line("```diff")
+              local old_lines = {}
+              for l in (diff_content.old .. "\n"):gmatch("([^\n]*)\n") do old_lines[#old_lines + 1] = l end
+              local new_lines = {}
+              for l in (diff_content.new .. "\n"):gmatch("([^\n]*)\n") do new_lines[#new_lines + 1] = l end
+              local oi, ni = 1, 1
+              while oi <= #old_lines or ni <= #new_lines do
+                local ol = old_lines[oi]
+                local nl = new_lines[ni]
+                if ol == nl then
+                  oi = oi + 1
+                  ni = ni + 1
+                elseif ol and (not nl or ol ~= new_lines[ni]) then
+                  append_line("- " .. ol)
+                  oi = oi + 1
+                else
+                  append_line("+ " .. nl)
+                  ni = ni + 1
+                end
+              end
+              append_line("```")
+            elseif file_path then
               if file_path:match("plans/") and file_path:match("%.md$") and vim.fn.filereadable(file_path) == 1 then
                 M._plan_path[buf] = file_path
                 M._set_frontmatter_field(buf, "plan", file_path)
@@ -1428,6 +1516,10 @@ function M._start_streaming(buf)
                       if c.type == "image" then
                         local src = c.source or {}
                         table.insert(imgs, { media_type = src.media_type, data = src.data, url = src.url })
+                      elseif c.type == "diff" and c.path then
+                        table.insert(out_parts, "diff: " .. c.path)
+                        if c.oldText then table.insert(out_parts, "--- " .. c.path) end
+                        if c.newText then table.insert(out_parts, "+++ " .. c.path) end
                       elseif c.content and c.content.text then
                         table.insert(out_parts, c.content.text)
                       elseif c.text then
@@ -1760,12 +1852,12 @@ function M._fresh_restart(buf, root)
           vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { "Session failed: " .. (err and err.message or "unknown") })
           return
         end
-        M._restore_mode(buf, root, new_sid, result)
         M._set_frontmatter_field(buf, "session", new_sid)
         M._sessions[buf] = new_sid
         local row = vim.api.nvim_buf_line_count(buf) - 1
         vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { "Session ready" })
         vim.notify("[djinni] Session restarted (fresh)", vim.log.levels.INFO)
+        M._restore_mode(buf, root, new_sid, result)
         if history_msg then
           session.send_message(root, new_sid, history_msg, function() end)
         end
@@ -2381,7 +2473,6 @@ function M._restore_mode(buf, root, sid, result)
   local saved_mode = M._current_mode[buf]
   M._extract_modes(buf, result)
   if saved_mode then
-    session.set_mode(root, sid, saved_mode)
     M._current_mode[buf] = saved_mode
     M._set_frontmatter_field(buf, "mode", saved_mode)
   end

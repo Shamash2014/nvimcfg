@@ -24,7 +24,7 @@ function M.new(cmd, args, cwd)
     on_stderr = function(_, data)
       if data then
         for _, line in ipairs(data) do
-          if line ~= "" and not line:match("^%s") and not line:match("%[Object%]") then
+          if line ~= "" and not line:match("^%s") and not line:match("%[Object%]") and not line:match("consuming background task") then
             log.warn("stderr: " .. line)
           end
         end
