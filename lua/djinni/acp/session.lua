@@ -39,6 +39,10 @@ local function touch_activity(project_root)
   session.last_activity = vim.uv.now()
 end
 
+function M.touch_activity(project_root)
+  touch_activity(project_root)
+end
+
 local function schedule_idle_check(project_root)
   local config = get_config()
   local timeout = config.idle_timeout or 1800000

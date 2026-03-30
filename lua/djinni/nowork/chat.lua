@@ -1250,7 +1250,7 @@ function M._start_streaming(buf)
   local last_event_time = vim.uv.now()
   local events_received = false
   local active_tool_count = 0
-  local watchdog_timeout = 60000
+  local watchdog_timeout = 300000
 
   timer:start(100, 100, function()
     M._spinner_frame = M._spinner_frame + 1
@@ -1266,14 +1266,12 @@ function M._start_streaming(buf)
       if not M._streaming[buf] then return end
       local ok_alive, alive = pcall(function() return client:is_alive() end)
       local dead = not ok_alive or not alive
-      local has_pending_perm = M._pending_permission and M._pending_permission[buf]
       local has_active_tool = active_tool_count > 0
-      local timeout = events_received and 120000 or watchdog_timeout
       local tool_stuck = has_active_tool and (vim.uv.now() - last_event_time) > 300000
-      local stale = not has_pending_perm and not has_active_tool and (vim.uv.now() - last_event_time) > timeout
-      if dead or stale or tool_stuck then
+      local stale = not dead and not has_active_tool and (vim.uv.now() - last_event_time) > 900000
+      if dead or tool_stuck or stale then
         local exit_info = dead and client.exit_code and " (exit " .. tostring(client.exit_code) .. ")" or ""
-        local reason = dead and ("Process died" .. exit_info) or "No events for " .. (timeout / 1000) .. "s"
+        local reason = dead and ("Process died" .. exit_info) or stale and "No events for 900s" or "Tool stuck for 300s"
         log.warn("watchdog triggered: " .. reason)
         pending = pending .. "\n\n**" .. reason .. "**\n"
         M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
@@ -1328,9 +1326,14 @@ function M._start_streaming(buf)
   handler = function(data)
     local ok, err = pcall(function()
       if not data then return end
-      if data.sessionId and sid and data.sessionId ~= sid then return end
+      if data.sessionId and sid and data.sessionId ~= sid then
+        local u = (data.update or data).sessionUpdate or "?"
+        log.dbg("sid mismatch: got=" .. data.sessionId .. " want=" .. sid .. " type=" .. u)
+        return
+      end
       last_event_time = vim.uv.now()
       events_received = true
+      session.touch_activity(root)
 
       local update = data.update or data
       local update_type = update.sessionUpdate
@@ -2546,5 +2549,13 @@ session.idle_guards[#session.idle_guards + 1] = function(project_root)
   end
   return false
 end
+
+vim.api.nvim_create_autocmd("VimLeavePre", {
+  callback = function()
+    for buf, fn in pairs(M._stream_cleanup) do
+      pcall(fn, true)
+    end
+  end,
+})
 
 return M
