@@ -53,7 +53,6 @@ M._last_event_time = {} -- buf -> uv.now() of last event
 M._events_received = {} -- buf -> bool
 M._plan_lines = {} -- buf -> { start_line, end_line }
 M._last_tool_title = {} -- buf -> string
-M._tool_fold_starts = {}
 M._think_fold_start = {} -- buf -> line number where current thinking section started
 
 session.idle_guards[#session.idle_guards + 1] = function(project_root, provider_name)
@@ -559,6 +558,7 @@ function M.attach(buf)
         vim.wo[win2].foldenable = true
         vim.wo[win2].foldlevel = 0
         vim.wo[win2].foldminlines = 1
+        vim.wo[win2].foldclose = "all"
       end)
     end
   end
@@ -872,7 +872,6 @@ function M.attach(buf)
       M._events_received[buf] = nil
       M._plan_lines[buf] = nil
       M._last_tool_title[buf] = nil
-      M._tool_fold_starts[buf] = nil
       M._tool_log[buf] = nil
       M._cleanup_deferred[buf] = nil
       M._think_fold_start[buf] = nil
@@ -1349,12 +1348,6 @@ function M._on_session_update(buf, data)
         M._active_tool_count[buf] = (M._active_tool_count[buf] or 0) + 1
         local title = update.title or kind
         M._append_line(buf, "- " .. title)
-        vim.schedule(function()
-          if vim.api.nvim_buf_is_valid(buf) then
-            M._tool_fold_starts[buf] = M._tool_fold_starts[buf] or {}
-            table.insert(M._tool_fold_starts[buf], vim.api.nvim_buf_line_count(buf))
-          end
-        end)
         M._tool_log[buf] = M._tool_log[buf] or {}
         table.insert(M._tool_log[buf], { name = title, kind = kind, input = nil, output = nil, images = {} })
       end
@@ -1481,16 +1474,7 @@ function M._on_session_update(buf, data)
                   M._update_plan_section(buf)
                 end
               end)
-            else
-              M._append_line(buf, "  " .. file_path)
             end
-          elseif text and text ~= "" then
-            for line in (text .. "\n"):gmatch("([^\n]*)\n") do
-              M._append_line(buf, "> " .. line)
-            end
-            M._append_line(buf, "")
-          elseif last_tool_title then
-            M._append_line(buf, "  done")
           end
         elseif status == "error" then
           M._append_line(buf, "  error: " .. (text or ""))
@@ -1531,23 +1515,6 @@ function M._on_session_update(buf, data)
               entry.images = imgs
               entry.status = status
             end
-          end
-          local fold_starts = M._tool_fold_starts[buf]
-          local fold_start = fold_starts and table.remove(fold_starts, 1)
-          if fold_starts and #fold_starts == 0 then M._tool_fold_starts[buf] = nil end
-          if fold_start then
-            vim.defer_fn(function()
-              if not vim.api.nvim_buf_is_valid(buf) then return end
-              local win = vim.fn.bufwinid(buf)
-              if win == -1 then return end
-              local fold_end = vim.api.nvim_buf_line_count(buf)
-              if fold_end > fold_start then
-                pcall(vim.api.nvim_win_call, win, function()
-                  vim.cmd("normal! zx")
-                  vim.cmd(fold_start .. "," .. fold_end .. "foldclose")
-                end)
-              end
-            end, 50)
           end
         end
       end
