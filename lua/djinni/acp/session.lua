@@ -54,10 +54,10 @@ local function schedule_idle_check(key)
 
     local elapsed = vim.uv.now() - session.last_activity
     if elapsed >= timeout then
-      local project_root = key:match("^(.+):")
+      local project_root, prov = key:match("^(.+):(.+)$")
       local guarded = false
       for _, guard in ipairs(M.idle_guards) do
-        if guard(project_root) then
+        if guard(project_root, prov) then
           guarded = true
           break
         end
@@ -93,6 +93,7 @@ function M.get_or_create(project_root, provider_name)
   end
 
   if session then
+    session.client:shutdown(true)
     session.task_sessions = {}
   end
 
@@ -135,8 +136,11 @@ function M.create_task_session(project_root, callback, opts)
   local client = M.get_or_create(project_root, provider_name)
   local key = M.session_key(project_root, provider_name)
 
+  local log = require("djinni.nowork.log")
+  log.info("create_task_session: root=" .. project_root .. " provider=" .. tostring(provider_name) .. " auth=" .. tostring(client.auth_methods ~= nil))
   client:when_ready(function(ready_err)
     if ready_err then
+      log.warn("create_task_session: ready error: " .. tostring(ready_err.message or ready_err))
       if callback then callback(ready_err, nil) end
       return
     end
@@ -155,8 +159,10 @@ function M.create_task_session(project_root, callback, opts)
       }
     end
     local req = { cwd = project_root, mcpServers = mcp_servers }
+    log.info("create_task_session: sending session/new cwd=" .. project_root)
     client:request("session/new", req, function(err, result)
       if err then
+        log.warn("create_task_session: session/new error: " .. vim.inspect(err))
         if callback then
           callback(err, nil)
         end
@@ -164,6 +170,7 @@ function M.create_task_session(project_root, callback, opts)
       end
 
       local session_id = result and result.sessionId
+      log.info("create_task_session: session/new OK sid=" .. tostring(session_id))
       if session_id then
         local session = M.sessions[key]
         if session then

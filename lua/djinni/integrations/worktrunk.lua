@@ -350,7 +350,7 @@ function M.stop_statusline()
   statusline_cache = ""
 end
 
-local function open_diff_buf(lines)
+function M.open_diff_buf(lines)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].filetype = "diff"
@@ -387,7 +387,7 @@ local wt_ops = {
   { key = "relocate",     label = "relocate — move worktrees to expected paths", branch_only = false },
 }
 
-local function notify_result(op, ok, lines, stderr)
+function M.notify_result(op, ok, lines, stderr)
   if ok then
     local out = table.concat(lines or {}, "\n")
     vim.notify("[wt] " .. op .. (out ~= "" and ": " .. out or " done"), vim.log.levels.INFO)
@@ -417,35 +417,35 @@ function M.pick_op(branch)
 
     local function run_op(args_extra)
       if op.key == "commit" then
-        M.commit(branch, function(ok, lines, stderr) notify_result("commit", ok, lines, stderr) end)
+        M.commit(branch, function(ok, lines, stderr) M.notify_result("commit", ok, lines, stderr) end)
       elseif op.key == "squash" then
-        M.squash(branch, function(ok, lines, stderr) notify_result("squash", ok, lines, stderr) end)
+        M.squash(branch, function(ok, lines, stderr) M.notify_result("squash", ok, lines, stderr) end)
       elseif op.key == "rebase" then
-        M.rebase(args_extra, branch, function(ok, lines, stderr) notify_result("rebase", ok, lines, stderr) end)
+        M.rebase(args_extra, branch, function(ok, lines, stderr) M.notify_result("rebase", ok, lines, stderr) end)
       elseif op.key == "push" then
-        M.push(args_extra, branch, function(ok, lines, stderr) notify_result("push", ok, lines, stderr) end)
+        M.push(args_extra, branch, function(ok, lines, stderr) M.notify_result("push", ok, lines, stderr) end)
       elseif op.key == "diff" then
         M.diff(branch, function(ok, lines, stderr)
           vim.schedule(function()
-            if ok and #lines > 0 then open_diff_buf(lines)
+            if ok and #lines > 0 then M.open_diff_buf(lines)
             elseif ok then vim.notify("[wt] diff: no changes", vim.log.levels.INFO)
             else vim.notify("[wt] diff failed: " .. table.concat(stderr or {}, "\n"), vim.log.levels.ERROR)
             end
           end)
         end)
       elseif op.key == "promote" then
-        M.promote(branch, function(ok, lines, stderr) notify_result("promote", ok, lines, stderr) end)
+        M.promote(branch, function(ok, lines, stderr) M.notify_result("promote", ok, lines, stderr) end)
       elseif op.key == "copy-ignored" then
         local parts = type(args_extra) == "table" and args_extra or {}
-        M.copy_ignored(parts[1] or "", parts[2] or "", function(ok, lines, stderr) notify_result("copy-ignored", ok, lines, stderr) end)
+        M.copy_ignored(parts[1] or "", parts[2] or "", function(ok, lines, stderr) M.notify_result("copy-ignored", ok, lines, stderr) end)
       elseif op.key == "eval" then
-        M.eval(args_extra or "", function(ok, lines, stderr) notify_result("eval", ok, lines, stderr) end)
+        M.eval(args_extra or "", function(ok, lines, stderr) M.notify_result("eval", ok, lines, stderr) end)
       elseif op.key == "for-each" then
-        M.for_each(args_extra or "", function(ok, lines, stderr) notify_result("for-each", ok, lines, stderr) end)
+        M.for_each(args_extra or "", function(ok, lines, stderr) M.notify_result("for-each", ok, lines, stderr) end)
       elseif op.key == "prune" then
-        M.prune(function(ok, lines, stderr) notify_result("prune", ok, lines, stderr) end)
+        M.prune(function(ok, lines, stderr) M.notify_result("prune", ok, lines, stderr) end)
       elseif op.key == "relocate" then
-        M.relocate(function(ok, lines, stderr) notify_result("relocate", ok, lines, stderr) end)
+        M.relocate(function(ok, lines, stderr) M.notify_result("relocate", ok, lines, stderr) end)
       end
     end
 

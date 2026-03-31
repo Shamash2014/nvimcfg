@@ -81,6 +81,14 @@ function M.setup(opts)
     vim.api.nvim_create_user_command("WorktrunkRemove", function() snacks.action_worktree_remove() end, {})
     vim.api.nvim_create_user_command("WorktrunkMerge", function() snacks.action_worktree_merge() end, {})
 
+    vim.api.nvim_create_user_command("Worktrunk", function()
+      require("djinni.integrations.worktrunk_ui").toggle()
+    end, {})
+
+    vim.keymap.set("n", "<leader>ow", function()
+      require("djinni.integrations.worktrunk_ui").toggle()
+    end, { desc = "Worktrunk UI" })
+
     vim.keymap.set("n", "<leader>owl", function() snacks.action_worktree_list() end, { desc = "List Worktrees" })
     vim.keymap.set("n", "<leader>owc", function() snacks.action_worktree_create() end, { desc = "Create Worktree" })
     vim.keymap.set("n", "<leader>owd", function() snacks.action_worktree_remove() end, { desc = "Remove Worktree" })

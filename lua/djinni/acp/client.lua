@@ -97,7 +97,7 @@ function M:_spawn()
     vim.defer_fn(function()
       self:_initialize()
     end, 50)
-    vim.defer_fn(function()
+    self._init_timer = vim.defer_fn(function()
       if not self._ready then
         self:_flush_ready_error("initialize timeout (10s)")
       end
@@ -121,29 +121,62 @@ function M:_initialize()
       self:_flush_ready_error("initialize failed: " .. (err.message or "unknown"))
       return
     end
-    log.info("initialize OK")
+    log.info("initialize OK caps=" .. tostring(result and result.agentCapabilities ~= nil) .. " auth=" .. tostring(result and result.authMethods ~= nil))
     if result then
       self.agent_capabilities = result.agentCapabilities
       self.agent_info = result.agentInfo
       self.auth_methods = result.authMethods
     end
-    local was_reconnect = self._reconnect_count > 0
-    self.state = "ready"
-    self._ready = true
-    self._reconnect_count = 0
-    for _, cb in ipairs(self._ready_callbacks) do
-      cb(nil)
-    end
-    self._ready_callbacks = {}
-    if was_reconnect then
-      local handlers = self.event_handlers["client_reconnected"]
-      if handlers then
-        for _, handler in ipairs(handlers) do
-          pcall(handler)
-        end
+    if self.auth_methods and #self.auth_methods > 0 then
+      if self._init_timer then
+        self._init_timer:stop()
+        self._init_timer = nil
       end
+      self:_authenticate(function(auth_err)
+        if auth_err then
+          self:_flush_ready_error("authenticate failed: " .. (auth_err.message or tostring(auth_err)))
+          return
+        end
+        self:_mark_ready()
+      end)
+    else
+      self:_mark_ready()
     end
   end)
+end
+
+function M:_authenticate(callback)
+  local method = self.auth_methods[1]
+  local method_id = method.id or method.methodId
+  log.info("authenticating with method=" .. tostring(method_id))
+  self:request("authenticate", { methodId = method_id }, function(err)
+    if err then
+      log.warn("authenticate error: " .. vim.inspect(err))
+      callback(err)
+      return
+    end
+    log.info("authenticate OK")
+    callback(nil)
+  end, { timeout = 15000 })
+end
+
+function M:_mark_ready()
+  local was_reconnect = self._reconnect_count > 0
+  self.state = "ready"
+  self._ready = true
+  self._reconnect_count = 0
+  for _, cb in ipairs(self._ready_callbacks) do
+    cb(nil)
+  end
+  self._ready_callbacks = {}
+  if was_reconnect then
+    local handlers = self.event_handlers["client_reconnected"]
+    if handlers then
+      for _, handler in ipairs(handlers) do
+        pcall(handler)
+      end
+    end
+  end
 end
 
 function M:_flush_ready_error(msg)

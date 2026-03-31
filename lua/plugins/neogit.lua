@@ -2,7 +2,6 @@ return {
   "NeogitOrg/neogit",
   dependencies = {
     "nvim-lua/plenary.nvim",
-    "sindrets/diffview.nvim",
   },
   keys = {
     { "<leader>gg", function() require("neogit").open() end, desc = "Neogit" },
@@ -10,8 +9,6 @@ return {
     { "<leader>gl", function() require("neogit").open({ "log" }) end, desc = "Log" },
     { "<leader>gp", function() require("neogit").open({ "push" }) end, desc = "Push" },
     { "<leader>gf", function() require("neogit").open({ "fetch" }) end, desc = "Fetch" },
-    { "<leader>gD", "<cmd>DiffviewOpen<cr>", desc = "Diffview" },
-    { "<leader>gh", "<cmd>DiffviewFileHistory %<cr>", desc = "File history" },
   },
   opts = {
     kind = "tab",
@@ -35,7 +32,7 @@ return {
     },
     integrations = {
       telescope = false,
-      diffview = true,
+      diffview = false,
       snacks = true,
     },
     mappings = {

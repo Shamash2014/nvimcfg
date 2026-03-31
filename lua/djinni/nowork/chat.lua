@@ -11,6 +11,13 @@ local ns_id = vim.api.nvim_create_namespace("djinni_chat")
 local get_provider
 
 local M = {}
+
+_G._djinni_chat_statusline = function()
+  local ok, mod = pcall(require, "djinni.nowork.chat")
+  if ok and mod and mod.statusline then return mod.statusline() end
+  return ""
+end
+
 M._streaming = {} -- buf -> true when streaming
 M._queue = {} -- buf -> { text1, text2, ... }
 M._sessions = {} -- buf -> sessionId (in-memory backup)
@@ -46,6 +53,7 @@ M._last_event_time = {} -- buf -> uv.now() of last event
 M._events_received = {} -- buf -> bool
 M._plan_lines = {} -- buf -> { start_line, end_line }
 M._last_tool_title = {} -- buf -> string
+M._tool_fold_start = {} -- buf -> line number where current tool call started
 
 session.idle_guards[#session.idle_guards + 1] = function(project_root, provider_name)
   for b, _ in pairs(M._sessions) do
@@ -137,7 +145,7 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
     if vim.bo[b].filetype ~= "nowork-chat" then return end
     local win = vim.fn.bufwinid(b)
     if win ~= -1 and (vim.wo[win].statusline or "") == "" then
-      vim.wo[win].statusline = "%{%v:lua.require('djinni.nowork.chat').statusline()%} %f %m"
+      vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
     end
     local hp = M._hidden_pending[b]
     if hp and hp ~= "" then
@@ -453,6 +461,7 @@ function M._ensure_session(buf)
     session.create_task_session(root, function(err, new_sid, result)
       M._creating_session[buf] = nil
       if err or not new_sid then
+        log.warn("_ensure_session: create FAILED err=" .. tostring(err and (err.message or vim.inspect(err))) .. " new_sid=" .. tostring(new_sid))
         vim.schedule(function()
           if vim.api.nvim_buf_is_valid(buf) then
             M._update_system_block(buf, "Session failed: " .. (err and err.message or "unknown error"))
@@ -536,7 +545,7 @@ function M.attach(buf)
   if win ~= -1 then
     vim.wo[win].wrap = true
     vim.wo[win].linebreak = true
-    vim.wo[win].statusline = "%{%v:lua.require('djinni.nowork.chat').statusline()%} %f %m"
+    vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
     vim.wo[win].conceallevel = 2
     local ok, rm = pcall(require, "render-markdown")
     if ok then rm.enable() end
@@ -861,6 +870,7 @@ function M.attach(buf)
       M._events_received[buf] = nil
       M._plan_lines[buf] = nil
       M._last_tool_title[buf] = nil
+      M._tool_fold_start[buf] = nil
     end,
   })
 end
@@ -1076,82 +1086,12 @@ function M.send(buf, text)
   local sid = M.get_session_id(buf) or M._sessions[buf]
   log.info("send: buf=" .. tostring(buf) .. " sid=" .. tostring(sid) .. " creating=" .. tostring(M._creating_session[buf]) .. " len=" .. tostring(#text))
   if not sid or sid == "" then
-    if M._creating_session[buf] then
-      local client = session.get_or_create(root, get_provider(buf))
-      if client:is_alive() then
-        log.info("send: queuing message (session creating)")
-        if not M._queue[buf] then M._queue[buf] = {} end
-        table.insert(M._queue[buf], text)
-        return
-      end
-      M._creating_session[buf] = nil
+    if not M._queue[buf] then M._queue[buf] = {} end
+    table.insert(M._queue[buf], text)
+    log.info("send: queuing message (no session)")
+    if not M._creating_session[buf] then
+      M._ensure_session(buf)
     end
-    M._creating_session[buf] = true
-    local sess_opts = build_session_opts(buf, root)
-    session.create_task_session(root, function(err, new_sid, result)
-      M._creating_session[buf] = nil
-      if err or not new_sid then
-        vim.schedule(function()
-          vim.notify("[djinni] Session failed", vim.log.levels.ERROR)
-        end)
-        return
-      end
-      vim.schedule(function()
-        if not vim.api.nvim_buf_is_valid(buf) then return end
-        if M._interrupt_pending[buf] then
-          M._interrupt_pending[buf] = nil
-          session.interrupt(root, new_sid, get_provider(buf))
-          return
-        end
-        M._set_frontmatter_field(buf, "session", new_sid)
-        M._sessions[buf] = new_sid
-        M._subscribe_session(buf, root, new_sid)
-        vim.notify("[djinni] Session ready", vim.log.levels.INFO)
-        M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
-        local gen = M._stream_gen[buf]
-        M._streaming[buf] = true
-        M._start_streaming(buf)
-        M._restore_mode(buf, root, new_sid, result)
-        local msg = inject_skills(buf, root, build_history_context(buf, text))
-        log.info("new-session send: sid=" .. tostring(new_sid) .. " len=" .. tostring(#msg))
-        session.send_message(root, new_sid, msg, function(_err, prompt_result)
-          log.info("new-session callback: " .. (_err and ("err=" .. vim.inspect(_err)) or "ok"))
-          if prompt_result then
-            log.info("prompt_result: stopReason=" .. tostring(prompt_result.stopReason))
-            if prompt_result.usage then log.info("usage: " .. vim.inspect(prompt_result.usage)) end
-          end
-          vim.schedule(function()
-            if M._stream_gen[buf] ~= gen then return end
-            if not vim.api.nvim_buf_is_valid(buf) then return end
-            M._accumulate_usage(buf, prompt_result)
-            local tok = prompt_result and (prompt_result.tokenUsage or prompt_result.usage) or {}
-            local total = (tok.inputTokens or 0) + (tok.outputTokens or 0)
-            if total == 0 then
-              log.warn("0-token response on new session, stopReason=" .. tostring(prompt_result and prompt_result.stopReason))
-              if M._stream_cleanup[buf] then
-                M._stream_cleanup[buf]()
-              end
-              M._cleanup_empty_djinni(buf)
-              M._sessions[buf] = nil
-              M._set_frontmatter_field(buf, "session", "")
-              M._send_retries[buf] = (M._send_retries[buf] or 0) + 1
-              if M._send_retries[buf] > M._max_send_retries then
-                M._update_system_block(buf, "Failed after " .. M._max_send_retries .. " retries. Send a message to try again.")
-                M._send_retries[buf] = 0
-              else
-                M._update_system_block(buf, "Empty response — reconnecting...")
-                M.send(buf, text)
-              end
-              return
-            end
-            M._send_retries[buf] = 0
-            if M._stream_cleanup[buf] then
-              M._stream_cleanup[buf]()
-            end
-          end)
-        end, images, get_provider(buf))
-      end)
-    end, sess_opts)
     return
   end
 
@@ -1390,6 +1330,11 @@ function M._on_session_update(buf, data)
         M._active_tool_count[buf] = (M._active_tool_count[buf] or 0) + 1
         local title = update.title or kind
         M._append_line(buf, "- " .. title)
+        vim.schedule(function()
+          if vim.api.nvim_buf_is_valid(buf) then
+            M._tool_fold_start[buf] = vim.api.nvim_buf_line_count(buf)
+          end
+        end)
         M._tool_log[buf] = M._tool_log[buf] or {}
         table.insert(M._tool_log[buf], { name = title, kind = kind, input = nil, output = nil, images = {} })
       end
@@ -1576,12 +1521,21 @@ function M._on_session_update(buf, data)
               entry.status = status
             end
           end
-          vim.schedule(function()
-            local win = vim.fn.bufwinid(buf)
-            if win ~= -1 then
-              pcall(vim.api.nvim_win_call, win, function() vim.cmd("normal! zx") end)
-            end
-          end)
+          local fold_start = M._tool_fold_start[buf]
+          M._tool_fold_start[buf] = nil
+          if fold_start then
+            vim.defer_fn(function()
+              if not vim.api.nvim_buf_is_valid(buf) then return end
+              local win = vim.fn.bufwinid(buf)
+              if win == -1 then return end
+              local fold_end = vim.api.nvim_buf_line_count(buf)
+              if fold_end > fold_start then
+                pcall(vim.api.nvim_win_call, win, function()
+                  vim.cmd(fold_start .. "," .. fold_end .. "foldclose")
+                end)
+              end
+            end, 50)
+          end
         end
       end
 
