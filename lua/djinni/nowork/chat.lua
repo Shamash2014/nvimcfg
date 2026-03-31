@@ -39,7 +39,7 @@ M._last_code_buf = nil
 M._cleanup_deferred = {} -- buf -> true when stream_cleanup was called but blocked by pending permission
 M._tool_log = {} -- buf -> list of {name, kind, input, output, images}
 M._interrupt_pending = {} -- buf -> true when interrupt fired before session was created
-M._hidden_pending = {} -- buf -> accumulated text not yet rendered (buffer was hidden)
+M._hidden_pending = {} -- buf -> list of text chunks not yet rendered (buffer was hidden)
 M._timer_scheduled = {} -- buf -> true when a vim.schedule is already pending for the timer
 M._pending_images = {} -- buf -> list of { data = base64, media_type = "image/png" }
 M._stream_gen = {} -- buf -> generation counter to detect stale callbacks
@@ -149,10 +149,10 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
       vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
     end
     local hp = M._hidden_pending[b]
-    if hp and hp ~= "" then
+    if hp and #hp > 0 then
       M._hidden_pending[b] = nil
       if vim.api.nvim_buf_is_valid(b) then
-        M._apply_stream_chunk(b, hp)
+        M._apply_stream_chunk(b, table.concat(hp))
       end
     end
     if not M._streaming[b] and not M._creating_session[b] then
@@ -873,6 +873,14 @@ function M.attach(buf)
       M._plan_lines[buf] = nil
       M._last_tool_title[buf] = nil
       M._tool_fold_start[buf] = nil
+      M._tool_log[buf] = nil
+      M._cleanup_deferred[buf] = nil
+      M._think_fold_start[buf] = nil
+      M._config_options[buf] = nil
+      M._available_commands[buf] = nil
+      M._interrupt_pending[buf] = nil
+      M._creating_session[buf] = nil
+      M._timer_scheduled[buf] = nil
     end,
   })
 end
@@ -1173,6 +1181,7 @@ function M.send(buf, text)
         if M._stream_cleanup[buf] then
           M._stream_cleanup[buf]()
         end
+        M._maybe_auto_compact(buf)
       end)
     end
   end, images, get_provider(buf))
@@ -1249,14 +1258,16 @@ function M._flush_pending(buf)
   local pending = M._pending_text[buf] or ""
   if pending == "" then return end
   if vim.fn.bufwinid(buf) == -1 then
-    M._hidden_pending[buf] = (M._hidden_pending[buf] or "") .. pending
+    M._hidden_pending[buf] = M._hidden_pending[buf] or {}
+    M._hidden_pending[buf][#M._hidden_pending[buf] + 1] = pending
     M._pending_text[buf] = ""
     return
   end
   local hp = M._hidden_pending[buf]
   if hp then
     M._hidden_pending[buf] = nil
-    pending = hp .. pending
+    hp[#hp + 1] = pending
+    pending = table.concat(hp)
   end
   M._pending_text[buf] = ""
   if not vim.api.nvim_buf_is_valid(buf) then
@@ -1268,7 +1279,8 @@ end
 function M._append_line(buf, line)
   M._flush_pending(buf)
   if vim.fn.bufwinid(buf) == -1 then
-    M._hidden_pending[buf] = (M._hidden_pending[buf] or "") .. "\n" .. line
+    M._hidden_pending[buf] = M._hidden_pending[buf] or {}
+    M._hidden_pending[buf][#M._hidden_pending[buf] + 1] = "\n" .. line
     return
   end
   if line:find("\n") then
@@ -2820,6 +2832,20 @@ function M._accumulate_usage(buf, result)
     u.cost = u.cost + (tonumber(result.totalCost) or 0)
   end
   M._usage[buf] = u
+end
+
+M._auto_compact_threshold = 0.80
+
+function M._maybe_auto_compact(buf)
+  local u = M._usage[buf]
+  if not u or u.context_size == 0 or u.context_used == 0 then return end
+  local ratio = u.context_used / u.context_size
+  if ratio < M._auto_compact_threshold then return end
+  if M._streaming[buf] then return end
+  vim.schedule(function()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    M.send(buf, "/compact")
+  end)
 end
 
 function M.statusline()

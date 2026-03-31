@@ -25,7 +25,7 @@ function M.new(cmd, args, cwd)
   self.request_id = 0
   self.pending_requests = {}
   self.event_handlers = {}
-  self._buffer = ""
+  self._buffer_parts = {}
   self.state = "disconnected"
   self._ready = false
   self._ready_callbacks = {}
@@ -40,7 +40,7 @@ end
 
 function M:_spawn()
   self.state = "connecting"
-  self._buffer = ""
+  self._buffer_parts = {}
 
   log.info("spawning: " .. self._cmd .. " " .. table.concat(self._args, " ") .. " cwd=" .. (self.cwd or "nil"))
 
@@ -204,10 +204,10 @@ function M:_on_stdout(data)
   if not data then return end
   for i, chunk in ipairs(data) do
     if i == 1 then
-      self._buffer = self._buffer .. chunk
+      self._buffer_parts[#self._buffer_parts + 1] = chunk
     else
-      local line = self._buffer
-      self._buffer = chunk
+      local line = table.concat(self._buffer_parts)
+      self._buffer_parts = { chunk }
       if line ~= "" then
         self:_handle_message(line)
       end
@@ -376,6 +376,12 @@ function M:shutdown(force)
     return
   end
   self:notify("exit")
+  self.pending_requests = {}
+  self.event_handlers = {}
+  self.subscribers = {}
+  self.request_handlers = {}
+  self._ready_callbacks = {}
+  self._buffer_parts = {}
   if force then
     if self.job_id then
       vim.fn.jobstop(self.job_id)
