@@ -53,7 +53,8 @@ M._last_event_time = {} -- buf -> uv.now() of last event
 M._events_received = {} -- buf -> bool
 M._plan_lines = {} -- buf -> { start_line, end_line }
 M._last_tool_title = {} -- buf -> string
-M._tool_fold_start = {} -- buf -> line number where current tool call started
+M._tool_fold_start = {}
+M._think_fold_start = {} -- buf -> line number where current thinking section started
 
 session.idle_guards[#session.idle_guards + 1] = function(project_root, provider_name)
   for b, _ in pairs(M._sessions) do
@@ -540,6 +541,7 @@ function M.attach(buf)
   end
 
   migrate_unicode(buf)
+  M._unwrap_paragraphs(buf)
 
   local win = vim.fn.bufwinid(buf)
   if win ~= -1 then
@@ -721,7 +723,7 @@ function M.attach(buf)
   map("n", "dS", function()
     M._delete_block(buf)
   end)
-  map("n", "<C-d>", function()
+  map("n", "<C-q>", function()
     local path = vim.api.nvim_buf_get_name(buf)
     local name = vim.fn.fnamemodify(path, ":t")
     vim.ui.select(
@@ -1326,6 +1328,11 @@ function M._on_session_update(buf, data)
       if is_think then
         M._append_line(buf, "")
         M._append_line(buf, "**Thinking...**")
+        vim.schedule(function()
+          if vim.api.nvim_buf_is_valid(buf) then
+            M._think_fold_start[buf] = vim.api.nvim_buf_line_count(buf)
+          end
+        end)
       else
         M._active_tool_count[buf] = (M._active_tool_count[buf] or 0) + 1
         local title = update.title or kind
@@ -1384,6 +1391,21 @@ function M._on_session_update(buf, data)
             end
             M._append_line(buf, "")
           end
+          local think_fold_start = M._think_fold_start[buf]
+          M._think_fold_start[buf] = nil
+          if think_fold_start then
+            vim.defer_fn(function()
+              if not vim.api.nvim_buf_is_valid(buf) then return end
+              local win = vim.fn.bufwinid(buf)
+              if win == -1 then return end
+              local fold_end = vim.api.nvim_buf_line_count(buf)
+              if fold_end > think_fold_start then
+                pcall(vim.api.nvim_win_call, win, function()
+                  vim.cmd(think_fold_start .. "," .. fold_end .. "foldclose")
+                end)
+              end
+            end, 50)
+          end
         end
       else
         local text = nil
@@ -1427,39 +1449,15 @@ function M._on_session_update(buf, data)
           log.dbg("tool completed: path=" .. (file_path or "nil") .. " from_title=" .. (last_tool_title or ""))
           M._last_tool_title[buf] = nil
           if diff_content then
-            local diff_lines_out = {}
-            diff_lines_out[#diff_lines_out + 1] = { text = "  " .. diff_content.path, hl = "Comment" }
-            local old_lines = {}
-            for l in (diff_content.old .. "\n"):gmatch("([^\n]*)\n") do old_lines[#old_lines + 1] = l end
-            local new_lines = {}
-            for l in (diff_content.new .. "\n"):gmatch("([^\n]*)\n") do new_lines[#new_lines + 1] = l end
-            local oi, ni = 1, 1
-            while oi <= #old_lines or ni <= #new_lines do
-              local ol = old_lines[oi]
-              local nl = new_lines[ni]
-              if ol == nl then
-                oi = oi + 1
-                ni = ni + 1
-              elseif ol and (not nl or ol ~= new_lines[ni]) then
-                diff_lines_out[#diff_lines_out + 1] = { text = "- " .. ol, hl = "DiffDelete" }
-                oi = oi + 1
-              else
-                diff_lines_out[#diff_lines_out + 1] = { text = "+ " .. nl, hl = "DiffAdd" }
-                ni = ni + 1
-              end
-            end
+            local codediff = require("djinni.nowork.codediff")
+            local diff_lines_out = codediff.compute(diff_content.old, diff_content.new, diff_content.path)
             for _, dl in ipairs(diff_lines_out) do
               M._append_line(buf, dl.text)
             end
             vim.schedule(function()
               if not vim.api.nvim_buf_is_valid(buf) then return end
               local lc = vim.api.nvim_buf_line_count(buf)
-              local start_line = lc - #diff_lines_out
-              for i, dl in ipairs(diff_lines_out) do
-                if dl.hl then
-                  pcall(vim.api.nvim_buf_add_highlight, buf, ns_id, dl.hl, start_line + i - 1, 0, -1)
-                end
-              end
+              codediff.apply_highlights(buf, lc - #diff_lines_out, diff_lines_out)
             end)
           elseif file_path then
             if file_path:match("plans/") and file_path:match("%.md$") and vim.fn.filereadable(file_path) == 1 then
@@ -1790,6 +1788,7 @@ function M._start_streaming(buf)
     log.info("stream_cleanup called force=" .. tostring(force))
     cleanup()
     M._flush_pending(buf)
+    M._unwrap_paragraphs(buf)
     local usage = M._usage[buf]
     if usage and vim.api.nvim_buf_is_valid(buf) then
       local total = usage.input_tokens + usage.output_tokens
@@ -1928,6 +1927,53 @@ function M._process_queue(buf)
   if #M._queue[buf] == 0 then M._queue[buf] = nil end
   log.info("_process_queue: sending queued message buf=" .. tostring(buf) .. " len=" .. tostring(#text))
   M.send(buf, text)
+end
+
+local function _is_structural_line(line)
+  if line == "" then return true end
+  if line:match("^```") then return true end
+  if line:match("^#") then return true end
+  if line:match("^%s*[-*+]%s") then return true end
+  if line:match("^%s*%d+%.%s") then return true end
+  if line:match("^>") then return true end
+  if line:match("^|") then return true end
+  if line:match("^%[[%*%+!]%]") then return true end
+  if line:match("^---$") then return true end
+  if line:match("^@%w") then return true end
+  return false
+end
+
+function M._unwrap_paragraphs(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local all = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local start_line = 0
+  for i = #all, 1, -1 do
+    if (all[i] or ""):match("^@Djinni%s*$") then
+      start_line = i
+      break
+    end
+  end
+  if start_line == 0 then return end
+
+  local lines = { unpack(all, start_line + 1) }
+  local result = {}
+  local in_code = false
+  for _, line in ipairs(lines) do
+    if line:match("^```") then
+      in_code = not in_code
+      result[#result + 1] = line
+    elseif in_code then
+      result[#result + 1] = line
+    elseif _is_structural_line(line) then
+      result[#result + 1] = line
+    elseif #result > 0 and not _is_structural_line(result[#result]) and not in_code then
+      result[#result] = result[#result] .. " " .. line
+    else
+      result[#result + 1] = line
+    end
+  end
+
+  vim.api.nvim_buf_set_lines(buf, start_line, #all, false, result)
 end
 
 function M._apply_stream_chunk(buf, text)
