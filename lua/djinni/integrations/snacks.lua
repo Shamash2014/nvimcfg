@@ -98,9 +98,10 @@ function M.pick_sessions()
     format = function(item)
       local icon = item.kind == "terminal" and ">" or (item.streaming and "~" or "+")
       local hl = item.streaming and "DiagnosticWarn" or "Comment"
+      local text = #item.text > 50 and item.text:sub(1, 47) .. "..." or item.text
       return {
         { "[" .. icon .. "] ", hl },
-        { item.text, "Normal" },
+        { text, "Normal" },
         { "  " .. item.kind, "Comment" },
       }
     end,
@@ -118,6 +119,19 @@ function M.pick_sessions()
       end
     end,
   })
+end
+
+function M.trim_bg_terminals()
+  local ok, terms = pcall(function() return require("snacks.terminal")._terms end)
+  if not ok or not terms then return end
+  for _, term in pairs(terms) do
+    if term.buf and vim.api.nvim_buf_is_valid(term.buf) then
+      local wins = vim.fn.win_findbuf(term.buf)
+      if #wins == 0 then
+        pcall(vim.api.nvim_set_option_value, 'scrollback', 100, { buf = term.buf })
+      end
+    end
+  end
 end
 
 function M.pick_project(callback)

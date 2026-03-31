@@ -608,6 +608,7 @@ function M.run_task(task, opts)
 
         self.term:focus()
         self.background = false
+        pcall(vim.api.nvim_set_option_value, 'scrollback', 1000, { buf = self.term.buf })
         vim.notify(string.format("Attached to task '%s'", self.name), vim.log.levels.INFO)
         return true
       end
@@ -622,12 +623,10 @@ function M.run_task(task, opts)
           vim.api.nvim_set_option_value('buflisted', false, { buf = self.term.buf })
         end
 
-        -- Hide the terminal window but keep process running
         self.term:hide()
-        -- Mark as background but keep terminal alive
         self.background = true
-        -- Keep interactive false to prevent input when hidden
         self.term.opts.interactive = false
+        pcall(vim.api.nvim_set_option_value, 'scrollback', 100, { buf = self.term.buf })
 
         vim.notify(string.format("Task '%s' detached (continues running in background)", self.name), vim.log.levels.INFO)
       end

@@ -53,7 +53,7 @@ M._last_event_time = {} -- buf -> uv.now() of last event
 M._events_received = {} -- buf -> bool
 M._plan_lines = {} -- buf -> { start_line, end_line }
 M._last_tool_title = {} -- buf -> string
-M._tool_fold_start = {}
+M._tool_fold_starts = {}
 M._think_fold_start = {} -- buf -> line number where current thinking section started
 
 session.idle_guards[#session.idle_guards + 1] = function(project_root, provider_name)
@@ -872,7 +872,7 @@ function M.attach(buf)
       M._events_received[buf] = nil
       M._plan_lines[buf] = nil
       M._last_tool_title[buf] = nil
-      M._tool_fold_start[buf] = nil
+      M._tool_fold_starts[buf] = nil
       M._tool_log[buf] = nil
       M._cleanup_deferred[buf] = nil
       M._think_fold_start[buf] = nil
@@ -1351,7 +1351,8 @@ function M._on_session_update(buf, data)
         M._append_line(buf, "- " .. title)
         vim.schedule(function()
           if vim.api.nvim_buf_is_valid(buf) then
-            M._tool_fold_start[buf] = vim.api.nvim_buf_line_count(buf)
+            M._tool_fold_starts[buf] = M._tool_fold_starts[buf] or {}
+            table.insert(M._tool_fold_starts[buf], vim.api.nvim_buf_line_count(buf))
           end
         end)
         M._tool_log[buf] = M._tool_log[buf] or {}
@@ -1531,8 +1532,9 @@ function M._on_session_update(buf, data)
               entry.status = status
             end
           end
-          local fold_start = M._tool_fold_start[buf]
-          M._tool_fold_start[buf] = nil
+          local fold_starts = M._tool_fold_starts[buf]
+          local fold_start = fold_starts and table.remove(fold_starts, 1)
+          if fold_starts and #fold_starts == 0 then M._tool_fold_starts[buf] = nil end
           if fold_start then
             vim.defer_fn(function()
               if not vim.api.nvim_buf_is_valid(buf) then return end
@@ -1541,6 +1543,7 @@ function M._on_session_update(buf, data)
               local fold_end = vim.api.nvim_buf_line_count(buf)
               if fold_end > fold_start then
                 pcall(vim.api.nvim_win_call, win, function()
+                  vim.cmd("normal! zx")
                   vim.cmd(fold_start .. "," .. fold_end .. "foldclose")
                 end)
               end
@@ -1813,6 +1816,15 @@ function M._start_streaming(buf)
       end
     end
     M._cleanup_empty_djinni(buf)
+    vim.defer_fn(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      local win = vim.fn.bufwinid(buf)
+      if win == -1 then return end
+      pcall(vim.api.nvim_win_call, win, function()
+        vim.cmd("normal! zx")
+        vim.wo[win].foldlevel = 0
+      end)
+    end, 80)
     local last_perm = M._last_perm_tool[buf]
     M._last_perm_tool[buf] = nil
     local count = M._continuation_count[buf] or 0
@@ -1867,12 +1879,6 @@ function M._start_streaming(buf)
         vim.notify("[djinni] Done: " .. task_name .. " (" .. project .. ")", vim.log.levels.INFO)
         if vim.api.nvim_buf_is_valid(buf) then
           local win = vim.fn.bufwinid(buf)
-          if win ~= -1 then
-            vim.api.nvim_win_call(win, function()
-              vim.cmd("normal! zx")
-              vim.wo[win].foldlevel = 0
-            end)
-          end
           local lc = vim.api.nvim_buf_line_count(buf)
           vim.api.nvim_buf_set_lines(buf, lc, lc, false, you_block())
           if win ~= -1 then
