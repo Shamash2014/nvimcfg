@@ -18,6 +18,7 @@ M.commands = {
   { name = "/mode", args = true, forward = false },
   { name = "/skill", args = true, forward = false },
   { name = "/mcp", args = true, forward = false },
+  { name = "/clear", args = false, forward = false },
   { name = "/help", args = false, forward = false },
 }
 
@@ -225,6 +226,42 @@ function M.execute(buf, text)
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
       "", "---", "", "@System", "New session", "", "---", "", "@You", "", "", "---", "",
     })
+    return true
+  end
+
+  if cmd.name == "/clear" then
+    local mcp_mod = require("djinni.nowork.mcp")
+    local root = chat.get_project_root(buf)
+    if root then mcp_mod.clear_cache(root) end
+    if chat._streaming[buf] then
+      if chat._stream_cleanup[buf] then chat._stream_cleanup[buf](true) end
+    end
+    chat._set_frontmatter_field(buf, "session", "")
+    chat._set_frontmatter_field(buf, "status", "")
+    chat._set_frontmatter_field(buf, "tokens", "")
+    chat._set_frontmatter_field(buf, "cost", "")
+    chat._sessions[buf] = nil
+    chat._continuation_count[buf] = 0
+    chat._last_tool_failed[buf] = false
+    chat._queue[buf] = nil
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, 20, false)
+    local fm_end = 0
+    for i, line in ipairs(lines) do
+      if i > 1 and line == "---" then
+        fm_end = i
+        break
+      end
+    end
+    if fm_end > 0 then
+      vim.api.nvim_buf_set_lines(buf, fm_end, -1, false, {
+        "", "@You", "", "", "---", "",
+      })
+      local win = vim.fn.bufwinid(buf)
+      if win ~= -1 then
+        vim.api.nvim_win_set_cursor(win, { fm_end + 2, 0 })
+      end
+    end
+    vim.notify("[djinni] Buffer cleared", vim.log.levels.INFO)
     return true
   end
 
