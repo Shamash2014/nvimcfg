@@ -45,8 +45,10 @@ return {
     integrations = {
       telescope = false,
       diffview = false,
+      codediff = true,
       snacks = true,
     },
+    diff_viewer = "codediff",
     mappings = {
       popup = {
         ["p"] = "PushPopup",
