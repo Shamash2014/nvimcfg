@@ -556,6 +556,31 @@ function M.attach(buf)
   if fm.mode and fm.mode ~= "" then
     M._current_mode[buf] = fm.mode
   end
+  if fm.type == "task" then
+    local task = require("djinni.nowork.task")
+    if not task.is_task_buf(buf) then
+      task._task_bufs[buf] = true
+      task.setup_keymaps(buf)
+      vim.api.nvim_create_autocmd("BufEnter", {
+        buffer = buf,
+        callback = function()
+          if vim.api.nvim_buf_is_valid(buf) then
+            task.update_tasks_section(buf)
+          end
+        end,
+      })
+      vim.api.nvim_create_autocmd("BufWipeout", {
+        buffer = buf,
+        once = true,
+        callback = function()
+          task._task_bufs[buf] = nil
+          task._task_lines[buf] = nil
+          task._line_to_file[buf] = nil
+        end,
+      })
+      task.update_tasks_section(buf)
+    end
+  end
 
   migrate_unicode(buf)
   M._unwrap_paragraphs(buf)

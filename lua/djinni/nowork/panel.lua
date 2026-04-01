@@ -145,7 +145,7 @@ function M._scan_tasks()
       while true do
         local name, type = vim.loop.fs_scandir_next(handle)
         if not name then break end
-        if type == "file" and name:match("%.md$") then
+        if type == "file" and name:match("%.md$") and name ~= "TASK.md" then
           local path = dir .. "/" .. name
           local f = io.open(path, "r")
           if f then

@@ -41,6 +41,10 @@ function M.setup(opts)
     require("djinni.nowork.panel").prev_task()
   end, {})
 
+  vim.api.nvim_create_user_command("NoworkTask", function()
+    require("djinni.nowork.task").toggle()
+  end, {})
+
   vim.api.nvim_create_user_command("NoworkPick", function()
     require("djinni.integrations.snacks").pick_task()
   end, {})
@@ -64,6 +68,10 @@ function M.setup(opts)
   vim.keymap.set("n", "<C-q>", function()
     require("djinni.nowork.panel").toggle()
   end, { desc = "Toggle Nowork panel" })
+
+  vim.keymap.set("n", "<leader>ft", function()
+    require("djinni.nowork.task").toggle()
+  end, { desc = "Toggle project task panel" })
 
   vim.keymap.set("n", "]c", function()
     require("djinni.nowork.panel").next_task()
