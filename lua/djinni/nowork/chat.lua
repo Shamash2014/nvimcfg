@@ -230,6 +230,7 @@ end
 get_provider = function(buf)
   return read_frontmatter_field(buf, "provider")
 end
+M.get_provider = get_provider
 
 local function build_session_opts(buf, root)
   local mcp_names = parse_csv(read_frontmatter_field(buf, "mcp"))

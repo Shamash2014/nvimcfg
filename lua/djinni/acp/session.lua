@@ -147,16 +147,30 @@ function M.create_task_session(project_root, callback, opts)
     local mcp_dict = opts.mcpServers or {}
     local mcp_servers = {}
     for name, cfg in pairs(mcp_dict) do
-      local env = {}
-      for k, v in pairs(cfg.env or {}) do
-        env[#env + 1] = { name = k, value = v }
+      local t = cfg.type
+      if t == "http" or t == "sse" then
+        local headers = {}
+        for k, v in pairs(cfg.headers or {}) do
+          headers[#headers + 1] = { name = k, value = v }
+        end
+        mcp_servers[#mcp_servers + 1] = {
+          name    = name,
+          type    = t,
+          url     = cfg.url,
+          headers = headers,
+        }
+      else
+        local env = {}
+        for k, v in pairs(cfg.env or {}) do
+          env[#env + 1] = { name = k, value = v }
+        end
+        mcp_servers[#mcp_servers + 1] = {
+          name    = name,
+          command = cfg.command,
+          args    = cfg.args or {},
+          env     = env,
+        }
       end
-      mcp_servers[#mcp_servers + 1] = {
-        name    = name,
-        command = cfg.command,
-        args    = cfg.args or {},
-        env     = env,
-      }
     end
     local req = { cwd = project_root, mcpServers = mcp_servers }
     log.info("create_task_session: sending session/new cwd=" .. project_root)
@@ -229,16 +243,30 @@ function M.load_task_session(project_root, session_id, callback, opts)
       local mcp_dict = (opts and opts.mcpServers) or {}
       local mcp_servers = {}
       for name, cfg in pairs(mcp_dict) do
-        local env = {}
-        for k, v in pairs(cfg.env or {}) do
-          env[#env + 1] = { name = k, value = v }
+        local t = cfg.type
+        if t == "http" or t == "sse" then
+          local headers = {}
+          for k, v in pairs(cfg.headers or {}) do
+            headers[#headers + 1] = { name = k, value = v }
+          end
+          mcp_servers[#mcp_servers + 1] = {
+            name    = name,
+            type    = t,
+            url     = cfg.url,
+            headers = headers,
+          }
+        else
+          local env = {}
+          for k, v in pairs(cfg.env or {}) do
+            env[#env + 1] = { name = k, value = v }
+          end
+          mcp_servers[#mcp_servers + 1] = {
+            name    = name,
+            command = cfg.command,
+            args    = cfg.args or {},
+            env     = env,
+          }
         end
-        mcp_servers[#mcp_servers + 1] = {
-          name    = name,
-          command = cfg.command,
-          args    = cfg.args or {},
-          env     = env,
-        }
       end
       params = { sessionId = session_id, cwd = project_root, mcpServers = mcp_servers }
     else

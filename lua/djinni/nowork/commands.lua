@@ -5,8 +5,9 @@ function M.get_models(buf)
   local session = require("djinni.acp.session")
   local provider = require("djinni.acp.provider")
   local root = chat.get_project_root(buf)
-  local available = session.get_available_models(root)
-  return provider.list_models(available)
+  local provider_name = chat.get_provider(buf)
+  local available = session.get_available_models(root, provider_name)
+  return provider.list_models(available, provider_name)
 end
 
 M.commands = {

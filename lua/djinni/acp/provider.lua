@@ -18,6 +18,18 @@ M.providers = {
     args = { "acp" },
     models = {},
     resume = { method = "session/load", needs_cwd = true },
+    static_models = {
+      { id = "claude-3.5-sonnet",  label = "claude-3.5-sonnet" },
+      { id = "claude-3-opus",      label = "claude-3-opus" },
+      { id = "claude-3-haiku",     label = "claude-3-haiku" },
+      { id = "gpt-4o",             label = "gpt-4o" },
+      { id = "gpt-4o-mini",        label = "gpt-4o-mini" },
+      { id = "o1",                 label = "o1" },
+      { id = "o1-mini",            label = "o1-mini" },
+      { id = "gemini-1.5-pro",     label = "gemini-1.5-pro" },
+      { id = "gemini-2.0-flash",   label = "gemini-2.0-flash" },
+      { id = "cursor-small",       label = "cursor-small" },
+    },
   },
 }
 
@@ -86,26 +98,34 @@ function M.resolve_model(provider_name, alias, session_models)
   return expanded
 end
 
-function M.list_models(session_models)
-  if not session_models then return {} end
-  if session_models.optionId and session_models.options then
-    local items = {}
-    for _, opt in ipairs(session_models.options) do
-      local id = opt.value or opt.id
-      if id then
-        local label = opt.name or id
-        if opt.description and opt.description ~= "" then
-          label = label .. " — " .. opt.description
+function M.list_models(session_models, provider_name)
+  local items = {}
+  if session_models then
+    if session_models.optionId and session_models.options then
+      for _, opt in ipairs(session_models.options) do
+        local id = opt.value or opt.id
+        if id then
+          local label = opt.name or id
+          if opt.description and opt.description ~= "" then
+            label = label .. " — " .. opt.description
+          end
+          items[#items + 1] = { id = id, label = label }
         end
-        items[#items + 1] = { id = id, label = label }
+      end
+    else
+      local ids = iter_model_ids(session_models)
+      for _, id in ipairs(ids) do
+        items[#items + 1] = { id = id, label = id }
       end
     end
-    return items
   end
-  local ids = iter_model_ids(session_models)
-  local items = {}
-  for _, id in ipairs(ids) do
-    items[#items + 1] = { id = id, label = id }
+  if #items == 0 and provider_name then
+    local p = M.providers[provider_name]
+    if p and p.static_models then
+      for _, m in ipairs(p.static_models) do
+        items[#items + 1] = { id = m.id, label = m.label or m.id }
+      end
+    end
   end
   return items
 end
