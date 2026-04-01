@@ -182,6 +182,28 @@ function M.format_stats(entry)
   return table.concat(parts, "  ")
 end
 
+local function save_and_clear_buffers()
+  local cur = vim.fn.system("git branch --show-current"):gsub("%s+$", "")
+  if cur ~= "" then
+    local ok, resession = pcall(require, "resession")
+    if ok then
+      resession.save("wt:" .. cur, { notify = false })
+    end
+  end
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.bo[bufnr].buflisted and vim.api.nvim_buf_is_loaded(bufnr) then
+      pcall(vim.api.nvim_buf_delete, bufnr, {})
+    end
+  end
+end
+
+local function load_branch_session(branch)
+  local ok, resession = pcall(require, "resession")
+  if ok then
+    pcall(resession.load, "wt:" .. branch, { silence_errors = true })
+  end
+end
+
 local function show_switch_stats(branch)
   M.list(function(entries)
     if not entries then return end
@@ -200,7 +222,9 @@ function M.switch_to(branch, callback)
   M.get_path(branch, function(path)
     if not path then return end
     vim.schedule(function()
+      save_and_clear_buffers()
       vim.cmd("tcd " .. vim.fn.fnameescape(path))
+      load_branch_session(branch)
       show_switch_stats(branch)
       if callback then callback() end
     end)
@@ -212,6 +236,7 @@ function M.create_for_task(branch, callback)
     if ok then
       if path then
         vim.schedule(function()
+          save_and_clear_buffers()
           vim.cmd("tcd " .. vim.fn.fnameescape(path))
           show_switch_stats(branch)
         end)
