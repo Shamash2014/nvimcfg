@@ -54,6 +54,24 @@ M._events_received = {} -- buf -> bool
 M._plan_lines = {} -- buf -> { start_line, end_line }
 M._last_tool_title = {} -- buf -> string
 M._think_fold_start = {} -- buf -> line number where current thinking section started
+M._tool_section_start = {} -- buf -> line number where current tool section started
+
+function M._close_tool_fold(buf)
+  local start = M._tool_section_start[buf]
+  if not start then return end
+  M._tool_section_start[buf] = nil
+  vim.defer_fn(function()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    local win = vim.fn.bufwinid(buf)
+    if win == -1 then return end
+    local fold_end = vim.api.nvim_buf_line_count(buf)
+    if fold_end > start then
+      pcall(vim.api.nvim_win_call, win, function()
+        vim.cmd(start .. "," .. fold_end .. "foldclose")
+      end)
+    end
+  end, 50)
+end
 
 session.idle_guards[#session.idle_guards + 1] = function(project_root, provider_name)
   for b, _ in pairs(M._sessions) do
@@ -555,12 +573,28 @@ function M.attach(buf)
       pcall(function()
         vim.wo[win2].foldmethod = "expr"
         vim.wo[win2].foldexpr = "v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)"
+        vim.wo[win2].foldtext = "v:lua.require('djinni.nowork.chat').foldtext()"
         vim.wo[win2].foldenable = true
         vim.wo[win2].foldlevel = 0
         vim.wo[win2].foldminlines = 1
-        vim.wo[win2].foldclose = "all"
       end)
     end
+    vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter" }, {
+      buffer = buf,
+      callback = function()
+        local w = vim.fn.bufwinid(buf)
+        if w ~= -1 then
+          if vim.wo[w].foldmethod ~= "expr" then
+            vim.wo[w].foldmethod = "expr"
+            vim.wo[w].foldexpr = "v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)"
+            vim.wo[w].foldtext = "v:lua.require('djinni.nowork.chat').foldtext()"
+            vim.wo[w].foldenable = true
+            vim.wo[w].foldlevel = 0
+            vim.wo[w].foldminlines = 1
+          end
+        end
+      end,
+    })
   end
 
   local function map(mode, lhs, rhs)
@@ -880,6 +914,7 @@ function M.attach(buf)
       M._interrupt_pending[buf] = nil
       M._creating_session[buf] = nil
       M._timer_scheduled[buf] = nil
+      M._tool_section_start[buf] = nil
     end,
   })
 end
@@ -889,28 +924,61 @@ local function _is_tool_line(l)
 end
 
 local function _is_fold_content(l)
-  return l:match("^  ") or l:match("^> ") or l:match("^%*%*Thinking") or _is_tool_line(l) or (l:match("^- ") and not l:match("^- %[")) or l:match("^```") or l:match("^%+") or l:match("^%-[^%-]")
+  return l:match("^  ") or l:match("^> ") or _is_tool_line(l) or l:match("^```") or l:match("^%+[^%+]")
+end
+
+local function _prev_nonblank(lnum)
+  for i = lnum - 1, math.max(1, lnum - 15), -1 do
+    local l = vim.fn.getline(i)
+    if l ~= "" then return l end
+  end
+end
+
+local function _is_foldable(l)
+  return l:match("^%*%*Thinking") or _is_tool_line(l) or _is_fold_content(l)
 end
 
 function M.foldexpr(lnum)
   local line = vim.fn.getline(lnum)
-  if line:match("^- %[") then return "0" end
-  if line:match("^%*%*Thinking") then return ">1" end
-  if _is_tool_line(line) then return ">1" end
-  if line:match("^- ") then return ">1" end
-  if line:match("^  ") or line:match("^> ") or line:match("^```") or line:match("^%+") or line:match("^%-[^%-]") then return "1" end
+  if line:match("^- %[") or line:match("^@%w") or line:match("^%-%-%-$") then return "0" end
+  if line:match("^%*%*Thinking") or _is_tool_line(line) then
+    local prev = _prev_nonblank(lnum)
+    if prev and _is_foldable(prev) then return "1" end
+    return ">1"
+  end
+  if _is_fold_content(line) then return "1" end
   if line == "" then
-    for i = lnum - 1, math.max(1, lnum - 20), -1 do
-      local prev = vim.fn.getline(i)
-      if prev == "" then
-      elseif _is_fold_content(prev) then
-        return "1"
-      else
-        return "0"
-      end
-    end
+    local prev = _prev_nonblank(lnum)
+    if prev and _is_foldable(prev) then return "1" end
   end
   return "0"
+end
+
+function M.foldtext()
+  local start = vim.v.foldstart
+  local end_line = vim.v.foldend
+  local tool_count = 0
+  local names = {}
+  for i = start, end_line do
+    local l = vim.fn.getline(i)
+    local name = l:match("^%[.%] (.+)")
+    if name then
+      tool_count = tool_count + 1
+      if #names < 3 then names[#names + 1] = name end
+    end
+  end
+  local lines = end_line - start + 1
+  if tool_count > 0 then
+    if tool_count <= 3 then
+      return table.concat(names, ", ") .. " (" .. lines .. " lines)"
+    end
+    return names[1] .. " + " .. (tool_count - 1) .. " more (" .. lines .. " lines)"
+  end
+  local first = vim.fn.getline(start)
+  if first:match("^%*%*Thinking") then
+    return "Thinking... (" .. lines .. " lines)"
+  end
+  return first .. " (" .. lines .. " lines)"
 end
 
 function M._migrate_you_block(buf)
@@ -1322,6 +1390,7 @@ function M._on_session_update(buf, data)
 
     if update_type == "agent_message_chunk" then
       M._last_perm_tool[buf] = nil
+      M._close_tool_fold(buf)
       local text = update.content and update.content.text
       if text then
         M._pending_text[buf] = (M._pending_text[buf] or "") .. text
@@ -1337,17 +1406,16 @@ function M._on_session_update(buf, data)
       local kind = update.kind or ""
       local is_think = kind:lower() == "think" or kind:lower() == "thinking"
       if is_think then
+        M._think_fold_start[buf] = vim.api.nvim_buf_line_count(buf) + 1
         M._append_line(buf, "")
         M._append_line(buf, "**Thinking...**")
-        vim.schedule(function()
-          if vim.api.nvim_buf_is_valid(buf) then
-            M._think_fold_start[buf] = vim.api.nvim_buf_line_count(buf)
-          end
-        end)
       else
         M._active_tool_count[buf] = (M._active_tool_count[buf] or 0) + 1
         local title = update.title or kind
-        M._append_line(buf, "- " .. title)
+        if not M._tool_section_start[buf] then
+          M._tool_section_start[buf] = vim.api.nvim_buf_line_count(buf) + 1
+        end
+        M._append_line(buf, "[*] " .. title)
         M._tool_log[buf] = M._tool_log[buf] or {}
         table.insert(M._tool_log[buf], { name = title, kind = kind, input = nil, output = nil, images = {} })
       end
@@ -1414,19 +1482,20 @@ function M._on_session_update(buf, data)
           end
         end
       else
-        local text = nil
+        local text_parts = {}
         if type(update.content) == "table" then
           if update.content.text then
-            text = tostring(update.content.text)
+            text_parts[#text_parts + 1] = tostring(update.content.text)
           elseif #update.content > 0 then
             for _, c in ipairs(update.content) do
-              if c.content and c.content.text then
-                text = tostring(c.content.text)
-                break
+              if c.type ~= "diff" and c.type ~= "image" then
+                local t = (c.content and c.content.text) or c.text
+                if t then text_parts[#text_parts + 1] = tostring(t) end
               end
             end
           end
         end
+        local text = #text_parts > 0 and table.concat(text_parts, "\n") or nil
         if status == "completed" then
           local file_path = nil
           local diff_content = nil
@@ -1476,6 +1545,14 @@ function M._on_session_update(buf, data)
               end)
             end
           end
+          if file_path and not diff_content then
+            M._append_line(buf, "  " .. file_path)
+          end
+          if text then
+            for tline in text:gmatch("([^\n]+)") do
+              M._append_line(buf, "  " .. tline)
+            end
+          end
         elseif status == "error" then
           M._append_line(buf, "  error: " .. (text or ""))
         end
@@ -1515,6 +1592,9 @@ function M._on_session_update(buf, data)
               entry.images = imgs
               entry.status = status
             end
+          end
+          if (M._active_tool_count[buf] or 0) == 0 then
+            M._close_tool_fold(buf)
           end
         end
       end
@@ -1732,6 +1812,7 @@ function M._start_streaming(buf)
 
   M._pending_text[buf] = ""
   M._active_tool_count[buf] = 0
+  M._tool_section_start[buf] = nil
   M._last_event_time[buf] = vim.uv.now()
   M._events_received[buf] = false
   M._plan_lines[buf] = nil
@@ -1770,6 +1851,7 @@ function M._start_streaming(buf)
     log.info("stream_cleanup called force=" .. tostring(force))
     cleanup()
     M._flush_pending(buf)
+    M._close_tool_fold(buf)
     M._unwrap_paragraphs(buf)
     local usage = M._usage[buf]
     if usage and vim.api.nvim_buf_is_valid(buf) then
@@ -1789,7 +1871,6 @@ function M._start_streaming(buf)
       if win == -1 then return end
       pcall(vim.api.nvim_win_call, win, function()
         vim.cmd("normal! zx")
-        vim.wo[win].foldlevel = 0
       end)
     end, 80)
     local last_perm = M._last_perm_tool[buf]

@@ -10,6 +10,18 @@ return {
     { "<leader>gp", function() require("neogit").open({ "push" }) end, desc = "Push" },
     { "<leader>gf", function() require("neogit").open({ "fetch" }) end, desc = "Fetch" },
   },
+  config = function(_, opts)
+    require("neogit").setup(opts)
+    vim.api.nvim_create_autocmd("FileType", {
+      pattern = "NeogitStatus",
+      group = vim.api.nvim_create_augroup("neogit_worktrunk", { clear = true }),
+      callback = function(ev)
+        vim.keymap.set("n", "w", function()
+          require("djinni.integrations.worktrunk_ui").create()
+        end, { buffer = ev.buf, nowait = true, silent = true, desc = "Worktrunk" })
+      end,
+    })
+  end,
   opts = {
     kind = "tab",
     disable_hint = true,
@@ -49,7 +61,7 @@ return {
         ["X"] = "ResetPopup",
         ["A"] = "CherryPickPopup",
         ["v"] = "RevertPopup",
-        ["w"] = "WorktreePopup",
+        ["w"] = false,
       },
       status = {
         ["q"] = "Close",

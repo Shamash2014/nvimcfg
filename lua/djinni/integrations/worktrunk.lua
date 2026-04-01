@@ -52,44 +52,34 @@ function M.available()
   return vim.fn.executable("wt") == 1
 end
 
-function M.list(callback)
-  run_async("wt", { "list" }, function(ok, lines, stderr)
+function M.list(opts_or_cb, cb)
+  local opts, callback
+  if type(opts_or_cb) == "function" then
+    opts = {}
+    callback = opts_or_cb
+  else
+    opts = opts_or_cb or {}
+    callback = cb
+  end
+
+  local args = { "list", "--format=json" }
+  if opts.branches then table.insert(args, "--branches") end
+  if opts.remotes then table.insert(args, "--remotes") end
+  if opts.full then table.insert(args, "--full") end
+
+  run_async("wt", args, function(ok, lines, stderr)
     if not ok then
       callback(nil, table.concat(stderr or {}, "\n"))
       return
     end
-    callback(M.parse_list(lines))
+    local json_str = table.concat(lines, "")
+    local success, data = pcall(vim.json.decode, json_str)
+    if not success or type(data) ~= "table" then
+      callback(nil, "failed to parse JSON")
+      return
+    end
+    callback(data)
   end)
-end
-
-function M.parse_list(lines)
-  local entries = {}
-  for i, line in ipairs(lines) do
-    if i == 1 then goto continue end
-    local trimmed = line:match("^%s*(.-)%s*$")
-    if trimmed == "" then goto continue end
-    if trimmed:match("^[○●]") then goto continue end
-
-    local marker = trimmed:sub(1, 1)
-    local rest = trimmed:sub(2):match("^%s*(.+)$")
-    if not rest then goto continue end
-
-    local parts = {}
-    for part in rest:gmatch("%S+") do
-      table.insert(parts, part)
-    end
-
-    if #parts >= 1 then
-      table.insert(entries, {
-        current = (marker == "@"),
-        trunk = (marker == "^"),
-        branch = parts[1],
-        raw = trimmed,
-      })
-    end
-    ::continue::
-  end
-  return entries
 end
 
 function M.create(branch, opts_or_callback, callback)
@@ -168,19 +158,41 @@ function M.get_path(branch, callback)
   end)
 end
 
-function M.is_dirty(branch, callback)
-  M.get_path(branch, function(path)
-    if not path then
-      callback(nil)
-      return
+function M.format_stats(entry)
+  if not entry then return "" end
+  local parts = {}
+  table.insert(parts, entry.branch or "?")
+  if entry.commit then
+    table.insert(parts, entry.commit.short_sha .. " " .. (entry.commit.message or ""))
+  end
+  local wt = entry.working_tree
+  if wt then
+    local flags = {}
+    if wt.staged then table.insert(flags, "staged") end
+    if wt.modified then table.insert(flags, "modified") end
+    if wt.untracked then table.insert(flags, "untracked") end
+    if #flags > 0 then table.insert(parts, table.concat(flags, " ")) end
+    if wt.diff and (wt.diff.added > 0 or wt.diff.deleted > 0) then
+      table.insert(parts, "+" .. wt.diff.added .. " -" .. wt.diff.deleted)
     end
-    run_async("git", { "-C", path, "status", "--porcelain" }, function(ok, lines)
-      if not ok then
-        callback(nil)
+  end
+  if entry.main and (entry.main.ahead > 0 or entry.main.behind > 0) then
+    table.insert(parts, "↑" .. entry.main.ahead .. " ↓" .. entry.main.behind)
+  end
+  return table.concat(parts, "  ")
+end
+
+local function show_switch_stats(branch)
+  M.list(function(entries)
+    if not entries then return end
+    for _, e in ipairs(entries) do
+      if e.branch == branch and e.kind == "worktree" then
+        vim.schedule(function()
+          vim.notify("[wt] " .. M.format_stats(e), vim.log.levels.INFO)
+        end)
         return
       end
-      callback(#lines > 0)
-    end)
+    end
   end)
 end
 
@@ -188,7 +200,8 @@ function M.switch_to(branch, callback)
   M.get_path(branch, function(path)
     if not path then return end
     vim.schedule(function()
-      vim.cmd("cd " .. vim.fn.fnameescape(path))
+      vim.cmd("tcd " .. vim.fn.fnameescape(path))
+      show_switch_stats(branch)
       if callback then callback() end
     end)
   end)
@@ -199,7 +212,8 @@ function M.create_for_task(branch, callback)
     if ok then
       if path then
         vim.schedule(function()
-          vim.cmd("cd " .. vim.fn.fnameescape(path))
+          vim.cmd("tcd " .. vim.fn.fnameescape(path))
+          show_switch_stats(branch)
         end)
       end
       if callback then callback(path) end
