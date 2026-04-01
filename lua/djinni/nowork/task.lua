@@ -4,6 +4,8 @@ M._task_bufs = {}
 M._task_lines = {}
 M._line_to_file = {}
 
+local DEFAULT_SYSTEM = "This is a task buffer. Work on the tasks listed in the ### Tasks section above. Pick up pending tasks, complete them one by one, and update their status as you go."
+
 local status_icons = {
   running = "●",
   input = "⚠",
@@ -58,6 +60,24 @@ end
 
 function M.is_task_buf(buf)
   return M._task_bufs[buf] == true
+end
+
+local function get_system_message(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return DEFAULT_SYSTEM end
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local in_fm = false
+  local fm_count = 0
+  for _, line in ipairs(lines) do
+    if line:match("^%-%-%-$") then
+      fm_count = fm_count + 1
+      if fm_count == 1 then in_fm = true
+      elseif fm_count == 2 then break end
+    elseif in_fm then
+      local k, v = line:match("^(%w+):%s*(.+)$")
+      if k == "system" then return v end
+    end
+  end
+  return DEFAULT_SYSTEM
 end
 
 function M._scan_project_tasks(root)
@@ -371,6 +391,7 @@ function M.open(root)
     "provider: claude-code",
     "model:",
     "mcp: " .. mcp_value,
+    "system: " .. DEFAULT_SYSTEM,
     "status:",
     "created: " .. os.date("!%Y-%m-%dT%H:%M:%SZ"),
     "---",
@@ -381,7 +402,7 @@ function M.open(root)
     "---",
     "",
     "@System",
-    "This is a task buffer. Work on the tasks listed in the ### Tasks section above. Pick up pending tasks, complete them one by one, and update their status as you go.",
+    DEFAULT_SYSTEM,
     "",
     "---",
     "",
@@ -528,10 +549,11 @@ function M.clear_conversation(buf)
   end
   if not task_end then return end
 
+  local sys_msg = get_system_message(buf)
   local tail = {
     "",
     "@System",
-    "This is a task buffer. Work on the tasks listed in the ### Tasks section above. Pick up pending tasks, complete them one by one, and update their status as you go.",
+    sys_msg,
     "",
     "---",
     "",
