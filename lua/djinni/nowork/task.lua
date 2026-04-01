@@ -388,6 +388,145 @@ function M.open(root)
   return buf
 end
 
+function M.create_task_chat(root, subject, system_prompt)
+  root = resolve_root(root)
+  local cfg = get_config()
+  local chat_dir = root .. "/" .. (cfg.chat and cfg.chat.dir or ".chat")
+  vim.fn.mkdir(chat_dir, "p")
+
+  local slug = subject:lower():gsub("[^%w]+", "-"):gsub("^%-+", ""):gsub("%-+$", ""):sub(1, 50)
+  local filename = slug .. ".md"
+  local path = chat_dir .. "/" .. filename
+
+  if vim.fn.filereadable(path) == 1 then
+    return require("djinni.nowork.chat").open(path)
+  end
+
+  local mcp_mod = require("djinni.nowork.mcp")
+  local auto_mcps = mcp_mod.list(root)
+  local mcp_value = #auto_mcps > 0 and table.concat(auto_mcps, ", ") or ""
+
+  local content = table.concat({
+    "---",
+    "project: " .. project_name(root),
+    "root: " .. root,
+    "title: " .. subject,
+    "session:",
+    "provider: claude-code",
+    "model:",
+    "mcp: " .. mcp_value,
+    "status: idle",
+    "created: " .. os.date("!%Y-%m-%dT%H:%M:%SZ"),
+    "---",
+    "",
+    "@System",
+    system_prompt or subject,
+    "",
+    "---",
+    "",
+    "@You",
+    "",
+    "",
+    "---",
+    "",
+  }, "\n")
+
+  local f = io.open(path, "w")
+  if f then
+    f:write(content)
+    f:close()
+  end
+
+  return path
+end
+
+function M.spawn_task(root, subject, system_prompt, auto_send)
+  local path = M.create_task_chat(root, subject, system_prompt)
+  if not path then return end
+
+  local chat = require("djinni.nowork.chat")
+  local buf = chat.open(path)
+
+  if auto_send and buf then
+    vim.defer_fn(function()
+      if vim.api.nvim_buf_is_valid(buf) then
+        chat.send(buf, auto_send)
+      end
+    end, 500)
+  end
+
+  return buf, path
+end
+
+function M.spawn_tasks(root, task_list)
+  root = resolve_root(root)
+  local results = {}
+  for _, task in ipairs(task_list) do
+    local buf, path = M.spawn_task(
+      root,
+      task.subject,
+      task.system_prompt,
+      task.auto_send
+    )
+    table.insert(results, { buf = buf, path = path, subject = task.subject })
+  end
+
+  local task_buf_list = {}
+  for buf, _ in pairs(M._task_bufs) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      table.insert(task_buf_list, buf)
+    end
+  end
+  for _, tb in ipairs(task_buf_list) do
+    M.update_tasks_section(tb)
+  end
+
+  return results
+end
+
+function M.clear(root)
+  root = resolve_root(root)
+  local cfg = get_config()
+  local chat_dir = cfg.chat and cfg.chat.dir or ".chat"
+  local dir = root .. "/" .. chat_dir
+  local task_path = task_file_path(root)
+
+  local handle = vim.loop.fs_scandir(dir)
+  if not handle then return end
+
+  local to_remove = {}
+  while true do
+    local name, type = vim.loop.fs_scandir_next(handle)
+    if not name then break end
+    if type == "file" and name:match("%.md$") then
+      local path = dir .. "/" .. name
+      if path ~= task_path then
+        table.insert(to_remove, path)
+      end
+    end
+  end
+
+  if #to_remove == 0 then return end
+
+  vim.ui.select({ "Yes", "No" }, { prompt = "Clear " .. #to_remove .. " task(s)?" }, function(choice)
+    if choice ~= "Yes" then return end
+
+    for _, path in ipairs(to_remove) do
+      local bufnr = vim.fn.bufnr(path)
+      if bufnr ~= -1 then
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+      end
+      os.remove(path)
+    end
+
+    for buf, _ in pairs(M._task_bufs) do
+      if vim.api.nvim_buf_is_valid(buf) then
+        M.update_tasks_section(buf)
+      end
+    end
+  end)
+end
+
 function M.toggle(root)
   root = resolve_root(root)
   local path = task_file_path(root)
