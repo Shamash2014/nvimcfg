@@ -228,8 +228,8 @@ function M.update_tasks_section(buf)
 
   local section_start
   if task_start and task_end then
-    vim.api.nvim_buf_set_lines(buf, task_start - 1, task_end, false, task_lines)
-    section_start = task_start - 1
+    vim.api.nvim_buf_set_lines(buf, task_start - 2, task_end, false, task_lines)
+    section_start = task_start - 2
   else
     vim.api.nvim_buf_set_lines(buf, fm_end, fm_end, false, task_lines)
     section_start = fm_end
