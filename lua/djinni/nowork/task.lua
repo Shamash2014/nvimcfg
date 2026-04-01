@@ -360,7 +360,7 @@ function M.open(root)
     "---",
     "",
     "@System",
-    "Task buffer ready",
+    "This is a task buffer. Work on the tasks listed in the ### Tasks section above. Pick up pending tasks, complete them one by one, and update their status as you go.",
     "",
     "---",
     "",
