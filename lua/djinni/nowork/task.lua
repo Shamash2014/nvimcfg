@@ -287,6 +287,27 @@ function M.setup_keymaps(buf)
       end
     end
   end, { buffer = buf, silent = true, nowait = true })
+
+  vim.keymap.set("n", "gc", function()
+    M.clear_conversation(buf)
+  end, { buffer = buf, silent = true, desc = "Clear task conversation" })
+
+  vim.keymap.set("n", "gx", function()
+    local root = M._task_bufs[buf] and nil
+    M.clear(root)
+  end, { buffer = buf, silent = true, desc = "Clear all task files" })
+
+  vim.keymap.set("n", "?", function()
+    local lines = {
+      " Task Dashboard Help",
+      "",
+      " <CR>   Open task at cursor / Send message",
+      " gc     Clear conversation (keep tasks)",
+      " gx     Clear all task .chat files",
+      " ?      Show this help",
+    }
+    vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO, { title = "TASK.md" })
+  end, { buffer = buf, silent = true, desc = "Task help" })
 end
 
 local function setup_task_autocmds(buf)
