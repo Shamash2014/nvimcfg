@@ -484,6 +484,61 @@ function M.spawn_tasks(root, task_list)
   return results
 end
 
+function M.clear_conversation(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  if not M._task_bufs[buf] then return end
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+
+  local task_end = nil
+  local fm_count = 0
+  local in_tasks = false
+  for i, line in ipairs(lines) do
+    if line:match("^%-%-%-$") then
+      fm_count = fm_count + 1
+      if fm_count >= 3 and in_tasks then
+        task_end = i
+        break
+      end
+    end
+    if line:match("^### Tasks") then
+      in_tasks = true
+    end
+  end
+  if not task_end then return end
+
+  local tail = {
+    "",
+    "@System",
+    "This is a task buffer. Work on the tasks listed in the ### Tasks section above. Pick up pending tasks, complete them one by one, and update their status as you go.",
+    "",
+    "---",
+    "",
+    "@You",
+    "",
+    "",
+    "---",
+    "",
+  }
+
+  vim.api.nvim_buf_set_lines(buf, task_end, -1, false, tail)
+
+  local chat = require("djinni.nowork.chat")
+  chat._streaming[buf] = nil
+  if chat._queue then chat._queue[buf] = nil end
+
+  local root = chat.get_project_root(buf)
+  if root then
+    local session = require("djinni.acp.session")
+    local sid = chat.get_session_id(buf)
+    if sid and sid ~= "" then
+      chat._set_frontmatter_field(buf, "session", "")
+      chat._sessions[buf] = nil
+    end
+    chat._ensure_session(buf)
+  end
+end
+
 function M.clear(root)
   root = resolve_root(root)
   local cfg = get_config()
