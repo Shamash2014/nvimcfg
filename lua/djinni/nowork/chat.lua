@@ -2355,16 +2355,24 @@ function M.pick_model(buf)
   vim.schedule(function()
     local models = commands.get_models(buf)
     local current = read_frontmatter_field(buf, "model") or ""
-    local labels = { "[type manually…]" }
-    local id_map = {}
+
+    local items = { { kind = "manual", label = "[type manually…]" } }
     for _, m in ipairs(models) do
-      labels[#labels + 1] = m.label or m.id
-      id_map[m.label or m.id] = m.id
+      items[#items + 1] = {
+        kind = "model",
+        id = m.id,
+        label = m.label or m.id,
+      }
     end
 
-    vim.ui.select(labels, { prompt = "Select model" }, function(choice)
+    vim.ui.select(items, {
+      prompt = "Select model",
+      format_item = function(item)
+        return item.label or item.id or ""
+      end,
+    }, function(choice)
       if not choice then return end
-      if choice == "[type manually…]" then
+      if choice.kind == "manual" then
         vim.ui.input({ prompt = "Model: ", default = current }, function(input)
           if not input or input == "" then return end
           M._set_frontmatter_field(buf, "model", input)
@@ -2372,7 +2380,8 @@ function M.pick_model(buf)
         end)
         return
       end
-      local model_id = id_map[choice] or choice
+      local model_id = choice.id or choice.label
+      if not model_id or model_id == "" then return end
       M._set_frontmatter_field(buf, "model", model_id)
       M.restart_session(buf)
     end)

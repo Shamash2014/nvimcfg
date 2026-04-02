@@ -76,10 +76,13 @@ function source:get_completions(ctx, callback)
     local commands = require("djinni.nowork.commands")
     local buf = vim.api.nvim_get_current_buf()
     for _, model in ipairs(commands.get_models(buf)) do
-      if model:find(model_arg, 1, true) == 1 or model_arg == "" then
+      local id = model.id or model.label
+      if (id and id:find(model_arg, 1, true) == 1) or model_arg == "" then
         table.insert(items, {
-          label = model,
+          label = id or "",
+          filterText = id or "",
           kind = vim.lsp.protocol.CompletionItemKind.EnumMember,
+          documentation = model.label and model.label ~= id and { kind = "markdown", value = model.label } or nil,
         })
       end
     end

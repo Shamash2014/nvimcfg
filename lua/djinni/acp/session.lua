@@ -341,10 +341,10 @@ end
 function M.set_mode(project_root, session_id, mode_id, provider_name)
   local client = M.get_or_create(project_root, provider_name)
   touch_activity(M.session_key(project_root, provider_name))
-  client:request("session/set_mode", {
+  client:notify("session/set_mode", {
     sessionId = session_id,
     modeId = mode_id,
-  }, function() end)
+  })
 end
 
 function M.interrupt(project_root, session_id, provider_name)

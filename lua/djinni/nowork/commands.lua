@@ -297,8 +297,9 @@ function M.omnifunc(findstart, base)
   if line:match("^%s*/model%s") then
     local matches = {}
     for _, model in ipairs(M.get_models(vim.api.nvim_get_current_buf())) do
-      if model:find(base, 1, true) == 1 then
-        table.insert(matches, { word = model })
+      local id = model.id or model.label
+      if id and id:find(base, 1, true) == 1 then
+        table.insert(matches, { word = id, menu = model.label or model.id or "" })
       end
     end
     return matches
