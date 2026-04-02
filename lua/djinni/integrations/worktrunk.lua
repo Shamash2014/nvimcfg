@@ -197,13 +197,6 @@ local function save_and_clear_buffers()
   end
 end
 
-local function load_branch_session(branch)
-  local ok, resession = pcall(require, "resession")
-  if ok then
-    pcall(resession.load, "wt:" .. branch, { silence_errors = true })
-  end
-end
-
 local function show_switch_stats(branch)
   M.list(function(entries)
     if not entries then return end
@@ -220,11 +213,27 @@ end
 
 function M.switch_to(branch, callback)
   M.get_path(branch, function(path)
-    if not path then return end
+    if not path then
+      vim.notify("[wt] Could not find worktree path for: " .. branch, vim.log.levels.ERROR)
+      return
+    end
     vim.schedule(function()
       save_and_clear_buffers()
       vim.cmd("tcd " .. vim.fn.fnameescape(path))
-      load_branch_session(branch)
+      local ok, resession = pcall(require, "resession")
+      if ok then
+        local loaded = pcall(resession.load, "wt:" .. branch, { silence_errors = true })
+        if not loaded then
+          local folder_name = vim.fn.fnamemodify(path, ":t"):lower()
+          pcall(resession.load, folder_name, { silence_errors = true })
+        end
+      end
+      local bufs = vim.tbl_filter(function(b)
+        return vim.bo[b].buflisted and vim.api.nvim_buf_get_name(b) ~= ""
+      end, vim.api.nvim_list_bufs())
+      if #bufs == 0 then
+        vim.cmd("edit " .. vim.fn.fnameescape(path))
+      end
       show_switch_stats(branch)
       if callback then callback() end
     end)
@@ -238,6 +247,20 @@ function M.create_for_task(branch, callback)
         vim.schedule(function()
           save_and_clear_buffers()
           vim.cmd("tcd " .. vim.fn.fnameescape(path))
+          local rok, resession = pcall(require, "resession")
+          if rok then
+            local loaded = pcall(resession.load, "wt:" .. branch, { silence_errors = true })
+            if not loaded then
+              local folder_name = vim.fn.fnamemodify(path, ":t"):lower()
+              pcall(resession.load, folder_name, { silence_errors = true })
+            end
+          end
+          local bufs = vim.tbl_filter(function(b)
+            return vim.bo[b].buflisted and vim.api.nvim_buf_get_name(b) ~= ""
+          end, vim.api.nvim_list_bufs())
+          if #bufs == 0 then
+            vim.cmd("edit " .. vim.fn.fnameescape(path))
+          end
           show_switch_stats(branch)
         end)
       end
