@@ -26,6 +26,8 @@ function M.new(cmd, args, cwd)
   self.pending_requests = {}
   self.event_handlers = {}
   self._buffer_parts = {}
+  self._update_queue = {}
+  self._update_scheduled = {}
   self.state = "disconnected"
   self._ready = false
   self._ready_callbacks = {}
@@ -262,12 +264,28 @@ function M:_handle_message(line)
     local sid = msg.params and msg.params.sessionId
     local sub = sid and self.subscribers[sid]
     if sub and sub.on_update and msg.method == "session/update" then
-      vim.schedule(function()
-        local h_ok, err = pcall(sub.on_update, msg.params)
-        if not h_ok then
-          log.err("subscriber update error: " .. tostring(err))
-        end
-      end)
+      local q = self._update_queue[sid]
+      if not q then
+        q = {}
+        self._update_queue[sid] = q
+      end
+      q[#q + 1] = msg.params
+      if not self._update_scheduled[sid] then
+        self._update_scheduled[sid] = true
+        vim.schedule(function()
+          self._update_scheduled[sid] = nil
+          local batch = self._update_queue[sid]
+          self._update_queue[sid] = nil
+          if batch then
+            for _, params in ipairs(batch) do
+              local h_ok, err = pcall(sub.on_update, params)
+              if not h_ok then
+                log.err("subscriber update error: " .. tostring(err))
+              end
+            end
+          end
+        end)
+      end
     end
     local handlers = self.event_handlers[msg.method]
     if handlers then

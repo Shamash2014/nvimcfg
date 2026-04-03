@@ -688,7 +688,7 @@ function M.attach(buf)
     vim.notify("[djinni] No plan section", vim.log.levels.INFO)
   end)
   map("n", "<C-c>", function()
-    M.interrupt(buf)
+    M.interrupt_all()
   end)
   map("n", "gP", function()
     M.select_provider(buf)
@@ -950,33 +950,15 @@ local function _is_tool_line(l)
   return l:match("^%[%*%]") or l:match("^%[%+%]") or l:match("^%[!%]")
 end
 
-local function _is_fold_content(l)
-  return l:match("^  ") or l:match("^> ") or _is_tool_line(l) or l:match("^```") or l:match("^%+[^%+]")
-end
-
-local function _prev_nonblank(lnum)
-  for i = lnum - 1, math.max(1, lnum - 15), -1 do
-    local l = vim.fn.getline(i)
-    if l ~= "" then return l end
-  end
-end
-
-local function _is_foldable(l)
-  return l:match("^%*%*Thinking") or _is_tool_line(l) or _is_fold_content(l)
-end
-
 function M.foldexpr(lnum)
   local line = vim.fn.getline(lnum)
-  if line:match("^- %[") or line:match("^@%w") or line:match("^%-%-%-$") then return "0" end
   if line:match("^%*%*Thinking") or _is_tool_line(line) then
-    local prev = _prev_nonblank(lnum)
-    if prev and _is_foldable(prev) then return "1" end
     return ">1"
   end
-  if _is_fold_content(line) then return "1" end
-  if line == "" then
-    local prev = _prev_nonblank(lnum)
-    if prev and _is_foldable(prev) then return "1" end
+  for i = lnum - 1, math.max(1, lnum - 200), -1 do
+    local l = vim.fn.getline(i)
+    if l:match("^@%w") or l:match("^%-%-%-$") then return "0" end
+    if l:match("^%*%*Thinking") or _is_tool_line(l) then return "1" end
   end
   return "0"
 end
@@ -1286,10 +1268,8 @@ function M.interrupt(buf)
   local sid = M.get_session_id(buf) or M._sessions[buf]
   if root and sid then
     session.interrupt(root, sid, get_provider(buf))
-    vim.notify("[djinni] Interrupted", vim.log.levels.WARN)
   elseif root then
     M._interrupt_pending[buf] = true
-    vim.notify("[djinni] Interrupt — clearing stuck session", vim.log.levels.WARN)
     M._sessions[buf] = nil
     M._set_frontmatter_field(buf, "session", "")
   end
@@ -1318,6 +1298,23 @@ function M.interrupt(buf)
   else
     M._streaming[buf] = nil
     M._cleanup_empty_djinni(buf)
+  end
+end
+
+function M.interrupt_all()
+  local count = 0
+  for buf, _ in pairs(M._streaming) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      M.interrupt(buf)
+      count = count + 1
+    end
+  end
+  if count > 0 then
+    vim.notify("[djinni] Interrupted " .. count .. " session(s)", vim.log.levels.WARN)
+  else
+    local cur = vim.api.nvim_get_current_buf()
+    M.interrupt(cur)
+    vim.notify("[djinni] Interrupted", vim.log.levels.WARN)
   end
 end
 
@@ -1394,6 +1391,32 @@ function M._append_line(buf, line)
       vim.api.nvim_buf_set_lines(buf, lc, lc, false, { line })
     end)
   end
+end
+
+function M._append_lines(buf, lines_array)
+  M._flush_pending(buf)
+  if vim.fn.bufwinid(buf) == -1 then
+    M._hidden_pending[buf] = M._hidden_pending[buf] or {}
+    for _, line in ipairs(lines_array) do
+      M._hidden_pending[buf][#M._hidden_pending[buf] + 1] = "\n" .. line
+    end
+    return
+  end
+  local flat = {}
+  for _, line in ipairs(lines_array) do
+    if line:find("\n") then
+      for part in (line .. "\n"):gmatch("([^\n]*)\n") do
+        flat[#flat + 1] = part
+      end
+    else
+      flat[#flat + 1] = line
+    end
+  end
+  vim.schedule(function()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    local lc = vim.api.nvim_buf_line_count(buf)
+    vim.api.nvim_buf_set_lines(buf, lc, lc, false, flat)
+  end)
 end
 
 function M._on_session_update(buf, data)
@@ -1487,10 +1510,12 @@ function M._on_session_update(buf, data)
             end
           end
           if text then
+            local batch = {}
             for line in text:gmatch("([^\n]+)") do
-              M._append_line(buf, "> " .. line)
+              batch[#batch + 1] = "> " .. line
             end
-            M._append_line(buf, "")
+            batch[#batch + 1] = ""
+            M._append_lines(buf, batch)
           end
           local think_fold_start = M._think_fold_start[buf]
           M._think_fold_start[buf] = nil
@@ -1553,9 +1578,11 @@ function M._on_session_update(buf, data)
           if diff_content then
             local codediff = require("djinni.nowork.codediff")
             local diff_lines_out = codediff.compute(diff_content.old, diff_content.new, diff_content.path)
+            local diff_batch = {}
             for _, dl in ipairs(diff_lines_out) do
-              M._append_line(buf, dl.text)
+              diff_batch[#diff_batch + 1] = dl.text
             end
+            M._append_lines(buf, diff_batch)
             vim.schedule(function()
               if not vim.api.nvim_buf_is_valid(buf) then return end
               local lc = vim.api.nvim_buf_line_count(buf)
@@ -1844,6 +1871,7 @@ function M._start_streaming(buf)
   M._events_received[buf] = false
   M._plan_lines[buf] = nil
   M._last_tool_title[buf] = nil
+  M._auto_scroll[buf] = true
 
   if M._flush_timer[buf] and not M._flush_timer[buf]:is_closing() then
     M._flush_timer[buf]:stop()
@@ -1980,7 +2008,10 @@ function M._start_streaming(buf)
         cleanup()
         return
       end
-      M._flush_pending(buf)
+      local buf_visible = vim.fn.bufwinid(buf) ~= -1
+      if buf_visible then
+        M._flush_pending(buf)
+      end
       if not M._streaming[buf] then return end
       local ok_alive, alive = pcall(function() return client and client:is_alive() end)
       local dead = not ok_alive or not alive
@@ -2038,17 +2069,25 @@ end
 
 function M._unwrap_paragraphs(buf)
   if not vim.api.nvim_buf_is_valid(buf) then return end
-  local all = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local start_line = 0
-  for i = #all, 1, -1 do
-    if (all[i] or ""):match("^@Djinni%s*$") then
-      start_line = i
-      break
+  local total = vim.api.nvim_buf_line_count(buf)
+  local marker_line = nil
+  local window = 200
+  local search_from = math.max(0, total - window)
+  while search_from >= 0 do
+    local chunk = vim.api.nvim_buf_get_lines(buf, search_from, math.min(search_from + window, total), false)
+    for i = #chunk, 1, -1 do
+      if (chunk[i] or ""):match("^@Djinni%s*$") then
+        marker_line = search_from + i
+        break
+      end
     end
+    if marker_line then break end
+    if search_from == 0 then break end
+    search_from = math.max(0, search_from - window)
   end
-  if start_line == 0 then return end
+  if not marker_line then return end
 
-  local lines = { unpack(all, start_line + 1) }
+  local lines = vim.api.nvim_buf_get_lines(buf, marker_line, total, false)
   local result = {}
   local in_code = false
   for _, line in ipairs(lines) do
@@ -2066,8 +2105,10 @@ function M._unwrap_paragraphs(buf)
     end
   end
 
-  vim.api.nvim_buf_set_lines(buf, start_line, #all, false, result)
+  vim.api.nvim_buf_set_lines(buf, marker_line, total, false, result)
 end
+
+M._auto_scroll = {}
 
 function M._apply_stream_chunk(buf, text)
   if not vim.api.nvim_buf_is_valid(buf) then
@@ -2086,12 +2127,11 @@ function M._apply_stream_chunk(buf, text)
     vim.api.nvim_buf_set_lines(buf, line_count - 1, line_count, false, new_lines)
   end
 
-  local win = vim.fn.bufwinid(buf)
-  if win ~= -1 then
-    local cursor = vim.api.nvim_win_get_cursor(win)
-    local line_count = vim.api.nvim_buf_line_count(buf)
-    if cursor[1] >= line_count - 5 then
-      vim.api.nvim_win_set_cursor(win, { line_count, 0 })
+  if M._auto_scroll[buf] ~= false then
+    local win = vim.fn.bufwinid(buf)
+    if win ~= -1 then
+      local new_count = vim.api.nvim_buf_line_count(buf)
+      pcall(vim.api.nvim_win_set_cursor, win, { new_count, 0 })
     end
   end
 end

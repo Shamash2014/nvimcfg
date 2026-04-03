@@ -54,6 +54,10 @@ function M.setup(opts)
     require("djinni.integrations.snacks").pick_sessions()
   end, {})
 
+  vim.api.nvim_create_user_command("NoworkConsole", function()
+    require("djinni.nowork.console").toggle()
+  end, {})
+
   vim.keymap.set("n", "<leader>oac", function()
     require("djinni.code").create_with_file()
   end, { desc = "Task with file context" })
@@ -71,8 +75,9 @@ function M.setup(opts)
   end, { desc = "Toggle Nowork panel" })
 
   vim.keymap.set("n", "<leader>ft", function()
-    require("djinni.nowork.task").toggle()
-  end, { desc = "Toggle project task panel" })
+    require("djinni.nowork.console").toggle()
+  end, { desc = "Toggle Nowork Console" })
+
 
   vim.keymap.set("n", "]c", function()
     require("djinni.nowork.panel").next_task()
