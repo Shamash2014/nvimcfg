@@ -85,11 +85,17 @@ local function _activity_for(buf)
   return ""
 end
 
+local function _fmt_k(n)
+  if not n or n <= 0 then return "0" end
+  return n >= 1000 and string.format("%.1fk", n / 1000) or tostring(n)
+end
+
 local function _fmt_tokens(usage)
   if not usage then return "" end
-  local total = (usage.input_tokens or 0) + (usage.output_tokens or 0)
-  if total <= 0 then return "" end
-  return total >= 1000 and string.format("%.1fk", total / 1000) or tostring(total)
+  local inp = usage.input_tokens or 0
+  local out = usage.output_tokens or 0
+  if inp + out <= 0 then return "" end
+  return "↓" .. _fmt_k(inp) .. " ↑" .. _fmt_k(out)
 end
 
 local function _fmt_cost(usage)
@@ -97,10 +103,19 @@ local function _fmt_cost(usage)
   return string.format("$%.2f", usage.cost)
 end
 
+local function _fmt_context(usage)
+  if not usage then return "" end
+  local used = usage.context_used or 0
+  local size = usage.context_size or 0
+  if size <= 0 then return "" end
+  local pct = math.floor(used / size * 100)
+  return tostring(pct) .. "%"
+end
+
 local function _collect_sessions()
   local chat = require("djinni.nowork.chat")
-  local seen = {}
   local result = {}
+  local seen_sessions = {}
 
   local candidates = {}
   for buf in pairs(chat._sessions or {})  do candidates[buf] = true end
@@ -108,27 +123,33 @@ local function _collect_sessions()
 
   for buf in pairs(candidates) do
     if not vim.api.nvim_buf_is_valid(buf) then goto continue end
-    if seen[buf] then goto continue end
-    seen[buf] = true
-
-    local name = vim.api.nvim_buf_get_name(buf)
-    local short = vim.fn.fnamemodify(name, ":t:r")
-    if short == "" then short = "[buf " .. buf .. "]" end
 
     local sid = chat._sessions[buf] or ""
-    local sid_short = sid:sub(1, 8)
+    if sid ~= "" and seen_sessions[sid] then goto continue end
+    if sid ~= "" then seen_sessions[sid] = true end
 
+    local name_full = vim.api.nvim_buf_get_name(buf)
+    local short = vim.fn.fnamemodify(name_full, ":t:r")
+    if short == "" then short = "[buf " .. buf .. "]" end
+
+    local project = name_full:match("([^/]+)/[^/]+/[^/]+$") or ""
     local usage = chat._usage[buf]
+    local mode = chat._current_mode and chat._current_mode[buf] or ""
+    local tools = chat._tool_log and chat._tool_log[buf] or {}
 
     table.insert(result, {
       _type      = "session",
       buf        = buf,
       name       = short,
-      session_id = sid_short,
+      project    = project,
+      session_id = sid:sub(1, 8),
       status     = _status_for(buf),
       activity   = _activity_for(buf),
       tokens     = _fmt_tokens(usage),
       cost       = _fmt_cost(usage),
+      context    = _fmt_context(usage),
+      mode       = mode,
+      tool_count = #tools,
     })
     ::continue::
   end
@@ -138,6 +159,7 @@ local function _collect_sessions()
     local oa = order[a.status] or 9
     local ob = order[b.status] or 9
     if oa ~= ob then return oa < ob end
+    if a.project ~= b.project then return a.project < b.project end
     return a.name < b.name
   end)
   return result
@@ -285,39 +307,69 @@ local function _render()
   if M._tab == "sessions" then
     local sessions = _filter_sessions(_collect_sessions())
     if #sessions == 0 then
-      local row = push("  No active sessions")
+      local row = push("  No sessions")
       _set_hl(marks, row - 1, 0, -1, "Comment")
     else
+      local groups = {}
+      local group_map = {}
       for _, sd in ipairs(sessions) do
-        local icon  = status_icons[sd.status] or "◆"
-        local ihl   = status_hl[sd.status] or "Comment"
-        local name  = sd.name
-        local sid   = sd.session_id ~= "" and sd.session_id or "--------"
-        local act   = sd.activity
-
-        local row_text = string.format("  %s  %-22s %-9s %s", icon, name, sid, act)
-        local row = push(row_text)
-        items[row] = sd
-
-        local icon_col = 2
-        _set_hl(marks, row - 1, icon_col, icon_col + #icon, ihl)
-        _set_hl(marks, row - 1, icon_col + #icon + 2, icon_col + #icon + 2 + #name, "Normal")
-
-        if sd.sid ~= "" then
-          local sid_col = icon_col + #icon + 2 + 22 + 1
-          _set_hl(marks, row - 1, sid_col, sid_col + #sid, "Comment")
+        local key = sd.project or ""
+        if not group_map[key] then
+          group_map[key] = { name = key, sessions = {} }
+          table.insert(groups, group_map[key])
         end
+        table.insert(group_map[key].sessions, sd)
+      end
 
-        local vt = {}
-        if sd.tokens ~= "" then
-          table.insert(vt, { sd.tokens, "Number" })
-        end
-        if sd.cost ~= "" then
-          if #vt > 0 then table.insert(vt, { "  ", "Normal" }) end
-          table.insert(vt, { sd.cost, "String" })
-        end
-        if #vt > 0 then
-          _set_virt(virts, row - 1, vt)
+      for _, group in ipairs(groups) do
+        local count = #group.sessions
+        local header = group.name .. " (" .. count .. " session" .. (count ~= 1 and "s" or "") .. ")"
+        local hrow = push("  " .. header)
+        _set_hl(marks, hrow - 1, 2, 2 + #header, "Directory")
+
+        for _, sd in ipairs(group.sessions) do
+          local icon = status_icons[sd.status] or "◆"
+          local ihl  = status_hl[sd.status] or "Comment"
+          local act  = sd.activity ~= "" and ("  " .. sd.activity) or ""
+          local mode_str = sd.mode ~= "" and (" [" .. sd.mode .. "]") or ""
+          local tools_str = sd.tool_count > 0 and (" ⚙" .. sd.tool_count) or ""
+
+          local row_text = string.format("    %s  %s%s%s%s", icon, sd.name, mode_str, tools_str, act)
+          local row = push(row_text)
+          items[row] = sd
+
+          local col = 4
+          _set_hl(marks, row - 1, col, col + #icon, ihl)
+          col = col + #icon + 2
+          _set_hl(marks, row - 1, col, col + #sd.name, "Normal")
+          col = col + #sd.name
+          if mode_str ~= "" then
+            _set_hl(marks, row - 1, col, col + #mode_str, "DiagnosticInfo")
+            col = col + #mode_str
+          end
+          if tools_str ~= "" then
+            _set_hl(marks, row - 1, col, col + #tools_str, "Number")
+            col = col + #tools_str
+          end
+          if act ~= "" then
+            _set_hl(marks, row - 1, col, -1, "Comment")
+          end
+
+          local vt = {}
+          if sd.tokens ~= "" then
+            table.insert(vt, { sd.tokens, "Number" })
+          end
+          if sd.context ~= "" then
+            if #vt > 0 then table.insert(vt, { "  ", "Normal" }) end
+            table.insert(vt, { "ctx:" .. sd.context, "DiagnosticWarn" })
+          end
+          if sd.cost ~= "" then
+            if #vt > 0 then table.insert(vt, { "  ", "Normal" }) end
+            table.insert(vt, { sd.cost, "String" })
+          end
+          if #vt > 0 then
+            _set_virt(virts, row - 1, vt)
+          end
         end
       end
     end
@@ -359,7 +411,18 @@ local function _render()
           _set_hl(marks, row - 1, 4 + #picon + 1, 4 + #picon + 1 + #sicon, shl)
 
           if iss.assignee_session then
-            _set_virt(virts, row - 1, { { "→ " .. iss.assignee_session:sub(1, 8), "DiagnosticHint" } })
+            local chat_buf = _find_buf_for_session(iss.assignee_session)
+            if chat_buf then
+              local st = _status_for(chat_buf)
+              local icon = status_icons[st] or "◆"
+              local hl = status_hl[st] or "Comment"
+              _set_virt(virts, row - 1, {
+                { icon .. " ", hl },
+                { iss.assignee_session:sub(1, 8), "DiagnosticHint" },
+              })
+            else
+              _set_virt(virts, row - 1, { { "⊘ " .. iss.assignee_session:sub(1, 8), "Comment" } })
+            end
           end
         end
       end
@@ -374,7 +437,7 @@ local function _render()
   if M._tab == "sessions" then
     footer = "  <CR> jump  x interrupt  <Tab> issues  1-4 filter  r refresh  q close"
   else
-    footer = "  <CR> open  n new  s status  d dispatch  <Tab> sessions  1-5 filter  r refresh  q close"
+    footer = "  <CR> open  n new  s status  d dispatch  c chat  a archive  <Tab> sessions  1-5 filter  r refresh  q close"
   end
   local frow = push(footer)
   _set_hl(marks, frow - 1, 0, -1, "Comment")
@@ -469,6 +532,34 @@ local function _open_issue(iss)
   vim.cmd("edit " .. vim.fn.fnameescape(iss.path))
 end
 
+local function _find_buf_for_session(session_id)
+  if not session_id or session_id == "" then return nil end
+  local chat = require("djinni.nowork.chat")
+  for buf, sid in pairs(chat._sessions or {}) do
+    if vim.api.nvim_buf_is_valid(buf) and (sid == session_id or sid:sub(1, #session_id) == session_id) then
+      return buf
+    end
+  end
+  return nil
+end
+
+local function _goto_issue_chat(iss)
+  if not iss.assignee_session or iss.assignee_session == "" then
+    vim.notify("No chat assigned to this issue", vim.log.levels.WARN)
+    return
+  end
+  local buf = _find_buf_for_session(iss.assignee_session)
+  if not buf then
+    vim.notify("Chat session not open: " .. iss.assignee_session:sub(1, 8), vim.log.levels.WARN)
+    return
+  end
+  M.close()
+  if M._prev_win and vim.api.nvim_win_is_valid(M._prev_win) then
+    pcall(vim.api.nvim_set_current_win, M._prev_win)
+  end
+  vim.api.nvim_set_current_buf(buf)
+end
+
 local function _current_project_root()
   if M._prev_win and vim.api.nvim_win_is_valid(M._prev_win) then
     return vim.fn.getcwd(M._prev_win)
@@ -477,13 +568,46 @@ local function _current_project_root()
 end
 
 local function _create_issue()
-  local project_root = _current_project_root()
-  vim.ui.input({ prompt = "Issue title: " }, function(title)
-    if not title or title == "" then return end
-    local issue = require("djinni.nowork.issue")
-    issue.create(project_root, { title = title })
-    M._dirty = true
-    _render()
+  local projects = require("djinni.integrations.projects")
+  local known = projects.discover()
+  local fallback_root = _current_project_root()
+  local prev_win = M._prev_win
+
+  M.close()
+
+  local function do_create(project_root)
+    vim.ui.input({ prompt = "Title: " }, function(title)
+      if not title or title == "" then return end
+      vim.ui.select(require("djinni.nowork.issue").priorities, {
+        prompt = "Priority:",
+        format_item = function(p) return p end,
+      }, function(priority)
+        local issue = require("djinni.nowork.issue")
+        local iss = issue.create(project_root, {
+          title    = title,
+          priority = priority or "medium",
+        })
+        if iss and iss.path then
+          if prev_win and vim.api.nvim_win_is_valid(prev_win) then
+            vim.api.nvim_set_current_win(prev_win)
+          end
+          vim.cmd("edit " .. vim.fn.fnameescape(iss.path))
+        end
+      end)
+    end)
+  end
+
+  if #known <= 1 then
+    do_create(known[1] or fallback_root)
+    return
+  end
+
+  vim.ui.select(known, {
+    prompt = "Project:",
+    format_item = function(root) return vim.fn.fnamemodify(root, ":t") end,
+  }, function(root)
+    if not root then return end
+    do_create(root)
   end)
 end
 
@@ -613,6 +737,11 @@ function M.open()
     if item and item._type == "issue" then _dispatch_issue(item) end
   end)
 
+  map("c", function()
+    local item = _item_at_cursor()
+    if item and item._type == "issue" then _goto_issue_chat(item) end
+  end)
+
   map("<Tab>", function()
     _set_tab(M._tab == "sessions" and "issues" or "sessions")
   end)
@@ -638,6 +767,16 @@ function M.open()
   map({ "r", "<C-r>" }, function()
     M._dirty = true
     _render()
+  end)
+
+  map("a", function()
+    local item = _item_at_cursor()
+    if item and item._type == "issue" then
+      local issue = require("djinni.nowork.issue")
+      issue.archive(item.project_root, item.id)
+      M._dirty = true
+      _render()
+    end
   end)
 
   map("D", function()
@@ -668,6 +807,8 @@ function M.open()
         { "n", "DiagnosticOk" }, { " new  ", "Comment" },
         { "s", "DiagnosticOk" }, { " status  ", "Comment" },
         { "d", "DiagnosticOk" }, { " dispatch  ", "Comment" },
+        { "c", "DiagnosticOk" }, { " chat  ", "Comment" },
+        { "a", "DiagnosticOk" }, { " archive  ", "Comment" },
         { "D", "DiagnosticOk" }, { " delete  ", "Comment" },
         { "<Tab>", "DiagnosticOk" }, { " sessions  ", "Comment" },
         { "1-5", "DiagnosticOk" }, { " filter  ", "Comment" },

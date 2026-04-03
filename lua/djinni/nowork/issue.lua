@@ -88,6 +88,7 @@ end
 
 local function write_issue(project_root, issue)
   local path = issues_dir(project_root) .. "/" .. issue.id .. ".md"
+  issue.path = path
   local content = table.concat({
     "---",
     "id: " .. issue.id,
@@ -165,6 +166,14 @@ function M.update(project_root, id, fields)
   issue.updated_at = iso_timestamp()
   write_issue(project_root, issue)
   return issue
+end
+
+function M.archive(project_root, id)
+  local src = issues_dir(project_root) .. "/" .. id .. ".md"
+  local archive_dir = issues_dir(project_root) .. "/archive"
+  vim.fn.mkdir(archive_dir, "p")
+  local dst = archive_dir .. "/" .. id .. ".md"
+  os.rename(src, dst)
 end
 
 function M.delete(project_root, id)
