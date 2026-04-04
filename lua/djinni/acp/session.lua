@@ -5,6 +5,7 @@ local Provider = require("djinni.acp.provider")
 local M = {}
 M.sessions = {}
 M.idle_guards = {}
+M._idle_timers = {}
 M.reconnect_callbacks = {}
 
 local function extract_model_config_option(config_options)
@@ -46,7 +47,19 @@ local function schedule_idle_check(key)
   local config = get_config()
   local timeout = config.idle_timeout or 1800000
 
-  vim.defer_fn(function()
+  if M._idle_timers[key] then
+    pcall(function() M._idle_timers[key]:stop() end)
+    pcall(function() M._idle_timers[key]:close() end)
+    M._idle_timers[key] = nil
+  end
+
+  local t = vim.uv.new_timer()
+  M._idle_timers[key] = t
+  t:start(timeout, 0, vim.schedule_wrap(function()
+    t:stop()
+    t:close()
+    M._idle_timers[key] = nil
+
     local session = M.sessions[key]
     if not session or not session.client:is_alive() then
       return
@@ -71,7 +84,7 @@ local function schedule_idle_check(key)
     else
       schedule_idle_check(key)
     end
-  end, timeout)
+  end))
 end
 
 function M.session_key(project_root, provider_name)
@@ -383,6 +396,11 @@ function M.unsubscribe_session(project_root, session_id, provider_name)
 end
 
 function M.shutdown_key(key)
+  if M._idle_timers[key] then
+    pcall(function() M._idle_timers[key]:stop() end)
+    pcall(function() M._idle_timers[key]:close() end)
+    M._idle_timers[key] = nil
+  end
   local session = M.sessions[key]
   if not session then return end
   for sid in pairs(session.task_sessions) do

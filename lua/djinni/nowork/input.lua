@@ -5,8 +5,8 @@ M.SEPARATOR = string.rep(SEPARATOR_CHAR, 45)
 
 function M.find_separator(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  for i, line in ipairs(lines) do
-    if line:match("^" .. SEPARATOR_CHAR .. "+$") then
+  for i = #lines, 1, -1 do
+    if lines[i]:match("^" .. SEPARATOR_CHAR .. "+$") then
       return i - 1
     end
   end

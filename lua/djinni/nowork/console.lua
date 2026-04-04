@@ -474,17 +474,10 @@ end
 
 local function _start_timer()
   M._timer = vim.uv.new_timer()
-  M._timer:start(0, 500, vim.schedule_wrap(function()
+  M._timer:start(0, 1000, vim.schedule_wrap(function()
     if not is_valid() then
       M._stop_timer()
       return
-    end
-    local chat = require("djinni.nowork.chat")
-    for buf in pairs(chat._streaming or {}) do
-      if chat._streaming[buf] then
-        M._dirty = true
-        break
-      end
     end
     if M._dirty then
       M._dirty = false
