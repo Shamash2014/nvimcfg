@@ -2373,6 +2373,30 @@ function M._fresh_restart(buf, root)
     M._set_frontmatter_field(buf, "session", "")
     M._sessions[buf] = nil
     session.shutdown_project(root, nil, get_provider(buf))
+    local pre_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    for i = #pre_lines, 1, -1 do
+      local l = pre_lines[i]
+      if l:match("^@You%s*$") then
+        local has_content = false
+        for j = i + 1, #pre_lines do
+          if pre_lines[j]:match("^@%w+%s*$") or pre_lines[j]:match("^%-%-%-$") then break end
+          if pre_lines[j]:match("%S") then has_content = true; break end
+        end
+        if not has_content then
+          local del_from = i
+          while del_from > 1 and (pre_lines[del_from - 1] == "" or pre_lines[del_from - 1]:match("^%-%-%-$")) do
+            del_from = del_from - 1
+          end
+          local del_to = i
+          while del_to < #pre_lines and (pre_lines[del_to + 1] == "" or pre_lines[del_to + 1]:match("^%-%-%-$")) do
+            del_to = del_to + 1
+          end
+          pcall(vim.api.nvim_buf_set_lines, buf, del_from - 1, del_to, false, {})
+        end
+        break
+      end
+      if l:match("^@%w+%s*$") and not l:match("^@You") then break end
+    end
     local lc = vim.api.nvim_buf_line_count(buf)
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@System", "Restarting session...", "" })
     session.create_task_session(root, function(err, new_sid, result)
@@ -2390,8 +2414,23 @@ function M._fresh_restart(buf, root)
         vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { "Session ready" })
         vim.notify("[djinni] Session restarted (fresh)", vim.log.levels.INFO)
         M._restore_mode(buf, root, new_sid, result)
+        local function finish_restart()
+          vim.schedule(function()
+            if not vim.api.nvim_buf_is_valid(buf) then return end
+            M._pending_text[buf] = {}
+            M._append_batch[buf] = nil
+            local rlc = vim.api.nvim_buf_line_count(buf)
+            vim.api.nvim_buf_set_lines(buf, rlc, rlc, false, you_block())
+            local win = vim.fn.bufwinid(buf)
+            if win ~= -1 then
+              vim.api.nvim_win_set_cursor(win, { rlc + 5, 0 })
+            end
+          end)
+        end
         if history_msg then
-          session.send_message(root, new_sid, history_msg, function() end, nil, get_provider(buf))
+          session.send_message(root, new_sid, history_msg, function() finish_restart() end, nil, get_provider(buf))
+        else
+          finish_restart()
         end
       end)
     end, sess_opts)
