@@ -1380,6 +1380,25 @@ function M._flush_pending(buf)
   if not vim.api.nvim_buf_is_valid(buf) then
     return
   end
+  local MAX_CHUNK = 4096
+  if #pending > MAX_CHUNK then
+    local cut = pending:sub(1, MAX_CHUNK)
+    local nl = cut:find("\n[^\n]*$")
+    if nl then
+      M._apply_stream_chunk(buf, pending:sub(1, nl - 1))
+      local leftover = pending:sub(nl)
+      local pt2 = M._pending_text[buf]
+      if not pt2 then pt2 = {}; M._pending_text[buf] = pt2 end
+      table.insert(pt2, 1, leftover)
+    else
+      M._apply_stream_chunk(buf, cut)
+      local leftover = pending:sub(MAX_CHUNK + 1)
+      local pt2 = M._pending_text[buf]
+      if not pt2 then pt2 = {}; M._pending_text[buf] = pt2 end
+      table.insert(pt2, 1, leftover)
+    end
+    return
+  end
   M._apply_stream_chunk(buf, pending)
 end
 

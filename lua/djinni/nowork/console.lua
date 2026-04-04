@@ -437,12 +437,16 @@ local function _render()
   if M._tab == "sessions" then
     footer = "  <CR> jump  x interrupt  <Tab> issues  1-4 filter  r refresh  q close"
   else
-    footer = "  <CR> open  n new  s status  d dispatch  c chat  a archive  <Tab> sessions  1-5 filter  r refresh  q close"
+    footer = "  <CR> open  n new  s status  d dispatch  c chat  a archive  A archive done  <Tab> sessions  1-5 filter  r refresh  q close"
   end
   local frow = push(footer)
   _set_hl(marks, frow - 1, 0, -1, "Comment")
 
-  -- Apply to buffer
+  -- Apply to buffer (skip if content unchanged)
+  local fingerprint = #lines .. "\0" .. (lines[1] or "") .. "\0" .. (lines[#lines] or "")
+  if fingerprint == M._last_render_fingerprint then return end
+  M._last_render_fingerprint = fingerprint
+
   vim.bo[M._buf].modifiable = true
   vim.api.nvim_buf_set_lines(M._buf, 0, -1, false, lines)
   vim.bo[M._buf].modifiable = false
@@ -772,6 +776,24 @@ function M.open()
     end
   end)
 
+  map("A", function()
+    if M._tab ~= "issues" then return end
+    local all = _collect_issues()
+    local issue = require("djinni.nowork.issue")
+    local count = 0
+    for _, iss in ipairs(all) do
+      if iss.status == "done" then
+        issue.archive(iss.project_root, iss.id)
+        count = count + 1
+      end
+    end
+    if count > 0 then
+      M._dirty = true
+      _render()
+      vim.notify("[djinni] Archived " .. count .. " completed issue" .. (count > 1 and "s" or ""), vim.log.levels.INFO)
+    end
+  end)
+
   map("D", function()
     local item = _item_at_cursor()
     if item and item._type == "issue" then
@@ -802,6 +824,7 @@ function M.open()
         { "d", "DiagnosticOk" }, { " dispatch  ", "Comment" },
         { "c", "DiagnosticOk" }, { " chat  ", "Comment" },
         { "a", "DiagnosticOk" }, { " archive  ", "Comment" },
+        { "A", "DiagnosticOk" }, { " archive done  ", "Comment" },
         { "D", "DiagnosticOk" }, { " delete  ", "Comment" },
         { "<Tab>", "DiagnosticOk" }, { " sessions  ", "Comment" },
         { "1-5", "DiagnosticOk" }, { " filter  ", "Comment" },

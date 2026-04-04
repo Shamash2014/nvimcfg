@@ -264,27 +264,41 @@ function M:_handle_message(line)
     local sid = msg.params and msg.params.sessionId
     local sub = sid and self.subscribers[sid]
     if sub and sub.on_update and msg.method == "session/update" then
-      local q = self._update_queue[sid]
-      if not q then
-        q = {}
-        self._update_queue[sid] = q
+      local uq = self._update_queue[sid]
+      if not uq then
+        uq = {}
+        self._update_queue[sid] = uq
       end
-      q[#q + 1] = msg.params
+      uq[#uq + 1] = msg.params
       if not self._update_scheduled[sid] then
         self._update_scheduled[sid] = true
-        vim.schedule(function()
-          self._update_scheduled[sid] = nil
-          local batch = self._update_queue[sid]
-          self._update_queue[sid] = nil
-          if batch then
-            for _, params in ipairs(batch) do
-              local h_ok, err = pcall(sub.on_update, params)
-              if not h_ok then
-                log.err("subscriber update error: " .. tostring(err))
-              end
+        local BATCH_SIZE = 10
+        local client = self
+        local function drain()
+          local q = client._update_queue[sid]
+          if not q or #q == 0 then
+            client._update_queue[sid] = nil
+            client._update_scheduled[sid] = nil
+            return
+          end
+          local n = math.min(#q, BATCH_SIZE)
+          for i = 1, n do
+            local h_ok, err = pcall(sub.on_update, q[i])
+            if not h_ok then
+              log.err("subscriber update error: " .. tostring(err))
             end
           end
-        end)
+          if n >= #q then
+            client._update_queue[sid] = nil
+            client._update_scheduled[sid] = nil
+          else
+            local remaining = {}
+            for i = n + 1, #q do remaining[#remaining + 1] = q[i] end
+            client._update_queue[sid] = remaining
+            vim.schedule(drain)
+          end
+        end
+        vim.schedule(drain)
       end
     end
     local handlers = self.event_handlers[msg.method]
