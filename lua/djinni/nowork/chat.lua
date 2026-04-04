@@ -595,17 +595,19 @@ function M.attach(buf)
     vim.wo[win].conceallevel = 2
     local ok, rm = pcall(require, "render-markdown")
     if ok then rm.enable() end
-    local win2 = vim.fn.bufwinid(buf)
-    if win2 ~= -1 and vim.api.nvim_buf_is_valid(vim.api.nvim_win_get_buf(win2)) then
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      local w = vim.fn.bufwinid(buf)
+      if w == -1 then return end
       pcall(function()
-        vim.wo[win2].foldmethod = "expr"
-        vim.wo[win2].foldexpr = "v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)"
-        vim.wo[win2].foldtext = "v:lua.require('djinni.nowork.chat').foldtext()"
-        vim.wo[win2].foldenable = true
-        vim.wo[win2].foldlevel = 0
-        vim.wo[win2].foldminlines = 1
+        vim.wo[w].foldmethod = "expr"
+        vim.wo[w].foldexpr = "v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)"
+        vim.wo[w].foldtext = "v:lua.require('djinni.nowork.chat').foldtext()"
+        vim.wo[w].foldenable = true
+        vim.wo[w].foldlevel = 0
+        vim.wo[w].foldminlines = 1
       end)
-    end
+    end)
     vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter" }, {
       buffer = buf,
       callback = function()
