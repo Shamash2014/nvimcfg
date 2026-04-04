@@ -1278,7 +1278,26 @@ function M.send(buf, text)
   end, images, get_provider(buf))
 end
 
+M._last_interrupt_time = {}
+local FORCE_KILL_WINDOW = 2
+
 function M.interrupt(buf)
+  local now = vim.uv.hrtime() / 1e9
+  local last = M._last_interrupt_time[buf]
+  M._last_interrupt_time[buf] = now
+
+  if last and (now - last) < FORCE_KILL_WINDOW and not M._streaming[buf] then
+    local root = M.get_project_root(buf)
+    if root then
+      session.force_kill(root, get_provider(buf))
+      vim.notify("[djinni] Force-killed process", vim.log.levels.WARN)
+    end
+    M._last_interrupt_time[buf] = nil
+    M._sessions[buf] = nil
+    M._set_frontmatter_field(buf, "session", "")
+    return
+  end
+
   local root = M.get_project_root(buf)
   local sid = M.get_session_id(buf) or M._sessions[buf]
   if root and sid then

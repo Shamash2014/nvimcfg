@@ -395,6 +395,19 @@ function M.unsubscribe_session(project_root, session_id, provider_name)
   end
 end
 
+function M.force_kill(project_root, provider_name)
+  local key = M.session_key(project_root, provider_name)
+  if M._idle_timers[key] then
+    pcall(function() M._idle_timers[key]:stop() end)
+    pcall(function() M._idle_timers[key]:close() end)
+    M._idle_timers[key] = nil
+  end
+  local s = M.sessions[key]
+  if not s then return end
+  s.client:kill_tree()
+  M.sessions[key] = nil
+end
+
 function M.shutdown_key(key)
   if M._idle_timers[key] then
     pcall(function() M._idle_timers[key]:stop() end)

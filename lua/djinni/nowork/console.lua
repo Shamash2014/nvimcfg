@@ -661,6 +661,7 @@ end
 
 function M.open()
   if M._win and vim.api.nvim_win_is_valid(M._win) then return end
+  M._last_render_fingerprint = nil
 
   M._prev_win = vim.api.nvim_get_current_win()
 

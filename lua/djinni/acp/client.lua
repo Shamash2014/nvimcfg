@@ -94,6 +94,7 @@ function M:_spawn()
   })
 
   if self.job_id and self.job_id > 0 then
+    self.pid = vim.fn.jobpid(self.job_id)
     self.state = "connected"
     log.info("job started, id=" .. tostring(self.job_id))
     vim.defer_fn(function()
@@ -400,6 +401,25 @@ end
 
 function M:is_alive()
   return self.job_id ~= nil
+end
+
+function M:kill_tree()
+  self._shutting_down = true
+  if not self.job_id then return end
+  if self.pid then
+    pcall(vim.uv.kill, -self.pid, "sigkill")
+  end
+  pcall(vim.fn.jobstop, self.job_id)
+  self.job_id = nil
+  self.pid = nil
+  self.state = "disconnected"
+  self._ready = false
+  self.pending_requests = {}
+  self.event_handlers = {}
+  self.subscribers = {}
+  self.request_handlers = {}
+  self._ready_callbacks = {}
+  self._buffer_parts = {}
 end
 
 function M:shutdown(force)
