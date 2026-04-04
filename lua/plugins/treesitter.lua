@@ -4,7 +4,6 @@ return {
   event = { "BufReadPost", "BufNewFile" },
   dependencies = {
     "nvim-treesitter/nvim-treesitter-textobjects",
-    "nvim-treesitter/nvim-treesitter-context",
   },
   config = function()
     local supported_filetypes = {
@@ -14,18 +13,6 @@ return {
       'dart', 'swift', 'kotlin', 'java', 'astro', 'vue', 'chat'
     }
 
-    local function patch_query_get()
-      local query = vim.treesitter.query
-      if type(query) ~= "table" then return end
-      local orig = query.get
-      if type(orig) ~= "function" then return end
-      query.get = function(lang, query_name)
-        local ok, result = pcall(orig, lang, query_name)
-        if ok then return result end
-      end
-    end
-    patch_query_get()
-
     require("nvim-treesitter").setup()
 
     local ensure_installed = {
@@ -34,7 +21,7 @@ return {
       "typescript", "tsx", "css", "html", "regex", "diff",
     }
     vim.schedule(function()
-      local installed = require("nvim-treesitter.config").get_installed()
+      local installed = require("nvim-treesitter").get_installed()
       local missing = vim.tbl_filter(function(lang)
         return not vim.list_contains(installed, lang)
       end, ensure_installed)
@@ -42,26 +29,6 @@ return {
         vim.cmd("TSInstall " .. table.concat(missing, " "))
       end
     end)
-
-    require("treesitter-context").setup({
-      enable = true,
-      max_lines = 3,
-      min_window_height = 0,
-      line_timeout = 200,
-      trim_scope = "outer",
-      patterns = {
-        default = {
-          "class", "function", "method",
-          "for", "while", "if", "switch", "case",
-        },
-        markdown = {
-          "section", "atx_heading", "list_item",
-        },
-      },
-      exact_patterns = {},
-      zindex = 20,
-      mode = "cursor",
-    })
 
     vim.treesitter.language.register("markdown", "md")
     vim.treesitter.language.register("markdown_inline", "md")
