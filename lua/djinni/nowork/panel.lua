@@ -7,7 +7,8 @@ M._cursor_idx = 1
 M._tasks = {}
 
 M._assoc_win = nil
-M._orig_height = nil
+M._orig_width = nil
+M._collapsed = {}
 
 local status_icons = {
   running = "●",
@@ -70,7 +71,7 @@ local function get_config()
   if ok and djinni.config then
     return djinni.config
   end
-  return { panel = { height = 15, position = "bottom" }, chat = { dir = ".chat" } }
+  return { panel = { width = 40 }, chat = { dir = ".chat" } }
 end
 
 local function get_assoc_win()
@@ -82,7 +83,7 @@ local function get_assoc_win()
       return win
     end
   end
-  vim.cmd("above split")
+  vim.cmd("rightbelow vsplit")
   local new_win = vim.api.nvim_get_current_win()
   if M._win and vim.api.nvim_win_is_valid(M._win) then
     vim.api.nvim_set_current_win(M._win)
@@ -278,15 +279,23 @@ function M.render()
 
   local groups = M._get_grouped_tasks()
   for _, group in ipairs(groups) do
+    local collapsed = M._collapsed[group.root]
     local summary = aggregate_group(group.tasks)
-    local header = group.name .. " (" .. summary .. ")"
+    local chevron = collapsed and "▸ " or "▾ "
+    local header = chevron .. group.name .. " (" .. summary .. ")"
     table.insert(lines, header)
     local line_nr = #lines
     M._line_projects[line_nr] = group.root
     table.insert(hl_marks, {
-      line = line_nr - 1, col = 0, end_col = #group.name,
+      line = line_nr - 1, col = 0, end_col = #chevron,
+      hl = "NonText",
+    })
+    table.insert(hl_marks, {
+      line = line_nr - 1, col = #chevron, end_col = #chevron + #group.name,
       hl = "Directory",
     })
+
+    if collapsed then goto continue end
 
     for _, task in ipairs(group.tasks) do
       local icon = status_icons[task.status] or "◆"
@@ -337,6 +346,7 @@ function M.render()
         virt_texts[tline_nr - 1] = vt
       end
     end
+    ::continue::
   end
 
   if #lines == 0 then
@@ -363,8 +373,9 @@ function M.render()
   end
 
   if M._win and vim.api.nvim_win_is_valid(M._win) then
+    local cur = vim.api.nvim_win_get_cursor(M._win)
     local line_count = vim.api.nvim_buf_line_count(M._buf)
-    local target = math.min(M._cursor_idx, line_count)
+    local target = math.min(cur[1], line_count)
     if target < 1 then target = 1 end
     pcall(vim.api.nvim_win_set_cursor, M._win, { target, 0 })
   end
@@ -377,7 +388,7 @@ function M.open()
 
   M._assoc_win = vim.api.nvim_get_current_win()
   local cfg = get_config()
-  local height = cfg.panel and cfg.panel.height or 15
+  local width = cfg.panel and cfg.panel.width or 40
 
   M._buf = vim.api.nvim_create_buf(false, true)
   vim.bo[M._buf].buftype = "nofile"
@@ -385,25 +396,27 @@ function M.open()
   vim.bo[M._buf].swapfile = false
   vim.bo[M._buf].filetype = "nowork-panel"
 
-  vim.cmd("botright " .. height .. "split")
+  vim.cmd("topleft " .. width .. "vsplit")
   M._win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(M._win, M._buf)
 
-  vim.wo[M._win].winfixheight = true
+  vim.wo[M._win].winfixwidth = true
   vim.wo[M._win].cursorline = true
   vim.wo[M._win].wrap = false
   vim.wo[M._win].signcolumn = "no"
   vim.wo[M._win].number = false
   vim.wo[M._win].relativenumber = false
   vim.wo[M._win].foldenable = false
+  vim.wo[M._win].statuscolumn = ""
 
-  M._orig_height = height
+  M._orig_width = width
 
   local buf = M._buf
   local function map(key, fn)
     vim.keymap.set("n", key, fn, { buffer = buf, nowait = true })
   end
 
+  map("<Tab>", M.toggle_group)
   map("<CR>", M.open_task)
   map("c", M.create_task)
   map("<C-w>", M.gen_worktree)
@@ -441,13 +454,20 @@ function M.toggle()
   end
 end
 
+function M.toggle_group()
+  local root = project_at_cursor()
+  if not root or root == "" then return end
+  M._collapsed[root] = not M._collapsed[root]
+  M.render()
+end
+
 function M.maximize()
   if not M._win or not vim.api.nvim_win_is_valid(M._win) then return end
 
   if M._maximized then
-    vim.api.nvim_win_set_height(M._win, M._orig_height)
+    vim.api.nvim_win_set_width(M._win, M._orig_width)
   else
-    vim.api.nvim_win_set_height(M._win, vim.o.lines - 3)
+    vim.api.nvim_win_set_width(M._win, vim.o.columns - 10)
   end
   M._maximized = not M._maximized
 end
@@ -605,7 +625,14 @@ function M.archive_task()
     pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
   end
   os.remove(task.file_path)
+  local row = M._win and vim.api.nvim_win_is_valid(M._win) and vim.api.nvim_win_get_cursor(M._win)[1] or 1
   M.render()
+  if M._win and vim.api.nvim_win_is_valid(M._win) then
+    local line_count = vim.api.nvim_buf_line_count(M._buf)
+    row = math.min(row, line_count)
+    if row < 1 then row = 1 end
+    pcall(vim.api.nvim_win_set_cursor, M._win, { row, 0 })
+  end
 end
 
 function M.remove_project()
@@ -735,6 +762,7 @@ function M.show_help()
   local help = {
     "Nowork Keybinds",
     "",
+    "  <Tab>   Toggle project",
     "  c       Create task",
     "  <C-w>   Gen worktree",
     "  m       Merge worktree",

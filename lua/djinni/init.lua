@@ -2,8 +2,7 @@ local M = {}
 
 local defaults = {
   panel = {
-    height = 15,
-    position = "bottom",
+    width = 40,
   },
   chat = {
     dir = ".chat",

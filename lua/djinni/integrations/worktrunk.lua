@@ -227,9 +227,11 @@ local function save_and_clear_buffers()
       resession.save("wt:" .. cur, { notify = false })
     end
   end
-  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.bo[bufnr].buflisted and vim.api.nvim_buf_is_loaded(bufnr) then
-      pcall(vim.api.nvim_buf_delete, bufnr, {})
+  local scratch = vim.api.nvim_create_buf(true, true)
+  local wins = vim.api.nvim_tabpage_list_wins(0)
+  for _, win in ipairs(wins) do
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_set_buf(win, scratch)
     end
   end
 end
