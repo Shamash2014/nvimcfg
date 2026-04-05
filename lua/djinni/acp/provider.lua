@@ -124,9 +124,17 @@ function M.list_models(session_models, provider_name)
         end
       end
     else
-      local ids = iter_model_ids(session_models)
-      for _, id in ipairs(ids) do
-        items[#items + 1] = { id = id, label = id }
+      local models = session_models.availableModels or session_models
+      if type(models) == "table" and #models > 0 then
+        for _, m in ipairs(models) do
+          if type(m) == "string" then
+            items[#items + 1] = { id = m, label = m }
+          elseif m.modelId or m.id then
+            local id = m.modelId or m.id
+            local label = m.name or id
+            items[#items + 1] = { id = id, label = label }
+          end
+        end
       end
     end
   end

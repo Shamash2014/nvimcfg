@@ -3,10 +3,7 @@ local Provider = require("djinni.acp.provider")
 
 
 local M = {}
-M.sessions = {}
-M.idle_guards = {}
-M._idle_timers = {}
-M.reconnect_callbacks = {}
+M.sessions_by_id = {}
 
 local function extract_model_config_option(config_options)
   if not config_options then return nil end
@@ -29,96 +26,46 @@ local function get_config()
   end
   return {
     provider = "claude-code",
-    idle_timeout = 300000,
   }
 end
 
-local function touch_activity(key)
-  local session = M.sessions[key]
-  if not session then return end
-  session.last_activity = vim.uv.now()
-end
-
-function M.touch_activity(project_root, provider_name)
-  touch_activity(M.session_key(project_root, provider_name))
-end
-
-local function schedule_idle_check(key)
-  local config = get_config()
-  local timeout = config.idle_timeout or 1800000
-
-  if M._idle_timers[key] then
-    pcall(function() M._idle_timers[key]:stop() end)
-    pcall(function() M._idle_timers[key]:close() end)
-    M._idle_timers[key] = nil
-  end
-
-  local t = vim.uv.new_timer()
-  M._idle_timers[key] = t
-  t:start(timeout, 0, vim.schedule_wrap(function()
-    t:stop()
-    t:close()
-    M._idle_timers[key] = nil
-
-    local session = M.sessions[key]
-    if not session or not session.client:is_alive() then
-      return
-    end
-
-    local elapsed = vim.uv.now() - session.last_activity
-    if elapsed >= timeout then
-      local project_root, prov = key:match("^(.+):(.+)$")
-      local guarded = false
-      for _, guard in ipairs(M.idle_guards) do
-        if guard(project_root, prov) then
-          guarded = true
-          break
-        end
+local function build_mcp_servers(mcp_dict)
+  local mcp_servers = {}
+  for name, cfg in pairs(mcp_dict or {}) do
+    local t = cfg.type
+    if t == "http" or t == "sse" then
+      local headers = {}
+      for k, v in pairs(cfg.headers or {}) do
+        headers[#headers + 1] = { name = k, value = v }
       end
-      if guarded then
-        touch_activity(key)
-        schedule_idle_check(key)
-      else
-        M.shutdown_key(key)
-      end
+      mcp_servers[#mcp_servers + 1] = {
+        name    = name,
+        type    = t,
+        url     = cfg.url,
+        headers = headers,
+      }
     else
-      schedule_idle_check(key)
+      local env = {}
+      for k, v in pairs(cfg.env or {}) do
+        env[#env + 1] = { name = k, value = v }
+      end
+      mcp_servers[#mcp_servers + 1] = {
+        name    = name,
+        command = cfg.command,
+        args    = cfg.args or {},
+        env     = env,
+      }
     end
-  end))
+  end
+  if #mcp_servers == 0 then
+    return setmetatable({}, { __jsontype = "array" })
+  end
+  return mcp_servers
 end
 
-function M.session_key(project_root, provider_name)
-  if not provider_name or provider_name == "" then
-    provider_name = get_config().provider
-  end
-  return project_root .. ":" .. provider_name
-end
-
-function M.get_or_create(project_root, provider_name)
-  local config = get_config()
-  provider_name = provider_name or config.provider
-  local key = M.session_key(project_root, provider_name)
-
-  local session = M.sessions[key]
-  if session and session.client:is_alive() then
-    touch_activity(key)
-    return session.client, provider_name
-  end
-
-  if session then
-    session.client:shutdown(true)
-    session.task_sessions = {}
-  end
-
+local function spawn_client(project_root, provider_name)
   local provider = Provider.get(provider_name)
-
   local client = Client.new(provider.command, provider.args, project_root)
-  M.sessions[key] = {
-    client = client,
-    provider_name = provider_name,
-    task_sessions = {},
-    last_activity = vim.uv.now(),
-  }
 
   client:on_request("session/request_permission", function(params, respond)
     local handlers = client.event_handlers["permission_request"]
@@ -129,91 +76,81 @@ function M.get_or_create(project_root, provider_name)
     end
   end)
 
-  client:on("client_reconnected", function()
-    local s = M.sessions[key]
-    if s then
-      s.task_sessions = {}
-    end
-    for _, cb in ipairs(M.reconnect_callbacks) do
-      pcall(cb, project_root, provider_name)
-    end
-  end)
+  return client
+end
 
-  schedule_idle_check(key)
-  return client, provider_name
+local function register_session(session_id, entry)
+  M.sessions_by_id[session_id] = entry
+
+  entry.client:on("client_reconnected", function()
+    vim.schedule(function()
+      local cur = M.sessions_by_id[session_id]
+      if not cur or cur.client ~= entry.client then return end
+      M.sessions_by_id[session_id] = nil
+      pcall(function() entry.client:shutdown(true) end)
+      if entry.reconnect_cb then
+        pcall(entry.reconnect_cb, entry.project_root, entry.provider_name)
+      end
+    end)
+  end)
+end
+
+function M.get_client(session_id)
+  local entry = M.sessions_by_id[session_id]
+  if entry then return entry.client end
+  return nil
 end
 
 function M.create_task_session(project_root, callback, opts)
   opts = opts or {}
-  local provider_name = opts.provider
-  local client = M.get_or_create(project_root, provider_name)
-  local key = M.session_key(project_root, provider_name)
-
+  local config = get_config()
+  local provider_name = opts.provider or config.provider
   local log = require("djinni.nowork.log")
-  log.info("create_task_session: root=" .. project_root .. " provider=" .. tostring(provider_name) .. " auth=" .. tostring(client.auth_methods ~= nil))
+
+  local client = spawn_client(project_root, provider_name)
+
+  log.info("create_task_session: root=" .. project_root .. " provider=" .. tostring(provider_name))
   client:when_ready(function(ready_err)
     if ready_err then
       log.warn("create_task_session: ready error: " .. tostring(ready_err.message or ready_err))
+      pcall(function() client:shutdown(true) end)
       if callback then callback(ready_err, nil) end
       return
     end
-    local mcp_dict = opts.mcpServers or {}
-    local mcp_servers = {}
-    for name, cfg in pairs(mcp_dict) do
-      local t = cfg.type
-      if t == "http" or t == "sse" then
-        local headers = {}
-        for k, v in pairs(cfg.headers or {}) do
-          headers[#headers + 1] = { name = k, value = v }
-        end
-        mcp_servers[#mcp_servers + 1] = {
-          name    = name,
-          type    = t,
-          url     = cfg.url,
-          headers = headers,
-        }
-      else
-        local env = {}
-        for k, v in pairs(cfg.env or {}) do
-          env[#env + 1] = { name = k, value = v }
-        end
-        mcp_servers[#mcp_servers + 1] = {
-          name    = name,
-          command = cfg.command,
-          args    = cfg.args or {},
-          env     = env,
-        }
-      end
-    end
-    local req = { cwd = project_root, mcpServers = mcp_servers }
+
+    local req = { cwd = project_root, mcpServers = build_mcp_servers(opts.mcpServers) }
     log.info("create_task_session: sending session/new cwd=" .. project_root)
     client:request("session/new", req, function(err, result)
       if err then
         log.warn("create_task_session: session/new error: " .. vim.inspect(err))
-        if callback then
-          callback(err, nil)
-        end
+        pcall(function() client:shutdown(true) end)
+        if callback then callback(err, nil) end
         return
       end
 
       local session_id = result and result.sessionId
       log.info("create_task_session: session/new OK sid=" .. tostring(session_id))
-      if session_id then
-        local session = M.sessions[key]
-        if session then
-          session.task_sessions[session_id] = true
-          local model_opt = result and extract_model_config_option(result.configOptions)
-          if model_opt then
-            session.model_config_option = model_opt
-          elseif result and (result.models or result.availableModels) then
-            session.available_models = result.models or result.availableModels
-          end
-        end
-        if opts.model and opts.model ~= "" then
-          local model_id = Provider.resolve_model(provider_name or get_config().provider, opts.model, M.get_available_models(project_root, provider_name))
-          if model_id then
-            M.set_model(project_root, session_id, model_id, provider_name)
-          end
+      if not session_id then
+        pcall(function() client:shutdown(true) end)
+        if callback then callback({ message = "no sessionId in response" }, nil) end
+        return
+      end
+
+      local entry = {
+        client = client,
+        provider_name = provider_name,
+        project_root = project_root,
+        model_config_option = result and extract_model_config_option(result.configOptions),
+      }
+      if not entry.model_config_option and result and (result.models or result.availableModels) then
+        entry.available_models = result.models or result.availableModels
+      end
+      register_session(session_id, entry)
+
+      if opts.model and opts.model ~= "" then
+        local model_id = Provider.resolve_model(provider_name, opts.model, M.get_available_models(session_id))
+        if model_id then
+          M.set_model(nil, session_id, model_id)
         end
       end
 
@@ -224,107 +161,90 @@ function M.create_task_session(project_root, callback, opts)
   end)
 end
 
-function M.set_model(project_root, session_id, model_id, provider_name)
-  local client = M.get_or_create(project_root, provider_name)
-  local key = M.session_key(project_root, provider_name)
-  touch_activity(key)
-  local session = M.sessions[key]
-  if session and session.model_config_option then
-    client:request("session/set_config_option", {
-      sessionId = session_id,
-      optionId = session.model_config_option.optionId,
-      value = model_id,
-    }, function() end)
-  else
-    client:request("session/set_model", { sessionId = session_id, modelId = model_id }, function() end)
-  end
-end
-
 function M.load_task_session(project_root, session_id, callback, opts)
   opts = opts or {}
-  local provider_name = opts.provider
-  local client = M.get_or_create(project_root, provider_name)
-  local key = M.session_key(project_root, provider_name)
-  touch_activity(key)
+  local config = get_config()
+  local provider_name = opts.provider or config.provider
+  local log = require("djinni.nowork.log")
 
-  client:when_ready(function()
-    local provider = Provider.get(provider_name or get_config().provider)
+  local client = spawn_client(project_root, provider_name)
+
+  client:when_ready(function(ready_err)
+    if ready_err then
+      pcall(function() client:shutdown(true) end)
+      if callback then callback(ready_err, nil) end
+      return
+    end
+
+    local provider = Provider.get(provider_name)
     local resume_cfg = provider.resume or { method = "session/resume" }
 
     local params
     if resume_cfg.needs_cwd then
-      local mcp_dict = (opts and opts.mcpServers) or {}
-      local mcp_servers = {}
-      for name, cfg in pairs(mcp_dict) do
-        local t = cfg.type
-        if t == "http" or t == "sse" then
-          local headers = {}
-          for k, v in pairs(cfg.headers or {}) do
-            headers[#headers + 1] = { name = k, value = v }
-          end
-          mcp_servers[#mcp_servers + 1] = {
-            name    = name,
-            type    = t,
-            url     = cfg.url,
-            headers = headers,
-          }
-        else
-          local env = {}
-          for k, v in pairs(cfg.env or {}) do
-            env[#env + 1] = { name = k, value = v }
-          end
-          mcp_servers[#mcp_servers + 1] = {
-            name    = name,
-            command = cfg.command,
-            args    = cfg.args or {},
-            env     = env,
-          }
-        end
-      end
-      params = { sessionId = session_id, cwd = project_root, mcpServers = mcp_servers }
+      params = { sessionId = session_id, cwd = project_root, mcpServers = build_mcp_servers(opts.mcpServers) }
     else
       params = { sessionId = session_id }
     end
 
     client:request(resume_cfg.method, params, function(err, result)
-      if not err then
-        local session = M.sessions[key]
-        if session then
-          session.task_sessions[session_id] = true
-          local model_opt = result and extract_model_config_option(result.configOptions)
-          if model_opt then
-            session.model_config_option = model_opt
-          elseif result and (result.models or result.availableModels) then
-            session.available_models = result.models or result.availableModels
-          end
-        end
+      if err then
+        log.warn("load_task_session: resume error sid=" .. tostring(session_id) .. " err=" .. vim.inspect(err))
+        pcall(function() client:shutdown(true) end)
+        if callback then callback(err, nil) end
+        return
       end
 
-      if not err and opts.model and opts.model ~= "" then
-        local model_id = Provider.resolve_model(provider_name or get_config().provider, opts.model, M.get_available_models(project_root, provider_name))
+      local entry = {
+        client = client,
+        provider_name = provider_name,
+        project_root = project_root,
+        model_config_option = result and extract_model_config_option(result.configOptions),
+      }
+      if not entry.model_config_option and result and (result.models or result.availableModels) then
+        entry.available_models = result.models or result.availableModels
+      end
+      register_session(session_id, entry)
+
+      if opts.model and opts.model ~= "" then
+        local model_id = Provider.resolve_model(provider_name, opts.model, M.get_available_models(session_id))
         if model_id then
-          M.set_model(project_root, session_id, model_id, provider_name)
+          M.set_model(nil, session_id, model_id)
         end
       end
 
-      if callback then
-        callback(err, result)
-      end
+      if callback then callback(nil, result) end
     end, { timeout = 30000 })
   end)
 end
 
-function M.send_message(project_root, session_id, content, callback, images, provider_name)
-  local log = require("djinni.nowork.log")
-  local client = M.get_or_create(project_root, provider_name)
-  local key = M.session_key(project_root, provider_name)
-  touch_activity(key)
+function M.set_model(_, session_id, model_id, _provider_name)
+  local entry = M.sessions_by_id[session_id]
+  if not entry then return end
+  if entry.model_config_option then
+    entry.client:request("session/set_config_option", {
+      sessionId = session_id,
+      optionId = entry.model_config_option.optionId,
+      value = model_id,
+    }, function() end)
+  else
+    entry.client:request("session/set_model", { sessionId = session_id, modelId = model_id }, function() end)
+  end
+end
 
-  log.info("send_message: sid=" .. tostring(session_id) .. " ready=" .. tostring(client._ready) .. " alive=" .. tostring(client:is_alive()) .. " sub=" .. tostring(client.subscribers[session_id] ~= nil))
+function M.send_message(_, session_id, content, callback, images, _provider_name)
+  local log = require("djinni.nowork.log")
+  local entry = M.sessions_by_id[session_id]
+  if not entry then
+    log.warn("send_message: no entry for sid=" .. tostring(session_id))
+    if callback then callback({ message = "Session not found" }, nil) end
+    return
+  end
+  local client = entry.client
+
+  log.info("send_message: sid=" .. tostring(session_id) .. " ready=" .. tostring(client._ready) .. " alive=" .. tostring(client:is_alive()))
 
   client:when_ready(function(ready_err)
     if ready_err then
-      log.warn("send_message: when_ready error: " .. tostring(ready_err.message or ready_err))
       if callback then callback(ready_err, nil) end
       return
     end
@@ -342,107 +262,87 @@ function M.send_message(project_root, session_id, content, callback, images, pro
       sessionId = session_id,
       prompt = prompt,
     }, function(err, result)
-      log.info("send_message: callback err=" .. tostring(err and (err.message or vim.inspect(err))) .. " result=" .. tostring(result ~= nil))
-      touch_activity(key)
-      if callback then
-        callback(err, result)
-      end
+      if callback then callback(err, result) end
     end)
   end)
 end
 
-function M.set_mode(project_root, session_id, mode_id, provider_name)
-  local client = M.get_or_create(project_root, provider_name)
-  touch_activity(M.session_key(project_root, provider_name))
-  client:notify("session/set_mode", {
+function M.set_mode(_, session_id, mode_id, _provider_name)
+  local entry = M.sessions_by_id[session_id]
+  if not entry then return end
+  entry.client:request("session/set_mode", {
     sessionId = session_id,
     modeId = mode_id,
-  })
+  }, function(err, result) -- response is minimal; ignore err/result for now
+  end)
 end
 
-function M.interrupt(project_root, session_id, provider_name)
-  local client = M.get_or_create(project_root, provider_name)
-  touch_activity(M.session_key(project_root, provider_name))
-  client:notify("session/cancel", { sessionId = session_id })
+function M.interrupt(_, session_id, _provider_name)
+  local entry = M.sessions_by_id[session_id]
+  if not entry then return end
+  entry.client:notify("session/cancel", { sessionId = session_id })
 end
 
-function M.close_task_session(project_root, session_id, provider_name)
+function M.close_task_session(_, session_id, _provider_name)
   if not session_id or session_id == "" then return end
-  local key = M.session_key(project_root, provider_name)
-  local s = M.sessions[key]
-  if not s then return end
-  if s.client:is_alive() then
-    s.client:notify("session/cancel", { sessionId = session_id })
+  local entry = M.sessions_by_id[session_id]
+  if not entry then return end
+  M.sessions_by_id[session_id] = nil
+  if entry.client:is_alive() then
+    pcall(function() entry.client:notify("session/cancel", { sessionId = session_id }) end)
   end
-  s.task_sessions[session_id] = nil
+  pcall(function() entry.client:shutdown(true) end)
 end
 
-function M.on_event(project_root, event, handler, provider_name)
-  local client = M.get_or_create(project_root, provider_name)
-  client:on(event, handler)
+function M.on_event(_, session_id, event, handler)
+  local entry = M.sessions_by_id[session_id]
+  if not entry then return end
+  entry.client:on(event, handler)
 end
 
-function M.subscribe_session(project_root, session_id, handlers, provider_name)
-  local client = M.get_or_create(project_root, provider_name)
-  client:subscribe(session_id, handlers)
+function M.subscribe_session(_, session_id, handlers, _provider_name)
+  local entry = M.sessions_by_id[session_id]
+  if not entry then return end
+  entry.client:subscribe(session_id, handlers)
 end
 
-function M.unsubscribe_session(project_root, session_id, provider_name)
-  local key = M.session_key(project_root, provider_name)
-  local s = M.sessions[key]
-  if s and s.client then
-    s.client:unsubscribe(session_id)
+function M.unsubscribe_session(_, session_id, _provider_name)
+  local entry = M.sessions_by_id[session_id]
+  if entry and entry.client then
+    entry.client:unsubscribe(session_id)
   end
 end
 
-function M.force_kill(project_root, provider_name)
-  local key = M.session_key(project_root, provider_name)
-  if M._idle_timers[key] then
-    pcall(function() M._idle_timers[key]:stop() end)
-    pcall(function() M._idle_timers[key]:close() end)
-    M._idle_timers[key] = nil
+function M.on_reconnect(session_id, cb)
+  local entry = M.sessions_by_id[session_id]
+  if entry then
+    entry.reconnect_cb = cb
   end
-  local s = M.sessions[key]
-  if not s then return end
-  s.client:kill_tree()
-  M.sessions[key] = nil
 end
 
-function M.shutdown_key(key)
-  if M._idle_timers[key] then
-    pcall(function() M._idle_timers[key]:stop() end)
-    pcall(function() M._idle_timers[key]:close() end)
-    M._idle_timers[key] = nil
-  end
-  local session = M.sessions[key]
-  if not session then return end
-  for sid in pairs(session.task_sessions) do
-    if session.client:is_alive() then
-      session.client:notify("session/cancel", { sessionId = sid })
-    end
-  end
-  session.client:shutdown(true)
-  M.sessions[key] = nil
+function M.get_available_models(session_id)
+  local entry = M.sessions_by_id[session_id]
+  if not entry then return nil end
+  return entry.model_config_option or entry.available_models or nil
 end
 
-function M.shutdown_project(project_root, force, provider_name)
-  local key = M.session_key(project_root, provider_name)
-  local session = M.sessions[key]
-  if not session then
-    return
-  end
-  for sid in pairs(session.task_sessions) do
-    if session.client:is_alive() then
-      session.client:notify("session/cancel", { sessionId = sid })
-    end
-  end
-  session.client:shutdown(force)
-  M.sessions[key] = nil
+function M.touch_activity(_, _)
 end
 
 function M.shutdown_all()
-  for key in pairs(M.sessions) do
-    M.shutdown_key(key)
+  local sids = {}
+  for sid in pairs(M.sessions_by_id) do
+    sids[#sids + 1] = sid
+  end
+  for _, sid in ipairs(sids) do
+    local entry = M.sessions_by_id[sid]
+    M.sessions_by_id[sid] = nil
+    if entry then
+      if entry.client:is_alive() then
+        pcall(function() entry.client:notify("session/cancel", { sessionId = sid }) end)
+      end
+      pcall(function() entry.client:shutdown(true) end)
+    end
   end
 end
 
@@ -451,12 +351,5 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
     M.shutdown_all()
   end,
 })
-
-function M.get_available_models(project_root, provider_name)
-  local key = M.session_key(project_root, provider_name)
-  local s = M.sessions[key]
-  if not s then return nil end
-  return s.model_config_option or s.available_models or nil
-end
 
 return M

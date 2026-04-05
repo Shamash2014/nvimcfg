@@ -4,9 +4,10 @@ function M.get_models(buf)
   local chat = require("djinni.nowork.chat")
   local session = require("djinni.acp.session")
   local provider = require("djinni.acp.provider")
-  local root = chat.get_project_root(buf)
   local provider_name = chat.get_provider(buf)
-  local available = session.get_available_models(root, provider_name)
+  local sid = chat.get_session_id and chat.get_session_id(buf) or nil
+  if (not sid or sid == "") and chat._sessions then sid = chat._sessions[buf] end
+  local available = sid and session.get_available_models(sid) or nil
   return provider.list_models(available, provider_name)
 end
 

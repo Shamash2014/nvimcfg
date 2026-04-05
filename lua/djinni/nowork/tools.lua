@@ -164,4 +164,17 @@ function M.apply_extmarks(buf, ns)
   end
 end
 
+function M.extract_tool_at_cursor(lines, row)
+  local line = lines[row]
+  if not line then return nil end
+  local name, args = line:match("^[├└]─ ([%w_:%.]+)%((.-)%)$")
+  if not name then
+    name = line:match("^[├└]─ ([%w_:%.]+)")
+  end
+  if name then
+    return { name = name, args = args or "" }
+  end
+  return nil
+end
+
 return M

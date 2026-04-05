@@ -4,6 +4,7 @@ local commands = require("djinni.nowork.commands")
 local session = require("djinni.acp.session")
 local log = require("djinni.nowork.log")
 local mcp = require("djinni.nowork.mcp")
+local tools = require("djinni.nowork.tools")
 local skills = require("djinni.nowork.skills")
 
 local ns_id = vim.api.nvim_create_namespace("djinni_chat")
@@ -62,6 +63,20 @@ M._djinni_marker_line = {} -- buf -> line number of @Djinni marker (avoids backw
 M._append_batch = {} -- buf -> list of lines to write in next scheduled flush
 M._append_scheduled = {} -- buf -> true when a flush is already scheduled
 M._fm_end_cache = {} -- buf -> frontmatter closing line index (1-based)
+M._cached_root = {} -- buf -> cached project root (avoids reading frontmatter per event)
+M._last_activity_touch = {} -- buf -> last timestamp we called touch_activity
+M._checktime_dirty = false
+M._FILE_MUTATING = { edit=true, create=true, write=true, delete=true, move=true }
+
+function M._invalidate_session(buf)
+  local old_sid = M._sessions[buf]
+  M._sessions[buf] = nil
+  M._set_frontmatter_field(buf, "session", "")
+  if old_sid and old_sid ~= "" then
+    local root = M._cached_root[buf] or M.get_project_root(buf)
+    pcall(session.close_task_session, root, old_sid, get_provider(buf))
+  end
+end
 
 function M._close_tool_fold(buf)
   local start = M._tool_section_start[buf]
@@ -81,37 +96,20 @@ function M._close_tool_fold(buf)
   end, 50)
 end
 
-session.idle_guards[#session.idle_guards + 1] = function(project_root, provider_name)
-  for b, _ in pairs(M._sessions) do
-    if vim.api.nvim_buf_is_valid(b) and M.get_project_root(b) == project_root and get_provider(b) == provider_name then
-      return true
+function M._on_session_reconnect(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  if M._streaming[buf] then
+    M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
+    if M._stream_cleanup[buf] then
+      M._stream_cleanup[buf](true)
     end
+    M._cleanup_empty_djinni(buf)
   end
-  return false
-end
-
-session.reconnect_callbacks[#session.reconnect_callbacks + 1] = function(project_root, provider_name)
-  local count = 0
-  for b, _ in pairs(M._attached) do
-    if vim.api.nvim_buf_is_valid(b) and M.get_project_root(b) == project_root and get_provider(b) == provider_name then
-      if M._streaming[b] then
-        M._stream_gen[b] = (M._stream_gen[b] or 0) + 1
-        if M._stream_cleanup[b] then
-          M._stream_cleanup[b](true)
-        end
-        M._cleanup_empty_djinni(b)
-      end
-      M._sessions[b] = nil
-      M._set_frontmatter_field(b, "session", "")
-      M._creating_session[b] = nil
-      M._update_system_block(b, "Reconnecting...")
-      M._ensure_session(b)
-      count = count + 1
-    end
-  end
-  if count > 0 then
-    vim.notify("[djinni] Reconnected — re-establishing " .. count .. " session(s)", vim.log.levels.WARN)
-  end
+  M._invalidate_session(buf)
+  M._creating_session[buf] = nil
+  M._update_system_block(buf, "Reconnecting...")
+  M._ensure_session(buf)
+  vim.notify("[djinni] Reconnected — re-establishing session", vim.log.levels.WARN)
 end
 
 local function hide_snacks_notif(id)
@@ -183,11 +181,10 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
     if not M._streaming[b] and not M._creating_session[b] then
       local root = M.get_project_root(b)
       if root then
-        local s = session.sessions[session.session_key(root, get_provider(b))]
         local sid = M._sessions[b]
-        local client_dead = not s or not s.client or not s.client:is_alive()
-        local session_gone = sid and s and not (s.task_sessions or {})[sid]
-        if client_dead or session_gone then
+        local s = sid and session.sessions_by_id[sid] or nil
+        local client_dead = sid and (not s or not s.client or not s.client:is_alive())
+        if sid and client_dead then
           M._sessions[b] = nil
           M._set_frontmatter_field(b, "session", "")
           M._ensure_session(b)
@@ -235,8 +232,13 @@ local function parse_csv(str)
   return result
 end
 
+M._cached_provider = {}
 get_provider = function(buf)
-  return read_frontmatter_field(buf, "provider")
+  local cached = M._cached_provider[buf]
+  if cached then return cached end
+  cached = read_frontmatter_field(buf, "provider")
+  M._cached_provider[buf] = cached
+  return cached
 end
 M.get_provider = get_provider
 
@@ -275,14 +277,49 @@ local function inject_skills(buf, root, prompt)
 end
 
 local function build_history_context(buf, current_text)
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = blocks.parse(lines)
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  local scan_from = math.max(0, line_count - 500)
+  local lines = vim.api.nvim_buf_get_lines(buf, scan_from, -1, false)
   local msgs = {}
-  for _, block in ipairs(parsed) do
-    if (block.type == "you" or block.type == "djinni") and block.content and block.content ~= "" then
-      msgs[#msgs + 1] = block
+  local current_type = nil
+  local current_lines = {}
+  for _, line in ipairs(lines) do
+    local header = line:match("^@(%w+)%s*$")
+    if header then
+      if current_type and #current_lines > 0 then
+        local content = table.concat(current_lines, "\n"):match("^%s*(.-)%s*$")
+        if content ~= "" then
+          msgs[#msgs + 1] = { type = current_type:lower(), content = content }
+        end
+      end
+      current_type = header
+      current_lines = {}
+    elseif line:match("^%-%-%-$") then
+      if current_type and #current_lines > 0 then
+        local content = table.concat(current_lines, "\n"):match("^%s*(.-)%s*$")
+        if content ~= "" then
+          msgs[#msgs + 1] = { type = current_type:lower(), content = content }
+        end
+      end
+      current_type = nil
+      current_lines = {}
+    elseif current_type then
+      current_lines[#current_lines + 1] = line
     end
   end
+  if current_type and #current_lines > 0 then
+    local content = table.concat(current_lines, "\n"):match("^%s*(.-)%s*$")
+    if content ~= "" then
+      msgs[#msgs + 1] = { type = current_type:lower(), content = content }
+    end
+  end
+  local filtered = {}
+  for _, m in ipairs(msgs) do
+    if m.type == "you" or m.type == "djinni" then
+      filtered[#filtered + 1] = m
+    end
+  end
+  msgs = filtered
   if #msgs > 0 and msgs[#msgs].type == "you" then
     msgs[#msgs] = nil
   end
@@ -349,7 +386,7 @@ function M.create(project_root, opts)
     "project: " .. project_name(project_root),
     "root: " .. project_root,
     "session:",
-    "provider: claude-code",
+    "provider: " .. (opts.provider or (config.acp and config.acp.provider) or "claude-code"),
     "model:",
     "mcp: " .. mcp_value,
     "system: " .. (opts.system or ""),
@@ -441,7 +478,6 @@ function M._ensure_session(buf)
   local sid = M.get_session_id(buf)
   log.info("_ensure_session: buf=" .. tostring(buf) .. " sid=" .. tostring(sid) .. " root=" .. root)
   if sid and sid ~= "" then
-    session.get_or_create(root, get_provider(buf))
     local sess_opts = build_session_opts(buf, root)
     log.info("_ensure_session: loading task session sid=" .. sid)
     session.load_task_session(root, sid, function(err, result)
@@ -647,6 +683,11 @@ function M.attach(buf)
   map("n", "[[", function()
     M._jump_turn(buf, -1)
   end)
+  map("n", "G", function()
+    M._auto_scroll[buf] = true
+    local lc = vim.api.nvim_buf_line_count(buf)
+    pcall(vim.api.nvim_win_set_cursor, 0, { lc, 0 })
+  end)
   map("n", "<Tab>", "za")
   map("n", "<CR>", function()
     local text = M._get_you_block_at_cursor(buf)
@@ -701,7 +742,8 @@ function M.attach(buf)
     vim.notify("[djinni] No plan section", vim.log.levels.INFO)
   end)
   map("n", "<C-c>", function()
-    M.interrupt_all()
+    M.interrupt(buf)
+    vim.notify("[djinni] Interrupted", vim.log.levels.WARN)
   end)
   map("n", "gP", function()
     M.select_provider(buf)
@@ -817,6 +859,9 @@ function M.attach(buf)
   end)
   map("n", "r", function()
     M._retry_block(buf)
+  end)
+  map("n", "gx", function()
+    M._rerun_tool(buf)
   end)
   map("n", "s", function()
     M._permission_action(buf, "select")
@@ -957,6 +1002,8 @@ function M.attach(buf)
       M._fm_end_cache[buf] = nil
       M._append_batch[buf] = nil
       M._append_scheduled[buf] = nil
+      M._first_msg_sent[buf] = nil
+      M._last_interrupt_time[buf] = nil
     end,
   })
 end
@@ -970,12 +1017,14 @@ function M.foldexpr(lnum)
   if line:match("^%*%*Thinking") or _is_tool_line(line) then
     return ">1"
   end
-  for i = lnum - 1, math.max(1, lnum - 200), -1 do
-    local l = vim.fn.getline(i)
-    if l:match("^@%w") or l:match("^%-%-%-$") then return "0" end
-    if l:match("^%*%*Thinking") or _is_tool_line(l) then return "1" end
+  if line:match("^@%w") or line:match("^%-%-%-$") or line == "" then
+    return "0"
   end
-  return "0"
+  local prev = vim.fn.getline(lnum - 1)
+  if prev:match("^%*%*Thinking") or _is_tool_line(prev) then
+    return "1"
+  end
+  return "="
 end
 
 function M.foldtext()
@@ -1220,33 +1269,44 @@ function M.send(buf, text)
         M._send_retries[buf] = 0
         return
       end
-      M.send(buf, text)
+      local delay = 1000 * math.pow(2, (M._send_retries[buf] or 1) - 1)
+      vim.defer_fn(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        M.send(buf, text)
+      end, delay)
+    end
+
+    local function lightweight_cleanup()
+      M._streaming[buf] = nil
+      M._stream_cleanup[buf] = nil
+      M._cleanup_deferred[buf] = nil
+      M._interrupt_pending[buf] = nil
+      M._stream_client[buf] = nil
+      M._flush_pending(buf)
+    end
+
+    local function invalidate_session()
+      M._invalidate_session(buf)
     end
 
     if err and err.data and err.data.details == "Session not found" then
       vim.schedule(function()
         if M._stream_gen[buf] ~= gen then return end
         if not vim.api.nvim_buf_is_valid(buf) then return end
-        if M._stream_cleanup[buf] then
-          M._stream_cleanup[buf]()
-        end
+        lightweight_cleanup()
         M._cleanup_empty_djinni(buf)
-        M._sessions[buf] = nil
-        M._set_frontmatter_field(buf, "session", "")
+        invalidate_session()
         retry_send("Session not found")
       end)
     elseif err then
       vim.schedule(function()
         if M._stream_gen[buf] ~= gen then return end
         if not vim.api.nvim_buf_is_valid(buf) then return end
-        if M._stream_cleanup[buf] then
-          M._stream_cleanup[buf]()
-        end
+        lightweight_cleanup()
         M._cleanup_empty_djinni(buf)
         local msg = err.message or (err.data and err.data.details) or vim.inspect(err)
         M._update_system_block(buf, "Error: " .. msg .. " — reconnecting...")
-        M._sessions[buf] = nil
-        M._set_frontmatter_field(buf, "session", "")
+        invalidate_session()
         retry_send(msg)
       end)
     else
@@ -1258,12 +1318,9 @@ function M.send(buf, text)
         local total = (tok.inputTokens or 0) + (tok.outputTokens or 0)
         if total == 0 then
           log.warn("0-token response, stopReason=" .. tostring(prompt_result and prompt_result.stopReason) .. " — invalidating session")
-          if M._stream_cleanup[buf] then
-            M._stream_cleanup[buf]()
-          end
+          lightweight_cleanup()
           M._cleanup_empty_djinni(buf)
-          M._sessions[buf] = nil
-          M._set_frontmatter_field(buf, "session", "")
+          invalidate_session()
           M._update_system_block(buf, "Empty response — reconnecting...")
           retry_send("empty response")
           return
@@ -1288,8 +1345,9 @@ function M.interrupt(buf)
 
   if last and (now - last) < FORCE_KILL_WINDOW and not M._streaming[buf] then
     local root = M.get_project_root(buf)
-    if root then
-      session.force_kill(root, get_provider(buf))
+    local force_sid = M.get_session_id(buf) or M._sessions[buf]
+    if root and force_sid and force_sid ~= "" then
+      session.close_task_session(root, force_sid, get_provider(buf))
       vim.notify("[djinni] Force-killed process", vim.log.levels.WARN)
     end
     M._last_interrupt_time[buf] = nil
@@ -1382,6 +1440,7 @@ end
 function M._flush_pending(buf)
   local pt = M._pending_text[buf]
   if not pt or #pt == 0 then return end
+  M._text_dirty = false
   local pending = table.concat(pt)
   M._pending_text[buf] = {}
   if pending == "" then return end
@@ -1430,6 +1489,10 @@ function M._stop_global_timer()
   M._global_timer_scheduled = false
 end
 
+M._watchdog_tick = 0
+M._checktime_tick = 0
+M._text_dirty = false
+
 function M._start_global_timer()
   if M._global_timer then return end
   local timer = vim.uv.new_timer()
@@ -1440,6 +1503,8 @@ function M._start_global_timer()
     M._global_timer_scheduled = true
     vim.schedule(function()
       M._global_timer_scheduled = false
+      M._watchdog_tick = M._watchdog_tick + 1
+      local do_watchdog = M._watchdog_tick % 6 == 0
 
       local any_streaming = false
       for buf, _ in pairs(M._streaming) do
@@ -1453,32 +1518,33 @@ function M._start_global_timer()
 
         any_streaming = true
 
-        if vim.fn.bufwinid(buf) ~= -1 then
+        if M._text_dirty and vim.fn.bufwinid(buf) ~= -1 then
           M._flush_pending(buf)
         end
 
-        local client = M._stream_client[buf]
-        local ok_alive, alive = pcall(function() return client and client:is_alive() end)
-        local dead = not ok_alive or not alive
-        local has_active_tool = (M._active_tool_count[buf] or 0) > 0
-        local elapsed = vim.uv.now() - (M._last_event_time[buf] or vim.uv.now())
-        local no_events = not M._events_received[buf] and elapsed > 180000
-        local tool_stuck = has_active_tool and elapsed > 300000
-        local stale = not dead and not has_active_tool and M._events_received[buf] and elapsed > 900000
-        if dead or no_events or tool_stuck or stale then
-          local exit_info = dead and client and client.exit_code and " (exit " .. tostring(client.exit_code) .. ")" or ""
-          local reason = dead and ("Process died" .. exit_info) or no_events and "No events received for 180s" or stale and "No events for 900s" or "Tool stuck for 300s"
-          log.warn("watchdog triggered: " .. reason)
-          local pt = M._pending_text[buf]
-          if not pt then pt = {}; M._pending_text[buf] = pt end
-          pt[#pt + 1] = "\n\n**" .. reason .. "**\n"
-          M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
-          M._sessions[buf] = nil
-          M._set_frontmatter_field(buf, "session", "")
-          M._last_tool_failed[buf] = false
-          M._continuation_count[buf] = 0
-          if M._stream_cleanup[buf] then
-            M._stream_cleanup[buf](true)
+        if do_watchdog then
+          local client = M._stream_client[buf]
+          local ok_alive, alive = pcall(function() return client and client:is_alive() end)
+          local dead = not ok_alive or not alive
+          local has_active_tool = (M._active_tool_count[buf] or 0) > 0
+          local elapsed = vim.uv.now() - (M._last_event_time[buf] or vim.uv.now())
+          local no_events = not M._events_received[buf] and elapsed > 180000
+          local tool_stuck = has_active_tool and elapsed > 300000
+          local stale = not dead and not has_active_tool and M._events_received[buf] and elapsed > 900000
+          if dead or no_events or tool_stuck or stale then
+            local exit_info = dead and client and client.exit_code and " (exit " .. tostring(client.exit_code) .. ")" or ""
+            local reason = dead and ("Process died" .. exit_info) or no_events and "No events received for 180s" or stale and "No events for 900s" or "Tool stuck for 300s"
+            log.warn("watchdog triggered: " .. reason)
+            local pt = M._pending_text[buf]
+            if not pt then pt = {}; M._pending_text[buf] = pt end
+            pt[#pt + 1] = "\n\n**" .. reason .. "**\n"
+            M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
+            M._invalidate_session(buf)
+            M._last_tool_failed[buf] = false
+            M._continuation_count[buf] = 0
+            if M._stream_cleanup[buf] then
+              M._stream_cleanup[buf](true)
+            end
           end
         end
 
@@ -1490,13 +1556,26 @@ function M._start_global_timer()
         if console_ok and console then console._dirty = true end
       end
 
+      if M._checktime_dirty then
+        M._checktime_tick = M._checktime_tick + 1
+        if M._checktime_tick >= 4 then
+          M._checktime_dirty = false
+          M._checktime_tick = 0
+          vim.cmd("silent! checktime")
+        end
+      end
+
       for buf, _ in pairs(M._scroll_pending) do
         M._scroll_pending[buf] = nil
-        if M._auto_scroll[buf] ~= false then
-          local win = vim.fn.bufwinid(buf)
-          if win ~= -1 then
-            local new_count = vim.api.nvim_buf_line_count(buf)
-            pcall(vim.api.nvim_win_set_cursor, win, { new_count, 0 })
+        local win = vim.fn.bufwinid(buf)
+        if win ~= -1 then
+          local line_count = vim.api.nvim_buf_line_count(buf)
+          local ok, pos = pcall(vim.api.nvim_win_get_cursor, win)
+          if ok and (line_count - pos[1]) > 3 then
+            M._auto_scroll[buf] = false
+          end
+          if M._auto_scroll[buf] ~= false then
+            pcall(vim.api.nvim_win_set_cursor, win, { line_count, 0 })
           end
         end
       end
@@ -1569,12 +1648,20 @@ function M._append_lines(buf, lines_array)
 end
 
 function M._on_session_update(buf, data)
-  local root = M.get_project_root(buf)
+  if not data then return end
+  local root = M._cached_root[buf]
+  if not root then
+    root = M.get_project_root(buf)
+    M._cached_root[buf] = root
+  end
   local ok, err = pcall(function()
-    if not data then return end
-    M._last_event_time[buf] = vim.uv.now()
+    local now = vim.uv.now()
+    M._last_event_time[buf] = now
     M._events_received[buf] = true
-    if root then session.touch_activity(root, get_provider(buf)) end
+    if root and (now - (M._last_activity_touch[buf] or 0)) > 5000 then
+      M._last_activity_touch[buf] = now
+      session.touch_activity(root, get_provider(buf))
+    end
 
     local update = data.update or data
     local update_type = update.sessionUpdate
@@ -1589,12 +1676,12 @@ function M._on_session_update(buf, data)
 
     if update_type == "agent_message_chunk" then
       M._last_perm_tool[buf] = nil
-      if M._tool_section_start[buf] then M._close_tool_fold(buf) end
       local text = update.content and update.content.text
       if text then
         local pt = M._pending_text[buf]
         if not pt then pt = {}; M._pending_text[buf] = pt end
         pt[#pt + 1] = text
+        M._text_dirty = true
       end
 
     elseif update_type == "agent_thought_chunk" then
@@ -1603,6 +1690,7 @@ function M._on_session_update(buf, data)
         local pt = M._pending_text[buf]
         if not pt then pt = {}; M._pending_text[buf] = pt end
         pt[#pt + 1] = text
+        M._text_dirty = true
       end
 
     elseif update_type == "tool_call" then
@@ -1636,9 +1724,8 @@ function M._on_session_update(buf, data)
         M._last_tool_failed[buf] = false
         M._last_perm_tool[buf] = nil
         if not is_think then M._active_tool_count[buf] = math.max(0, (M._active_tool_count[buf] or 1) - 1) end
-        local FILE_MUTATING = { edit=true, create=true, write=true, delete=true, move=true }
-        if FILE_MUTATING[kind] then
-          vim.schedule(function() vim.cmd("silent! checktime") end)
+        if M._FILE_MUTATING[kind] then
+          M._checktime_dirty = true
         end
         if kind == "Agent" then
           local agent_title = title ~= "" and title or "subagent"
@@ -1670,21 +1757,7 @@ function M._on_session_update(buf, data)
             batch[#batch + 1] = ""
             M._append_lines(buf, batch)
           end
-          local think_fold_start = M._think_fold_start[buf]
           M._think_fold_start[buf] = nil
-          if think_fold_start and not M._streaming[buf] then
-            vim.defer_fn(function()
-              if not vim.api.nvim_buf_is_valid(buf) then return end
-              local win = vim.fn.bufwinid(buf)
-              if win == -1 then return end
-              local fold_end = vim.api.nvim_buf_line_count(buf)
-              if fold_end > think_fold_start then
-                pcall(vim.api.nvim_win_call, win, function()
-                  vim.cmd(think_fold_start .. "," .. fold_end .. "foldclose")
-                end)
-              end
-            end, 50)
-          end
         end
       else
         local text_parts = {}
@@ -1857,7 +1930,6 @@ function M._on_session_update(buf, data)
       end
 
     elseif update_type == "usage_update" then
-      log.info("usage_update: " .. vim.inspect(update))
       M._accumulate_usage(buf, update)
 
     elseif update_type == "result" then
@@ -2006,6 +2078,9 @@ function M._subscribe_session(buf, root, sid)
       M._on_permission(buf, params, respond)
     end,
   }, get_provider(buf))
+  session.on_reconnect(sid, function()
+    vim.schedule(function() M._on_session_reconnect(buf) end)
+  end)
 end
 
 function M._start_streaming(buf)
@@ -2043,6 +2118,7 @@ function M._start_streaming(buf)
 
   M._stream_cleanup[buf] = function(force)
     if not M._streaming[buf] then return end
+    local cleanup_gen = M._stream_gen[buf]
     if not vim.api.nvim_buf_is_valid(buf) then
       cleanup()
       return
@@ -2072,6 +2148,7 @@ function M._start_streaming(buf)
     M._cleanup_empty_djinni(buf)
     vim.defer_fn(function()
       if not vim.api.nvim_buf_is_valid(buf) then return end
+      if M._streaming[buf] then return end
       local cwin = vim.fn.bufwinid(buf)
       if cwin == -1 then return end
       pcall(function()
@@ -2081,7 +2158,13 @@ function M._start_streaming(buf)
       pcall(vim.api.nvim_win_call, cwin, function()
         vim.cmd("normal! zx")
       end)
-    end, 80)
+    end, 300)
+    vim.defer_fn(function()
+      if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].modified then
+        pcall(vim.api.nvim_buf_call, buf, function() vim.cmd("silent! write") end)
+      end
+    end, 500)
+    M._maybe_collapse_turns(buf)
     local last_perm = M._last_perm_tool[buf]
     M._last_perm_tool[buf] = nil
     local count = M._continuation_count[buf] or 0
@@ -2131,6 +2214,7 @@ function M._start_streaming(buf)
 
     if not M._queue[buf] or #M._queue[buf] == 0 then
       vim.defer_fn(function()
+        if M._streaming[buf] or M._stream_gen[buf] ~= cleanup_gen then return end
         local task_name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t:r")
         local project = vim.fn.fnamemodify(M.get_project_root(buf) or "", ":t")
         vim.notify("[djinni] Done: " .. task_name .. " (" .. project .. ")", vim.log.levels.INFO)
@@ -2150,7 +2234,8 @@ function M._start_streaming(buf)
     M._process_queue(buf)
   end
 
-  local client = session.get_or_create(root, get_provider(buf))
+  local sid = M._sessions[buf]
+  local client = sid and session.get_client(sid) or nil
   M._stream_client[buf] = client
   M._start_global_timer()
 end
@@ -2229,6 +2314,45 @@ function M._unwrap_paragraphs(buf)
 end
 
 M._auto_scroll = {}
+
+M._collapse_threshold = 3000
+
+function M._maybe_collapse_turns(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  if line_count < M._collapse_threshold then return end
+
+  local fm_end = M._get_fm_end(buf) or 2
+  local lines = vim.api.nvim_buf_get_lines(buf, fm_end, -1, false)
+
+  local turn_starts = {}
+  for i, line in ipairs(lines) do
+    if line:match("^@You%s*$") or line:match("^@Djinni%s*$") or line:match("^@System%s*$") then
+      turn_starts[#turn_starts + 1] = fm_end + i
+    end
+  end
+
+  if #turn_starts < 6 then return end
+
+  local keep_turns = 4
+  local cut_before = turn_starts[#turn_starts - keep_turns + 1]
+  if not cut_before then return end
+
+  local cut_line = cut_before - 1
+  if cut_line > fm_end + 1 then
+    local collapsed_count = cut_line - fm_end - 1
+    local sep_line = cut_line
+    local prev = vim.api.nvim_buf_get_lines(buf, sep_line - 2, sep_line - 1, false)[1] or ""
+    if prev:match("^%-%-%-$") then
+      sep_line = sep_line - 1
+    end
+    if sep_line > fm_end + 1 then
+      local marker = { "", "--- " .. collapsed_count .. " lines collapsed (see file on disk) ---", "" }
+      vim.api.nvim_buf_set_lines(buf, fm_end, sep_line - 1, false, marker)
+      M._fm_end_cache[buf] = nil
+    end
+  end
+end
 
 function M._apply_stream_chunk(buf, text)
   if not vim.api.nvim_buf_is_valid(buf) then
@@ -2370,9 +2494,12 @@ function M._fresh_restart(buf, root)
   end)()
 
   local function do_fresh()
+    local prev_sid = M.get_session_id(buf) or M._sessions[buf]
     M._set_frontmatter_field(buf, "session", "")
     M._sessions[buf] = nil
-    session.shutdown_project(root, nil, get_provider(buf))
+    if prev_sid and prev_sid ~= "" then
+      session.close_task_session(root, prev_sid, get_provider(buf))
+    end
     local pre_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     for i = #pre_lines, 1, -1 do
       local l = pre_lines[i]
@@ -2473,9 +2600,11 @@ function M.select_provider(buf)
       vim.schedule(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
         local root = M.get_project_root(buf)
-        if root then
-          session.shutdown_project(root, nil, get_provider(buf))
+        local prov_old_sid = M.get_session_id(buf) or M._sessions[buf]
+        if root and prov_old_sid and prov_old_sid ~= "" then
+          session.close_task_session(root, prov_old_sid, get_provider(buf))
         end
+        M._sessions[buf] = nil
         M._set_frontmatter_field(buf, "provider", choice)
         M._set_frontmatter_field(buf, "session", "")
 
@@ -2870,7 +2999,78 @@ function M._open_tool_log(buf)
   end, { buffer = fbuf, silent = true, nowait = true })
 end
 
-function M._edit_block(_buf) end
+function M._edit_block(buf)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local row = cursor[1]
+
+  local block_start = nil
+  for i = row, 1, -1 do
+    if lines[i] and lines[i]:match("^@You%s*$") then
+      block_start = i
+      break
+    end
+    if lines[i] and lines[i]:match("^@%w+%s*$") and not lines[i]:match("^@You") then
+      return
+    end
+    if lines[i] and lines[i]:match("^%-%-%-$") and i > 2 then
+      return
+    end
+  end
+  if not block_start then return end
+
+  local block_end = #lines
+  for i = block_start + 1, #lines do
+    if lines[i]:match("^%-%-%-$") or lines[i]:match("^@%w+%s*$") then
+      block_end = i - 1
+      break
+    end
+  end
+
+  local text_lines = {}
+  for i = block_start + 1, block_end do
+    table.insert(text_lines, lines[i])
+  end
+  local text = table.concat(text_lines, "\n"):match("^%s*(.-)%s*$")
+  if not text or text == "" then return end
+
+  local next_block = nil
+  for i = block_end + 1, #lines do
+    if lines[i]:match("^@%w+%s*$") then
+      next_block = i
+      break
+    end
+  end
+  if not next_block then return end
+
+  local del_from = next_block
+  if del_from > 1 and lines[del_from - 1]:match("^%-%-%-$") then
+    del_from = del_from - 1
+  end
+  if del_from > 1 and lines[del_from - 1] == "" then
+    del_from = del_from - 1
+  end
+
+  pcall(vim.api.nvim_buf_set_lines, buf, del_from - 1, #lines, false, {})
+
+  M._invalidate_session(buf)
+  M._creating_session[buf] = nil
+  M._first_msg_sent[buf] = nil
+
+  M.send(buf, text)
+end
+
+function M._rerun_tool(buf)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  local tool = tools.extract_tool_at_cursor(lines, row)
+  if not tool then return end
+  local prompt = "Run " .. tool.name
+  if tool.args ~= "" then
+    prompt = prompt .. " with: " .. tool.args
+  end
+  M.send(buf, prompt)
+end
 
 function M._retry_block(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
@@ -3108,6 +3308,9 @@ function M._resolve_refs(text, source_buf)
   text = text:gsub("@{file:(%d+%-?%d*)}", function(range)
     return "@./" .. rel .. ":" .. range
   end)
+  text = text:gsub("%[#file%]%((.-)%)", function(path)
+    return "@./" .. path
+  end)
   return text
 end
 
@@ -3170,18 +3373,6 @@ function M.statusline()
   end)
   if ok then return result end
   return "djinni"
-end
-
-session.idle_guards[#session.idle_guards + 1] = function(project_root, provider_name)
-  for buf, _ in pairs(M._streaming) do
-    if vim.api.nvim_buf_is_valid(buf) and M.get_project_root(buf) == project_root and get_provider(buf) == provider_name then return true end
-  end
-  if M._pending_permission then
-    for buf, _ in pairs(M._pending_permission) do
-      if vim.api.nvim_buf_is_valid(buf) and M.get_project_root(buf) == project_root and get_provider(buf) == provider_name then return true end
-    end
-  end
-  return false
 end
 
 vim.api.nvim_create_autocmd("VimLeavePre", {

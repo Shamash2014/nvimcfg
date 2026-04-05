@@ -95,13 +95,13 @@ M._line_tasks = {}
 M._line_projects = {}
 
 local function task_at_cursor()
-  if not M._buf or not M._win then return nil end
+  if not M._buf or not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
   local row = vim.api.nvim_win_get_cursor(M._win)[1]
   return M._line_tasks[row]
 end
 
 local function project_at_cursor()
-  if not M._buf or not M._win then return nil end
+  if not M._buf or not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
   local row = vim.api.nvim_win_get_cursor(M._win)[1]
   return M._line_projects[row]
 end

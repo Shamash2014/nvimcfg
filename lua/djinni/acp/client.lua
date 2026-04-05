@@ -27,7 +27,6 @@ function M.new(cmd, args, cwd)
   self.event_handlers = {}
   self._buffer_parts = {}
   self._update_queue = {}
-  self._update_scheduled = {}
   self.state = "disconnected"
   self._ready = false
   self._ready_callbacks = {}
@@ -137,8 +136,7 @@ function M:_initialize()
       end
       self:_authenticate(function(auth_err)
         if auth_err then
-          self:_flush_ready_error("authenticate failed: " .. (auth_err.message or tostring(auth_err)))
-          return
+          log.warn("authenticate failed (non-blocking): " .. (auth_err.message or tostring(auth_err)))
         end
         self:_mark_ready()
       end)
@@ -203,6 +201,50 @@ function M:when_ready(callback)
   end
 end
 
+local CHUNK_TYPES = {
+  agent_message_chunk = true,
+  agent_thought_chunk = true,
+  usage_update = true,
+}
+
+local function coalesce_updates(queue)
+  local out = {}
+  local i = 1
+  while i <= #queue do
+    local params = queue[i]
+    local su = params.update or params
+    local utype = su.sessionUpdate
+    if utype and CHUNK_TYPES[utype] and su.content then
+      local texts = { su.content.text or "" }
+      local last_params = params
+      local j = i + 1
+      while j <= #queue do
+        local nparams = queue[j]
+        local nsu = nparams.update or nparams
+        if nsu.sessionUpdate == utype and nsu.content then
+          texts[#texts + 1] = nsu.content.text or ""
+          last_params = nparams
+          j = j + 1
+        else
+          break
+        end
+      end
+      if j > i + 1 then
+        local last_su = last_params.update or last_params
+        last_su.content.text = table.concat(texts)
+        out[#out + 1] = last_params
+      else
+        out[#out + 1] = params
+      end
+      i = j
+    else
+      out[#out + 1] = params
+      i = i + 1
+    end
+  end
+  return out
+end
+
 function M:_on_stdout(data)
   if not data then return end
   for i, chunk in ipairs(data) do
@@ -212,28 +254,97 @@ function M:_on_stdout(data)
       local line = table.concat(self._buffer_parts)
       self._buffer_parts = { chunk }
       if line ~= "" then
-        self:_handle_message(line)
+        local pq = self._parse_queue
+        if not pq then
+          pq = {}
+          self._parse_queue = pq
+        end
+        pq[#pq + 1] = line
       end
     end
   end
+  if not self._drain_timer then
+    self._drain_timer = vim.uv.new_timer()
+    local client = self
+    self._drain_scheduled = false
+    self._drain_timer:start(8, 50, function()
+      if client._drain_scheduled then return end
+      client._drain_scheduled = true
+      vim.schedule(function()
+        client._drain_scheduled = false
+        client:_drain_all()
+      end)
+    end)
+  end
 end
 
-function M:_handle_message(line)
-  local ok, msg = pcall(vim.json.decode, line)
-  if not ok or type(msg) ~= "table" then
-    return
+local MAX_PARSE_PER_DRAIN = 50
+
+function M:_drain_all()
+  local pq = self._parse_queue
+  if pq and #pq > 0 then
+    local n = #pq
+    if n <= MAX_PARSE_PER_DRAIN then
+      self._parse_queue = nil
+      for _, raw in ipairs(pq) do
+        local ok, msg = pcall(vim.json.decode, raw)
+        if ok and type(msg) == "table" then
+          self:_route_message(msg)
+        end
+      end
+    else
+      local batch = {}
+      for i = 1, MAX_PARSE_PER_DRAIN do
+        batch[i] = pq[i]
+      end
+      local remaining = {}
+      for i = MAX_PARSE_PER_DRAIN + 1, n do
+        remaining[#remaining + 1] = pq[i]
+      end
+      self._parse_queue = remaining
+      for _, raw in ipairs(batch) do
+        local ok, msg = pcall(vim.json.decode, raw)
+        if ok and type(msg) == "table" then
+          self:_route_message(msg)
+        end
+      end
+    end
   end
 
+  local has_work = false
+  for sid, uq in pairs(self._update_queue) do
+    has_work = true
+    self._update_queue[sid] = nil
+    local sub = self.subscribers[sid]
+    if sub and sub.on_update then
+      local coalesced = coalesce_updates(uq)
+      for _, params in ipairs(coalesced) do
+        local h_ok, h_err = pcall(sub.on_update, params)
+        if not h_ok then
+          log.err("subscriber update error: " .. tostring(h_err))
+        end
+      end
+    end
+  end
+
+  if not has_work and not self._parse_queue then
+    if self._drain_timer and not self._drain_timer:is_closing() then
+      self._drain_timer:stop()
+      self._drain_timer:close()
+    end
+    self._drain_timer = nil
+  end
+end
+
+function M:_route_message(msg)
   if msg.id and self.pending_requests[msg.id] then
     local cb = self.pending_requests[msg.id]
     self.pending_requests[msg.id] = nil
-    vim.schedule(function()
-      if msg.error then
-        cb(msg.error, nil)
-      else
-        cb(nil, msg.result)
-      end
-    end)
+    if msg.error then
+      cb(msg.error, nil)
+    else
+      cb(nil, msg.result)
+    end
   elseif msg.method and msg.id then
     local respond = function(result)
       if not self:is_alive() then error("client is not alive") end
@@ -247,19 +358,15 @@ function M:_handle_message(line)
     local sid = msg.params and msg.params.sessionId
     local sub = sid and self.subscribers[sid]
     if sub and sub.on_permission and msg.method == "session/request_permission" then
-      vim.schedule(function()
-        local s_ok, err = pcall(sub.on_permission, msg.params, respond)
-        if not s_ok then
-          log.err("subscriber permission error: " .. tostring(err))
-        end
-      end)
+      local s_ok, err = pcall(sub.on_permission, msg.params, respond)
+      if not s_ok then
+        log.err("subscriber permission error: " .. tostring(err))
+      end
     elseif self.request_handlers[msg.method] then
-      vim.schedule(function()
-        local s_ok, err = pcall(self.request_handlers[msg.method], msg.params, respond)
-        if not s_ok then
-          log.err("request handler error: " .. tostring(err))
-        end
-      end)
+      local s_ok, err = pcall(self.request_handlers[msg.method], msg.params, respond)
+      if not s_ok then
+        log.err("request handler error: " .. tostring(err))
+      end
     end
   elseif msg.method and not msg.id then
     local sid = msg.params and msg.params.sessionId
@@ -271,47 +378,15 @@ function M:_handle_message(line)
         self._update_queue[sid] = uq
       end
       uq[#uq + 1] = msg.params
-      if not self._update_scheduled[sid] then
-        self._update_scheduled[sid] = true
-        local BATCH_SIZE = 10
-        local client = self
-        local function drain()
-          local q = client._update_queue[sid]
-          if not q or #q == 0 then
-            client._update_queue[sid] = nil
-            client._update_scheduled[sid] = nil
-            return
-          end
-          local n = math.min(#q, BATCH_SIZE)
-          for i = 1, n do
-            local h_ok, err = pcall(sub.on_update, q[i])
-            if not h_ok then
-              log.err("subscriber update error: " .. tostring(err))
-            end
-          end
-          if n >= #q then
-            client._update_queue[sid] = nil
-            client._update_scheduled[sid] = nil
-          else
-            local remaining = {}
-            for i = n + 1, #q do remaining[#remaining + 1] = q[i] end
-            client._update_queue[sid] = remaining
-            vim.schedule(drain)
-          end
-        end
-        vim.schedule(drain)
-      end
     end
     local handlers = self.event_handlers[msg.method]
     if handlers then
-      vim.schedule(function()
-        for _, handler in ipairs(handlers) do
-          local h_ok, err = pcall(handler, msg.params)
-          if not h_ok then
-            log.err("event handler error: " .. tostring(err))
-          end
+      for _, handler in ipairs(handlers) do
+        local h_ok, err = pcall(handler, msg.params)
+        if not h_ok then
+          log.err("event handler error: " .. tostring(err))
         end
-      end)
+      end
     end
   end
 end
@@ -424,6 +499,13 @@ end
 
 function M:shutdown(force)
   self._shutting_down = true
+  if self._drain_timer and not self._drain_timer:is_closing() then
+    self._drain_timer:stop()
+    self._drain_timer:close()
+  end
+  self._drain_timer = nil
+  self._parse_queue = nil
+  self._update_queue = {}
   if not self:is_alive() then
     return
   end

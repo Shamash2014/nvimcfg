@@ -28,6 +28,10 @@ local function extract_refs(content)
     if ref then
       refs[#refs + 1] = ref
     end
+    local file_path = line:match("%[#file%]%((.-)%)")
+    if file_path then
+      refs[#refs + 1] = "@./" .. file_path
+    end
   end
   return refs
 end
