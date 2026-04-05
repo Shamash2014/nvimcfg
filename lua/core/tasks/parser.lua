@@ -95,6 +95,15 @@ end
 function M.parse_buffer(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  return M.parse_lines(lines)
+end
+
+function M.parse_file(filepath)
+  local lines = vim.fn.readfile(filepath)
+  return M.parse_lines(lines)
+end
+
+function M.parse_lines(lines)
   local tests = {}
   local current_test = nil
   local current_section = nil
@@ -244,15 +253,6 @@ function M.parse_buffer(bufnr)
     suite_name = suite_name or "Test Suite",
     tests = tests,
   }
-end
-
-function M.parse_file(filepath)
-  local lines = vim.fn.readfile(filepath)
-  local bufnr = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-  local result = M.parse_buffer(bufnr)
-  vim.api.nvim_buf_delete(bufnr, { force = true })
-  return result
 end
 
 return M

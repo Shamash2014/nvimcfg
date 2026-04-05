@@ -13,16 +13,13 @@ M.terminals = {}
 M.command_history = {}
 M.max_history = 50
 
--- Async filesystem helpers (all resume on main thread via vim.schedule)
-local function async_fs_stat(path)
-  return async.await(function(cb)
-    uv.fs_stat(path, function(err, stat)
-      vim.schedule(function()
-        cb({ err = err, stat = stat })
-      end)
-    end)
-  end)
-end
+-- Task caching for performance
+M._task_cache = {
+  tasks = nil,
+  timestamp = 0,
+  ttl = 5000,
+  root = nil,
+}
 
 local function async_fs_scandir(path)
   return async.await(function(cb)
@@ -58,11 +55,6 @@ local function async_readfile(path)
       end)
     end)
   end)
-end
-
-local function async_file_exists(path)
-  local r = async_fs_stat(path)
-  return r.stat ~= nil
 end
 
 -- Build full terminal environment for task execution
@@ -120,11 +112,13 @@ local function add_to_history(task)
     timestamp = os.time(),
   }
 
+  local seen = {}
   for i = #M.command_history, 1, -1 do
-    if M.command_history[i].cmd == task.cmd then
-      table.remove(M.command_history, i)
-      break
-    end
+    seen[M.command_history[i].cmd] = i
+  end
+
+  if seen[task.cmd] then
+    table.remove(M.command_history, seen[task.cmd])
   end
 
   table.insert(M.command_history, 1, entry)
@@ -147,53 +141,6 @@ local skip_folders = {
   [".elixir_ls"] = true,
   [".next"] = true,
 }
-
--- Find nested project folders (async - must be called inside async.run)
-local function find_project_folders(root, max_depth)
-  max_depth = max_depth or 3
-  local projects = {}
-  local seen = {}
-
-  local patterns = {
-    "package.json",
-    "mix.exs",
-    "Cargo.toml",
-    "go.mod",
-    "pyproject.toml",
-    "Justfile",
-    "justfile",
-    "Makefile",
-    "makefile",
-  }
-
-  local function scan_dir(dir, depth)
-    if depth > max_depth then return end
-    if seen[dir] then return end
-    seen[dir] = true
-
-    local result = async_fs_scandir(dir)
-    if result.err or not result.handle then return end
-
-    while true do
-      local name, type = uv.fs_scandir_next(result.handle)
-      if not name then break end
-
-      if type == "directory" and not skip_folders[name] then
-        scan_dir(dir .. "/" .. name, depth + 1)
-      elseif type == "file" then
-        for _, pattern in ipairs(patterns) do
-          if name == pattern and dir ~= root then
-            table.insert(projects, { path = dir, file = name })
-            break
-          end
-        end
-      end
-    end
-  end
-
-  scan_dir(root, 0)
-  return projects
-end
 
 -- Define common tasks for different project types
 local tasks = {
@@ -247,23 +194,25 @@ local tasks = {
 local function detect_project_type(root)
   root = root or vim.fn.getcwd()
 
-  local checks = {
-    { files = { "pubspec.yaml" }, type = "flutter" },
-    { files = { "package.json" }, type = "javascript" },
-    { files = { "Cargo.toml" }, type = "rust" },
-    { files = { "go.mod", "go.sum" }, type = "go" },
-    { files = { "requirements.txt", "setup.py", "pyproject.toml", "Pipfile" }, type = "python" },
-    { files = { "mix.exs" }, type = "elixir" },
-    { files = { "Makefile", "makefile" }, type = "make" },
-  }
+  local result = async_fs_scandir(root)
+  if result.err or not result.handle then return nil end
 
-  for _, check in ipairs(checks) do
-    for _, file in ipairs(check.files) do
-      if async_file_exists(root .. "/" .. file) then
-        return check.type
-      end
+  local found_files = {}
+  while true do
+    local name, type = uv.fs_scandir_next(result.handle)
+    if not name then break end
+    if type == "file" then
+      found_files[name] = true
     end
   end
+
+  if found_files["pubspec.yaml"] then return "flutter" end
+  if found_files["package.json"] then return "javascript" end
+  if found_files["Cargo.toml"] then return "rust" end
+  if found_files["go.mod"] then return "go" end
+  if found_files["requirements.txt"] or found_files["setup.py"] or found_files["pyproject.toml"] or found_files["Pipfile"] then return "python" end
+  if found_files["mix.exs"] then return "elixir" end
+  if found_files["Makefile"] or found_files["makefile"] then return "make" end
 
   return nil
 end
@@ -466,12 +415,108 @@ local function load_tasks_for_folder(folder, file)
   return {}
 end
 
+-- Cache for nested project folders
+M._project_cache = {
+  folders = nil,
+  timestamp = 0,
+  ttl = 30000,
+  root = nil,
+}
+
+local function scan_projects_parallel(root, max_depth)
+  max_depth = max_depth or 3
+  local seen = {}
+  local scan_queue = { { dir = root, depth = 0 } }
+  local project_patterns = {
+    { file = "package.json", type = "npm" },
+    { file = "mix.exs", type = "mix" },
+    { file = "Cargo.toml", type = "cargo" },
+    { file = "go.mod", type = "go" },
+    { file = "pyproject.toml", type = "python" },
+    { file = "Justfile", type = "just" },
+    { file = "justfile", type = "just" },
+    { file = "Makefile", type = "make" },
+    { file = "makefile", type = "make" },
+  }
+
+  local projects = {}
+
+  local function process_dir(dir, depth)
+    if depth > max_depth or seen[dir] then return end
+    seen[dir] = true
+
+    local result = async_fs_scandir(dir)
+    if result.err or not result.handle then return end
+
+    local subdirs = {}
+    while true do
+      local name, type = uv.fs_scandir_next(result.handle)
+      if not name then break end
+
+      if type == "directory" and not skip_folders[name] then
+        table.insert(subdirs, dir .. "/" .. name)
+      elseif type == "file" then
+        for _, pattern in ipairs(project_patterns) do
+          if name == pattern.file and dir ~= root then
+            table.insert(projects, { path = dir, file = name, type = pattern.type })
+            break
+          end
+        end
+      end
+    end
+
+    for _, subdir in ipairs(subdirs) do
+      table.insert(scan_queue, { dir = subdir, depth = depth + 1 })
+    end
+  end
+
+  while #scan_queue > 0 do
+    local item = table.remove(scan_queue)
+    process_dir(item.dir, item.depth)
+  end
+
+  return projects
+end
+
+local function load_nested_tasks_parallel(root, nested_projects)
+  if #nested_projects == 0 then return {} end
+
+  local function load_single(project)
+    local folder_tasks = load_tasks_for_folder(project.path, project.file)
+    local rel_path = project.path:gsub("^" .. vim.pesc(root) .. "/", "")
+    for _, task in ipairs(folder_tasks) do
+      task.name = rel_path .. ": " .. task.name
+    end
+    return folder_tasks
+  end
+
+  local wrapped_tasks = {}
+  for i, project in ipairs(nested_projects) do
+    wrapped_tasks[i] = function() return load_single(project) end
+  end
+
+  local results = async.all(wrapped_tasks)
+  local all_tasks = {}
+  for _, tasks_list in ipairs(results) do
+    for _, task in ipairs(tasks_list) do
+      table.insert(all_tasks, task)
+    end
+  end
+  return all_tasks
+end
+
 -- Get available tasks for current project (async - runs in coroutine)
 -- Must be called inside async.run()
 function M.get_tasks_async()
-  local project_tasks = {}
   local root = vim.fn.getcwd()
   local git_root = vim.fs.root(0, { ".git" }) or root
+
+  local cache = M._task_cache
+  if cache.tasks and cache.root == git_root and (vim.uv.now() - cache.timestamp) < cache.ttl then
+    return cache.tasks
+  end
+
+  local project_tasks = {}
 
   local loaders = {
     function() return load_npm_tasks(root) end,
@@ -481,21 +526,27 @@ function M.get_tasks_async()
     function() return load_mix_tasks(root) end,
   }
 
-  for _, loader in ipairs(loaders) do
-    for _, task in ipairs(loader()) do
+  local loader_results = async.all(loaders)
+  for _, tasks_list in ipairs(loader_results) do
+    for _, task in ipairs(tasks_list) do
       table.insert(project_tasks, task)
     end
   end
 
-  local nested = find_project_folders(root, 3)
-  for _, project in ipairs(nested) do
-    local rel_path = project.path:gsub("^" .. vim.pesc(root) .. "/", "")
-    local folder_tasks = load_tasks_for_folder(project.path, project.file)
+  local nested_cache = M._project_cache
+  local nested
+  if nested_cache.folders and nested_cache.root == root and (vim.uv.now() - nested_cache.timestamp) < nested_cache.ttl then
+    nested = nested_cache.folders
+  else
+    nested = scan_projects_parallel(root, 3)
+    nested_cache.folders = nested
+    nested_cache.timestamp = vim.uv.now()
+    nested_cache.root = root
+  end
 
-    for _, task in ipairs(folder_tasks) do
-      task.name = rel_path .. ": " .. task.name
-      table.insert(project_tasks, task)
-    end
+  local nested_tasks = load_nested_tasks_parallel(root, nested)
+  for _, task in ipairs(nested_tasks) do
+    table.insert(project_tasks, task)
   end
 
   local project_type = detect_project_type(git_root)
@@ -504,6 +555,10 @@ function M.get_tasks_async()
       table.insert(project_tasks, task)
     end
   end
+
+  cache.tasks = project_tasks
+  cache.timestamp = vim.uv.now()
+  cache.root = git_root
 
   return project_tasks
 end
@@ -515,6 +570,12 @@ function M.get_tasks(callback)
     async.schedule()
     callback(result)
   end)
+end
+
+function M.invalidate_cache()
+  M._task_cache.tasks = nil
+  M._task_cache.timestamp = 0
+  M._task_cache.root = nil
 end
 
 -- Run a specific task
@@ -880,8 +941,46 @@ function M.run_custom_command()
   end)
 end
 
+local function format_history_items(items)
+  for i = 1, math.min(3, #M.command_history) do
+    local entry = M.command_history[i]
+    local time_ago = os.difftime(os.time(), entry.timestamp)
+    local time_str
+    if time_ago < 60 then
+      time_str = "just now"
+    elseif time_ago < 3600 then
+      time_str = math.floor(time_ago / 60) .. "m ago"
+    else
+      time_str = math.floor(time_ago / 3600) .. "h ago"
+    end
+    table.insert(items, {
+      text = "[" .. i .. "] " .. entry.name,
+      desc = time_str .. " - " .. entry.cmd,
+      task = { name = entry.name, cmd = entry.cmd, desc = entry.desc },
+      is_task = true,
+      is_history = true,
+    })
+  end
+end
+
+-- Debounce state for pick_task
+M._pick_debounce = {
+  timer = nil,
+  delay = 150,
+  pending = false,
+}
+
 -- Show task picker
 function M.pick_task()
+  if M._pick_debounce.pending then
+    return
+  end
+
+  M._pick_debounce.pending = true
+  vim.defer_fn(function()
+    M._pick_debounce.pending = false
+  end, M._pick_debounce.delay)
+
   M.get_tasks(function(available_tasks)
     local items = {
       {
@@ -891,24 +990,7 @@ function M.pick_task()
       }
     }
 
-    for i = 1, math.min(3, #M.command_history) do
-      local entry = M.command_history[i]
-      local time_ago = os.difftime(os.time(), entry.timestamp)
-      local time_str
-      if time_ago < 60 then
-        time_str = "just now"
-      elseif time_ago < 3600 then
-        time_str = math.floor(time_ago / 60) .. "m ago"
-      else
-        time_str = math.floor(time_ago / 3600) .. "h ago"
-      end
-      table.insert(items, {
-        text = "[" .. i .. "] " .. entry.name,
-        desc = time_str .. " - " .. entry.cmd,
-        task = { name = entry.name, cmd = entry.cmd, desc = entry.desc },
-        is_history = true
-      })
-    end
+    format_history_items(items)
 
     if #M.command_history > 0 then
       table.insert(items, {
@@ -1054,8 +1136,23 @@ function M.pick_buffers_tabs_tasks()
   })
 end
 
+-- Debounce state for pick_tasks_and_commands
+M._pick_commands_debounce = {
+  pending = false,
+  delay = 150,
+}
+
 -- Combined picker for tasks and Vim commands
 function M.pick_tasks_and_commands()
+  if M._pick_commands_debounce.pending then
+    return
+  end
+
+  M._pick_commands_debounce.pending = true
+  vim.defer_fn(function()
+    M._pick_commands_debounce.pending = false
+  end, M._pick_commands_debounce.delay)
+
   local snacks = require("snacks")
 
   M.get_tasks(function(available_tasks)
@@ -1085,25 +1182,7 @@ function M.pick_tasks_and_commands()
       is_task = true,
     })
 
-    for i = 1, math.min(3, #M.command_history) do
-      local entry = M.command_history[i]
-      local time_ago = os.difftime(os.time(), entry.timestamp)
-      local time_str
-      if time_ago < 60 then
-        time_str = "just now"
-      elseif time_ago < 3600 then
-        time_str = math.floor(time_ago / 60) .. "m ago"
-      else
-        time_str = math.floor(time_ago / 3600) .. "h ago"
-      end
-      table.insert(items, {
-        text = "[" .. i .. "] " .. entry.name,
-        desc = time_str .. " - " .. entry.cmd,
-        task = { name = entry.name, cmd = entry.cmd, desc = entry.desc },
-        is_task = true,
-        is_history = true,
-      })
-    end
+    format_history_items(items)
 
     for _, task in ipairs(available_tasks) do
       local name = task.type == "npm" and task.name:gsub("^npm: ", "") or task.name
@@ -1358,16 +1437,12 @@ function M.npm_dev()
   async.run(function()
     local npm_tasks = load_npm_tasks()
     async.schedule()
-    for _, task in ipairs(npm_tasks) do
-      if task.name == "npm: dev" then
-        M.run_task(task)
-        return
-      end
-    end
-    for _, task in ipairs(npm_tasks) do
-      if task.name == "npm: start" then
-        M.run_task(task)
-        return
+    for _, name in ipairs({ "dev", "start" }) do
+      for _, task in ipairs(npm_tasks) do
+        if task.name == "npm: " .. name then
+          M.run_task(task)
+          return
+        end
       end
     end
     vim.notify('No "dev" or "start" npm script found', vim.log.levels.WARN)

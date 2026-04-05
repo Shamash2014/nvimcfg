@@ -4,6 +4,13 @@ M._task_bufs = {}
 M._task_lines = {}
 M._line_to_file = {}
 
+M._scan_debounce = {
+  timer = nil,
+  ttl = 2000,
+  root = nil,
+  buf = nil,
+}
+
 local DEFAULT_SYSTEM = "This is a task dashboard buffer. You are a task orchestrator — NEVER do implementation work directly in this buffer. Instead, for every task or request, ALWAYS spawn a new .chat agent buffer to handle it. Use the spawn_task tool or create a new .chat file for each piece of work. This buffer is only for planning, listing tasks, checking status, and coordinating work across spawned agents. When the user asks you to do something, create a dedicated .chat buffer for it and let that agent handle the implementation."
 
 local status_icons = {
@@ -23,6 +30,13 @@ local status_hl = {
 local status_order = { running = 1, input = 2, idle = 3, done = 4 }
 
 local ns = vim.api.nvim_create_namespace("nowork_task_section")
+
+M._project_cache = {
+  tasks = {},
+  timestamp = 0,
+  ttl = 5000,
+  root = nil,
+}
 
 local function get_config()
   local ok, djinni = pcall(require, "djinni")
@@ -81,6 +95,11 @@ local function get_system_message(buf)
 end
 
 function M._scan_project_tasks(root)
+  local cache = M._project_cache
+  if cache.tasks and cache.root == root and (vim.uv.now() - cache.timestamp) < cache.ttl then
+    return cache.tasks
+  end
+
   local cfg = get_config()
   local chat_dir = cfg.chat and cfg.chat.dir or ".chat"
   local tasks = {}
@@ -88,73 +107,83 @@ function M._scan_project_tasks(root)
 
   local dir = root .. "/" .. chat_dir
   local handle = vim.loop.fs_scandir(dir)
-  if not handle then return tasks end
+  if not handle then
+    cache.tasks = tasks
+    cache.timestamp = vim.uv.now()
+    cache.root = root
+    return tasks
+  end
 
+  local files_to_scan = {}
   while true do
     local name, type = vim.loop.fs_scandir_next(handle)
     if not name then break end
     if type == "file" and name:match("%.md$") then
       local path = dir .. "/" .. name
-      if path == task_path then goto continue end
-      local f = io.open(path, "r")
-      if f then
-        local title = name:gsub("%.md$", "")
-        local status = "idle"
-        local model = ""
-        local tokens = ""
-        local cost = ""
-        local worktree = ""
-        local in_frontmatter = false
-        local fm_count = 0
-        for line in f:lines() do
-          if line:match("^%-%-%-") then
-            fm_count = fm_count + 1
-            if fm_count == 1 then
-              in_frontmatter = true
-            elseif fm_count == 2 then
-              break
-            end
-          elseif in_frontmatter then
-            local k, v = line:match("^(%w+):%s*(.+)$")
-            if k == "title" then title = v end
-            if k == "status" then status = v end
-            if k == "model" then model = v end
-            if k == "tokens" then tokens = v end
-            if k == "cost" then cost = v end
-            if k == "worktree" then worktree = v end
-          end
-        end
-        f:close()
-
-        local chat = require("djinni.nowork.chat")
-        local bufnr = vim.fn.bufnr(path)
-        if bufnr ~= -1 then
-          local usage = chat._usage[bufnr]
-          if usage then
-            local total = usage.input_tokens + usage.output_tokens
-            if total > 0 then
-              tokens = total >= 1000 and string.format("%.1fk", total / 1000) or tostring(total)
-            end
-            if usage.cost > 0 then
-              cost = string.format("%.2f", usage.cost)
-            end
-          end
-          if chat._streaming[bufnr] then
-            status = "running"
-          end
-        end
-
-        table.insert(tasks, {
-          title = title,
-          status = status,
-          model = model,
-          tokens = tokens,
-          cost = cost,
-          worktree = worktree,
-          file_path = path,
-        })
+      if path ~= task_path then
+        table.insert(files_to_scan, path)
       end
-      ::continue::
+    end
+  end
+
+  local chat = require("djinni.nowork.chat")
+  for _, path in ipairs(files_to_scan) do
+    local f = io.open(path, "r")
+    if f then
+      local title = vim.fn.fnamemodify(path, ":t"):gsub("%.md$", "")
+      local status = "idle"
+      local model = ""
+      local tokens = ""
+      local cost = ""
+      local worktree = ""
+      local in_frontmatter = false
+      local fm_count = 0
+      for line in f:lines() do
+        if line:match("^%-%-%-") then
+          fm_count = fm_count + 1
+          if fm_count == 1 then
+            in_frontmatter = true
+          elseif fm_count == 2 then
+            break
+          end
+        elseif in_frontmatter then
+          local k, v = line:match("^(%w+):%s*(.+)$")
+          if k == "title" then title = v end
+          if k == "status" then status = v end
+          if k == "model" then model = v end
+          if k == "tokens" then tokens = v end
+          if k == "cost" then cost = v end
+          if k == "worktree" then worktree = v end
+        end
+      end
+      f:close()
+
+      local bufnr = vim.fn.bufnr(path)
+      if bufnr ~= -1 then
+        local usage = chat._usage[bufnr]
+        if usage then
+          local total = usage.input_tokens + usage.output_tokens
+          if total > 0 then
+            tokens = total >= 1000 and string.format("%.1fk", total / 1000) or tostring(total)
+          end
+          if usage.cost > 0 then
+            cost = string.format("%.2f", usage.cost)
+          end
+        end
+        if chat._streaming[bufnr] then
+          status = "running"
+        end
+      end
+
+      table.insert(tasks, {
+        title = title,
+        status = status,
+        model = model,
+        tokens = tokens,
+        cost = cost,
+        worktree = worktree,
+        file_path = path,
+      })
     end
   end
 
@@ -164,6 +193,10 @@ function M._scan_project_tasks(root)
     if oa ~= ob then return oa < ob end
     return a.title < b.title
   end)
+
+  cache.tasks = tasks
+  cache.timestamp = vim.uv.now()
+  cache.root = root
 
   return tasks
 end
@@ -334,9 +367,24 @@ local function setup_task_autocmds(buf)
   vim.api.nvim_create_autocmd("BufEnter", {
     buffer = buf,
     callback = function()
-      if vim.api.nvim_buf_is_valid(buf) then
-        M.update_tasks_section(buf)
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      
+      local debounce = M._scan_debounce
+      if debounce.timer then
+        debounce.timer:stop()
+        debounce.timer:close()
       end
+      
+      debounce.timer = vim.uv.new_timer()
+      debounce.buf = buf
+      
+      debounce.timer:start(debounce.ttl, 0, vim.schedule_wrap(function()
+        if vim.api.nvim_buf_is_valid(buf) then
+          M.update_tasks_section(buf)
+        end
+        debounce.timer:close()
+        debounce.timer = nil
+      end))
     end,
   })
   vim.api.nvim_create_autocmd("BufWipeout", {
@@ -432,6 +480,12 @@ end
 
 function M.create_task_chat(root, subject, system_prompt)
   root = resolve_root(root)
+  
+  if M._project_cache.root == root then
+    M._project_cache.tasks = nil
+    M._project_cache.timestamp = 0
+  end
+  
   local cfg = get_config()
   local chat_dir = root .. "/" .. (cfg.chat and cfg.chat.dir or ".chat")
   vim.fn.mkdir(chat_dir, "p")
@@ -584,6 +638,11 @@ end
 
 function M.clear(root)
   root = resolve_root(root)
+  
+  M._project_cache.tasks = nil
+  M._project_cache.root = nil
+  M._project_cache.timestamp = 0
+  
   local cfg = get_config()
   local chat_dir = cfg.chat and cfg.chat.dir or ".chat"
   local dir = root .. "/" .. chat_dir
