@@ -81,11 +81,7 @@ function M.execute(buf, text)
   end
 
   if cmd.name == "/provider" and args and args ~= "" then
-    chat._set_frontmatter_field(buf, "provider", args)
-    local lc = vim.api.nvim_buf_line_count(buf)
-    vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
-      "", "---", "", "@System", "Provider: " .. args, "",
-    })
+    chat.switch_provider(buf, args)
     return true
   end
 

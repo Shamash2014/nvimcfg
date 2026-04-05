@@ -2590,6 +2590,43 @@ function M.restart_session(buf)
 end
 
 
+function M.switch_provider(buf, choice)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local root = M.get_project_root(buf)
+  local prov_old_sid = M.get_session_id(buf) or M._sessions[buf]
+  if root and prov_old_sid and prov_old_sid ~= "" then
+    session.close_task_session(root, prov_old_sid, get_provider(buf))
+  end
+  M._sessions[buf] = nil
+  M._cached_provider[buf] = nil
+  M._set_frontmatter_field(buf, "provider", choice)
+  M._set_frontmatter_field(buf, "session", "")
+
+  local lines = { "", "---", "", "@System", "Provider changed to " .. choice, "" }
+  input.insert_above_separator(buf, lines)
+
+  if root then
+    local provider_opts = build_session_opts(buf, root)
+    session.create_task_session(root, function(err, new_sid)
+      if err or not new_sid then
+        vim.schedule(function()
+          if vim.api.nvim_buf_is_valid(buf) then
+            M._update_system_block(buf, "Session failed: " .. (err and err.message or "unknown"))
+          end
+        end)
+        return
+      end
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(buf) then
+          M._set_frontmatter_field(buf, "session", new_sid)
+          M._sessions[buf] = new_sid
+          M._subscribe_session(buf, root, new_sid)
+        end
+      end)
+    end, provider_opts)
+  end
+end
+
 function M.select_provider(buf)
   local Provider = require("djinni.acp.provider")
   local providers = Provider.list()
@@ -2597,41 +2634,7 @@ function M.select_provider(buf)
   vim.schedule(function()
     vim.ui.select(providers, { prompt = "Select provider:" }, function(choice)
       if not choice then return end
-      vim.schedule(function()
-        if not vim.api.nvim_buf_is_valid(buf) then return end
-        local root = M.get_project_root(buf)
-        local prov_old_sid = M.get_session_id(buf) or M._sessions[buf]
-        if root and prov_old_sid and prov_old_sid ~= "" then
-          session.close_task_session(root, prov_old_sid, get_provider(buf))
-        end
-        M._sessions[buf] = nil
-        M._set_frontmatter_field(buf, "provider", choice)
-        M._set_frontmatter_field(buf, "session", "")
-
-        local lines = { "", "---", "", "@System", "Provider changed to " .. choice, "" }
-        input.insert_above_separator(buf, lines)
-
-        if root then
-          local provider_opts = build_session_opts(buf, root)
-          session.create_task_session(root, function(err, new_sid)
-            if err or not new_sid then
-              vim.schedule(function()
-                if vim.api.nvim_buf_is_valid(buf) then
-                  M._update_system_block(buf, "Session failed: " .. (err and err.message or "unknown"))
-                end
-              end)
-              return
-            end
-            vim.schedule(function()
-              if vim.api.nvim_buf_is_valid(buf) then
-                M._set_frontmatter_field(buf, "session", new_sid)
-                M._sessions[buf] = new_sid
-                M._subscribe_session(buf, root, new_sid)
-              end
-            end)
-          end, provider_opts)
-        end
-      end)
+      vim.schedule(function() M.switch_provider(buf, choice) end)
     end)
   end)
 end
