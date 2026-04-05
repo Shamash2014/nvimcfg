@@ -650,13 +650,15 @@ function M.merge_worktree()
   local worktrunk = require("djinni.integrations.worktrunk")
   vim.ui.input({ prompt = "Merge into (empty = trunk): " }, function(target)
     if target == nil then return end
-    worktrunk.merge(target, branch, function(ok, out)
-      vim.schedule(function()
-        if ok then
-          vim.notify("[djinni] merged " .. branch .. (target ~= "" and " → " .. target or ""), vim.log.levels.INFO)
-        else
-          vim.notify("[djinni] merge failed: " .. tostring(out), vim.log.levels.ERROR)
-        end
+    worktrunk.get_path(branch, function(path)
+      worktrunk.merge({ target = target ~= "" and target or nil, cwd = path }, function(ok, out)
+        vim.schedule(function()
+          if ok then
+            vim.notify("[djinni] merged " .. branch .. (target ~= "" and " → " .. target or ""), vim.log.levels.INFO)
+          else
+            vim.notify("[djinni] merge failed: " .. tostring(out), vim.log.levels.ERROR)
+          end
+        end)
       end)
     end)
   end)

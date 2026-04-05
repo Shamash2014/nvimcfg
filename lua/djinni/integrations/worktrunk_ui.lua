@@ -1,8 +1,50 @@
 local M = {}
 local wt = require("djinni.integrations.worktrunk")
 
+local function format_worktree(e)
+  local mark = e.is_current and "@ " or "  "
+  local name = e.branch or "(detached)"
+  local parts = {}
+  if e.symbols and e.symbols ~= "" then table.insert(parts, e.symbols) end
+  if e.operation_state then table.insert(parts, e.operation_state) end
+  if e.main_state and e.main_state ~= "is_main" then table.insert(parts, e.main_state) end
+  if e.working_tree then
+    local wt_flags = {}
+    if e.working_tree.staged then table.insert(wt_flags, "+staged") end
+    if e.working_tree.modified then table.insert(wt_flags, "!modified") end
+    if e.working_tree.untracked then table.insert(wt_flags, "?untracked") end
+    if #wt_flags > 0 then table.insert(parts, table.concat(wt_flags, " ")) end
+    if e.working_tree.diff then
+      local d = e.working_tree.diff
+      if d.added > 0 or d.deleted > 0 then
+        table.insert(parts, "+" .. d.added .. " -" .. d.deleted)
+      end
+    end
+  end
+  if e.main and (e.main.ahead > 0 or e.main.behind > 0) then
+    table.insert(parts, "main↑" .. e.main.ahead .. "↓" .. e.main.behind)
+  end
+  if e.remote and (e.remote.ahead > 0 or e.remote.behind > 0) then
+    table.insert(parts, "remote⇡" .. e.remote.ahead .. "⇣" .. e.remote.behind)
+  end
+  if e.ci and e.ci.status then table.insert(parts, "CI:" .. e.ci.status) end
+  if e.commit then
+    local age = ""
+    if e.commit.timestamp then
+      local delta = os.time() - e.commit.timestamp
+      if delta < 3600 then age = string.format(" %dm", math.floor(delta / 60))
+      elseif delta < 86400 then age = string.format(" %dh", math.floor(delta / 3600))
+      else age = string.format(" %dd", math.floor(delta / 86400))
+      end
+    end
+    table.insert(parts, e.commit.short_sha .. age .. " " .. (e.commit.message or ""))
+  end
+  local suffix = #parts > 0 and ("  " .. table.concat(parts, "  ")) or ""
+  return mark .. name .. suffix
+end
+
 local function pick_branch(prompt, cb)
-  wt.list(function(entries)
+  wt.list({ full = true }, function(entries)
     vim.schedule(function()
       if not entries or #entries == 0 then
         vim.notify("[wt] No worktrees", vim.log.levels.WARN)
@@ -18,21 +60,7 @@ local function pick_branch(prompt, cb)
       end
       vim.ui.select(items, {
         prompt = prompt,
-        format_item = function(e)
-          local mark = e.is_current and "@ " or "  "
-          local name = e.branch or "(detached)"
-          local stats = {}
-          if e.symbols and e.symbols ~= "" then table.insert(stats, e.symbols) end
-          if e.working_tree and e.working_tree.diff then
-            local d = e.working_tree.diff
-            if d.added > 0 or d.deleted > 0 then
-              table.insert(stats, "+" .. d.added .. " -" .. d.deleted)
-            end
-          end
-          if e.commit then table.insert(stats, e.commit.short_sha .. " " .. (e.commit.message or "")) end
-          local suffix = #stats > 0 and ("  " .. table.concat(stats, "  ")) or ""
-          return mark .. name .. suffix
-        end,
+        format_item = format_worktree,
       }, function(choice)
         if choice then cb(choice.branch) end
       end)
@@ -67,10 +95,14 @@ function M.create()
     :action("c", "Create worktree", function()
       vim.ui.input({ prompt = "New branch: " }, function(branch)
         if not branch or branch == "" then return end
-        wt.create_for_task(branch, function(path)
-          if path then
-            vim.notify("[wt] Created: " .. branch, vim.log.levels.INFO)
-          end
+        vim.ui.select({ "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
+          if not choice then return end
+          local opts = choice:match("Stacked") and { base = "@" } or {}
+          wt.create_for_task(branch, opts, function(path)
+            if path then
+              vim.notify("[wt] Created: " .. branch, vim.log.levels.INFO)
+            end
+          end)
         end)
       end)
     end)
@@ -93,57 +125,69 @@ function M.create()
     :new_action_group("Operations")
     :action("C", "Commit", function()
       pick_branch("Commit on:", function(branch)
-        wt.commit(branch, notify_and_refresh("commit"))
+        wt.get_path(branch, function(path)
+          wt.commit({ cwd = path }, notify_and_refresh("commit"))
+        end)
       end)
     end)
     :action("S", "Squash", function()
       pick_branch("Squash on:", function(branch)
-        wt.squash(branch, notify_and_refresh("squash"))
+        wt.get_path(branch, function(path)
+          wt.squash({ cwd = path }, notify_and_refresh("squash"))
+        end)
       end)
     end)
     :action("D", "Diff", function()
       pick_branch("Diff for:", function(branch)
-        wt.diff(branch, function(ok2, lines, stderr)
-          vim.schedule(function()
-            if ok2 and #lines > 0 then
-              wt.open_diff_buf(lines)
-            elseif ok2 then
-              vim.notify("[wt] No changes", vim.log.levels.INFO)
-            else
-              vim.notify("[wt] Diff failed: " .. table.concat(stderr or {}, "\n"), vim.log.levels.ERROR)
-            end
+        wt.get_path(branch, function(path)
+          wt.diff({ cwd = path }, function(ok2, lines, stderr)
+            vim.schedule(function()
+              if ok2 and #lines > 0 then
+                wt.open_diff_buf(lines)
+              elseif ok2 then
+                vim.notify("[wt] No changes", vim.log.levels.INFO)
+              else
+                vim.notify("[wt] Diff failed: " .. table.concat(stderr or {}, "\n"), vim.log.levels.ERROR)
+              end
+            end)
           end)
         end)
       end)
     end)
     :action("m", "Merge", function()
       pick_branch("Merge branch:", function(branch)
-        vim.ui.input({ prompt = "Merge '" .. branch .. "' into: " }, function(target)
-          if not target or target == "" then return end
-          wt.merge(target, branch, notify_and_refresh("merge"))
+        vim.ui.input({ prompt = "Merge '" .. branch .. "' into (empty=default): " }, function(target)
+          if target == nil then return end
+          wt.get_path(branch, function(path)
+            wt.merge({ target = target ~= "" and target or nil, cwd = path }, notify_and_refresh("merge"))
+          end)
         end)
       end)
     end)
     :action("r", "Rebase", function()
       pick_branch("Rebase branch:", function(branch)
-        vim.ui.input({ prompt = "Rebase '" .. branch .. "' onto: " }, function(target)
-          if not target then return end
-          wt.rebase(target, branch, notify_and_refresh("rebase"))
+        vim.ui.input({ prompt = "Rebase '" .. branch .. "' onto (empty=default): " }, function(target)
+          if target == nil then return end
+          wt.get_path(branch, function(path)
+            wt.rebase({ target = target ~= "" and target or nil, cwd = path }, notify_and_refresh("rebase"))
+          end)
         end)
       end)
     end)
     :action("p", "Push", function()
       pick_branch("Push branch:", function(branch)
-        vim.ui.input({ prompt = "Push '" .. branch .. "' to (empty=trunk): " }, function(target)
-          if not target then return end
-          wt.push(target, branch, notify_and_refresh("push"))
+        vim.ui.input({ prompt = "Push '" .. branch .. "' to (empty=default): " }, function(target)
+          if target == nil then return end
+          wt.get_path(branch, function(path)
+            wt.push({ target = target ~= "" and target or nil, cwd = path }, notify_and_refresh("push"))
+          end)
         end)
       end)
     end)
     :new_action_group("Advanced")
     :action("P", "Promote", function()
       pick_branch("Promote:", function(branch)
-        wt.promote(branch, notify_and_refresh("promote"))
+        wt.promote({ branch = branch }, notify_and_refresh("promote"))
       end)
     end)
     :action("x", "Prune", function()
@@ -179,16 +223,20 @@ end
 function M.quick_create()
   vim.ui.input({ prompt = "New worktree branch: " }, function(branch)
     if not branch or branch == "" then return end
-    wt.create_for_task(branch, function(path)
-      if path then
-        vim.notify("[wt] Created and switched to: " .. branch, vim.log.levels.INFO)
-      end
+    vim.ui.select({ "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
+      if not choice then return end
+      local opts = choice:match("Stacked") and { base = "@" } or {}
+      wt.create_for_task(branch, opts, function(path)
+        if path then
+          vim.notify("[wt] Created and switched to: " .. branch, vim.log.levels.INFO)
+        end
+      end)
     end)
   end)
 end
 
 function M.quick_diff()
-  wt.diff(nil, function(ok, lines, stderr)
+  wt.diff(function(ok, lines, stderr)
     vim.schedule(function()
       if ok and #lines > 0 then
         wt.open_diff_buf(lines)

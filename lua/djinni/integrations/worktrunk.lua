@@ -92,9 +92,12 @@ function M.create(branch, opts_or_callback, callback)
     cb = callback
   end
   local args = { "switch", "--create", branch }
-  if opts.base then
-    table.insert(args, "--base=" .. opts.base)
-  end
+  if opts.base then table.insert(args, "--base=" .. opts.base) end
+  if opts.execute then table.insert(args, "--execute") table.insert(args, opts.execute) end
+  if opts.clobber then table.insert(args, "--clobber") end
+  if opts.no_cd then table.insert(args, "--no-cd") end
+  if opts.yes then table.insert(args, "--yes") end
+  if opts.no_verify then table.insert(args, "--no-verify") end
   run_async("wt", args, function(ok, lines, stderr)
     if ok then
       local path = nil
@@ -112,49 +115,83 @@ function M.create(branch, opts_or_callback, callback)
   end)
 end
 
-function M.remove(branch, callback)
+function M.remove(branches, opts_or_cb, cb)
+  local opts, callback
+  if type(opts_or_cb) == "function" then
+    opts = {}
+    callback = opts_or_cb
+  else
+    opts = opts_or_cb or {}
+    callback = cb
+  end
   local args = { "remove" }
-  if branch then
-    table.insert(args, branch)
+  if opts.force then table.insert(args, "--force") end
+  if opts.force_delete then table.insert(args, "--force-delete") end
+  if opts.no_delete_branch then table.insert(args, "--no-delete-branch") end
+  if opts.foreground then table.insert(args, "--foreground") end
+  if opts.yes then table.insert(args, "--yes") end
+  if type(branches) == "table" then
+    for _, b in ipairs(branches) do table.insert(args, b) end
+  elseif branches then
+    table.insert(args, branches)
   end
   run_async("wt", args, function(ok, lines, stderr)
     callback(ok, table.concat(ok and lines or stderr or {}, "\n"))
   end)
 end
 
-function M.merge(target, branch, callback)
+function M.merge(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
   local args = { "merge" }
-  if target and target ~= "" then
-    table.insert(args, target)
-  end
-  if branch then
-    table.insert(args, "--branch")
-    table.insert(args, branch)
-  end
-  run_async("wt", args, function(ok, lines, stderr)
+  if opts.target and opts.target ~= "" then table.insert(args, opts.target) end
+  if opts.no_squash then table.insert(args, "--no-squash") end
+  if opts.no_commit then table.insert(args, "--no-commit") end
+  if opts.no_rebase then table.insert(args, "--no-rebase") end
+  if opts.no_remove then table.insert(args, "--no-remove") end
+  if opts.no_ff then table.insert(args, "--no-ff") end
+  if opts.stage then table.insert(args, "--stage=" .. opts.stage) end
+  if opts.yes then table.insert(args, "--yes") end
+  run_async("wt", args, { cwd = opts.cwd }, function(ok, lines, stderr)
     callback(ok, table.concat(ok and lines or stderr or {}, "\n"))
   end)
 end
 
 function M.get_path(branch, callback)
-  run_async("git", { "worktree", "list", "--porcelain" }, function(ok, lines)
-    if not ok then
-      callback(nil)
-      return
-    end
-    local current_worktree = nil
-    for _, line in ipairs(lines) do
-      if line:match("^worktree ") then
-        current_worktree = line:match("^worktree (.+)")
-      elseif line:match("^branch ") then
-        local branch_name = line:match("^branch refs/heads/(.+)")
-        if branch_name == branch and current_worktree then
-          callback(current_worktree)
-          return
-        end
+  M.list(function(entries)
+    if not entries then callback(nil) return end
+    for _, e in ipairs(entries) do
+      if e.branch == branch and e.path then
+        callback(e.path)
+        return
       end
     end
     callback(nil)
+  end)
+end
+
+function M.switch(branch, opts_or_cb, cb)
+  local opts, callback
+  if type(opts_or_cb) == "function" then
+    opts = {}
+    callback = opts_or_cb
+  else
+    opts = opts_or_cb or {}
+    callback = cb
+  end
+  local args = { "switch" }
+  if opts.create then table.insert(args, "--create") end
+  if opts.base then table.insert(args, "--base=" .. opts.base) end
+  if opts.execute then table.insert(args, "--execute") table.insert(args, opts.execute) end
+  if opts.branches then table.insert(args, "--branches") end
+  if opts.remotes then table.insert(args, "--remotes") end
+  if opts.clobber then table.insert(args, "--clobber") end
+  if opts.no_cd then table.insert(args, "--no-cd") end
+  if opts.yes then table.insert(args, "--yes") end
+  if opts.no_verify then table.insert(args, "--no-verify") end
+  if branch then table.insert(args, branch) end
+  run_async("wt", args, function(ok, lines, stderr)
+    if callback then callback(ok, lines, stderr) end
   end)
 end
 
@@ -240,8 +277,16 @@ function M.switch_to(branch, callback)
   end)
 end
 
-function M.create_for_task(branch, callback)
-  M.create(branch, function(ok, path)
+function M.create_for_task(branch, opts_or_cb, cb)
+  local opts, callback
+  if type(opts_or_cb) == "function" then
+    opts = {}
+    callback = opts_or_cb
+  else
+    opts = opts_or_cb or {}
+    callback = cb
+  end
+  M.create(branch, opts, function(ok, path)
     if ok then
       if path then
         vim.schedule(function()
@@ -287,80 +332,99 @@ function M.step_rollback(callback)
   end)
 end
 
-function M.commit(branch, callback)
-  M.get_path(branch, function(path)
-    if not path then callback(false, "worktree path not found") return end
-    run_async("wt", { "commit" }, { cwd = path }, callback)
-  end)
+function M.hook_show(callback)
+  run_async("wt", { "hook", "show" }, callback)
 end
 
-function M.squash(branch, callback)
-  M.get_path(branch, function(path)
-    if not path then callback(false, "worktree path not found") return end
-    run_async("wt", { "squash" }, { cwd = path }, callback)
-  end)
+function M.config_show(callback)
+  run_async("wt", { "config", "show" }, callback)
 end
 
-function M.rebase(target, branch, callback)
-  local args = { "rebase" }
-  if target and target ~= "" then table.insert(args, target) end
-  if branch then
-    table.insert(args, "--branch")
-    table.insert(args, branch)
-  end
-  run_async("wt", args, callback)
+function M.commit(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
+  local args = { "step", "commit" }
+  if opts.stage then table.insert(args, "--stage=" .. opts.stage) end
+  if opts.yes then table.insert(args, "--yes") end
+  run_async("wt", args, { cwd = opts.cwd }, callback)
 end
 
-function M.push(target, branch, callback)
-  local args = { "push" }
-  if target and target ~= "" then table.insert(args, target) end
-  if branch then
-    table.insert(args, "--branch")
-    table.insert(args, branch)
-  end
-  run_async("wt", args, callback)
+function M.squash(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
+  local args = { "step", "squash" }
+  if opts.target then table.insert(args, opts.target) end
+  if opts.stage then table.insert(args, "--stage=" .. opts.stage) end
+  if opts.yes then table.insert(args, "--yes") end
+  run_async("wt", args, { cwd = opts.cwd }, callback)
 end
 
-function M.diff(branch, callback)
-  local args = { "diff" }
-  if branch then
-    table.insert(args, "--branch")
-    table.insert(args, branch)
-  end
-  run_async("wt", args, callback)
+function M.rebase(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
+  local args = { "step", "rebase" }
+  if opts.target and opts.target ~= "" then table.insert(args, opts.target) end
+  if opts.yes then table.insert(args, "--yes") end
+  run_async("wt", args, { cwd = opts.cwd }, callback)
+end
+
+function M.push(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
+  local args = { "step", "push" }
+  if opts.target and opts.target ~= "" then table.insert(args, opts.target) end
+  if opts.no_ff then table.insert(args, "--no-ff") end
+  if opts.yes then table.insert(args, "--yes") end
+  run_async("wt", args, { cwd = opts.cwd }, callback)
+end
+
+function M.diff(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
+  local args = { "step", "diff" }
+  if opts.target then table.insert(args, opts.target) end
+  run_async("wt", args, { cwd = opts.cwd }, callback)
 end
 
 function M.copy_ignored(src, dst, callback)
-  run_async("wt", { "copy-ignored", src, dst }, callback)
+  run_async("wt", { "step", "copy-ignored", src, dst }, callback)
 end
 
 function M.eval(expr, callback)
-  run_async("wt", { "eval", expr }, callback)
+  run_async("wt", { "step", "eval", expr }, callback)
 end
 
 function M.for_each(cmd, callback)
-  local args = { "for-each" }
+  local args = { "step", "for-each" }
   for part in cmd:gmatch("%S+") do
     table.insert(args, part)
   end
   run_async("wt", args, callback)
 end
 
-function M.promote(branch, callback)
-  local args = { "promote" }
-  if branch then
-    table.insert(args, "--branch")
-    table.insert(args, branch)
-  end
+function M.promote(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  if type(opts) == "string" then opts = { branch = opts } end
+  opts = opts or {}
+  local args = { "step", "promote" }
+  if opts.branch then table.insert(args, opts.branch) end
+  run_async("wt", args, { cwd = opts.cwd }, callback)
+end
+
+function M.prune(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
+  local args = { "step", "prune" }
+  if opts.yes then table.insert(args, "--yes") end
   run_async("wt", args, callback)
 end
 
-function M.prune(callback)
-  run_async("wt", { "prune" }, callback)
-end
-
-function M.relocate(callback)
-  run_async("wt", { "relocate" }, callback)
+function M.relocate(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
+  local args = { "step", "relocate" }
+  if opts.yes then table.insert(args, "--yes") end
+  run_async("wt", args, callback)
 end
 
 local statusline_cache = ""
@@ -436,17 +500,20 @@ function M.open_diff_buf(lines)
 end
 
 local wt_ops = {
-  { key = "commit",       label = "commit — stage & commit (LLM msg)",       branch_only = true  },
-  { key = "squash",       label = "squash — squash all commits into one",     branch_only = true  },
-  { key = "rebase",       label = "rebase — rebase onto target branch",       branch_only = false, prompt = "Rebase onto:" },
-  { key = "push",         label = "push — fast-forward target to branch",     branch_only = false, prompt = "Push to target (empty=trunk):" },
-  { key = "diff",         label = "diff — all changes since branch point",    branch_only = false },
-  { key = "promote",      label = "promote — swap branch into main worktree", branch_only = false },
-  { key = "copy-ignored", label = "copy-ignored — copy gitignored files",     branch_only = false, prompt2 = { "From worktree:", "To worktree:" } },
-  { key = "eval",         label = "eval — evaluate a template expression",    branch_only = false, prompt = "Expression:" },
-  { key = "for-each",     label = "for-each — run command in every worktree", branch_only = false, prompt = "Command:" },
-  { key = "prune",        label = "prune — remove merged worktrees/branches", branch_only = false },
-  { key = "relocate",     label = "relocate — move worktrees to expected paths", branch_only = false },
+  { key = "commit",       label = "commit — stage & commit (LLM msg)",          needs_wt = true  },
+  { key = "squash",       label = "squash — squash all commits into one",        needs_wt = true  },
+  { key = "rebase",       label = "rebase — rebase onto target branch",          needs_wt = true,  prompt = "Rebase onto (empty=default):" },
+  { key = "push",         label = "push — fast-forward target to branch",        needs_wt = true,  prompt = "Push to target (empty=default):" },
+  { key = "diff",         label = "diff — all changes since branch point",       needs_wt = true  },
+  { key = "merge",        label = "merge — squash, rebase, merge into target",   needs_wt = true,  prompt = "Merge into (empty=default):" },
+  { key = "promote",      label = "promote — swap branch into main worktree",    needs_wt = false },
+  { key = "copy-ignored", label = "copy-ignored — copy gitignored files",        needs_wt = false, prompt2 = { "From worktree:", "To worktree:" } },
+  { key = "eval",         label = "eval — evaluate a template expression",       needs_wt = false, prompt = "Expression:" },
+  { key = "for-each",     label = "for-each — run command in every worktree",    needs_wt = false, prompt = "Command:" },
+  { key = "prune",        label = "prune — remove merged worktrees/branches",    needs_wt = false },
+  { key = "relocate",     label = "relocate — move worktrees to expected paths", needs_wt = false },
+  { key = "hook-show",    label = "hook show — display configured hooks",        needs_wt = false },
+  { key = "config-show",  label = "config show — display configuration",         needs_wt = false },
 }
 
 function M.notify_result(op, ok, lines, stderr)
@@ -458,12 +525,20 @@ function M.notify_result(op, ok, lines, stderr)
   end
 end
 
+local function resolve_cwd_and_run(branch, fn)
+  if not branch or branch == "" then
+    fn(nil)
+    return
+  end
+  M.get_path(branch, function(path)
+    fn(path)
+  end)
+end
+
 function M.pick_op(branch)
   local items = {}
   for _, op in ipairs(wt_ops) do
-    if not op.branch_only or (branch and branch ~= "") then
-      table.insert(items, op)
-    end
+    table.insert(items, op)
   end
 
   local labels = vim.tbl_map(function(op) return op.label end, items)
@@ -478,37 +553,61 @@ function M.pick_op(branch)
     if not op then return end
 
     local function run_op(args_extra)
-      if op.key == "commit" then
-        M.commit(branch, function(ok, lines, stderr) M.notify_result("commit", ok, lines, stderr) end)
-      elseif op.key == "squash" then
-        M.squash(branch, function(ok, lines, stderr) M.notify_result("squash", ok, lines, stderr) end)
-      elseif op.key == "rebase" then
-        M.rebase(args_extra, branch, function(ok, lines, stderr) M.notify_result("rebase", ok, lines, stderr) end)
-      elseif op.key == "push" then
-        M.push(args_extra, branch, function(ok, lines, stderr) M.notify_result("push", ok, lines, stderr) end)
-      elseif op.key == "diff" then
-        M.diff(branch, function(ok, lines, stderr)
-          vim.schedule(function()
-            if ok and #lines > 0 then M.open_diff_buf(lines)
-            elseif ok then vim.notify("[wt] diff: no changes", vim.log.levels.INFO)
-            else vim.notify("[wt] diff failed: " .. table.concat(stderr or {}, "\n"), vim.log.levels.ERROR)
-            end
+      resolve_cwd_and_run(branch, function(cwd)
+        if op.key == "commit" then
+          M.commit({ cwd = cwd }, function(ok, lines, stderr) M.notify_result("commit", ok, lines, stderr) end)
+        elseif op.key == "squash" then
+          M.squash({ cwd = cwd }, function(ok, lines, stderr) M.notify_result("squash", ok, lines, stderr) end)
+        elseif op.key == "rebase" then
+          M.rebase({ target = args_extra, cwd = cwd }, function(ok, lines, stderr) M.notify_result("rebase", ok, lines, stderr) end)
+        elseif op.key == "push" then
+          M.push({ target = args_extra, cwd = cwd }, function(ok, lines, stderr) M.notify_result("push", ok, lines, stderr) end)
+        elseif op.key == "diff" then
+          M.diff({ cwd = cwd }, function(ok, lines, stderr)
+            vim.schedule(function()
+              if ok and #lines > 0 then M.open_diff_buf(lines)
+              elseif ok then vim.notify("[wt] diff: no changes", vim.log.levels.INFO)
+              else vim.notify("[wt] diff failed: " .. table.concat(stderr or {}, "\n"), vim.log.levels.ERROR)
+              end
+            end)
           end)
-        end)
-      elseif op.key == "promote" then
-        M.promote(branch, function(ok, lines, stderr) M.notify_result("promote", ok, lines, stderr) end)
-      elseif op.key == "copy-ignored" then
-        local parts = type(args_extra) == "table" and args_extra or {}
-        M.copy_ignored(parts[1] or "", parts[2] or "", function(ok, lines, stderr) M.notify_result("copy-ignored", ok, lines, stderr) end)
-      elseif op.key == "eval" then
-        M.eval(args_extra or "", function(ok, lines, stderr) M.notify_result("eval", ok, lines, stderr) end)
-      elseif op.key == "for-each" then
-        M.for_each(args_extra or "", function(ok, lines, stderr) M.notify_result("for-each", ok, lines, stderr) end)
-      elseif op.key == "prune" then
-        M.prune(function(ok, lines, stderr) M.notify_result("prune", ok, lines, stderr) end)
-      elseif op.key == "relocate" then
-        M.relocate(function(ok, lines, stderr) M.notify_result("relocate", ok, lines, stderr) end)
-      end
+        elseif op.key == "merge" then
+          M.merge({ target = args_extra, cwd = cwd, yes = true }, function(ok, msg) M.notify_result("merge", ok, { msg }, {}) end)
+        elseif op.key == "promote" then
+          M.promote({ branch = branch }, function(ok, lines, stderr) M.notify_result("promote", ok, lines, stderr) end)
+        elseif op.key == "copy-ignored" then
+          local parts = type(args_extra) == "table" and args_extra or {}
+          M.copy_ignored(parts[1] or "", parts[2] or "", function(ok, lines, stderr) M.notify_result("copy-ignored", ok, lines, stderr) end)
+        elseif op.key == "eval" then
+          M.eval(args_extra or "", function(ok, lines, stderr) M.notify_result("eval", ok, lines, stderr) end)
+        elseif op.key == "for-each" then
+          M.for_each(args_extra or "", function(ok, lines, stderr) M.notify_result("for-each", ok, lines, stderr) end)
+        elseif op.key == "prune" then
+          M.prune({ yes = true }, function(ok, lines, stderr) M.notify_result("prune", ok, lines, stderr) end)
+        elseif op.key == "relocate" then
+          M.relocate({ yes = true }, function(ok, lines, stderr) M.notify_result("relocate", ok, lines, stderr) end)
+        elseif op.key == "hook-show" then
+          M.hook_show(function(ok, lines, stderr)
+            vim.schedule(function()
+              if ok and #lines > 0 then
+                M.open_diff_buf(lines)
+              else
+                M.notify_result("hook show", ok, lines, stderr)
+              end
+            end)
+          end)
+        elseif op.key == "config-show" then
+          M.config_show(function(ok, lines, stderr)
+            vim.schedule(function()
+              if ok and #lines > 0 then
+                M.open_diff_buf(lines)
+              else
+                M.notify_result("config show", ok, lines, stderr)
+              end
+            end)
+          end)
+        end
+      end)
     end
 
     if op.prompt2 then

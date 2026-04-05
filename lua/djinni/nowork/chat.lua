@@ -68,6 +68,43 @@ M._last_activity_touch = {} -- buf -> last timestamp we called touch_activity
 M._checktime_dirty = false
 M._FILE_MUTATING = { edit=true, create=true, write=true, delete=true, move=true }
 
+local function _win_fold_chat(win, buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_win_get_buf(win) ~= buf then return end
+  vim.api.nvim_win_call(win, function()
+    vim.cmd("noautocmd setlocal foldmethod=expr")
+    vim.cmd("noautocmd setlocal foldexpr=v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)")
+    vim.cmd("noautocmd setlocal foldtext=v:lua.require('djinni.nowork.chat').foldtext()")
+    vim.cmd("noautocmd setlocal foldenable")
+    vim.cmd("noautocmd setlocal foldlevel=0")
+  end)
+  local fml = vim.api.nvim_get_option_value("foldminlines", { win = win })
+  if fml ~= 1 then
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf and vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_win_call(win, function()
+        vim.cmd("noautocmd setlocal foldminlines=1")
+      end)
+    end
+  end
+end
+
+local function _win_fold_manual(win, buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_win_get_buf(win) ~= buf then return end
+  vim.api.nvim_win_call(win, function()
+    vim.cmd("noautocmd setlocal foldmethod=manual")
+  end)
+end
+
+local function _win_fold_restore_expr(win, buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_win_get_buf(win) ~= buf then return end
+  vim.api.nvim_win_call(win, function()
+    vim.cmd("noautocmd setlocal foldmethod=expr")
+    vim.cmd("noautocmd setlocal foldexpr=v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)")
+  end)
+end
+
 function M._invalidate_session(buf)
   local old_sid = M._sessions[buf]
   M._sessions[buf] = nil
@@ -643,14 +680,7 @@ function M.attach(buf)
       if not vim.api.nvim_buf_is_valid(buf) then return end
       local w = vim.fn.bufwinid(buf)
       if w == -1 then return end
-      pcall(function()
-        vim.wo[w].foldmethod = "expr"
-        vim.wo[w].foldexpr = "v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)"
-        vim.wo[w].foldtext = "v:lua.require('djinni.nowork.chat').foldtext()"
-        vim.wo[w].foldenable = true
-        vim.wo[w].foldlevel = 0
-        vim.wo[w].foldminlines = 1
-      end)
+      pcall(_win_fold_chat, w, buf)
     end)
     vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter" }, {
       buffer = buf,
@@ -660,12 +690,7 @@ function M.attach(buf)
         if w ~= -1 then
           pcall(function()
             if vim.wo[w].foldmethod ~= "expr" then
-              vim.wo[w].foldmethod = "expr"
-              vim.wo[w].foldexpr = "v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)"
-              vim.wo[w].foldtext = "v:lua.require('djinni.nowork.chat').foldtext()"
-              vim.wo[w].foldenable = true
-              vim.wo[w].foldlevel = 0
-              vim.wo[w].foldminlines = 1
+              _win_fold_chat(w, buf)
             end
           end)
         end
@@ -2104,7 +2129,7 @@ function M._start_streaming(buf)
 
   local win = vim.fn.bufwinid(buf)
   if win ~= -1 then
-    pcall(function() vim.wo[win].foldmethod = "manual" end)
+    pcall(_win_fold_manual, win, buf)
   end
 
   local function cleanup()
@@ -2151,10 +2176,7 @@ function M._start_streaming(buf)
       if M._streaming[buf] then return end
       local cwin = vim.fn.bufwinid(buf)
       if cwin == -1 then return end
-      pcall(function()
-        vim.wo[cwin].foldmethod = "expr"
-        vim.wo[cwin].foldexpr = "v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)"
-      end)
+      pcall(_win_fold_restore_expr, cwin, buf)
       pcall(vim.api.nvim_win_call, cwin, function()
         vim.cmd("normal! zx")
       end)
