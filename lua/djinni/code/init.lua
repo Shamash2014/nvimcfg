@@ -46,13 +46,13 @@ function M._create_task(s, e)
   local selection = table.concat(lines, "\n")
   local project_root = utils.get_project_root() or vim.fn.getcwd()
 
-  local prompt = "Here is code from `" .. rel_path .. ":" .. s .. "-" .. e .. "`:\n\n```\n" .. selection .. "\n```\n\nGenerate a task for this code."
+  local reference = "From `" .. rel_path .. ":" .. s .. "-" .. e .. "`:\n\n```\n" .. selection .. "\n```"
 
-  vim.notify("Creating task from " .. rel_path .. ":" .. s .. "-" .. e, vim.log.levels.INFO)
+  vim.notify("Adding reference from " .. rel_path .. ":" .. s .. "-" .. e, vim.log.levels.INFO)
 
   require("djinni.nowork.chat").create(project_root, {
-    prompt = prompt,
-    title = "task-" .. vim.fn.fnamemodify(rel_path, ":t:r"),
+    prompt = reference,
+    title = "ref-" .. vim.fn.fnamemodify(rel_path, ":t:r"),
     no_send = true,
   })
 end
