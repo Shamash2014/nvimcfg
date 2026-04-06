@@ -520,6 +520,8 @@ local wt_ops = {
   { key = "copy-ignored", label = "copy-ignored — copy gitignored files",        needs_wt = false, prompt2 = { "From worktree:", "To worktree:" } },
   { key = "eval",         label = "eval — evaluate a template expression",       needs_wt = false, prompt = "Expression:" },
   { key = "for-each",     label = "for-each — run command in every worktree",    needs_wt = false, prompt = "Command:" },
+  { key = "remove",       label = "remove — remove worktree",                     needs_wt = true  },
+  { key = "remove-force", label = "remove --force — force remove worktree",       needs_wt = true  },
   { key = "prune",        label = "prune — remove merged worktrees/branches",    needs_wt = false },
   { key = "relocate",     label = "relocate — move worktrees to expected paths", needs_wt = false },
   { key = "hook-show",    label = "hook show — display configured hooks",        needs_wt = false },
@@ -684,6 +686,10 @@ function M.pick_op(branch)
           M.eval(args_extra or "", function(ok, lines, stderr) M.notify_result("eval", ok, lines, stderr) end)
         elseif op.key == "for-each" then
           M.for_each(args_extra or "", function(ok, lines, stderr) M.notify_result("for-each", ok, lines, stderr) end)
+        elseif op.key == "remove" then
+          M.remove(branch, { yes = true }, function(ok, msg) M.notify_result("remove", ok, { msg }, {}) end)
+        elseif op.key == "remove-force" then
+          M.remove(branch, { force = true, yes = true }, function(ok, msg) M.notify_result("remove --force", ok, { msg }, {}) end)
         elseif op.key == "prune" then
           M.prune({ yes = true }, function(ok, lines, stderr) M.notify_result("prune", ok, lines, stderr) end)
         elseif op.key == "relocate" then

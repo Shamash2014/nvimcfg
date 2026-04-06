@@ -238,7 +238,7 @@ function M.action_worktree_remove()
     vim.ui.input({ prompt = "Remove worktree '" .. item.branch .. "'? (y/n): " }, function(answer)
       if answer ~= "y" then return end
       local wt = require("djinni.integrations.worktrunk")
-      wt.remove(item.branch, function(ok, msg)
+      wt.remove(item.branch, { force = true }, function(ok, msg)
         if ok then
           M.notify("Removed worktree: " .. item.branch, vim.log.levels.INFO)
         else
