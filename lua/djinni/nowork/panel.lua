@@ -34,6 +34,8 @@ local _wt_info_cache = {}
 local _wt_info_cache_at = {}
 local _root_stats = {}
 local _root_stats_ttl = 30
+local _tasks_dirty = true
+local _render_timer = nil
 
 local function _detect_worktree_info(root)
   if _wt_info_cache[root] ~= nil and _wt_info_cache_at[root] and (os.time() - _wt_info_cache_at[root]) < 30 then
@@ -79,11 +81,11 @@ local function _detect_worktree_info(root)
 end
 
 local _wt_branches_cache = {}
-local _wt_branches_cache_at = 0
+local _wt_branches_cache_at = {}
 local _wt_branches_ttl = 30
 
 local function _discover_worktrees(root)
-  if _wt_branches_cache[root] and (os.time() - _wt_branches_cache_at) < _wt_branches_ttl then
+  if _wt_branches_cache[root] and _wt_branches_cache_at[root] and (os.time() - _wt_branches_cache_at[root]) < _wt_branches_ttl then
     return _wt_branches_cache[root]
   end
   local wt_dir = root .. "/.git/worktrees"
@@ -112,7 +114,7 @@ local function _discover_worktrees(root)
     end
   end
   _wt_branches_cache[root] = branches
-  _wt_branches_cache_at = os.time()
+  _wt_branches_cache_at[root] = os.time()
   return branches
 end
 
@@ -178,7 +180,7 @@ local function _refresh_wt_stats(tasks)
     end
     vim.schedule(function()
       if M._buf and vim.api.nvim_buf_is_valid(M._buf) then
-        M.render()
+        M.schedule_render()
       end
     end)
   end)
@@ -217,7 +219,7 @@ local function _refresh_root_stats(roots)
           on_exit = function()
             vim.schedule(function()
               if M._buf and vim.api.nvim_buf_is_valid(M._buf) then
-                M.render()
+                M.schedule_render()
               end
             end)
           end,
@@ -226,6 +228,28 @@ local function _refresh_root_stats(roots)
     })
     ::next_root::
   end
+end
+
+function M.refresh()
+  _wt_stats = {}
+  _root_stats = {}
+  _wt_info_cache = {}
+  _wt_info_cache_at = {}
+  _wt_branches_cache = {}
+  _wt_branches_cache_at = {}
+  _tasks_dirty = true
+  M.render()
+end
+
+function M.schedule_render()
+  _tasks_dirty = true
+  if _render_timer then
+    _render_timer:stop()
+  end
+  _render_timer = vim.defer_fn(function()
+    _render_timer = nil
+    M.render()
+  end, 50)
 end
 
 local function get_config()
@@ -383,6 +407,43 @@ function M._get_grouped_tasks()
 end
 
 function M._scan_tasks()
+  if not _tasks_dirty and #M._tasks > 0 then
+    local chat = require("djinni.nowork.chat")
+    for _, task in ipairs(M._tasks) do
+      local bufnr = vim.fn.bufnr(task.file_path)
+      if bufnr ~= -1 then
+        local usage = chat._usage[bufnr]
+        if usage then
+          local total = usage.input_tokens + usage.output_tokens
+          if total > 0 then
+            task.tokens = total >= 1000 and string.format("%.1fk", total / 1000) or tostring(total)
+          end
+          if usage.cost > 0 then
+            task.cost = string.format("%.2f", usage.cost)
+          end
+          if usage.context_size and usage.context_size > 0 then
+            task.context_pct = math.floor((usage.context_used or 0) / usage.context_size * 100)
+          end
+        end
+        if chat._streaming[bufnr] then
+          task.status = "running"
+        end
+        local is_visible = vim.fn.bufwinid(bufnr) ~= -1
+        if is_visible then
+          if chat._streaming[bufnr] then
+            task.activity = (chat._last_tool_title and chat._last_tool_title[bufnr]) or "streaming…"
+          elseif chat._last_perm_tool and chat._last_perm_tool[bufnr] then
+            task.activity = "⚠ " .. chat._last_perm_tool[bufnr]
+          else
+            task.activity = nil
+          end
+        end
+      end
+    end
+    return
+  end
+  _tasks_dirty = false
+
   local cfg = get_config()
   local chat_dir = cfg.chat and cfg.chat.dir or ".chat"
   local tasks = {}
@@ -411,9 +472,12 @@ function M._scan_tasks()
             local task_skills = ""
             local task_mcp = ""
             local task_worktree = ""
+            local line_num = 0
             local in_frontmatter = false
             local fm_count = 0
             for line in f:lines() do
+              line_num = line_num + 1
+              if line_num > 25 then break end
               if line:match("^%-%-%-") then
                 fm_count = fm_count + 1
                 if fm_count == 1 then
@@ -800,6 +864,7 @@ function M.open()
   map("j", M.cursor_down)
   map("k", M.cursor_up)
   map("/", M.search_tasks)
+  map("R", M.refresh)
   map("?", M.show_help)
 
   M.render()
@@ -1005,6 +1070,7 @@ function M.archive_task()
     pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
   end
   os.remove(task.file_path)
+  _tasks_dirty = true
   local row = M._win and vim.api.nvim_win_is_valid(M._win) and vim.api.nvim_win_get_cursor(M._win)[1] or 1
   M.render()
   if M._win and vim.api.nvim_win_is_valid(M._win) then
@@ -1020,6 +1086,7 @@ function M.remove_project()
   local root = root_from_key(key)
   if not root or root == "" then return end
   require("djinni.integrations.projects").remove(root)
+  _tasks_dirty = true
   M.render()
 end
 
@@ -1050,6 +1117,7 @@ function M.create_task()
         if filepath and worktree and worktree ~= "" and worktree ~= "main" then
           write_frontmatter_to_file(filepath, "worktree", worktree)
         end
+        _tasks_dirty = true
         M.render()
         local win = get_assoc_win()
         if win and filepath then
@@ -1127,6 +1195,7 @@ function M.gen_worktree()
         end
         write_frontmatter_to_file(task.file_path, "worktree", branch)
         vim.notify("[djinni] worktree: " .. branch, vim.log.levels.INFO)
+        _tasks_dirty = true
         M.render()
       end)
     end)
@@ -1139,6 +1208,7 @@ function M.add_project()
     snacks.pick_project(function(project_root)
       if project_root then
         require("djinni.integrations.projects").add(project_root)
+        _tasks_dirty = true
         M.render()
       end
     end)
@@ -1179,6 +1249,7 @@ function M.interrupt_task()
     return
   end
   require("djinni.nowork.chat").interrupt(bufnr)
+  _tasks_dirty = true
   M.render()
 end
 
