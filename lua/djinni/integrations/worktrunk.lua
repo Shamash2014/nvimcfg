@@ -388,8 +388,15 @@ function M.diff(opts, callback)
   run_async("wt", args, { cwd = opts.cwd }, callback)
 end
 
-function M.copy_ignored(src, dst, callback)
-  run_async("wt", { "step", "copy-ignored", src, dst }, callback)
+function M.copy_ignored(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
+  local args = { "step", "copy-ignored" }
+  if opts.from then table.insert(args, "--from=" .. opts.from) end
+  if opts.to then table.insert(args, "--to=" .. opts.to) end
+  if opts.force then table.insert(args, "--force") end
+  if opts.dry_run then table.insert(args, "--dry-run") end
+  run_async("wt", args, callback)
 end
 
 function M.eval(expr, callback)
@@ -579,7 +586,7 @@ function M.pick_op(branch)
           M.promote({ branch = branch }, function(ok, lines, stderr) M.notify_result("promote", ok, lines, stderr) end)
         elseif op.key == "copy-ignored" then
           local parts = type(args_extra) == "table" and args_extra or {}
-          M.copy_ignored(parts[1] or "", parts[2] or "", function(ok, lines, stderr) M.notify_result("copy-ignored", ok, lines, stderr) end)
+          M.copy_ignored({ from = parts[1], to = parts[2] }, function(ok, lines, stderr) M.notify_result("copy-ignored", ok, lines, stderr) end)
         elseif op.key == "eval" then
           M.eval(args_extra or "", function(ok, lines, stderr) M.notify_result("eval", ok, lines, stderr) end)
         elseif op.key == "for-each" then

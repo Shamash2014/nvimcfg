@@ -28,8 +28,93 @@ local status_order = { running = 1, input = 2, idle = 3, done = 4 }
 
 local ns = vim.api.nvim_create_namespace("nowork_panel")
 
-local _wt_dirty = {}
-local _wt_dirty_ttl = 30
+local _wt_stats = {}
+local _wt_stats_ttl = 30
+local _wt_info_cache = {}
+local _wt_info_cache_at = {}
+local _root_stats = {}
+local _root_stats_ttl = 30
+
+local function _detect_worktree_info(root)
+  if _wt_info_cache[root] ~= nil and _wt_info_cache_at[root] and (os.time() - _wt_info_cache_at[root]) < 30 then
+    return _wt_info_cache[root]
+  end
+  local function cache_false()
+    _wt_info_cache[root] = false
+    _wt_info_cache_at[root] = os.time()
+    return false
+  end
+  local git_path = root .. "/.git"
+  local stat = vim.loop.fs_stat(git_path)
+  if not stat or stat.type ~= "file" then return cache_false() end
+  local f = io.open(git_path, "r")
+  if not f then return cache_false() end
+  local content = f:read("*a")
+  f:close()
+  local gitdir = content:match("gitdir:%s*(.+)")
+  if not gitdir then return cache_false() end
+  gitdir = gitdir:gsub("%s+$", "")
+  if not vim.startswith(gitdir, "/") then
+    gitdir = root .. "/" .. gitdir
+  end
+  gitdir = vim.fn.fnamemodify(gitdir, ":p"):gsub("/$", "")
+  local main_git = gitdir:match("^(.+)/worktrees/[^/]+$")
+  if not main_git then return cache_false() end
+  local parent = vim.fn.fnamemodify(main_git, ":h")
+  local head_file = gitdir .. "/HEAD"
+  local hf = io.open(head_file, "r")
+  local branch = nil
+  if hf then
+    local head = hf:read("*l")
+    hf:close()
+    branch = head and head:match("ref: refs/heads/(.+)")
+  end
+  if not branch then
+    branch = gitdir:match("/worktrees/([^/]+)$")
+  end
+  local info = { parent = parent, branch = branch }
+  _wt_info_cache[root] = info
+  _wt_info_cache_at[root] = os.time()
+  return info
+end
+
+local _wt_branches_cache = {}
+local _wt_branches_cache_at = 0
+local _wt_branches_ttl = 30
+
+local function _discover_worktrees(root)
+  if _wt_branches_cache[root] and (os.time() - _wt_branches_cache_at) < _wt_branches_ttl then
+    return _wt_branches_cache[root]
+  end
+  local wt_dir = root .. "/.git/worktrees"
+  local handle = vim.loop.fs_scandir(wt_dir)
+  if not handle then
+    _wt_branches_cache[root] = {}
+    return {}
+  end
+  local branches = {}
+  while true do
+    local name, type = vim.loop.fs_scandir_next(handle)
+    if not name then break end
+    if type == "directory" then
+      local head_file = wt_dir .. "/" .. name .. "/HEAD"
+      local hf = io.open(head_file, "r")
+      if hf then
+        local head = hf:read("*l")
+        hf:close()
+        local branch = head and head:match("ref: refs/heads/(.+)")
+        if branch then
+          table.insert(branches, branch)
+        else
+          table.insert(branches, name)
+        end
+      end
+    end
+  end
+  _wt_branches_cache[root] = branches
+  _wt_branches_cache_at = os.time()
+  return branches
+end
 
 local function write_frontmatter_to_file(file_path, key, value)
   local chat = require("djinni.nowork.chat")
@@ -47,22 +132,99 @@ local function write_frontmatter_to_file(file_path, key, value)
   vim.api.nvim_buf_delete(bufnr, { force = true })
 end
 
-local function _refresh_wt_dirty(tasks)
+local _wt_stats_busy = false
+
+local function _refresh_wt_stats(tasks)
   local worktrunk = require("djinni.integrations.worktrunk")
   if not worktrunk.available() then return end
+  if _wt_stats_busy then return end
+
+  local needs_refresh = false
   for _, task in ipairs(tasks) do
     local branch = task.worktree
     if branch and branch ~= "" then
-      local entry = _wt_dirty[branch]
-      if not entry or (os.time() - entry.at) >= _wt_dirty_ttl then
-        worktrunk.is_dirty(branch, function(dirty)
-          _wt_dirty[branch] = { dirty = dirty, at = os.time() }
-          if M._buf and vim.api.nvim_buf_is_valid(M._buf) then
-            M.render()
-          end
-        end)
+      local entry = _wt_stats[branch]
+      if not entry or (os.time() - entry.at) >= _wt_stats_ttl then
+        needs_refresh = true
+        break
       end
     end
+  end
+  if not needs_refresh then return end
+
+  _wt_stats_busy = true
+  worktrunk.list({ full = true }, function(entries)
+    _wt_stats_busy = false
+    if not entries then return end
+    for _, e in ipairs(entries) do
+      if e.branch then
+        local wt = e.working_tree or {}
+        local diff = wt.diff or {}
+        local uncommitted = 0
+        if wt.staged then uncommitted = uncommitted + 1 end
+        if wt.modified then uncommitted = uncommitted + 1 end
+        if wt.untracked then uncommitted = uncommitted + 1 end
+        local dirty = wt.staged or wt.modified or wt.untracked or false
+        _wt_stats[e.branch] = {
+          added = diff.added or 0,
+          deleted = diff.deleted or 0,
+          uncommitted = uncommitted,
+          ahead = e.main and e.main.ahead or 0,
+          behind = e.main and e.main.behind or 0,
+          dirty = dirty,
+          at = os.time(),
+        }
+      end
+    end
+    vim.schedule(function()
+      if M._buf and vim.api.nvim_buf_is_valid(M._buf) then
+        M.render()
+      end
+    end)
+  end)
+end
+
+local function _refresh_root_stats(roots)
+  for _, root in ipairs(roots) do
+    local entry = _root_stats[root]
+    if entry and (os.time() - entry.at) < _root_stats_ttl then goto next_root end
+
+    local stats = { added = 0, deleted = 0, uncommitted = 0, at = os.time() }
+    _root_stats[root] = stats
+
+    vim.fn.jobstart({ "git", "diff", "--shortstat" }, {
+      cwd = root,
+      stdout_buffered = true,
+      on_stdout = function(_, data)
+        for _, line in ipairs(data or {}) do
+          local ins = line:match("(%d+) insertion")
+          local del = line:match("(%d+) deletion")
+          if ins then stats.added = tonumber(ins) end
+          if del then stats.deleted = tonumber(del) end
+        end
+      end,
+      on_exit = function()
+        vim.fn.jobstart({ "git", "status", "--porcelain" }, {
+          cwd = root,
+          stdout_buffered = true,
+          on_stdout = function(_, data)
+            local count = 0
+            for _, line in ipairs(data or {}) do
+              if line ~= "" then count = count + 1 end
+            end
+            stats.uncommitted = count
+          end,
+          on_exit = function()
+            vim.schedule(function()
+              if M._buf and vim.api.nvim_buf_is_valid(M._buf) then
+                M.render()
+              end
+            end)
+          end,
+        })
+      end,
+    })
+    ::next_root::
   end
 end
 
@@ -113,21 +275,110 @@ function M._get_grouped_tasks()
 
   local projects = require("djinni.integrations.projects")
   for _, root in ipairs(projects.get()) do
-    local name = vim.fn.fnamemodify(root, ":t")
-    if not group_map[root] then
-      group_map[root] = { name = name, root = root, tasks = {} }
-      table.insert(groups, group_map[root])
+    if root ~= "." then
+      local actual_root = root
+      local info = _detect_worktree_info(root)
+      if info then actual_root = info.parent end
+      if not group_map[actual_root] then
+        local name = vim.fn.fnamemodify(actual_root, ":t")
+        group_map[actual_root] = { name = name, root = actual_root, subgroups = {}, _sub_map = {} }
+        table.insert(groups, group_map[actual_root])
+      end
+      if info and info.branch then
+        local grp = group_map[actual_root]
+        if not grp._sub_map[info.branch] then
+          grp._sub_map[info.branch] = {
+            name = info.branch,
+            worktree = info.branch,
+            tasks = {},
+          }
+          table.insert(grp.subgroups, grp._sub_map[info.branch])
+        end
+      end
     end
   end
 
   for _, task in ipairs(M._tasks) do
     local task_root = task.root or task.file_path:match("^(.-)/%.[^/]+/[^/]+$") or ""
-    if not group_map[task_root] then
-      group_map[task_root] = { name = task.project, root = task_root, tasks = {} }
-      table.insert(groups, group_map[task_root])
+    if task_root ~= "." then
+      local wt_key = task.worktree and task.worktree ~= "" and task.worktree or nil
+      local info = _detect_worktree_info(task_root)
+      if info and not wt_key then
+        wt_key = info.branch
+        task_root = info.parent
+      end
+      wt_key = wt_key or "_main"
+      if not group_map[task_root] then
+        local name = vim.fn.fnamemodify(task_root, ":t")
+        group_map[task_root] = { name = name, root = task_root, subgroups = {}, _sub_map = {} }
+        table.insert(groups, group_map[task_root])
+      end
+      local grp = group_map[task_root]
+      if not grp._sub_map[wt_key] then
+        grp._sub_map[wt_key] = {
+          name = wt_key == "_main" and "main" or wt_key,
+          worktree = wt_key ~= "_main" and wt_key or nil,
+          tasks = {},
+        }
+        table.insert(grp.subgroups, grp._sub_map[wt_key])
+      end
+      table.insert(grp._sub_map[wt_key].tasks, task)
     end
-    table.insert(group_map[task_root].tasks, task)
   end
+
+  for _, grp in ipairs(groups) do
+    local wt_branches = _discover_worktrees(grp.root)
+    for _, branch in ipairs(wt_branches) do
+      if not grp._sub_map[branch] then
+        grp._sub_map[branch] = {
+          name = branch,
+          worktree = branch,
+          tasks = {},
+        }
+        table.insert(grp.subgroups, grp._sub_map[branch])
+      end
+    end
+  end
+
+  local function group_has_active(g)
+    for _, sg in ipairs(g.subgroups) do
+      for _, t in ipairs(sg.tasks) do
+        if t.status == "running" or t.status == "input" then return true end
+      end
+    end
+    return false
+  end
+
+  local function group_task_count(g)
+    local c = 0
+    for _, sg in ipairs(g.subgroups) do c = c + #sg.tasks end
+    return c
+  end
+
+  table.sort(groups, function(a, b)
+    local aa, ba = group_has_active(a), group_has_active(b)
+    if aa ~= ba then return aa end
+    local ac, bc = group_task_count(a), group_task_count(b)
+    if ac ~= bc then return ac > bc end
+    return a.name < b.name
+  end)
+
+  for _, grp in ipairs(groups) do
+    table.sort(grp.subgroups, function(a, b)
+      local function sub_active(sg)
+        for _, t in ipairs(sg.tasks) do
+          if t.status == "running" or t.status == "input" then return true end
+        end
+        return false
+      end
+      local aa, ba = sub_active(a), sub_active(b)
+      if aa ~= ba then return aa end
+      if (a.worktree ~= nil) ~= (b.worktree ~= nil) then return a.worktree ~= nil end
+      if #a.tasks ~= #b.tasks then return #a.tasks > #b.tasks end
+      return a.name < b.name
+    end)
+  end
+
   return groups
 end
 
@@ -227,15 +478,38 @@ function M._scan_tasks()
         if usage.cost > 0 then
           task.cost = string.format("%.2f", usage.cost)
         end
+        if usage.context_size and usage.context_size > 0 then
+          task.context_pct = math.floor((usage.context_used or 0) / usage.context_size * 100)
+        end
       end
       if chat._streaming[bufnr] then
         task.status = "running"
+      end
+      local is_visible = vim.fn.bufwinid(bufnr) ~= -1
+      if is_visible then
+        if chat._streaming[bufnr] then
+          task.activity = (chat._last_tool_title and chat._last_tool_title[bufnr]) or "streaming…"
+        elseif chat._last_perm_tool and chat._last_perm_tool[bufnr] then
+          task.activity = "⚠ " .. chat._last_perm_tool[bufnr]
+        end
       end
     end
   end
 
   M._tasks = tasks
-  _refresh_wt_dirty(tasks)
+  _refresh_wt_stats(tasks)
+
+  local roots_without_wt = {}
+  local seen_roots = {}
+  for _, task in ipairs(tasks) do
+    if (not task.worktree or task.worktree == "") and not seen_roots[task.root] then
+      seen_roots[task.root] = true
+      table.insert(roots_without_wt, task.root)
+    end
+  end
+  if #roots_without_wt > 0 then
+    _refresh_root_stats(roots_without_wt)
+  end
 end
 
 local function format_model(model)
@@ -243,27 +517,45 @@ local function format_model(model)
   return model:gsub("^claude%-", ""):gsub("^anthropic/", "")
 end
 
-local function aggregate_group(group_tasks)
-  local total_tokens = 0
-  local total_cost = 0
-  for _, task in ipairs(group_tasks) do
-    local tok = task.tokens or ""
-    local n = tonumber(tok:match("^([%d%.]+)k$"))
-    if n then
-      total_tokens = total_tokens + n * 1000
-    else
-      total_tokens = total_tokens + (tonumber(tok) or 0)
-    end
-    total_cost = total_cost + (tonumber(task.cost) or 0)
+local function root_from_key(key)
+  if not key then return nil end
+  return key:match("^(.+):") or key
+end
+
+local function render_ai_virt(task)
+  local vt = {}
+  if task.context_pct then
+    local pct_hl = task.context_pct >= 80 and "DiagnosticError" or task.context_pct >= 50 and "DiagnosticWarn" or "Comment"
+    table.insert(vt, { task.context_pct .. "%", pct_hl })
   end
-  local parts = { tostring(#group_tasks) .. " tasks" }
-  if total_tokens > 0 then
-    table.insert(parts, total_tokens >= 1000 and string.format("%.1fk", total_tokens / 1000) or tostring(total_tokens))
+  local model_str = format_model(task.model)
+  if model_str ~= "" then
+    if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
+    table.insert(vt, { model_str, "Comment" })
   end
-  if total_cost > 0 then
-    table.insert(parts, string.format("$%.2f", total_cost))
+  if task.tokens ~= "" then
+    if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
+    table.insert(vt, { task.tokens, "Number" })
   end
-  return table.concat(parts, ", ")
+  if task.cost ~= "" then
+    if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
+    table.insert(vt, { "$" .. task.cost, "String" })
+  end
+  return vt
+end
+
+local function render_stats_virt(stats)
+  local vt = {}
+  if not stats then return vt end
+  if stats.added > 0 or stats.deleted > 0 then
+    table.insert(vt, { "+" .. stats.added .. " ", "String" })
+    table.insert(vt, { "-" .. stats.deleted, "DiagnosticError" })
+  end
+  if stats.uncommitted > 0 then
+    if #vt > 0 then table.insert(vt, { "  ", "NonText" }) end
+    table.insert(vt, { stats.uncommitted .. "U", "DiagnosticWarn" })
+  end
+  return vt
 end
 
 function M.render()
@@ -273,85 +565,162 @@ function M.render()
 
   local lines = {}
   local hl_marks = {}
+  local virt_texts = {}
   M._line_tasks = {}
   M._line_projects = {}
-  local virt_texts = {}
+
+  local function add_hl(line_0, col, end_col, hl)
+    table.insert(hl_marks, { line = line_0, col = col, end_col = end_col, hl = hl })
+  end
+
+  local function map_line(line_nr, task, root)
+    M._line_tasks[line_nr] = task
+    M._line_projects[line_nr] = root
+  end
 
   local groups = M._get_grouped_tasks()
-  for _, group in ipairs(groups) do
+  for gi, group in ipairs(groups) do
     local collapsed = M._collapsed[group.root]
-    local summary = aggregate_group(group.tasks)
+    local total_tasks = 0
+    for _, sg in ipairs(group.subgroups) do total_tasks = total_tasks + #sg.tasks end
+    local summary = total_tasks == 1 and "1 task" or (total_tasks .. " tasks")
     local chevron = collapsed and "▸ " or "▾ "
     local header = chevron .. group.name .. " (" .. summary .. ")"
     table.insert(lines, header)
     local line_nr = #lines
     M._line_projects[line_nr] = group.root
-    table.insert(hl_marks, {
-      line = line_nr - 1, col = 0, end_col = #chevron,
-      hl = "NonText",
-    })
-    table.insert(hl_marks, {
-      line = line_nr - 1, col = #chevron, end_col = #chevron + #group.name,
-      hl = "Directory",
-    })
+    add_hl(line_nr - 1, 0, #chevron, "NonText")
+    add_hl(line_nr - 1, #chevron, #chevron + #group.name, "Directory")
 
-    if collapsed then goto continue end
+    if not collapsed then
 
-    for _, task in ipairs(group.tasks) do
-      local icon = status_icons[task.status] or "◆"
-      local fname = vim.fn.fnamemodify(task.file_path, ":t"):gsub("%.md$", "")
-      local task_line = "  " .. icon .. " " .. fname
-      table.insert(lines, task_line)
-      local tline_nr = #lines
-      M._line_tasks[tline_nr] = task
-      M._line_projects[tline_nr] = group.root
+    local has_worktrees = false
+    for _, sg in ipairs(group.subgroups) do
+      if sg.worktree then has_worktrees = true break end
+    end
 
-      table.insert(hl_marks, {
-        line = tline_nr - 1, col = 2, end_col = 2 + #icon,
-        hl = status_hl[task.status] or "Comment",
-      })
+    if has_worktrees then
+      for _, sub in ipairs(group.subgroups) do
+        local sub_key = group.root .. ":" .. sub.name
+        local sub_collapsed = M._collapsed[sub_key]
+        local sub_chevron = sub_collapsed and "  ▸ " or "  ▾ "
+        local sub_header
+        local sub_vt
 
-      local vt = {}
-      local model_str = format_model(task.model)
-      if model_str ~= "" then
-        table.insert(vt, { model_str, "Comment" })
-        table.insert(vt, { " │ ", "NonText" })
+        if sub.worktree then
+          local stats = _wt_stats[sub.worktree]
+          local dirty = stats and stats.dirty
+          sub_header = sub_chevron .. "⎇ " .. sub.name .. (dirty and "*" or "")
+          sub_vt = render_stats_virt(stats)
+        else
+          sub_header = sub_chevron .. sub.name
+          sub_vt = render_stats_virt(_root_stats[group.root])
+        end
+
+        table.insert(lines, sub_header)
+        local sl = #lines
+        M._line_projects[sl] = sub_key
+        add_hl(sl - 1, 0, #sub_chevron, "NonText")
+        if sub.worktree then
+          local stats = _wt_stats[sub.worktree]
+          local dirty = stats and stats.dirty
+          local branch_text = "⎇ " .. sub.name .. (dirty and "*" or "")
+          add_hl(sl - 1, #sub_chevron, #sub_chevron + #branch_text, dirty and "DiagnosticWarn" or "DiagnosticHint")
+        else
+          add_hl(sl - 1, #sub_chevron, #sub_chevron + #sub.name, "Comment")
+        end
+        if #sub_vt > 0 then virt_texts[sl - 1] = sub_vt end
+
+        if not sub_collapsed then
+          for _, task in ipairs(sub.tasks) do
+            local icon = status_icons[task.status] or "◆"
+            local fname = vim.fn.fnamemodify(task.file_path, ":t"):gsub("%.md$", "")
+            table.insert(lines, "      " .. icon .. " " .. fname)
+            local tl = #lines
+            map_line(tl, task, group.root)
+            add_hl(tl - 1, 6, 6 + #icon, status_hl[task.status] or "Comment")
+            local vt = render_ai_virt(task)
+            if #vt > 0 then virt_texts[tl - 1] = vt end
+            if task.activity then
+              table.insert(lines, "        " .. task.activity)
+              local al = #lines
+              map_line(al, task, group.root)
+              add_hl(al - 1, 8, #lines[al], "DiagnosticInfo")
+            end
+          end
+        end
       end
-      if task.tokens ~= "" then
-        table.insert(vt, { task.tokens, "Number" })
-      end
-      if task.cost ~= "" then
-        table.insert(vt, { " │ ", "NonText" })
-        table.insert(vt, { "$" .. task.cost, "String" })
-      end
-      if task.skills ~= "" then
-        if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
-        local count = select(2, task.skills:gsub(",", ",")) + 1
-        table.insert(vt, { count .. " skill" .. (count > 1 and "s" or ""), "DiagnosticInfo" })
-      end
-      if task.mcp ~= "" then
-        if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
-        local count = select(2, task.mcp:gsub(",", ",")) + 1
-        table.insert(vt, { count .. " mcp", "Special" })
-      end
-      if task.worktree and task.worktree ~= "" then
-        if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
-        local entry = _wt_dirty[task.worktree]
-        local label = "⎇ " .. task.worktree
-        if entry and entry.dirty then label = label .. "*" end
-        local hl = (entry and entry.dirty) and "DiagnosticWarn" or "DiagnosticHint"
-        table.insert(vt, { label, hl })
-      end
-      if #vt > 0 then
-        virt_texts[tline_nr - 1] = vt
+    else
+      for _, sub in ipairs(group.subgroups) do
+        for _, task in ipairs(sub.tasks) do
+          table.insert(lines, "")
+          map_line(#lines, task, group.root)
+
+          local icon = status_icons[task.status] or "◆"
+          local fname = vim.fn.fnamemodify(task.file_path, ":t"):gsub("%.md$", "")
+          local name_line = "  " .. icon .. " " .. fname
+          table.insert(lines, name_line)
+          local nl = #lines
+          map_line(nl, task, group.root)
+          add_hl(nl - 1, 2, 2 + #icon, status_hl[task.status] or "Comment")
+
+          local vt = render_ai_virt(task)
+          if #vt > 0 then virt_texts[nl - 1] = vt end
+
+          if task.activity then
+            table.insert(lines, "    " .. task.activity)
+            local al = #lines
+            map_line(al, task, group.root)
+            add_hl(al - 1, 4, #lines[al], "DiagnosticInfo")
+          end
+
+          local stats = _root_stats[group.root]
+          local parts = {}
+          local part_hls = {}
+          if stats then
+            if stats.added > 0 or stats.deleted > 0 then
+              table.insert(parts, "+" .. stats.added)
+              table.insert(part_hls, "String")
+              table.insert(parts, "-" .. stats.deleted)
+              table.insert(part_hls, "DiagnosticError")
+            end
+            if stats.uncommitted > 0 then
+              table.insert(parts, stats.uncommitted .. " uncommitted")
+              table.insert(part_hls, "DiagnosticWarn")
+            end
+          end
+          if #parts == 0 then
+            table.insert(parts, task.status)
+            table.insert(part_hls, "Comment")
+          end
+
+          local detail = "    "
+          local col = #detail
+          for pi, part in ipairs(parts) do
+            if pi > 1 then
+              detail = detail .. "  "
+              col = col + 2
+            end
+            local start_col = col
+            detail = detail .. part
+            col = col + #part
+            table.insert(hl_marks, { line = #lines, col = start_col, end_col = col, hl = part_hls[pi] })
+          end
+          table.insert(lines, detail)
+          map_line(#lines, task, group.root)
+        end
       end
     end
-    ::continue::
+    end
+
+    if gi < #groups then
+      table.insert(lines, "")
+    end
   end
 
   if #lines == 0 then
     table.insert(lines, "  No tasks")
-    table.insert(hl_marks, { line = 0, col = 0, end_col = 10, hl = "Comment" })
+    add_hl(0, 0, 10, "Comment")
   end
 
   vim.bo[M._buf].modifiable = true
@@ -423,6 +792,8 @@ function M.open()
   map("m", M.merge_worktree)
   map("P", M.add_project)
   map("Z", M.maximize)
+  map("x", M.interrupt_task)
+  map("s", M.dispatch_task)
   map("d", M.archive_task)
   map("D", M.remove_project)
   map("q", M.close)
@@ -636,14 +1007,16 @@ function M.archive_task()
 end
 
 function M.remove_project()
-  local root = project_at_cursor()
+  local key = project_at_cursor()
+  local root = root_from_key(key)
   if not root or root == "" then return end
   require("djinni.integrations.projects").remove(root)
   M.render()
 end
 
 function M.create_task()
-  local root = project_at_cursor()
+  local key = project_at_cursor()
+  local root = root_from_key(key)
   if not root or root == "" then
     local projects = require("djinni.integrations.projects")
     root = projects.find_root() or vim.fn.getcwd()
@@ -690,6 +1063,8 @@ function M.merge_worktree()
     end)
   end)
 end
+
+
 
 function M.gen_worktree()
   local task = task_at_cursor()
@@ -758,6 +1133,33 @@ function M.create_task_with_selection()
   end
 end
 
+function M.interrupt_task()
+  local task = task_at_cursor()
+  if not task then return end
+  local bufnr = vim.fn.bufnr(task.file_path)
+  if bufnr == -1 then
+    vim.notify("[djinni] task buffer not loaded", vim.log.levels.WARN)
+    return
+  end
+  require("djinni.nowork.chat").interrupt(bufnr)
+  M.render()
+end
+
+function M.dispatch_task()
+  local task = task_at_cursor()
+  if not task then return end
+  if task.status == "running" or task.status == "input" then
+    vim.notify("[djinni] task is active", vim.log.levels.WARN)
+    return
+  end
+  local win = get_assoc_win()
+  if win then
+    vim.api.nvim_win_call(win, function()
+      require("djinni.nowork.chat").open(task.file_path)
+    end)
+  end
+end
+
 function M.show_help()
   local help = {
     "Nowork Keybinds",
@@ -768,6 +1170,8 @@ function M.show_help()
     "  m       Merge worktree",
     "  P       Add project",
     "  Z       Maximize / restore",
+    "  x       Interrupt task",
+    "  s       Dispatch task",
     "  d       Delete task",
     "  D       Remove project",
     "  <CR>    Open task",
