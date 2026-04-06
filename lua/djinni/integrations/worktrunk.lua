@@ -511,6 +511,7 @@ end
 local wt_ops = {
   { key = "commit",       label = "commit — stage & commit (LLM msg)",          needs_wt = true  },
   { key = "squash",       label = "squash — squash all commits into one",        needs_wt = true  },
+  { key = "update",       label = "update — fetch remote & rebase onto default",  needs_wt = true  },
   { key = "rebase",       label = "rebase — rebase onto target branch",          needs_wt = true,  prompt = "Rebase onto (empty=default):" },
   { key = "push",         label = "push — fast-forward target to branch",        needs_wt = true,  prompt = "Push to target (empty=default):" },
   { key = "diff",         label = "diff — all changes since branch point",       needs_wt = true  },
@@ -544,6 +545,23 @@ local function resolve_cwd_and_run(branch, fn)
   end)
 end
 
+function M.update(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
+  local cwd = opts.cwd
+  run_async("git", { "fetch", "--prune" }, { cwd = cwd }, function(fetch_ok, _, fetch_stderr)
+    if not fetch_ok then
+      callback(false, {}, fetch_stderr)
+      return
+    end
+    local rebase_args = { "step", "rebase" }
+    if opts.target and opts.target ~= "" then table.insert(rebase_args, opts.target) end
+    run_async("wt", rebase_args, { cwd = cwd }, function(ok, lines, stderr)
+      callback(ok, lines, stderr)
+    end)
+  end)
+end
+
 function M.pick_op(branch)
   local items = {}
   for _, op in ipairs(wt_ops) do
@@ -567,6 +585,8 @@ function M.pick_op(branch)
           M.commit({ cwd = cwd }, function(ok, lines, stderr) M.notify_result("commit", ok, lines, stderr) end)
         elseif op.key == "squash" then
           M.squash({ cwd = cwd }, function(ok, lines, stderr) M.notify_result("squash", ok, lines, stderr) end)
+        elseif op.key == "update" then
+          M.update({ cwd = cwd }, function(ok, lines, stderr) M.notify_result("update", ok, lines, stderr) end)
         elseif op.key == "rebase" then
           M.rebase({ target = args_extra, cwd = cwd }, function(ok, lines, stderr) M.notify_result("rebase", ok, lines, stderr) end)
         elseif op.key == "push" then
