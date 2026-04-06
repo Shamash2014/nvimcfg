@@ -930,6 +930,9 @@ function M.next_task()
     local win = get_assoc_win()
     if win then
       vim.api.nvim_win_call(win, function()
+        if task.root and task.root ~= "" then
+          vim.cmd("lcd " .. vim.fn.fnameescape(task.root))
+        end
         require("djinni.nowork.chat").open(task.file_path)
       end)
     end
@@ -949,6 +952,9 @@ function M.prev_task()
     local win = get_assoc_win()
     if win then
       vim.api.nvim_win_call(win, function()
+        if task.root and task.root ~= "" then
+          vim.cmd("lcd " .. vim.fn.fnameescape(task.root))
+        end
         require("djinni.nowork.chat").open(task.file_path)
       end)
     end
@@ -962,6 +968,9 @@ function M.open_task()
   local win = get_assoc_win()
   if win then
     vim.api.nvim_win_call(win, function()
+      if task.root and task.root ~= "" then
+        vim.cmd("lcd " .. vim.fn.fnameescape(task.root))
+      end
       require("djinni.nowork.chat").open(task.file_path)
     end)
   end
@@ -1017,23 +1026,51 @@ end
 function M.create_task()
   local key = project_at_cursor()
   local root = root_from_key(key)
+  local worktree = key and key:match(":(.+)$")
   if not root or root == "" then
     local projects = require("djinni.integrations.projects")
     root = projects.find_root() or vim.fn.getcwd()
   end
+  if not worktree or worktree == "" then
+    local info = _detect_worktree_info(root)
+    if info and info.branch then
+      worktree = info.branch
+    end
+  end
 
   vim.ui.input({ prompt = "Task: " }, function(prompt)
     if not prompt or prompt == "" then return end
-    vim.schedule(function()
-      local filepath = require("djinni.nowork.chat").create(root, { prompt = prompt, no_open = true })
-      M.render()
-      local win = get_assoc_win()
-      if win and filepath then
-        vim.api.nvim_win_call(win, function()
-          require("djinni.nowork.chat").open(filepath)
+
+    local function do_create(task_root)
+      vim.schedule(function()
+        if task_root ~= root then
+          require("djinni.integrations.projects").add(task_root)
+        end
+        local filepath = require("djinni.nowork.chat").create(task_root, { prompt = prompt, no_open = true })
+        if filepath and worktree and worktree ~= "" and worktree ~= "main" then
+          write_frontmatter_to_file(filepath, "worktree", worktree)
+        end
+        M.render()
+        local win = get_assoc_win()
+        if win and filepath then
+          vim.api.nvim_win_call(win, function()
+            vim.cmd("lcd " .. vim.fn.fnameescape(task_root))
+            require("djinni.nowork.chat").open(filepath)
+          end)
+        end
+      end)
+    end
+
+    if worktree and worktree ~= "" and worktree ~= "main" then
+      local worktrunk = require("djinni.integrations.worktrunk")
+      if worktrunk.available() then
+        worktrunk.get_path(worktree, function(wt_path)
+          do_create(wt_path or root)
         end)
+        return
       end
-    end)
+    end
+    do_create(root)
   end)
 end
 
