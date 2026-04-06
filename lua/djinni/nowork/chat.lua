@@ -459,6 +459,10 @@ function M.create(project_root, opts)
   local buf = vim.api.nvim_get_current_buf()
   M.attach(buf)
 
+  if opts.no_send then
+    return filepath
+  end
+
   M._creating_session[buf] = true
   local sess_opts = build_session_opts(buf, project_root)
   session.create_task_session(project_root, function(err, sid, result)

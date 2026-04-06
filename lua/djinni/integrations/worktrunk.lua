@@ -531,7 +531,13 @@ function M.notify_result(op, ok, lines, stderr)
     local out = table.concat(lines or {}, "\n")
     vim.notify("[wt] " .. op .. (out ~= "" and ": " .. out or " done"), vim.log.levels.INFO)
   else
-    vim.notify("[wt] " .. op .. " failed: " .. table.concat(stderr or {}, "\n"), vim.log.levels.ERROR)
+    local parts = {}
+    local out = table.concat(lines or {}, "\n")
+    local err = table.concat(stderr or {}, "\n")
+    if out ~= "" then table.insert(parts, out) end
+    if err ~= "" then table.insert(parts, err) end
+    local detail = #parts > 0 and table.concat(parts, "\n") or "unknown error"
+    vim.notify("[wt] " .. op .. " failed:\n" .. detail, vim.log.levels.ERROR)
   end
 end
 
@@ -549,15 +555,82 @@ function M.update(opts, callback)
   if type(opts) == "function" then callback = opts opts = {} end
   opts = opts or {}
   local cwd = opts.cwd
-  run_async("git", { "fetch", "--prune" }, { cwd = cwd }, function(fetch_ok, _, fetch_stderr)
+  local wt_args = function(...)
+    local args = {}
+    if cwd then vim.list_extend(args, { "-C", cwd }) end
+    for _, a in ipairs({ ... }) do table.insert(args, a) end
+    return args
+  end
+  local function do_rebase(target)
+    local args = wt_args("step", "rebase")
+    if target and target ~= "" then table.insert(args, target) end
+    run_async("wt", args, function(ok, lines, stderr)
+      callback(ok, lines, stderr)
+    end)
+  end
+  local function resolve_and_rebase()
+    local target = opts.target
+    if target and target ~= "" then
+      if not target:match("^origin/") then
+        run_async("git", { "rev-parse", "--verify", "origin/" .. target }, { cwd = cwd }, function(ok)
+          do_rebase(ok and ("origin/" .. target) or target)
+        end)
+      else
+        do_rebase(target)
+      end
+    else
+      run_async("git", { "symbolic-ref", "refs/remotes/origin/HEAD", "--short" }, { cwd = cwd }, function(ok, lines)
+        do_rebase(ok and lines[1] or nil)
+      end)
+    end
+  end
+  if opts.skip_fetch then
+    resolve_and_rebase()
+  else
+    run_async("git", { "fetch", "--prune" }, { cwd = cwd }, function(fetch_ok, _, fetch_stderr)
+      if not fetch_ok then
+        callback(false, {}, fetch_stderr)
+        return
+      end
+      resolve_and_rebase()
+    end)
+  end
+end
+
+function M.update_all(opts, callback)
+  if type(opts) == "function" then callback = opts opts = {} end
+  opts = opts or {}
+  run_async("git", { "fetch", "--prune" }, function(fetch_ok, _, fetch_stderr)
     if not fetch_ok then
       callback(false, {}, fetch_stderr)
       return
     end
-    local rebase_args = { "step", "rebase" }
-    if opts.target and opts.target ~= "" then table.insert(rebase_args, opts.target) end
-    run_async("wt", rebase_args, { cwd = cwd }, function(ok, lines, stderr)
-      callback(ok, lines, stderr)
+    M.list(function(entries, err)
+      if not entries then
+        callback(false, {}, { err or "failed to list worktrees" })
+        return
+      end
+      local results = {}
+      local pending = #entries
+      if pending == 0 then callback(true, { "no worktrees" }, {}) return end
+      for _, entry in ipairs(entries) do
+        if entry.path then
+          M.update({ cwd = entry.path, skip_fetch = true }, function(ok, _, stderr)
+            local status = ok and "ok" or "FAIL"
+            table.insert(results, (entry.branch or "?") .. ": " .. status)
+            if not ok then
+              for _, line in ipairs(stderr or {}) do table.insert(results, "  " .. line) end
+            end
+            pending = pending - 1
+            if pending == 0 then
+              callback(true, results, {})
+            end
+          end)
+        else
+          pending = pending - 1
+          if pending == 0 then callback(true, results, {}) end
+        end
+      end
     end)
   end)
 end

@@ -37,6 +37,9 @@ return {
       { "[", group = "Prev" },
       { "]", group = "Next" },
       { "g", group = "Goto" },
+      { "ga", group = "AI", mode = { "n", "v" } },
+      { "ga", function() return require("djinni.code").ga_operator() end, desc = "Generate task from motion", mode = "n", expr = true },
+      { "gav", ":<C-u>lua require('djinni.code').generate_task_from_visual()<CR>", desc = "Generate task from selection", mode = "v" },
     },
   },
 }
