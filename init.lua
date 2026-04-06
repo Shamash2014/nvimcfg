@@ -1,3 +1,20 @@
+-- Patch treesitter to handle nil nodes in injection parsing (Neovim 0.12)
+do
+  local ts = vim.treesitter
+  local orig_get_node_text = ts.get_node_text
+  ts.get_node_text = function(node, source, opts)
+    if node == nil then return "" end
+    return orig_get_node_text(node, source, opts)
+  end
+  if ts.get_range then
+    local orig_get_range = ts.get_range
+    ts.get_range = function(node, source, metadata)
+      if node == nil then return { 0, 0, 0, 0, 0, 0 } end
+      return orig_get_range(node, source, metadata)
+    end
+  end
+end
+
 -- Disable unused providers for faster startup
 vim.g.loaded_python3_provider = 0
 vim.g.loaded_ruby_provider = 0

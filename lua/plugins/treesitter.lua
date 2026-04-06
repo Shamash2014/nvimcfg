@@ -6,12 +6,6 @@ return {
     "nvim-treesitter/nvim-treesitter-textobjects",
   },
   config = function()
-    local original_get_node_text = vim.treesitter.get_node_text
-    vim.treesitter.get_node_text = function(node, source, opts)
-      if node == nil then return "" end
-      return original_get_node_text(node, source, opts)
-    end
-
     local supported_filetypes = {
       'lua', 'python', 'javascript', 'typescript', 'jsx', 'tsx',
       'go', 'rust', 'elixir', 'heex', 'eex', 'bash', 'json',
