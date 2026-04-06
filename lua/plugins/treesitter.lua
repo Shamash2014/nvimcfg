@@ -9,7 +9,7 @@ return {
     local supported_filetypes = {
       'lua', 'python', 'javascript', 'typescript', 'jsx', 'tsx',
       'go', 'rust', 'elixir', 'heex', 'eex', 'bash', 'json',
-      'html', 'css', 'markdown', 'markdown_inline', 'vim', 'yaml', 'toml',
+      'html', 'css', 'markdown', 'vim', 'yaml', 'toml',
       'dart', 'swift', 'kotlin', 'java', 'astro', 'vue', 'chat'
     }
 
@@ -21,7 +21,7 @@ return {
       "typescript", "tsx", "css", "html", "regex", "diff",
     }
     vim.schedule(function()
-      local installed = require("nvim-treesitter").get_installed()
+      local installed = require("nvim-treesitter.info").installed_parsers()
       local missing = vim.tbl_filter(function(lang)
         return not vim.list_contains(installed, lang)
       end, ensure_installed)
@@ -31,7 +31,6 @@ return {
     end)
 
     vim.treesitter.language.register("markdown", "md")
-    vim.treesitter.language.register("markdown_inline", "md")
 
     local group = vim.api.nvim_create_augroup('TreesitterFolds', { clear = true })
 
