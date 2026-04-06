@@ -1,6 +1,6 @@
 return {
   "nvim-treesitter/nvim-treesitter",
-  build = ":TSUpdate",
+  branch = "main",
   event = { "BufReadPost", "BufNewFile" },
   dependencies = {
     "nvim-treesitter/nvim-treesitter-textobjects",
@@ -12,23 +12,6 @@ return {
       'html', 'css', 'markdown', 'vim', 'yaml', 'toml',
       'dart', 'swift', 'kotlin', 'java', 'astro', 'vue', 'chat'
     }
-
-    require("nvim-treesitter").setup()
-
-    local ensure_installed = {
-      "lua", "vim", "vimdoc", "query", "markdown", "markdown_inline",
-      "json", "yaml", "toml", "bash", "python", "javascript",
-      "typescript", "tsx", "css", "html", "regex", "diff",
-    }
-    vim.schedule(function()
-      local installed = require("nvim-treesitter.info").installed_parsers()
-      local missing = vim.tbl_filter(function(lang)
-        return not vim.list_contains(installed, lang)
-      end, ensure_installed)
-      if #missing > 0 then
-        vim.cmd("TSInstall " .. table.concat(missing, " "))
-      end
-    end)
 
     vim.treesitter.language.register("markdown", "md")
 

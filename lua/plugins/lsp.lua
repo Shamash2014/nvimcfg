@@ -1,5 +1,6 @@
 return {
-  "neovim/nvim-lspconfig",
+  dir = vim.fn.stdpath("config"),
+  name = "lsp-config",
   dependencies = { "b0o/SchemaStore.nvim", "mrjones2014/codesettings.nvim" },
   event = "VeryLazy",
   config = function()
