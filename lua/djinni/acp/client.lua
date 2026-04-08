@@ -263,19 +263,22 @@ function M:_on_stdout(data)
       end
     end
   end
-  if not self._drain_timer then
-    self._drain_timer = vim.uv.new_timer()
-    local client = self
-    self._drain_scheduled = false
-    self._drain_timer:start(8, 50, function()
-      if client._drain_scheduled then return end
-      client._drain_scheduled = true
-      vim.schedule(function()
-        client._drain_scheduled = false
-        client:_drain_all()
-      end)
+  self:_start_drain()
+end
+
+function M:_start_drain()
+  if self._drain_timer then return end
+  self._drain_timer = vim.uv.new_timer()
+  local client = self
+  self._drain_scheduled = false
+  self._drain_timer:start(8, 50, function()
+    if client._drain_scheduled then return end
+    client._drain_scheduled = true
+    vim.schedule(function()
+      client._drain_scheduled = false
+      client:_drain_all()
     end)
-  end
+  end)
 end
 
 local MAX_PARSE_PER_DRAIN = 50
@@ -313,10 +316,10 @@ function M:_drain_all()
 
   local has_work = false
   for sid, uq in pairs(self._update_queue) do
-    has_work = true
-    self._update_queue[sid] = nil
     local sub = self.subscribers[sid]
     if sub and sub.on_update then
+      has_work = true
+      self._update_queue[sid] = nil
       local coalesced = coalesce_updates(uq)
       for _, params in ipairs(coalesced) do
         local h_ok, h_err = pcall(sub.on_update, params)
@@ -324,6 +327,8 @@ function M:_drain_all()
           log.err("subscriber update error: " .. tostring(h_err))
         end
       end
+    elseif #uq > 0 then
+      has_work = true
     end
   end
 
@@ -370,8 +375,7 @@ function M:_route_message(msg)
     end
   elseif msg.method and not msg.id then
     local sid = msg.params and msg.params.sessionId
-    local sub = sid and self.subscribers[sid]
-    if sub and sub.on_update and msg.method == "session/update" then
+    if sid and msg.method == "session/update" then
       local uq = self._update_queue[sid]
       if not uq then
         uq = {}
@@ -468,6 +472,7 @@ end
 
 function M:subscribe(session_id, handlers)
   self.subscribers[session_id] = handlers
+  self:_start_drain()
 end
 
 function M:unsubscribe(session_id)

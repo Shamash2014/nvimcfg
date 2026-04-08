@@ -405,6 +405,13 @@ function M.open(root)
 
   local existing = vim.fn.bufnr(path)
   if existing ~= -1 and vim.api.nvim_buf_is_loaded(existing) then
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_get_buf(win) == existing then
+        vim.api.nvim_set_current_win(win)
+        M.update_tasks_section(existing)
+        return existing
+      end
+    end
     vim.api.nvim_set_current_buf(existing)
     M.update_tasks_section(existing)
     return existing
@@ -689,7 +696,14 @@ function M.toggle(root)
   local path = task_file_path(root)
   local existing = vim.fn.bufnr(path)
   if existing ~= -1 and vim.api.nvim_buf_is_loaded(existing) then
-    local win = vim.fn.bufwinid(existing)
+    local win = -1
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_get_buf(w) == existing then
+        win = w
+        break
+      end
+    end
+    if win == -1 then win = vim.fn.bufwinid(existing) end
     if win ~= -1 then
       vim.api.nvim_win_close(win, false)
       return

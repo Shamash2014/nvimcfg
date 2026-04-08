@@ -541,9 +541,9 @@ function M._ensure_session(buf)
         if not err and result then
           log.info("_ensure_session: resume OK sid=" .. sid)
           M._creating_session[buf] = nil
-          M._restore_mode(buf, root, sid, result)
           M._sessions[buf] = sid
           M._subscribe_session(buf, root, sid)
+          M._restore_mode(buf, root, sid, result)
           M._update_system_block(buf, "Session reconnected")
           M._process_queue(buf)
         else
@@ -562,10 +562,10 @@ function M._ensure_session(buf)
             end
             vim.schedule(function()
               if not vim.api.nvim_buf_is_valid(buf) then return end
-              M._restore_mode(buf, root, new_sid, cresult)
               M._set_frontmatter_field(buf, "session", new_sid)
               M._sessions[buf] = new_sid
               M._subscribe_session(buf, root, new_sid)
+              M._restore_mode(buf, root, new_sid, cresult)
               log.info("_ensure_session: fallback create OK new_sid=" .. new_sid)
               M._update_system_block(buf, "Session ready (ACP)")
               M._process_queue(buf)
@@ -590,11 +590,11 @@ function M._ensure_session(buf)
       end
       vim.schedule(function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
-        M._restore_mode(buf, root, new_sid, result)
         log.info("_ensure_session: create OK new_sid=" .. new_sid)
         M._set_frontmatter_field(buf, "session", new_sid)
         M._sessions[buf] = new_sid
         M._subscribe_session(buf, root, new_sid)
+        M._restore_mode(buf, root, new_sid, result)
         M._update_system_block(buf, "Session ready (ACP)")
         M._process_queue(buf)
       end)
