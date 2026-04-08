@@ -22,11 +22,46 @@ return {
     config = function()
       local dap = require("dap")
 
+      local function flutter_pick_device(cb)
+        local Job = require("plenary.job")
+        Job:new({
+          command = "flutter",
+          args = { "devices", "--machine" },
+          on_exit = function(j, code)
+            if code ~= 0 then
+              vim.schedule(function() cb(nil) end)
+              return
+            end
+            local raw = table.concat(j:result(), "")
+            local ok, devices = pcall(vim.json.decode, raw)
+            if not ok or #devices == 0 then
+              vim.schedule(function() cb(nil) end)
+              return
+            end
+            vim.schedule(function()
+              vim.ui.select(devices, {
+                prompt = "Select device:",
+                format_item = function(d) return d.name .. " (" .. d.id .. ")" end,
+              }, function(choice)
+                cb(choice and choice.id or nil)
+              end)
+            end)
+          end,
+        }):start()
+      end
+
       dap.adapters.flutter = {
         type = "executable",
         command = "flutter",
         args = { "debug_adapter" },
       }
+
+      dap.adapters.dart = {
+        type = "executable",
+        command = "dart",
+        args = { "debug_adapter" },
+      }
+
       dap.configurations.dart = {
         {
           type = "flutter",
@@ -34,6 +69,47 @@ return {
           name = "Launch Flutter",
           program = "${workspaceFolder}/lib/main.dart",
           cwd = "${workspaceFolder}",
+        },
+        {
+          type = "flutter",
+          request = "launch",
+          name = "Launch Flutter (pick device)",
+          program = "${workspaceFolder}/lib/main.dart",
+          cwd = "${workspaceFolder}",
+          toolArgs = function()
+            local co = coroutine.running()
+            flutter_pick_device(function(device_id)
+              if device_id then
+                coroutine.resume(co, { "-d", device_id })
+              else
+                coroutine.resume(co, {})
+              end
+            end)
+            return coroutine.yield()
+          end,
+        },
+        {
+          type = "flutter",
+          request = "attach",
+          name = "Attach to Flutter",
+          cwd = "${workspaceFolder}",
+          debugExternalPackageLibraries = true,
+          evaluateGettersInDebugViews = true,
+        },
+        {
+          type = "dart",
+          request = "launch",
+          name = "Run Dart",
+          program = "${file}",
+          cwd = "${workspaceFolder}",
+        },
+        {
+          type = "flutter",
+          request = "launch",
+          name = "Flutter Test (current file)",
+          program = "${file}",
+          cwd = "${workspaceFolder}",
+          noDebug = false,
         },
       }
 

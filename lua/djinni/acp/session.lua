@@ -217,6 +217,108 @@ function M.load_task_session(project_root, session_id, callback, opts)
   end)
 end
 
+function M.create_or_resume_session(project_root, session_id, callback, opts)
+  opts = opts or {}
+  local config = get_config()
+  local provider_name = opts.provider or config.provider
+  local log = require("djinni.nowork.log")
+
+  local client = spawn_client(project_root, provider_name)
+
+  client:when_ready(function(ready_err)
+    if ready_err then
+      log.warn("create_or_resume: ready error: " .. tostring(ready_err.message or ready_err))
+      pcall(function() client:shutdown(true) end)
+      if callback then callback(ready_err, nil, nil) end
+      return
+    end
+
+    local function do_create()
+      local req = { cwd = project_root, mcpServers = build_mcp_servers(opts.mcpServers) }
+      log.info("create_or_resume: creating new session cwd=" .. project_root)
+      client:request("session/new", req, function(err, result)
+        if err then
+          log.warn("create_or_resume: session/new error: " .. vim.inspect(err))
+          pcall(function() client:shutdown(true) end)
+          if callback then callback(err, nil, nil) end
+          return
+        end
+
+        local new_sid = result and result.sessionId
+        if not new_sid then
+          pcall(function() client:shutdown(true) end)
+          if callback then callback({ message = "no sessionId in response" }, nil, nil) end
+          return
+        end
+
+        local entry = {
+          client = client,
+          provider_name = provider_name,
+          project_root = project_root,
+          model_config_option = result and extract_model_config_option(result.configOptions),
+        }
+        if not entry.model_config_option and result and (result.models or result.availableModels) then
+          entry.available_models = result.models or result.availableModels
+        end
+        register_session(new_sid, entry)
+
+        if opts.model and opts.model ~= "" then
+          local model_id = Provider.resolve_model(provider_name, opts.model, M.get_available_models(new_sid))
+          if model_id then
+            M.set_model(nil, new_sid, model_id)
+          end
+        end
+
+        log.info("create_or_resume: new session OK sid=" .. new_sid)
+        if callback then callback(nil, new_sid, result) end
+      end, { timeout = 30000 })
+    end
+
+    if session_id and session_id ~= "" then
+      local provider = Provider.get(provider_name)
+      local resume_cfg = provider.resume or { method = "session/resume" }
+      local params
+      if resume_cfg.needs_cwd then
+        params = { sessionId = session_id, cwd = project_root, mcpServers = build_mcp_servers(opts.mcpServers) }
+      else
+        params = { sessionId = session_id }
+      end
+
+      log.info("create_or_resume: trying resume sid=" .. session_id)
+      client:request(resume_cfg.method, params, function(err, result)
+        if err then
+          log.info("create_or_resume: resume failed sid=" .. session_id .. " — falling back to create")
+          do_create()
+          return
+        end
+
+        local entry = {
+          client = client,
+          provider_name = provider_name,
+          project_root = project_root,
+          model_config_option = result and extract_model_config_option(result.configOptions),
+        }
+        if not entry.model_config_option and result and (result.models or result.availableModels) then
+          entry.available_models = result.models or result.availableModels
+        end
+        register_session(session_id, entry)
+
+        if opts.model and opts.model ~= "" then
+          local model_id = Provider.resolve_model(provider_name, opts.model, M.get_available_models(session_id))
+          if model_id then
+            M.set_model(nil, session_id, model_id)
+          end
+        end
+
+        log.info("create_or_resume: resume OK sid=" .. session_id)
+        if callback then callback(nil, session_id, result) end
+      end, { timeout = 30000 })
+    else
+      do_create()
+    end
+  end)
+end
+
 function M.set_model(_, session_id, model_id, _provider_name)
   local entry = M.sessions_by_id[session_id]
   if not entry then return end

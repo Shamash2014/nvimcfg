@@ -313,55 +313,76 @@ return {
 
         local Job = require('plenary.job')
 
+        local function dap_flutter_request(method, fallback_signal, label)
+          local session = require("dap").session()
+          if session then
+            session:request(method, vim.empty_dict(), function(err)
+              if err then
+                vim.notify(label .. " failed: " .. tostring(err), vim.log.levels.ERROR)
+              else
+                vim.notify(label .. " via DAP", vim.log.levels.INFO)
+              end
+            end)
+          else
+            Job:new({
+              command = 'sh',
+              args = { '-c', 'kill ' .. fallback_signal .. ' $(pgrep -f flutter_runner)' },
+              on_exit = function(j, return_val)
+                vim.schedule(function()
+                  if return_val == 0 then
+                    vim.notify(label .. " signal sent", vim.log.levels.INFO)
+                  else
+                    vim.notify("No Flutter process found", vim.log.levels.WARN)
+                  end
+                end)
+              end,
+            }):start()
+          end
+        end
+
         vim.api.nvim_buf_create_user_command(bufnr, "FlutterReload", function()
-          vim.notify("Flutter Hot Reload triggered", vim.log.levels.INFO)
-          Job:new({
-            command = 'sh',
-            args = { '-c', 'kill -USR1 $(pgrep -f flutter_runner)' },
-            on_exit = function(j, return_val)
-              vim.schedule(function()
-                if return_val == 0 then
-                  vim.notify("Hot reload signal sent", vim.log.levels.INFO)
-                else
-                  vim.notify("No Flutter process found", vim.log.levels.WARN)
-                end
-              end)
-            end,
-          }):start()
+          dap_flutter_request("hotReload", "-USR1", "Hot Reload")
         end, {})
 
         vim.api.nvim_buf_create_user_command(bufnr, "FlutterRestart", function()
-          vim.notify("Flutter Hot Restart triggered", vim.log.levels.INFO)
-          Job:new({
-            command = 'sh',
-            args = { '-c', 'kill -USR2 $(pgrep -f flutter_runner)' },
-            on_exit = function(j, return_val)
-              vim.schedule(function()
-                if return_val == 0 then
-                  vim.notify("Hot restart signal sent", vim.log.levels.INFO)
-                else
-                  vim.notify("No Flutter process found", vim.log.levels.WARN)
-                end
-              end)
-            end,
-          }):start()
+          dap_flutter_request("hotRestart", "-USR2", "Hot Restart")
         end, {})
 
         vim.api.nvim_buf_create_user_command(bufnr, "FlutterQuit", function()
-          vim.notify("Quitting Flutter app", vim.log.levels.INFO)
-          Job:new({
-            command = 'sh',
-            args = { '-c', 'kill -QUIT $(pgrep -f flutter_runner)' },
-            on_exit = function(j, return_val)
-              vim.schedule(function()
-                if return_val == 0 then
-                  vim.notify("Flutter app quit", vim.log.levels.INFO)
-                else
-                  vim.notify("No Flutter process found", vim.log.levels.WARN)
-                end
-              end)
-            end,
-          }):start()
+          local session = require("dap").session()
+          if session then
+            require("dap").terminate()
+            vim.notify("Flutter DAP session terminated", vim.log.levels.INFO)
+          else
+            Job:new({
+              command = 'sh',
+              args = { '-c', 'kill -QUIT $(pgrep -f flutter_runner)' },
+              on_exit = function(j, return_val)
+                vim.schedule(function()
+                  if return_val == 0 then
+                    vim.notify("Flutter app quit", vim.log.levels.INFO)
+                  else
+                    vim.notify("No Flutter process found", vim.log.levels.WARN)
+                  end
+                end)
+              end,
+            }):start()
+          end
+        end, {})
+
+        vim.api.nvim_buf_create_user_command(bufnr, "FlutterDebug", function()
+          local dap = require("dap")
+          local configs = dap.configurations.dart
+          if not configs or #configs == 0 then
+            vim.notify("No DAP configurations for dart", vim.log.levels.ERROR)
+            return
+          end
+          vim.ui.select(configs, {
+            prompt = "Debug configuration:",
+            format_item = function(c) return c.name end,
+          }, function(choice)
+            if choice then dap.run(choice) end
+          end)
         end, {})
 
         vim.api.nvim_buf_create_user_command(bufnr, "FlutterDevices", function()

@@ -531,75 +531,32 @@ function M._ensure_session(buf)
   M._creating_session[buf] = true
 
   local sid = M.get_session_id(buf)
+  local sess_opts = build_session_opts(buf, root)
   log.info("_ensure_session: buf=" .. tostring(buf) .. " sid=" .. tostring(sid) .. " root=" .. root)
-  if sid and sid ~= "" then
-    local sess_opts = build_session_opts(buf, root)
-    log.info("_ensure_session: loading task session sid=" .. sid)
-    session.load_task_session(root, sid, function(err, result)
+
+  session.create_or_resume_session(root, sid, function(err, new_sid, result)
+    M._creating_session[buf] = nil
+    if err or not new_sid then
+      log.warn("_ensure_session: failed err=" .. tostring(err and (err.message or vim.inspect(err))))
       vim.schedule(function()
-        if not vim.api.nvim_buf_is_valid(buf) then return end
-        if not err and result then
-          log.info("_ensure_session: resume OK sid=" .. sid)
-          M._creating_session[buf] = nil
-          M._sessions[buf] = sid
-          M._subscribe_session(buf, root, sid)
-          M._restore_mode(buf, root, sid, result)
-          M._update_system_block(buf, "Session reconnected")
-          M._process_queue(buf)
-        else
-          log.info("_ensure_session: resume FAILED err=" .. tostring(err and err.message or err) .. " — creating new")
-          M._set_frontmatter_field(buf, "session", "")
-          M._sessions[buf] = nil
-          session.create_task_session(root, function(cerr, new_sid, cresult)
-            M._creating_session[buf] = nil
-            if cerr or not new_sid then
-              vim.schedule(function()
-                if vim.api.nvim_buf_is_valid(buf) then
-                  M._update_system_block(buf, "Session failed: " .. (cerr and cerr.message or "unknown"))
-                end
-              end)
-              return
-            end
-            vim.schedule(function()
-              if not vim.api.nvim_buf_is_valid(buf) then return end
-              M._set_frontmatter_field(buf, "session", new_sid)
-              M._sessions[buf] = new_sid
-              M._subscribe_session(buf, root, new_sid)
-              M._restore_mode(buf, root, new_sid, cresult)
-              log.info("_ensure_session: fallback create OK new_sid=" .. new_sid)
-              M._update_system_block(buf, "Session ready (ACP)")
-              M._process_queue(buf)
-            end)
-          end, sess_opts)
+        if vim.api.nvim_buf_is_valid(buf) then
+          M._update_system_block(buf, "Session failed: " .. (err and err.message or "unknown"))
         end
       end)
-    end, sess_opts)
-  else
-    local sess_opts = build_session_opts(buf, root)
-    log.info("_ensure_session: no sid, creating new session")
-    session.create_task_session(root, function(err, new_sid, result)
-      M._creating_session[buf] = nil
-      if err or not new_sid then
-        log.warn("_ensure_session: create FAILED err=" .. tostring(err and (err.message or vim.inspect(err))) .. " new_sid=" .. tostring(new_sid))
-        vim.schedule(function()
-          if vim.api.nvim_buf_is_valid(buf) then
-            M._update_system_block(buf, "Session failed: " .. (err and err.message or "unknown error"))
-          end
-        end)
-        return
-      end
-      vim.schedule(function()
-        if not vim.api.nvim_buf_is_valid(buf) then return end
-        log.info("_ensure_session: create OK new_sid=" .. new_sid)
-        M._set_frontmatter_field(buf, "session", new_sid)
-        M._sessions[buf] = new_sid
-        M._subscribe_session(buf, root, new_sid)
-        M._restore_mode(buf, root, new_sid, result)
-        M._update_system_block(buf, "Session ready (ACP)")
-        M._process_queue(buf)
-      end)
-    end, sess_opts)
-  end
+      return
+    end
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      local resumed = sid and sid ~= "" and new_sid == sid
+      log.info("_ensure_session: " .. (resumed and "resumed" or "created") .. " sid=" .. new_sid)
+      M._set_frontmatter_field(buf, "session", new_sid)
+      M._sessions[buf] = new_sid
+      M._subscribe_session(buf, root, new_sid)
+      M._restore_mode(buf, root, new_sid, result)
+      M._update_system_block(buf, resumed and "Session reconnected" or "Session ready (ACP)")
+      M._process_queue(buf)
+    end)
+  end, sess_opts)
 end
 
 function M.open(file_path)
@@ -2533,94 +2490,75 @@ function M._fresh_restart(buf, root)
       .. "\n\n[End of context. Continue from here.]"
   end)()
 
-  local function do_fresh()
-    local prev_sid = M.get_session_id(buf) or M._sessions[buf]
-    M._set_frontmatter_field(buf, "session", "")
-    M._sessions[buf] = nil
-    if prev_sid and prev_sid ~= "" then
-      session.close_task_session(root, prev_sid, get_provider(buf))
-    end
-    local pre_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    for i = #pre_lines, 1, -1 do
-      local l = pre_lines[i]
-      if l:match("^@You%s*$") then
-        local has_content = false
-        for j = i + 1, #pre_lines do
-          if pre_lines[j]:match("^@%w+%s*$") or pre_lines[j]:match("^%-%-%-$") then break end
-          if pre_lines[j]:match("%S") then has_content = true; break end
-        end
-        if not has_content then
-          local del_from = i
-          while del_from > 1 and (pre_lines[del_from - 1] == "" or pre_lines[del_from - 1]:match("^%-%-%-$")) do
-            del_from = del_from - 1
-          end
-          local del_to = i
-          while del_to < #pre_lines and (pre_lines[del_to + 1] == "" or pre_lines[del_to + 1]:match("^%-%-%-$")) do
-            del_to = del_to + 1
-          end
-          pcall(vim.api.nvim_buf_set_lines, buf, del_from - 1, del_to, false, {})
-        end
-        break
+  local prev_sid = M.get_session_id(buf) or M._sessions[buf]
+  M._set_frontmatter_field(buf, "session", "")
+  M._sessions[buf] = nil
+  if prev_sid and prev_sid ~= "" then
+    session.close_task_session(root, prev_sid, get_provider(buf))
+  end
+  local pre_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  for i = #pre_lines, 1, -1 do
+    local l = pre_lines[i]
+    if l:match("^@You%s*$") then
+      local has_content = false
+      for j = i + 1, #pre_lines do
+        if pre_lines[j]:match("^@%w+%s*$") or pre_lines[j]:match("^%-%-%-$") then break end
+        if pre_lines[j]:match("%S") then has_content = true; break end
       end
-      if l:match("^@%w+%s*$") and not l:match("^@You") then break end
+      if not has_content then
+        local del_from = i
+        while del_from > 1 and (pre_lines[del_from - 1] == "" or pre_lines[del_from - 1]:match("^%-%-%-$")) do
+          del_from = del_from - 1
+        end
+        local del_to = i
+        while del_to < #pre_lines and (pre_lines[del_to + 1] == "" or pre_lines[del_to + 1]:match("^%-%-%-$")) do
+          del_to = del_to + 1
+        end
+        pcall(vim.api.nvim_buf_set_lines, buf, del_from - 1, del_to, false, {})
+      end
+      break
     end
-    local lc = vim.api.nvim_buf_line_count(buf)
-    vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@System", "Restarting session...", "" })
-    session.create_task_session(root, function(err, new_sid, result)
-      vim.schedule(function()
-        if not vim.api.nvim_buf_is_valid(buf) then return end
-        if err or not new_sid then
-          local row = vim.api.nvim_buf_line_count(buf) - 1
-          vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { "Session failed: " .. (err and err.message or "unknown") })
-          return
-        end
-        M._set_frontmatter_field(buf, "session", new_sid)
-        M._sessions[buf] = new_sid
-        M._subscribe_session(buf, root, new_sid)
-        local row = vim.api.nvim_buf_line_count(buf) - 1
-        vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { "Session ready" })
-        vim.notify("[djinni] Session restarted (fresh)", vim.log.levels.INFO)
-        M._restore_mode(buf, root, new_sid, result)
-        local function finish_restart()
-          vim.schedule(function()
-            if not vim.api.nvim_buf_is_valid(buf) then return end
-            M._pending_text[buf] = {}
-            M._append_batch[buf] = nil
-            local rlc = vim.api.nvim_buf_line_count(buf)
-            vim.api.nvim_buf_set_lines(buf, rlc, rlc, false, you_block())
-            local win = vim.fn.bufwinid(buf)
-            if win ~= -1 then
-              vim.api.nvim_win_set_cursor(win, { rlc + 5, 0 })
-            end
-          end)
-        end
-        if history_msg then
-          session.send_message(root, new_sid, history_msg, function() finish_restart() end, nil, get_provider(buf))
-        else
-          finish_restart()
-        end
-      end)
-    end, sess_opts)
+    if l:match("^@%w+%s*$") and not l:match("^@You") then break end
   end
+  local lc = vim.api.nvim_buf_line_count(buf)
+  vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "---", "", "@System", "Restarting session...", "" })
 
-  if old_sid and old_sid ~= "" then
-    session.close_task_session(root, old_sid, get_provider(buf))
-    session.load_task_session(root, old_sid, function(err, result)
-      vim.schedule(function()
-        if not vim.api.nvim_buf_is_valid(buf) then return end
-        if not err and result then
-          M._restore_mode(buf, root, old_sid, result)
-          M._sessions[buf] = old_sid
-          M._subscribe_session(buf, root, old_sid)
-          vim.notify("[djinni] Session resumed (context preserved)", vim.log.levels.INFO)
-        else
-          do_fresh()
-        end
-      end)
-    end, sess_opts)
-  else
-    do_fresh()
-  end
+  session.create_or_resume_session(root, old_sid, function(err, new_sid, result)
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      if err or not new_sid then
+        local row = vim.api.nvim_buf_line_count(buf) - 1
+        vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { "Session failed: " .. (err and err.message or "unknown") })
+        return
+      end
+      local resumed = old_sid and old_sid ~= "" and new_sid == old_sid
+      M._set_frontmatter_field(buf, "session", new_sid)
+      M._sessions[buf] = new_sid
+      M._subscribe_session(buf, root, new_sid)
+      local row = vim.api.nvim_buf_line_count(buf) - 1
+      vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { resumed and "Session resumed" or "Session ready" })
+      vim.notify("[djinni] Session " .. (resumed and "resumed (context preserved)" or "restarted (fresh)"), vim.log.levels.INFO)
+      M._restore_mode(buf, root, new_sid, result)
+      local function finish_restart()
+        vim.schedule(function()
+          if not vim.api.nvim_buf_is_valid(buf) then return end
+          M._pending_text[buf] = {}
+          M._append_batch[buf] = nil
+          local rlc = vim.api.nvim_buf_line_count(buf)
+          vim.api.nvim_buf_set_lines(buf, rlc, rlc, false, you_block())
+          local win = vim.fn.bufwinid(buf)
+          if win ~= -1 then
+            vim.api.nvim_win_set_cursor(win, { rlc + 5, 0 })
+          end
+        end)
+      end
+      if not resumed and history_msg then
+        session.send_message(root, new_sid, history_msg, function() finish_restart() end, nil, get_provider(buf))
+      else
+        finish_restart()
+      end
+    end)
+  end, sess_opts)
 end
 
 function M.restart_session(buf)
