@@ -96,6 +96,14 @@ function M.setup(opts)
 
     require("djinni.integrations.worktrunk").start_statusline(30000)
   end
+
+  local chat = require("djinni.nowork.chat")
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype == "nowork-chat" then
+      chat.attach(buf)
+      chat._ensure_session(buf)
+    end
+  end
 end
 
 return M

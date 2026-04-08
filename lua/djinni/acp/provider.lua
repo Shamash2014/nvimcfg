@@ -13,6 +13,12 @@ M.providers = {
     models = {},
     resume = { method = "session/load", needs_cwd = true },
   },
+  ["codex"] = {
+    command = "codex-acp",
+    args = {},
+    models = {},
+    resume = { method = "session/load", needs_cwd = true },
+  },
   ["cursor"] = {
     command = "agent",
     args = { "acp" },

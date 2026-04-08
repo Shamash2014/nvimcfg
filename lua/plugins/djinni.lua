@@ -6,6 +6,7 @@ return {
     "folke/which-key.nvim",
     "MeanderingProgrammer/render-markdown.nvim",
   },
+  ft = { "nowork-chat" },
   keys = {
     { "<leader>fo", function()
       local panel = require("djinni.nowork.panel")

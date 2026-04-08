@@ -205,8 +205,22 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
     local b = ev.buf
     if vim.bo[b].filetype ~= "nowork-chat" then return end
     local win = vim.fn.bufwinid(b)
-    if win ~= -1 and (vim.wo[win].statusline or "") == "" then
-      vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
+    if win ~= -1 then
+      if (vim.wo[win].statusline or "") == "" then
+        vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
+      end
+      vim.wo[win].wrap = true
+      vim.wo[win].linebreak = true
+      vim.wo[win].conceallevel = 2
+      local ok, rm = pcall(require, "render-markdown")
+      if ok then rm.enable() end
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(b) then return end
+        local w = vim.fn.bufwinid(b)
+        if w ~= -1 then
+          pcall(_win_fold_chat, w, b)
+        end
+      end)
     end
     local hp = M._hidden_pending[b]
     if hp and #hp > 0 then
