@@ -1,5 +1,5 @@
 return {
-  dir = vim.fn.stdpath("config"),
+  dir = vim.fn.stdpath("config") .. "/lua/plugins",
   name = "lsp-config",
   dependencies = { "b0o/SchemaStore.nvim", "mrjones2014/codesettings.nvim" },
   event = "VeryLazy",
