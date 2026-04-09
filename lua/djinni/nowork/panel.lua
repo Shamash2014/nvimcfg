@@ -2,6 +2,9 @@ local M = {}
 
 M._buf = nil
 M._win = nil
+M._sess_buf = nil
+M._sess_win = nil
+M._sess_visible = true
 M._maximized = false
 M._cursor_idx = 1
 M._tasks = {}
@@ -27,6 +30,7 @@ local status_hl = {
 local status_order = { running = 1, input = 2, idle = 3, done = 4 }
 
 local ns = vim.api.nvim_create_namespace("nowork_panel")
+local ns_sess = vim.api.nvim_create_namespace("nowork_sessions")
 
 local _wt_stats = {}
 local _wt_stats_ttl = 30
@@ -281,21 +285,36 @@ end
 M._line_tasks = {}
 M._line_projects = {}
 M._line_sessions = {}
+M._hidden_sessions = {}
+
+local function _in_sess_win()
+  if not M._sess_win or not vim.api.nvim_win_is_valid(M._sess_win) then return false end
+  return vim.api.nvim_get_current_win() == M._sess_win
+end
 
 local function session_at_cursor()
-  if not M._buf or not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
+  if _in_sess_win() then
+    local row = vim.api.nvim_win_get_cursor(M._sess_win)[1]
+    return M._sess_line_sessions[row]
+  end
+  if not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
   local row = vim.api.nvim_win_get_cursor(M._win)[1]
   return M._line_sessions[row]
 end
 
 local function task_at_cursor()
-  if not M._buf or not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
+  if _in_sess_win() then return nil end
+  if not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
   local row = vim.api.nvim_win_get_cursor(M._win)[1]
   return M._line_tasks[row]
 end
 
 local function project_at_cursor()
-  if not M._buf or not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
+  if _in_sess_win() then
+    local row = vim.api.nvim_win_get_cursor(M._sess_win)[1]
+    return M._sess_line_projects[row]
+  end
+  if not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
   local row = vim.api.nvim_win_get_cursor(M._win)[1]
   return M._line_projects[row]
 end
@@ -354,20 +373,6 @@ function M._get_grouped_tasks()
         table.insert(grp.subgroups, grp._sub_map[wt_key])
       end
       table.insert(grp._sub_map[wt_key].tasks, task)
-    end
-  end
-
-  for _, grp in ipairs(groups) do
-    local wt_branches = _discover_worktrees(grp.root)
-    for _, branch in ipairs(wt_branches) do
-      if not grp._sub_map[branch] then
-        grp._sub_map[branch] = {
-          name = branch,
-          worktree = branch,
-          tasks = {},
-        }
-        table.insert(grp.subgroups, grp._sub_map[branch])
-      end
     end
   end
 
@@ -656,19 +661,20 @@ local function _collect_sessions()
   local chat = require("djinni.nowork.chat")
   local result = {}
   local seen = {}
-
   local candidates = {}
   for buf in pairs(chat._sessions or {})  do candidates[buf] = true end
   for buf in pairs(chat._streaming or {}) do candidates[buf] = true end
 
   for buf in pairs(candidates) do
     if not vim.api.nvim_buf_is_valid(buf) then goto continue end
+    if M._hidden_sessions[buf] then goto continue end
+    local name_full = vim.api.nvim_buf_get_name(buf)
+    if name_full == "" or vim.api.nvim_get_option_value("buftype", { buf = buf }) == "nofile" then goto continue end
 
     local sid = chat._sessions[buf] or ""
     if sid ~= "" and seen[sid] then goto continue end
     if sid ~= "" then seen[sid] = true end
 
-    local name_full = vim.api.nvim_buf_get_name(buf)
     local short = vim.fn.fnamemodify(name_full, ":t:r")
     if short == "" then short = "[buf " .. buf .. "]" end
 
@@ -730,10 +736,89 @@ local function _collect_sessions()
   return result
 end
 
-function M.render()
-  if not M._buf or not vim.api.nvim_buf_is_valid(M._buf) then return end
+M._sess_line_sessions = {}
+M._sess_line_projects = {}
 
-  M._scan_tasks()
+local function _apply_buf_render(buf, buf_ns, lines, hl_marks, virt_texts)
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+
+  vim.api.nvim_buf_clear_namespace(buf, buf_ns, 0, -1)
+  for _, mark in ipairs(hl_marks) do
+    pcall(vim.api.nvim_buf_set_extmark, buf, buf_ns, mark.line, mark.col, {
+      end_col = mark.end_col,
+      hl_group = mark.hl,
+    })
+  end
+  for line_idx, vt in pairs(virt_texts) do
+    pcall(vim.api.nvim_buf_set_extmark, buf, buf_ns, line_idx, 0, {
+      virt_text = vt,
+      virt_text_pos = "right_align",
+    })
+  end
+end
+
+function M._render_sessions()
+  if not M._sess_buf or not vim.api.nvim_buf_is_valid(M._sess_buf) then return end
+  if not M._sess_win or not vim.api.nvim_win_is_valid(M._sess_win) then return end
+
+  local lines = {}
+  local hl_marks = {}
+  local virt_texts = {}
+  M._sess_line_sessions = {}
+  M._sess_line_projects = {}
+
+  local function add_hl(line_0, col, end_col, hl)
+    table.insert(hl_marks, { line = line_0, col = col, end_col = end_col, hl = hl })
+  end
+
+  local all_sessions = _collect_sessions()
+  local sessions = {}
+  for _, s in ipairs(all_sessions) do
+    if s.status ~= "done" then table.insert(sessions, s) end
+  end
+
+  local collapsed = M._collapsed["__sessions__"]
+  local chevron = collapsed and "▸ " or "▾ "
+  local count_str = #sessions > 0 and (" (" .. #sessions .. ")") or ""
+  local header = chevron .. "Sessions" .. count_str
+  table.insert(lines, header)
+  local hdr_row = #lines
+  M._sess_line_projects[hdr_row] = "__sessions__"
+  add_hl(hdr_row - 1, 0, #chevron, "NonText")
+  add_hl(hdr_row - 1, #chevron, #chevron + #("Sessions"), "Title")
+
+  if not collapsed then
+    if #sessions == 0 then
+      table.insert(lines, "  No active sessions")
+      add_hl(#lines - 1, 0, #lines[#lines], "Comment")
+    else
+      for _, s in ipairs(sessions) do
+        local icon = status_icons[s.status] or "◆"
+        local indent = "  "
+        table.insert(lines, indent .. icon .. " " .. s.name)
+        local sl = #lines
+        M._sess_line_sessions[sl] = s
+        add_hl(sl - 1, #indent, #indent + #icon, status_hl[s.status] or "Comment")
+        local vt = render_session_virt(s)
+        if #vt > 0 then virt_texts[sl - 1] = vt end
+        if s.activity and s.activity ~= "" then
+          table.insert(lines, indent .. "  " .. s.activity)
+          local al = #lines
+          M._sess_line_sessions[al] = s
+          add_hl(al - 1, #indent + 2, #lines[al], "DiagnosticInfo")
+        end
+      end
+    end
+  end
+
+  _apply_buf_render(M._sess_buf, ns_sess, lines, hl_marks, virt_texts)
+  vim.api.nvim_win_set_height(M._sess_win, #lines)
+end
+
+function M._render_tasks()
+  if not M._buf or not vim.api.nvim_buf_is_valid(M._buf) then return end
 
   local lines = {}
   local hl_marks = {}
@@ -749,64 +834,6 @@ function M.render()
   local function map_line(line_nr, task, root)
     M._line_tasks[line_nr] = task
     M._line_projects[line_nr] = root
-  end
-
-  local all_sessions = _collect_sessions()
-  local sessions = {}
-  for _, s in ipairs(all_sessions) do
-    if s.status ~= "done" then table.insert(sessions, s) end
-  end
-
-  if #sessions > 0 then
-    local collapsed = M._collapsed["__sessions__"]
-    local chevron = collapsed and "▸ " or "▾ "
-    local header = chevron .. "Sessions (" .. #sessions .. ")"
-    table.insert(lines, header)
-    local hdr_row = #lines
-    M._line_projects[hdr_row] = "__sessions__"
-    add_hl(hdr_row - 1, 0, #chevron, "NonText")
-    add_hl(hdr_row - 1, #chevron, #chevron + #("Sessions"), "Title")
-
-    if not collapsed then
-      local proj_groups = {}
-      local proj_order = {}
-      for _, s in ipairs(sessions) do
-        local proj = s.project ~= "" and s.project or "(no project)"
-        if not proj_groups[proj] then
-          proj_groups[proj] = {}
-          table.insert(proj_order, proj)
-        end
-        table.insert(proj_groups[proj], s)
-      end
-
-      for _, proj in ipairs(proj_order) do
-        if #proj_order > 1 then
-          table.insert(lines, "  " .. proj)
-          local pl = #lines
-          add_hl(pl - 1, 2, 2 + #proj, "Directory")
-        end
-
-        for _, s in ipairs(proj_groups[proj]) do
-          local icon = status_icons[s.status] or "◆"
-          local indent = #proj_order > 1 and "    " or "  "
-          table.insert(lines, indent .. icon .. " " .. s.name)
-          local sl = #lines
-          M._line_sessions[sl] = s
-          add_hl(sl - 1, #indent, #indent + #icon, status_hl[s.status] or "Comment")
-          local vt = render_session_virt(s)
-          if #vt > 0 then virt_texts[sl - 1] = vt end
-
-          if s.activity and s.activity ~= "" then
-            table.insert(lines, indent .. "  " .. s.activity)
-            local al = #lines
-            M._line_sessions[al] = s
-            add_hl(al - 1, #indent + 2, #lines[al], "DiagnosticInfo")
-          end
-        end
-      end
-    end
-
-    table.insert(lines, "")
   end
 
   local groups = M._get_grouped_tasks()
@@ -884,61 +911,20 @@ function M.render()
     else
       for _, sub in ipairs(group.subgroups) do
         for _, task in ipairs(sub.tasks) do
-          table.insert(lines, "")
-          map_line(#lines, task, group.root)
-
           local icon = status_icons[task.status] or "◆"
           local fname = vim.fn.fnamemodify(task.file_path, ":t"):gsub("%.md$", "")
-          local name_line = "  " .. icon .. " " .. fname
-          table.insert(lines, name_line)
-          local nl = #lines
-          map_line(nl, task, group.root)
-          add_hl(nl - 1, 2, 2 + #icon, status_hl[task.status] or "Comment")
-
+          table.insert(lines, "  " .. icon .. " " .. fname)
+          local tl = #lines
+          map_line(tl, task, group.root)
+          add_hl(tl - 1, 2, 2 + #icon, status_hl[task.status] or "Comment")
           local vt = render_ai_virt(task)
-          if #vt > 0 then virt_texts[nl - 1] = vt end
-
+          if #vt > 0 then virt_texts[tl - 1] = vt end
           if task.activity then
             table.insert(lines, "    " .. task.activity)
             local al = #lines
             map_line(al, task, group.root)
             add_hl(al - 1, 4, #lines[al], "DiagnosticInfo")
           end
-
-          local stats = _root_stats[group.root]
-          local parts = {}
-          local part_hls = {}
-          if stats then
-            if stats.added > 0 or stats.deleted > 0 then
-              table.insert(parts, "+" .. stats.added)
-              table.insert(part_hls, "String")
-              table.insert(parts, "-" .. stats.deleted)
-              table.insert(part_hls, "DiagnosticError")
-            end
-            if stats.uncommitted > 0 then
-              table.insert(parts, stats.uncommitted .. " uncommitted")
-              table.insert(part_hls, "DiagnosticWarn")
-            end
-          end
-          if #parts == 0 then
-            table.insert(parts, task.status)
-            table.insert(part_hls, "Comment")
-          end
-
-          local detail = "    "
-          local col = #detail
-          for pi, part in ipairs(parts) do
-            if pi > 1 then
-              detail = detail .. "  "
-              col = col + 2
-            end
-            local start_col = col
-            detail = detail .. part
-            col = col + #part
-            table.insert(hl_marks, { line = #lines, col = start_col, end_col = col, hl = part_hls[pi] })
-          end
-          table.insert(lines, detail)
-          map_line(#lines, task, group.root)
         end
       end
     end
@@ -954,23 +940,7 @@ function M.render()
     add_hl(0, 0, 10, "Comment")
   end
 
-  vim.bo[M._buf].modifiable = true
-  vim.api.nvim_buf_set_lines(M._buf, 0, -1, false, lines)
-  vim.bo[M._buf].modifiable = false
-
-  vim.api.nvim_buf_clear_namespace(M._buf, ns, 0, -1)
-  for _, mark in ipairs(hl_marks) do
-    pcall(vim.api.nvim_buf_set_extmark, M._buf, ns, mark.line, mark.col, {
-      end_col = mark.end_col,
-      hl_group = mark.hl,
-    })
-  end
-  for line_idx, vt in pairs(virt_texts) do
-    pcall(vim.api.nvim_buf_set_extmark, M._buf, ns, line_idx, 0, {
-      virt_text = vt,
-      virt_text_pos = "right_align",
-    })
-  end
+  _apply_buf_render(M._buf, ns, lines, hl_marks, virt_texts)
 
   if M._win and vim.api.nvim_win_is_valid(M._win) then
     local cur = vim.api.nvim_win_get_cursor(M._win)
@@ -979,6 +949,13 @@ function M.render()
     if target < 1 then target = 1 end
     pcall(vim.api.nvim_win_set_cursor, M._win, { target, 0 })
   end
+end
+
+function M.render()
+  if not M._buf or not vim.api.nvim_buf_is_valid(M._buf) then return end
+  M._scan_tasks()
+  if M._sess_visible then M._render_sessions() end
+  M._render_tasks()
 end
 
 function M.open()
@@ -1011,33 +988,75 @@ function M.open()
 
   M._orig_width = width
 
-  local buf = M._buf
-  local function map(key, fn)
-    vim.keymap.set("n", key, fn, { buffer = buf, nowait = true })
+  local function setup_keymaps(b)
+    local function map(key, fn)
+      vim.keymap.set("n", key, fn, { buffer = b, nowait = true })
+    end
+    map("<Tab>", M.toggle_group)
+    map("<CR>", M.open_task)
+    map("c", M.create_task)
+    map("<C-w>", M.gen_worktree)
+    map("m", M.merge_worktree)
+    map("P", M.add_project)
+    map("Z", M.maximize)
+    map("x", M.interrupt_task)
+    map("s", M.dispatch_task)
+    map("d", M.archive_task)
+    map("h", M.hide_session)
+    map("D", M.remove_project)
+    map("q", M.close)
+    map("j", M.cursor_down)
+    map("k", M.cursor_up)
+    map("/", M.search_tasks)
+    map("R", M.refresh)
+    map("?", M.show_help)
+    map("S", M.toggle_sessions_pin)
   end
 
-  map("<Tab>", M.toggle_group)
-  map("<CR>", M.open_task)
-  map("c", M.create_task)
-  map("<C-w>", M.gen_worktree)
-  map("m", M.merge_worktree)
-  map("P", M.add_project)
-  map("Z", M.maximize)
-  map("x", M.interrupt_task)
-  map("s", M.dispatch_task)
-  map("d", M.archive_task)
-  map("D", M.remove_project)
-  map("q", M.close)
-  map("j", M.cursor_down)
-  map("k", M.cursor_up)
-  map("/", M.search_tasks)
-  map("R", M.refresh)
-  map("?", M.show_help)
+  setup_keymaps(M._buf)
+
+  if M._sess_visible then
+    M._sess_buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[M._sess_buf].buftype = "nofile"
+    vim.bo[M._sess_buf].bufhidden = "wipe"
+    vim.bo[M._sess_buf].swapfile = false
+    vim.bo[M._sess_buf].filetype = "nowork-panel-sessions"
+
+    vim.cmd("aboveleft 1split")
+    M._sess_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(M._sess_win, M._sess_buf)
+
+    vim.wo[M._sess_win].winfixheight = true
+    vim.wo[M._sess_win].winfixwidth = true
+    vim.wo[M._sess_win].cursorline = true
+    vim.wo[M._sess_win].wrap = false
+    vim.wo[M._sess_win].signcolumn = "no"
+    vim.wo[M._sess_win].number = false
+    vim.wo[M._sess_win].relativenumber = false
+    vim.wo[M._sess_win].foldenable = false
+    vim.wo[M._sess_win].statuscolumn = ""
+    vim.wo[M._sess_win].statusline = " "
+
+    setup_keymaps(M._sess_buf)
+    vim.api.nvim_set_current_win(M._win)
+  end
 
   M.render()
 end
 
+function M._close_sess_pane()
+  if M._sess_win and vim.api.nvim_win_is_valid(M._sess_win) then
+    vim.api.nvim_win_close(M._sess_win, true)
+  end
+  if M._sess_buf and vim.api.nvim_buf_is_valid(M._sess_buf) then
+    pcall(vim.api.nvim_buf_delete, M._sess_buf, { force = true })
+  end
+  M._sess_win = nil
+  M._sess_buf = nil
+end
+
 function M.close()
+  M._close_sess_pane()
   if M._win and vim.api.nvim_win_is_valid(M._win) then
     vim.api.nvim_win_close(M._win, true)
   end
@@ -1069,14 +1088,97 @@ function M.maximize()
 
   if M._maximized then
     vim.api.nvim_win_set_width(M._win, M._orig_width)
+    if M._sess_win and vim.api.nvim_win_is_valid(M._sess_win) then
+      vim.api.nvim_win_set_width(M._sess_win, M._orig_width)
+    end
   else
-    vim.api.nvim_win_set_width(M._win, vim.o.columns - 10)
+    local w = vim.o.columns - 10
+    vim.api.nvim_win_set_width(M._win, w)
+    if M._sess_win and vim.api.nvim_win_is_valid(M._sess_win) then
+      vim.api.nvim_win_set_width(M._sess_win, w)
+    end
   end
   M._maximized = not M._maximized
 end
 
+function M.toggle_sessions_pin()
+  M._sess_visible = not M._sess_visible
+  if not M._sess_visible then
+    M._close_sess_pane()
+    return
+  end
+  if not M._win or not vim.api.nvim_win_is_valid(M._win) then return end
+
+  local prev_win = vim.api.nvim_get_current_win()
+
+  vim.api.nvim_set_current_win(M._win)
+
+  M._sess_buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[M._sess_buf].buftype = "nofile"
+  vim.bo[M._sess_buf].bufhidden = "wipe"
+  vim.bo[M._sess_buf].swapfile = false
+  vim.bo[M._sess_buf].filetype = "nowork-panel-sessions"
+
+  vim.cmd("aboveleft 1split")
+  M._sess_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(M._sess_win, M._sess_buf)
+
+  vim.wo[M._sess_win].winfixheight = true
+  vim.wo[M._sess_win].winfixwidth = true
+  vim.wo[M._sess_win].cursorline = true
+  vim.wo[M._sess_win].wrap = false
+  vim.wo[M._sess_win].signcolumn = "no"
+  vim.wo[M._sess_win].number = false
+  vim.wo[M._sess_win].relativenumber = false
+  vim.wo[M._sess_win].foldenable = false
+  vim.wo[M._sess_win].statuscolumn = ""
+  vim.wo[M._sess_win].statusline = " "
+
+  local function map(key, fn)
+    vim.keymap.set("n", key, fn, { buffer = M._sess_buf, nowait = true })
+  end
+  map("<Tab>", M.toggle_group)
+  map("<CR>", M.open_task)
+  map("c", M.create_task)
+  map("<C-w>", M.gen_worktree)
+  map("m", M.merge_worktree)
+  map("P", M.add_project)
+  map("Z", M.maximize)
+  map("x", M.interrupt_task)
+  map("s", M.dispatch_task)
+  map("d", M.archive_task)
+  map("h", M.hide_session)
+  map("D", M.remove_project)
+  map("q", M.close)
+  map("j", M.cursor_down)
+  map("k", M.cursor_up)
+  map("/", M.search_tasks)
+  map("R", M.refresh)
+  map("?", M.show_help)
+  map("S", M.toggle_sessions_pin)
+
+  vim.api.nvim_set_current_win(prev_win)
+  M._render_sessions()
+end
+
 
 function M.cursor_down()
+  local cur_win = vim.api.nvim_get_current_win()
+
+  if cur_win == M._sess_win and M._sess_buf and vim.api.nvim_buf_is_valid(M._sess_buf) then
+    local cursor = vim.api.nvim_win_get_cursor(M._sess_win)
+    local line_count = vim.api.nvim_buf_line_count(M._sess_buf)
+    if cursor[1] >= line_count then
+      if M._win and vim.api.nvim_win_is_valid(M._win) then
+        vim.api.nvim_set_current_win(M._win)
+        pcall(vim.api.nvim_win_set_cursor, M._win, { 1, 0 })
+      end
+      return
+    end
+    vim.api.nvim_win_set_cursor(M._sess_win, { cursor[1] + 1, 0 })
+    return
+  end
+
   if not M._win or not vim.api.nvim_win_is_valid(M._win) then return end
   local cursor = vim.api.nvim_win_get_cursor(M._win)
   local line_count = vim.api.nvim_buf_line_count(M._buf)
@@ -1094,18 +1196,37 @@ function M.cursor_down()
 end
 
 function M.cursor_up()
-  if not M._win or not vim.api.nvim_win_is_valid(M._win) then return end
-  local cursor = vim.api.nvim_win_get_cursor(M._win)
-  local new_row = math.max(cursor[1] - 1, 1)
-  vim.api.nvim_win_set_cursor(M._win, { new_row, 0 })
+  local cur_win = vim.api.nvim_get_current_win()
 
-  if M._line_tasks[new_row] then
-    for i, t in ipairs(M._tasks) do
-      if t == M._line_tasks[new_row] then
-        M._cursor_idx = i
-        break
+  if cur_win == M._win and M._win and vim.api.nvim_win_is_valid(M._win) then
+    local cursor = vim.api.nvim_win_get_cursor(M._win)
+    if cursor[1] <= 1 then
+      if M._sess_win and vim.api.nvim_win_is_valid(M._sess_win) and M._sess_buf then
+        vim.api.nvim_set_current_win(M._sess_win)
+        local last = vim.api.nvim_buf_line_count(M._sess_buf)
+        pcall(vim.api.nvim_win_set_cursor, M._sess_win, { last, 0 })
+      end
+      return
+    end
+    local new_row = cursor[1] - 1
+    vim.api.nvim_win_set_cursor(M._win, { new_row, 0 })
+
+    if M._line_tasks[new_row] then
+      for i, t in ipairs(M._tasks) do
+        if t == M._line_tasks[new_row] then
+          M._cursor_idx = i
+          break
+        end
       end
     end
+    return
+  end
+
+  if cur_win == M._sess_win and M._sess_buf and vim.api.nvim_buf_is_valid(M._sess_buf) then
+    local cursor = vim.api.nvim_win_get_cursor(M._sess_win)
+    local new_row = math.max(cursor[1] - 1, 1)
+    vim.api.nvim_win_set_cursor(M._sess_win, { new_row, 0 })
+    return
   end
 end
 
@@ -1227,7 +1348,24 @@ function M.open_task()
   end
 end
 
+function M.hide_session()
+  local sess = session_at_cursor()
+  if not sess then return end
+  M._hidden_sessions[sess.buf] = true
+  _tasks_dirty = true
+  M.render()
+end
+
 function M.archive_task()
+  local sess = session_at_cursor()
+  if sess then
+    local chat = require("djinni.nowork.chat")
+    chat._invalidate_session(sess.buf)
+    _tasks_dirty = true
+    M.render()
+    return
+  end
+
   local task = task_at_cursor()
   if not task then return end
 
@@ -1478,6 +1616,8 @@ function M.show_help()
     "  D       Remove project",
     "  <CR>    Open task",
     "  /       Search tasks",
+    "  h       Hide session",
+    "  S       Toggle sessions",
     "  j / k   Navigate",
     "  q       Close panel",
     "  ?       This help",

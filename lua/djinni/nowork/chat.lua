@@ -142,6 +142,8 @@ function M._on_session_reconnect(buf)
     end
     M._cleanup_empty_djinni(buf)
   end
+  local root = M.get_project_root(buf)
+  if root then mcp.clear_cache(root) end
   M._invalidate_session(buf)
   M._creating_session[buf] = nil
   M._update_system_block(buf, "Reconnecting...")
@@ -294,11 +296,10 @@ end
 M.get_provider = get_provider
 
 local function build_session_opts(buf, root)
-  local mcp_names = parse_csv(read_frontmatter_field(buf, "mcp"))
-  local resolved = mcp.resolve(root, mcp_names)
+  local all_servers = mcp.load(root)
   local opts = {}
-  if next(resolved) then
-    opts.mcpServers = resolved
+  if all_servers and next(all_servers) then
+    opts.mcpServers = all_servers
   end
   local model = read_frontmatter_field(buf, "model")
   if model and model ~= "" then
@@ -1004,6 +1005,8 @@ function M.attach(buf)
       M._append_scheduled[buf] = nil
       M._first_msg_sent[buf] = nil
       M._last_interrupt_time[buf] = nil
+      local ok, panel = pcall(require, "djinni.nowork.panel")
+      if ok and panel.render then panel.render() end
     end,
   })
 end
@@ -2463,6 +2466,7 @@ function M._fresh_restart(buf, root)
   M._stream_cleanup[buf] = nil
   M._cleanup_deferred[buf] = nil
 
+  mcp.clear_cache(root)
   local old_sid = M.get_session_id(buf) or M._sessions[buf]
   local sess_opts = build_session_opts(buf, root)
 
@@ -2584,6 +2588,7 @@ function M.switch_provider(buf, choice)
   input.insert_above_separator(buf, lines)
 
   if root then
+    mcp.clear_cache(root)
     local provider_opts = build_session_opts(buf, root)
     session.create_task_session(root, function(err, new_sid)
       if err or not new_sid then
