@@ -280,6 +280,13 @@ end
 
 M._line_tasks = {}
 M._line_projects = {}
+M._line_sessions = {}
+
+local function session_at_cursor()
+  if not M._buf or not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
+  local row = vim.api.nvim_win_get_cursor(M._win)[1]
+  return M._line_sessions[row]
+end
 
 local function task_at_cursor()
   if not M._buf or not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
@@ -622,6 +629,107 @@ local function render_stats_virt(stats)
   return vt
 end
 
+local function render_session_virt(s)
+  local vt = {}
+  if s.context ~= "" then
+    local pct = tonumber(s.context:match("(%d+)")) or 0
+    local pct_hl = pct >= 80 and "DiagnosticError" or pct >= 50 and "DiagnosticWarn" or "Comment"
+    table.insert(vt, { s.context, pct_hl })
+  end
+  if s.tokens ~= "" then
+    if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
+    table.insert(vt, { s.tokens, "Number" })
+  end
+  if s.cost ~= "" then
+    if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
+    table.insert(vt, { s.cost, "String" })
+  end
+  return vt
+end
+
+local function _fmt_k(n)
+  if not n or n <= 0 then return "0" end
+  return n >= 1000 and string.format("%.1fk", n / 1000) or tostring(n)
+end
+
+local function _collect_sessions()
+  local chat = require("djinni.nowork.chat")
+  local result = {}
+  local seen = {}
+
+  local candidates = {}
+  for buf in pairs(chat._sessions or {})  do candidates[buf] = true end
+  for buf in pairs(chat._streaming or {}) do candidates[buf] = true end
+
+  for buf in pairs(candidates) do
+    if not vim.api.nvim_buf_is_valid(buf) then goto continue end
+
+    local sid = chat._sessions[buf] or ""
+    if sid ~= "" and seen[sid] then goto continue end
+    if sid ~= "" then seen[sid] = true end
+
+    local name_full = vim.api.nvim_buf_get_name(buf)
+    local short = vim.fn.fnamemodify(name_full, ":t:r")
+    if short == "" then short = "[buf " .. buf .. "]" end
+
+    local project = name_full:match("([^/]+)/[^/]+/[^/]+$") or ""
+    local usage = chat._usage[buf]
+
+    local status
+    if chat._streaming[buf] then status = "running"
+    elseif chat._last_perm_tool[buf] then status = "input"
+    elseif chat._sessions[buf] then status = "idle"
+    else status = "done" end
+
+    local activity = ""
+    if chat._streaming[buf] then
+      local title = chat._last_tool_title[buf]
+      activity = title or "streaming…"
+    elseif chat._last_perm_tool[buf] then
+      activity = "⚠ " .. chat._last_perm_tool[buf]
+    end
+
+    local tokens = ""
+    if usage then
+      local inp = usage.input_tokens or 0
+      local out = usage.output_tokens or 0
+      if inp + out > 0 then tokens = "↓" .. _fmt_k(inp) .. " ↑" .. _fmt_k(out) end
+    end
+
+    local cost = ""
+    if usage and usage.cost and usage.cost > 0 then
+      cost = string.format("$%.2f", usage.cost)
+    end
+
+    local context = ""
+    if usage and (usage.context_size or 0) > 0 then
+      context = tostring(math.floor((usage.context_used or 0) / usage.context_size * 100)) .. "%"
+    end
+
+    table.insert(result, {
+      buf      = buf,
+      name     = short,
+      project  = project,
+      status   = status,
+      activity = activity,
+      tokens   = tokens,
+      cost     = cost,
+      context  = context,
+    })
+    ::continue::
+  end
+
+  table.sort(result, function(a, b)
+    local order = { running = 1, input = 2, idle = 3, done = 4 }
+    local oa = order[a.status] or 9
+    local ob = order[b.status] or 9
+    if oa ~= ob then return oa < ob end
+    if a.project ~= b.project then return a.project < b.project end
+    return a.name < b.name
+  end)
+  return result
+end
+
 function M.render()
   if not M._buf or not vim.api.nvim_buf_is_valid(M._buf) then return end
 
@@ -632,6 +740,7 @@ function M.render()
   local virt_texts = {}
   M._line_tasks = {}
   M._line_projects = {}
+  M._line_sessions = {}
 
   local function add_hl(line_0, col, end_col, hl)
     table.insert(hl_marks, { line = line_0, col = col, end_col = end_col, hl = hl })
@@ -640,6 +749,64 @@ function M.render()
   local function map_line(line_nr, task, root)
     M._line_tasks[line_nr] = task
     M._line_projects[line_nr] = root
+  end
+
+  local all_sessions = _collect_sessions()
+  local sessions = {}
+  for _, s in ipairs(all_sessions) do
+    if s.status ~= "done" then table.insert(sessions, s) end
+  end
+
+  if #sessions > 0 then
+    local collapsed = M._collapsed["__sessions__"]
+    local chevron = collapsed and "▸ " or "▾ "
+    local header = chevron .. "Sessions (" .. #sessions .. ")"
+    table.insert(lines, header)
+    local hdr_row = #lines
+    M._line_projects[hdr_row] = "__sessions__"
+    add_hl(hdr_row - 1, 0, #chevron, "NonText")
+    add_hl(hdr_row - 1, #chevron, #chevron + #("Sessions"), "Title")
+
+    if not collapsed then
+      local proj_groups = {}
+      local proj_order = {}
+      for _, s in ipairs(sessions) do
+        local proj = s.project ~= "" and s.project or "(no project)"
+        if not proj_groups[proj] then
+          proj_groups[proj] = {}
+          table.insert(proj_order, proj)
+        end
+        table.insert(proj_groups[proj], s)
+      end
+
+      for _, proj in ipairs(proj_order) do
+        if #proj_order > 1 then
+          table.insert(lines, "  " .. proj)
+          local pl = #lines
+          add_hl(pl - 1, 2, 2 + #proj, "Directory")
+        end
+
+        for _, s in ipairs(proj_groups[proj]) do
+          local icon = status_icons[s.status] or "◆"
+          local indent = #proj_order > 1 and "    " or "  "
+          table.insert(lines, indent .. icon .. " " .. s.name)
+          local sl = #lines
+          M._line_sessions[sl] = s
+          add_hl(sl - 1, #indent, #indent + #icon, status_hl[s.status] or "Comment")
+          local vt = render_session_virt(s)
+          if #vt > 0 then virt_texts[sl - 1] = vt end
+
+          if s.activity and s.activity ~= "" then
+            table.insert(lines, indent .. "  " .. s.activity)
+            local al = #lines
+            M._line_sessions[al] = s
+            add_hl(al - 1, #indent + 2, #lines[al], "DiagnosticInfo")
+          end
+        end
+      end
+    end
+
+    table.insert(lines, "")
   end
 
   local groups = M._get_grouped_tasks()
@@ -1027,8 +1194,27 @@ function M.prev_task()
 end
 
 function M.open_task()
+  local session = session_at_cursor()
+  if session and vim.api.nvim_buf_is_valid(session.buf) then
+    local existing = vim.fn.bufwinid(session.buf)
+    if existing ~= -1 then
+      vim.api.nvim_set_current_win(existing)
+    else
+      local win = get_assoc_win()
+      if win then vim.api.nvim_win_set_buf(win, session.buf) end
+    end
+    return
+  end
+
   local task = task_at_cursor()
   if not task then return end
+
+  local bufnr = vim.fn.bufnr(task.file_path)
+  local existing = bufnr ~= -1 and vim.fn.bufwinid(bufnr) or -1
+  if existing ~= -1 then
+    vim.api.nvim_set_current_win(existing)
+    return
+  end
 
   local win = get_assoc_win()
   if win then
@@ -1241,6 +1427,14 @@ function M.create_task_with_selection()
 end
 
 function M.interrupt_task()
+  local session = session_at_cursor()
+  if session then
+    require("djinni.nowork.chat").interrupt(session.buf)
+    _tasks_dirty = true
+    M.render()
+    return
+  end
+
   local task = task_at_cursor()
   if not task then return end
   local bufnr = vim.fn.bufnr(task.file_path)

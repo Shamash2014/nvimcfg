@@ -54,7 +54,7 @@ function M.setup(opts)
   end, {})
 
   vim.api.nvim_create_user_command("NoworkConsole", function()
-    require("djinni.nowork.console").toggle()
+    require("djinni.nowork.panel").toggle()
   end, {})
 
   vim.keymap.set("n", "<leader>oac", function()
@@ -74,8 +74,8 @@ function M.setup(opts)
   end, { desc = "Toggle Nowork panel" })
 
   vim.keymap.set("n", "<leader>ft", function()
-    require("djinni.nowork.console").toggle()
-  end, { desc = "Toggle Nowork Console" })
+    require("djinni.nowork.panel").toggle()
+  end, { desc = "Toggle Nowork panel" })
 
 
   vim.keymap.set("n", "]c", function()

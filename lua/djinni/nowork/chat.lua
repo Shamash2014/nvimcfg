@@ -1552,8 +1552,8 @@ function M._start_global_timer()
       end
 
       if any_streaming then
-        local console_ok, console = pcall(require, "djinni.nowork.console")
-        if console_ok and console then console._dirty = true end
+        local panel_ok, panel = pcall(require, "djinni.nowork.panel")
+        if panel_ok and panel then panel.schedule_render() end
       end
 
       if M._checktime_dirty then

@@ -51,7 +51,7 @@ return {
       })
     end, desc = "Nowork tasks" },
     { "<leader>fp", function() require("djinni.nowork.panel").toggle() end, desc = "Nowork panel" },
-    { "<leader>ft", function() require("djinni.nowork.console").toggle() end, desc = "Nowork Console" },
+    { "<leader>ft", function() require("djinni.nowork.panel").toggle() end, desc = "Nowork panel" },
   },
   config = function()
     require("djinni").setup()
