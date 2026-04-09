@@ -73,7 +73,7 @@ function M.list(opts_or_cb, cb)
       return
     end
     local json_str = table.concat(lines, "")
-    local success, data = pcall(vim.json.decode, json_str)
+    local success, data = pcall(vim.json.decode, json_str, { luanil = { object = true, array = true } })
     if not success or type(data) ~= "table" then
       callback(nil, "failed to parse JSON")
       return

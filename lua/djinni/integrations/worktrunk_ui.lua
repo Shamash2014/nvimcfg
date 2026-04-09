@@ -1,9 +1,20 @@
 local M = {}
 local wt = require("djinni.integrations.worktrunk")
 
+local function branch_display(e)
+  local b = e.branch
+  if b == nil or b == vim.NIL then
+    return "(detached)"
+  end
+  if type(b) == "string" then
+    return b
+  end
+  return tostring(b)
+end
+
 local function format_worktree(e)
   local mark = e.is_current and "@ " or "  "
-  local name = e.branch or "(detached)"
+  local name = branch_display(e)
   local parts = {}
   if e.symbols and e.symbols ~= "" then table.insert(parts, e.symbols) end
   if e.operation_state then table.insert(parts, e.operation_state) end
