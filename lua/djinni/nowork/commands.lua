@@ -21,6 +21,8 @@ M.commands = {
   { name = "/skill", args = true, forward = false },
   { name = "/mcp", args = true, forward = false },
   { name = "/clear", args = false, forward = false },
+  { name = "/fork", args = false, forward = false },
+  { name = "/tree", args = false, forward = false },
   { name = "/help", args = false, forward = false },
 }
 
@@ -216,6 +218,7 @@ function M.execute(buf, text)
     end
     chat._set_frontmatter_field(buf, "session", "")
     chat._sessions[buf] = nil
+    chat._waiting_input[buf] = nil
     chat._continuation_count[buf] = 0
     chat._last_tool_failed[buf] = false
     chat._queue[buf] = nil
@@ -224,6 +227,23 @@ function M.execute(buf, text)
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
       "", "---", "", "@System", "New session", "", "---", "", "@You", "", "", "---", "",
     })
+    return true
+  end
+
+  if cmd.name == "/fork" then
+    local root = chat.get_project_root(buf)
+    if not root then
+      vim.notify("[djinni] No project root", vim.log.levels.WARN)
+      return true
+    end
+    local path = vim.api.nvim_buf_get_name(buf)
+    local parent_name = vim.fn.fnamemodify(path, ":t")
+    chat.create(root, { parent = parent_name })
+    return true
+  end
+
+  if cmd.name == "/tree" then
+    chat.show_tree(buf)
     return true
   end
 
@@ -239,6 +259,7 @@ function M.execute(buf, text)
     chat._set_frontmatter_field(buf, "tokens", "")
     chat._set_frontmatter_field(buf, "cost", "")
     chat._sessions[buf] = nil
+    chat._waiting_input[buf] = nil
     chat._continuation_count[buf] = 0
     chat._last_tool_failed[buf] = false
     chat._queue[buf] = nil

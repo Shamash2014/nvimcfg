@@ -269,11 +269,12 @@ local function get_assoc_win()
     return M._assoc_win
   end
   for _, win in ipairs(vim.api.nvim_list_wins()) do
-    if win ~= M._win then
+    local cfg = vim.api.nvim_win_get_config(win)
+    if win ~= M._win and (not cfg.relative or cfg.relative == "") then
       return win
     end
   end
-  vim.cmd("rightbelow vsplit")
+  vim.cmd("rightbelow vsplit enew")
   local new_win = vim.api.nvim_get_current_win()
   if M._win and vim.api.nvim_win_is_valid(M._win) then
     vim.api.nvim_set_current_win(M._win)
@@ -684,6 +685,7 @@ local function _collect_sessions()
     local status
     if chat._streaming[buf] then status = "running"
     elseif chat._last_perm_tool[buf] then status = "input"
+    elseif chat._waiting_input and chat._waiting_input[buf] then status = "input"
     elseif chat._sessions[buf] then status = "idle"
     else status = "done" end
 
@@ -693,6 +695,8 @@ local function _collect_sessions()
       activity = title or "streaming…"
     elseif chat._last_perm_tool[buf] then
       activity = "⚠ " .. chat._last_perm_tool[buf]
+    elseif chat._waiting_input and chat._waiting_input[buf] then
+      activity = "⚠ waiting for input"
     end
 
     local tokens = ""

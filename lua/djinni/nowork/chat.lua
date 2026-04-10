@@ -50,7 +50,9 @@ M._stream_gen = {} -- buf -> generation counter to detect stale callbacks
 M._available_commands = {} -- buf -> list of { name, description }
 M._config_options = {} -- buf -> list of config options from ACP
 M._creating_session = {} -- buf -> true while create_task_session is in-flight
+M._win_configured = {} -- win -> buf when win options + folds already set
 M._send_retries = {} -- buf -> number of consecutive send retries
+M._waiting_input = {} -- buf -> true when agent stopped with end_turn (waiting for user)
 M._max_send_retries = 3
 M._active_tool_count = {} -- buf -> number of in-progress tool calls
 M._last_event_time = {} -- buf -> uv.now() of last event
@@ -108,6 +110,7 @@ end
 function M._invalidate_session(buf)
   local old_sid = M._sessions[buf]
   M._sessions[buf] = nil
+  M._waiting_input[buf] = nil
   M._set_frontmatter_field(buf, "session", "")
   if old_sid and old_sid ~= "" then
     local root = M._cached_root[buf] or M.get_project_root(buf)
@@ -135,6 +138,10 @@ end
 
 function M._on_session_reconnect(buf)
   if not vim.api.nvim_buf_is_valid(buf) then return end
+  if M._waiting_input[buf] and not M._streaming[buf] then
+    log.info("reconnect skipped — agent waiting for user input buf=" .. tostring(buf))
+    return
+  end
   if M._streaming[buf] then
     M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
     if M._stream_cleanup[buf] then
@@ -207,10 +214,9 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
     local b = ev.buf
     if vim.bo[b].filetype ~= "nowork-chat" then return end
     local win = vim.fn.bufwinid(b)
-    if win ~= -1 then
-      if (vim.wo[win].statusline or "") == "" then
-        vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
-      end
+    if win ~= -1 and M._win_configured[win] ~= b then
+      M._win_configured[win] = b
+      vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
       vim.wo[win].wrap = true
       vim.wo[win].linebreak = true
       vim.wo[win].conceallevel = 2
@@ -441,6 +447,7 @@ function M.create(project_root, opts)
     "provider: " .. (opts.provider or (config.acp and config.acp.provider) or "claude-code"),
     "model:",
     "mcp: " .. mcp_value,
+    "parent: " .. (opts.parent or ""),
     "system: " .. (opts.system or ""),
     "status:",
     "created: " .. iso_timestamp(),
@@ -502,6 +509,9 @@ function M.create(project_root, opts)
         vim.schedule(function()
           if not vim.api.nvim_buf_is_valid(buf) then return end
           M._accumulate_usage(buf, prompt_result)
+          if prompt_result and prompt_result.stopReason == "end_turn" then
+            M._waiting_input[buf] = true
+          end
           if M._stream_cleanup[buf] then
             M._stream_cleanup[buf]()
           end
@@ -645,7 +655,8 @@ function M.attach(buf)
   M._unwrap_paragraphs(buf)
 
   local win = vim.fn.bufwinid(buf)
-  if win ~= -1 then
+  if win ~= -1 and M._win_configured[win] ~= buf then
+    M._win_configured[win] = buf
     vim.wo[win].wrap = true
     vim.wo[win].linebreak = true
     vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
@@ -658,20 +669,6 @@ function M.attach(buf)
       if w == -1 then return end
       pcall(_win_fold_chat, w, buf)
     end)
-    vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter" }, {
-      buffer = buf,
-      callback = function()
-        if not vim.api.nvim_buf_is_valid(buf) then return end
-        local w = vim.fn.bufwinid(buf)
-        if w ~= -1 then
-          pcall(function()
-            if vim.wo[w].foldmethod ~= "expr" then
-              _win_fold_chat(w, buf)
-            end
-          end)
-        end
-      end,
-    })
   end
 
   local function map(mode, lhs, rhs)
@@ -1005,6 +1002,9 @@ function M.attach(buf)
       M._append_scheduled[buf] = nil
       M._first_msg_sent[buf] = nil
       M._last_interrupt_time[buf] = nil
+      for w, b in pairs(M._win_configured) do
+        if b == buf then M._win_configured[w] = nil end
+      end
       local ok, panel = pcall(require, "djinni.nowork.panel")
       if ok and panel.render then panel.render() end
     end,
@@ -1191,6 +1191,7 @@ function M.send(buf, text)
 
   local images = M._pending_images[buf]
   M._pending_images[buf] = nil
+  M._waiting_input[buf] = nil
 
   if text ~= "yes, continue" and not text:match("^The previous tool") then
     M._continuation_count[buf] = 0
@@ -1320,7 +1321,17 @@ function M.send(buf, text)
         local tok = prompt_result and (prompt_result.tokenUsage or prompt_result.usage) or {}
         local total = (tok.inputTokens or 0) + (tok.outputTokens or 0)
         if total == 0 then
-          log.warn("0-token response, stopReason=" .. tostring(prompt_result and prompt_result.stopReason) .. " — invalidating session")
+          local sr = prompt_result and prompt_result.stopReason
+          if sr == "end_turn" then
+            log.info("0-token end_turn — agent waiting for input, keeping session")
+            M._waiting_input[buf] = true
+            M._send_retries[buf] = 0
+            if M._stream_cleanup[buf] then
+              M._stream_cleanup[buf]()
+            end
+            return
+          end
+          log.warn("0-token response, stopReason=" .. tostring(sr) .. " — invalidating session")
           lightweight_cleanup()
           M._cleanup_empty_djinni(buf)
           invalidate_session()
@@ -1329,6 +1340,9 @@ function M.send(buf, text)
           return
         end
         M._send_retries[buf] = 0
+        if prompt_result and prompt_result.stopReason == "end_turn" then
+          M._waiting_input[buf] = true
+        end
         if M._stream_cleanup[buf] then
           M._stream_cleanup[buf]()
         end
@@ -1384,6 +1398,7 @@ function M.interrupt(buf)
     M._pending_permission[buf] = nil
   end
   M._cleanup_deferred[buf] = nil
+  M._waiting_input[buf] = nil
   M._last_tool_failed[buf] = false
   M._last_perm_tool[buf] = nil
   M._continuation_count[buf] = 0
@@ -1526,6 +1541,10 @@ function M._start_global_timer()
         end
 
         if do_watchdog then
+          if M._pending_permission and M._pending_permission[buf] then
+            M._last_event_time[buf] = vim.uv.now()
+            goto next_buf
+          end
           local client = M._stream_client[buf]
           local ok_alive, alive = pcall(function() return client and client:is_alive() end)
           local dead = not ok_alive or not alive
@@ -2217,7 +2236,8 @@ function M._start_streaming(buf)
         if M._streaming[buf] or M._stream_gen[buf] ~= cleanup_gen then return end
         local task_name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t:r")
         local project = vim.fn.fnamemodify(M.get_project_root(buf) or "", ":t")
-        vim.notify("[djinni] Done: " .. task_name .. " (" .. project .. ")", vim.log.levels.INFO)
+        local label = M._waiting_input[buf] and "Waiting" or "Done"
+        vim.notify("[djinni] " .. label .. ": " .. task_name .. " (" .. project .. ")", vim.log.levels.INFO)
         if vim.api.nvim_buf_is_valid(buf) then
           local win = vim.fn.bufwinid(buf)
           local lc = vim.api.nvim_buf_line_count(buf)
@@ -3369,5 +3389,174 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
     session.shutdown_all()
   end,
 })
+
+function M.show_tree(buf)
+  local root = M.get_project_root(buf)
+  if not root then
+    vim.notify("[djinni] No project root", vim.log.levels.WARN)
+    return
+  end
+
+  local config = require("djinni").config
+  local chat_dir = root .. "/" .. config.chat.dir
+  local current_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
+
+  local handle = vim.loop.fs_scandir(chat_dir)
+  if not handle then
+    vim.notify("[djinni] No chat directory", vim.log.levels.WARN)
+    return
+  end
+
+  local files = {}
+  local parents = {}
+  while true do
+    local name, ftype = vim.loop.fs_scandir_next(handle)
+    if not name then break end
+    if ftype == "file" and name:match("%.md$") and name ~= "TASK.md" then
+      files[#files + 1] = name
+      local f = io.open(chat_dir .. "/" .. name, "r")
+      if f then
+        local in_fm = false
+        local fm_count = 0
+        for line in f:lines() do
+          if line:match("^%-%-%-$") then
+            fm_count = fm_count + 1
+            if fm_count == 1 then in_fm = true
+            elseif fm_count == 2 then break end
+          elseif in_fm then
+            local k, v = line:match("^(%w+):%s*(.+)$")
+            if k == "parent" then
+              parents[name] = v
+              break
+            end
+          end
+        end
+        f:close()
+      end
+    end
+  end
+
+  local children = {}
+  for child, parent in pairs(parents) do
+    if not children[parent] then children[parent] = {} end
+    children[parent][#children[parent] + 1] = child
+  end
+  for _, kids in pairs(children) do
+    table.sort(kids)
+  end
+
+  local function find_root_ancestor(name)
+    local seen = {}
+    while parents[name] do
+      if seen[name] then break end
+      seen[name] = true
+      name = parents[name]
+    end
+    return name
+  end
+
+  local ancestor = find_root_ancestor(current_file)
+
+  local tree_lines = {}
+  local tree_files = {}
+  local current_line = 0
+
+  local function render(name, prefix, is_last)
+    local connector = is_last and "└─ " or "├─ "
+    local marker = name == current_file and "  ◀" or ""
+    local line = prefix .. connector .. name:gsub("%.md$", "") .. marker
+    tree_lines[#tree_lines + 1] = line
+    tree_files[#tree_files + 1] = name
+    if name == current_file then current_line = #tree_lines end
+
+    local kids = children[name]
+    if kids then
+      local child_prefix = prefix .. (is_last and "   " or "│  ")
+      for i, child in ipairs(kids) do
+        render(child, child_prefix, i == #kids)
+      end
+    end
+  end
+
+  local root_label = ancestor:gsub("%.md$", "")
+  local marker = ancestor == current_file and "  ◀" or ""
+  tree_lines[#tree_lines + 1] = root_label .. marker
+  tree_files[#tree_files + 1] = ancestor
+  if ancestor == current_file then current_line = 1 end
+
+  local kids = children[ancestor]
+  if kids then
+    for i, child in ipairs(kids) do
+      render(child, "", i == #kids)
+    end
+  end
+
+  if #tree_lines <= 1 and not children[ancestor] then
+    vim.notify("[djinni] No forks found", vim.log.levels.INFO)
+    return
+  end
+
+  local width = 0
+  for _, l in ipairs(tree_lines) do
+    width = math.max(width, vim.fn.strdisplaywidth(l))
+  end
+  width = math.max(width + 4, 30)
+  local height = math.min(#tree_lines + 2, 20)
+
+  local title = " Chat Tree "
+  local float_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(float_buf, 0, -1, false, tree_lines)
+
+  local ui = vim.api.nvim_list_uis()[1] or { width = 80, height = 24 }
+  local win = vim.api.nvim_open_win(float_buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    col = math.floor((ui.width - width) / 2),
+    row = math.floor((ui.height - height) / 2),
+    style = "minimal",
+    border = "rounded",
+    title = title,
+    title_pos = "center",
+  })
+
+  vim.bo[float_buf].buftype = "nofile"
+  vim.bo[float_buf].bufhidden = "wipe"
+  vim.bo[float_buf].modifiable = false
+
+  local tree_ns = vim.api.nvim_create_namespace("djinni_tree")
+  for i, line in ipairs(tree_lines) do
+    if line:find("◀") then
+      vim.api.nvim_buf_add_highlight(float_buf, tree_ns, "CursorLine", i - 1, 0, -1)
+    end
+    local conn_end = line:find("[^│├└─ ]")
+    if conn_end and conn_end > 1 then
+      vim.api.nvim_buf_add_highlight(float_buf, tree_ns, "Comment", i - 1, 0, conn_end - 1)
+    end
+  end
+
+  if current_line > 0 then
+    vim.api.nvim_win_set_cursor(win, { current_line, 0 })
+  end
+
+  local function close()
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+  end
+
+  local function open_at_cursor()
+    local row = vim.api.nvim_win_get_cursor(win)[1]
+    local fname = tree_files[row]
+    if fname then
+      close()
+      M.open(chat_dir .. "/" .. fname)
+    end
+  end
+
+  vim.keymap.set("n", "<CR>", open_at_cursor, { buffer = float_buf, nowait = true })
+  vim.keymap.set("n", "q", close, { buffer = float_buf, nowait = true })
+  vim.keymap.set("n", "<Esc>", close, { buffer = float_buf, nowait = true })
+end
 
 return M
