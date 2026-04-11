@@ -53,6 +53,10 @@ function M.setup(opts)
     require("djinni.integrations.snacks").pick_sessions()
   end, {})
 
+  vim.api.nvim_create_user_command("NoworkSwitch", function()
+    require("djinni.nowork.panel").switch_last_session()
+  end, {})
+
   vim.api.nvim_create_user_command("NoworkConsole", function()
     require("djinni.nowork.panel").toggle()
   end, {})
@@ -78,27 +82,19 @@ function M.setup(opts)
     chat.create(root, { split = true })
   end, {})
 
-  vim.keymap.set("n", "<leader>oac", function()
+  vim.keymap.set("n", "gac", function()
     require("djinni.code").create_with_file()
   end, { desc = "Task with file context" })
 
-  vim.keymap.set("v", "<leader>oav", function()
+  vim.keymap.set("v", "gav", function()
     require("djinni.code").create_with_selection()
   end, { desc = "Task with selection context" })
 
-  vim.keymap.set("v", "<leader>oas", function()
+  vim.keymap.set("v", "gas", function()
     require("djinni.code").send_selection_to_chat()
   end, { desc = "Send selection to chat" })
 
-  vim.keymap.set("n", "<leader>fp", function()
-    require("djinni.nowork.panel").toggle()
-  end, { desc = "Toggle Nowork panel" })
-
   vim.keymap.set("n", "<C-q>", function()
-    require("djinni.nowork.panel").toggle()
-  end, { desc = "Toggle Nowork panel" })
-
-  vim.keymap.set("n", "<leader>ft", function()
     require("djinni.nowork.panel").toggle()
   end, { desc = "Toggle Nowork panel" })
 

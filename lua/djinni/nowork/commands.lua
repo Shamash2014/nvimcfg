@@ -254,12 +254,10 @@ function M.execute(buf, text)
     if chat._streaming[buf] then
       if chat._stream_cleanup[buf] then chat._stream_cleanup[buf](true) end
     end
-    chat._set_frontmatter_field(buf, "session", "")
+    chat._invalidate_session(buf)
     chat._set_frontmatter_field(buf, "status", "")
     chat._set_frontmatter_field(buf, "tokens", "")
     chat._set_frontmatter_field(buf, "cost", "")
-    chat._sessions[buf] = nil
-    chat._waiting_input[buf] = nil
     chat._continuation_count[buf] = 0
     chat._last_tool_failed[buf] = false
     chat._queue[buf] = nil

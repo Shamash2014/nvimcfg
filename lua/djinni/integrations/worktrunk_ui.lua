@@ -55,7 +55,7 @@ local function format_worktree(e)
 end
 
 local function pick_branch(prompt, cb)
-  wt.list({ full = true }, function(entries)
+  wt.list(function(entries)
     vim.schedule(function()
       if not entries or #entries == 0 then
         vim.notify("[wt] No worktrees", vim.log.levels.WARN)
@@ -69,6 +69,19 @@ local function pick_branch(prompt, cb)
         vim.notify("[wt] No worktrees", vim.log.levels.WARN)
         return
       end
+      local items_by_branch = {}
+      for i, e in ipairs(items) do
+        items_by_branch[e.branch] = i
+      end
+      wt.list({ full = true }, function(full_entries)
+        if not full_entries then return end
+        vim.schedule(function()
+          for _, fe in ipairs(full_entries) do
+            local idx = items_by_branch[fe.branch]
+            if idx then items[idx] = fe end
+          end
+        end)
+      end)
       vim.ui.select(items, {
         prompt = prompt,
         format_item = format_worktree,
@@ -109,18 +122,25 @@ function M.create()
     end)
     :action("c", "Create worktree", function(p2)
       local args = p2:get_arguments()
-      vim.ui.input({ prompt = "New branch: " }, function(branch)
-        if not branch or branch == "" then return end
-        local opts = {}
-        if vim.tbl_contains(args, "--base=@") then
-          opts.base = "@"
-        end
-        wt.create_for_task(branch, opts, function(path)
-          if path then
-            vim.notify("[wt] Created: " .. branch, vim.log.levels.INFO)
-          end
+      local function prompt_branch(opts)
+        vim.ui.input({ prompt = "New branch: " }, function(branch)
+          if not branch or branch == "" then return end
+          wt.create_for_task(branch, opts, function(path)
+            if path then
+              vim.notify("[wt] Created: " .. branch, vim.log.levels.INFO)
+            end
+          end)
         end)
-      end)
+      end
+      if vim.tbl_contains(args, "--base=@") then
+        prompt_branch({ base = "@" })
+      else
+        vim.ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
+          if not choice then return end
+          local opts = (choice:match("Current") or choice:match("Stacked")) and { base = "@" } or {}
+          prompt_branch(opts)
+        end)
+      end
     end)
     :action("d", "Delete worktree", function(p2)
       local args = p2:get_arguments()
@@ -278,11 +298,11 @@ function M.quick_switch()
 end
 
 function M.quick_create()
-  vim.ui.input({ prompt = "New worktree branch: " }, function(branch)
-    if not branch or branch == "" then return end
-    vim.ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
-      if not choice then return end
-      local opts = (choice:match("Current") or choice:match("Stacked")) and { base = "@" } or {}
+  vim.ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
+    if not choice then return end
+    local opts = (choice:match("Current") or choice:match("Stacked")) and { base = "@" } or {}
+    vim.ui.input({ prompt = "New worktree branch: " }, function(branch)
+      if not branch or branch == "" then return end
       wt.create_for_task(branch, opts, function(path)
         if path then
           vim.notify("[wt] Created and switched to: " .. branch, vim.log.levels.INFO)
@@ -311,10 +331,12 @@ function M.setup()
     M.create()
   end, {})
 
-  vim.keymap.set("n", "<leader>oww", function() M.create() end, { desc = "Worktrunk" })
-  vim.keymap.set("n", "<leader>ows", function() M.quick_switch() end, { desc = "Switch worktree" })
-  vim.keymap.set("n", "<leader>owc", function() M.quick_create() end, { desc = "Create worktree" })
-  vim.keymap.set("n", "<leader>owd", function() M.quick_diff() end, { desc = "Diff worktree" })
+  vim.keymap.set("n", "<leader>gaww", function() M.create() end, { desc = "Worktrunk" })
+  vim.keymap.set("n", "<leader>gaws", function() M.quick_switch() end, { desc = "Switch worktree" })
+  vim.keymap.set("n", "<leader>gawc", function() M.quick_create() end, { desc = "Create worktree" })
+  vim.keymap.set("n", "<leader>gawd", function() M.quick_diff() end, { desc = "Diff worktree" })
+
+  wt.refresh_cache()
 end
 
 return M

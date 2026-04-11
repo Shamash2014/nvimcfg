@@ -56,20 +56,18 @@ function M.pick_task(opts)
 end
 
 function M.pick_sessions()
-  local chat = require("djinni.nowork.chat")
+  local panel = require("djinni.nowork.panel")
   local items = {}
 
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.bo[buf].filetype == "nowork-chat" and vim.api.nvim_buf_is_valid(buf) then
-      local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t:r")
-      local streaming = chat._streaming[buf] == true
-      table.insert(items, {
-        text = name,
-        buf = buf,
-        kind = "chat",
-        streaming = streaming,
-      })
-    end
+  local sessions = panel._collect_sessions()
+  for _, s in ipairs(sessions) do
+    table.insert(items, {
+      text = s.title .. " " .. s.project,
+      buf = s.buf,
+      kind = "chat",
+      streaming = s.status == "running",
+      session = s,
+    })
   end
 
   local ok, terms = pcall(function() return require("snacks.terminal")._terms end)
@@ -96,14 +94,17 @@ function M.pick_sessions()
     title = "Background Sessions",
     items = items,
     format = function(item)
-      local icon = item.kind == "terminal" and ">" or (item.streaming and "~" or "+")
-      local hl = item.streaming and "DiagnosticWarn" or "Comment"
-      local text = #item.text > 50 and item.text:sub(1, 47) .. "..." or item.text
-      return {
-        { "[" .. icon .. "] ", hl },
-        { text, "Normal" },
-        { "  " .. item.kind, "Comment" },
-      }
+      if item.session then
+        local s = item.session
+        local icon = s.status == "running" and "●" or s.status == "input" and "⚠" or "◆"
+        local hl = s.status == "running" and "DiagnosticOk" or s.status == "input" and "DiagnosticWarn" or "Comment"
+        local parts = {{ icon .. " ", hl }, { s.title }}
+        if s.project ~= "" then table.insert(parts, { "  (" .. s.project .. ")", "Comment" }) end
+        if s.cost ~= "" then table.insert(parts, { "  " .. s.cost, "String" }) end
+        if s.context ~= "" then table.insert(parts, { "  " .. s.context, "Number" }) end
+        return parts
+      end
+      return {{ "> ", "Comment" }, { item.text }}
     end,
     confirm = function(picker, item)
       picker:close()

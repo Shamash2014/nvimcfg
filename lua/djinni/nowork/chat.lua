@@ -118,6 +118,61 @@ function M._invalidate_session(buf)
   end
 end
 
+local ns_attach = vim.api.nvim_create_namespace("djinni_attach")
+
+function M._update_attach_indicator(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  vim.api.nvim_buf_clear_namespace(buf, ns_attach, 0, -1)
+  local imgs = M._pending_images[buf]
+  if not imgs or #imgs == 0 then return end
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  for i = #lines, 1, -1 do
+    if lines[i] and lines[i]:match("^@You%s*$") then
+      vim.api.nvim_buf_set_extmark(buf, ns_attach, i - 1, 0, {
+        virt_text = { { " [" .. #imgs .. " image" .. (#imgs > 1 and "s" or "") .. " attached]", "DiagnosticInfo" } },
+        virt_text_pos = "eol",
+      })
+      return
+    end
+  end
+end
+
+function M._paste_image(buf, img)
+  local chat_path = vim.api.nvim_buf_get_name(buf)
+  local chat_dir = vim.fn.fnamemodify(chat_path, ":h")
+  local img_dir = chat_dir .. "/images"
+  vim.fn.mkdir(img_dir, "p")
+  local ext = img.ext or "png"
+  local ts = os.date("%Y%m%d-%H%M%S")
+  local filename = ts .. "." .. ext
+  local filepath = img_dir .. "/" .. filename
+  local f = io.open(filepath, "wb")
+  if f then
+    f:write(img.raw)
+    f:close()
+  end
+  if not M._pending_images[buf] then M._pending_images[buf] = {} end
+  table.insert(M._pending_images[buf], { data = img.data, media_type = img.media_type })
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local insert_row = vim.api.nvim_win_get_cursor(0)[1]
+  for i = insert_row, 1, -1 do
+    if lines[i] and lines[i]:match("^@You%s*$") then
+      for j = i + 1, #lines do
+        if lines[j] == "" or lines[j]:match("^%-%-%-$") or lines[j]:match("^@%w+") then
+          insert_row = j
+          break
+        end
+        insert_row = j + 1
+      end
+      break
+    end
+  end
+  local ref = "![image](images/" .. filename .. ")"
+  vim.api.nvim_buf_set_lines(buf, insert_row - 1, insert_row - 1, false, { ref })
+  M._update_attach_indicator(buf)
+  vim.notify("[djinni] Image attached: " .. filename, vim.log.levels.INFO)
+end
+
 function M._close_tool_fold(buf)
   local start = M._tool_section_start[buf]
   if not start then return end
@@ -164,32 +219,117 @@ local function hide_snacks_notif(id)
   if ok and Snacks.notifier then Snacks.notifier.hide(id) end
 end
 
+local IMAGE_EXTENSIONS = { png = "image/png", jpg = "image/jpeg", jpeg = "image/jpeg", gif = "image/gif", webp = "image/webp", svg = "image/svg+xml" }
+
+local function detect_media_type(raw)
+  if not raw or #raw < 4 then return nil end
+  local b1, b2, b3, b4 = raw:byte(1, 4)
+  if b1 == 0x89 and b2 == 0x50 and b3 == 0x4E and b4 == 0x47 then return "image/png", "png" end
+  if b1 == 0xFF and b2 == 0xD8 and b3 == 0xFF then return "image/jpeg", "jpg" end
+  if b1 == 0x47 and b2 == 0x49 and b3 == 0x46 then return "image/gif", "gif" end
+  if b1 == 0x52 and b2 == 0x49 and b3 == 0x46 and #raw >= 12 then
+    local w1, w2, w3, w4 = raw:byte(9, 12)
+    if w1 == 0x57 and w2 == 0x45 and w3 == 0x42 and w4 == 0x50 then return "image/webp", "webp" end
+  end
+  return nil
+end
+
+local function encode_base64(raw, callback)
+  vim.system({ "base64" }, { stdin = raw, text = true }, function(b64_result)
+    vim.schedule(function()
+      if b64_result.code ~= 0 or not b64_result.stdout then
+        callback(nil)
+        return
+      end
+      local data = b64_result.stdout:gsub("%s+", "")
+      if data == "" then
+        callback(nil)
+        return
+      end
+      callback(data)
+    end)
+  end)
+end
+
 local function get_clipboard_image(callback)
-  local pngpaste = vim.fn.exepath("pngpaste")
-  if pngpaste == "" then
+  local function try_raw(raw)
+    if not raw or #raw == 0 then
+      callback(nil)
+      return
+    end
+    local media_type, ext = detect_media_type(raw)
+    if not media_type then
+      callback(nil)
+      return
+    end
+    encode_base64(raw, function(data)
+      if not data then
+        callback(nil)
+        return
+      end
+      callback({ data = data, media_type = media_type, ext = ext, raw = raw })
+    end)
+  end
+
+  if vim.fn.has("mac") == 1 then
+    local pngpaste = vim.fn.exepath("pngpaste")
+    if pngpaste == "" then
+      callback(nil)
+      return
+    end
+    vim.system({ pngpaste, "/dev/stdout" }, { text = false }, function(result)
+      if result.code ~= 0 or not result.stdout or #result.stdout == 0 then
+        vim.schedule(function() callback(nil) end)
+        return
+      end
+      vim.schedule(function() try_raw(result.stdout) end)
+    end)
+  else
+    local wl_paste = vim.fn.exepath("wl-paste")
+    local xclip = vim.fn.exepath("xclip")
+    if wl_paste ~= "" then
+      vim.system({ wl_paste, "--no-newline", "--type", "image/png" }, { text = false }, function(result)
+        vim.schedule(function() try_raw(result.code == 0 and result.stdout or nil) end)
+      end)
+    elseif xclip ~= "" then
+      vim.system({ xclip, "-selection", "clipboard", "-t", "image/png", "-o" }, { text = false }, function(result)
+        vim.schedule(function() try_raw(result.code == 0 and result.stdout or nil) end)
+      end)
+    else
+      callback(nil)
+    end
+  end
+end
+
+local function file_to_image(filepath, callback)
+  local ext = filepath:match("%.(%w+)$")
+  if not ext then
     callback(nil)
     return
   end
-  vim.system({ pngpaste, "/dev/stdout" }, { text = false }, function(result)
-    if result.code ~= 0 or not result.stdout or #result.stdout == 0 then
-      vim.schedule(function() callback(nil) end)
+  ext = ext:lower()
+  local media_type = IMAGE_EXTENSIONS[ext]
+  if not media_type then
+    callback(nil)
+    return
+  end
+  local f = io.open(filepath, "rb")
+  if not f then
+    callback(nil)
+    return
+  end
+  local raw = f:read("*a")
+  f:close()
+  if not raw or #raw == 0 then
+    callback(nil)
+    return
+  end
+  encode_base64(raw, function(data)
+    if not data then
+      callback(nil)
       return
     end
-    local raw = result.stdout
-    vim.system({ "base64" }, { stdin = raw, text = true }, function(b64_result)
-      vim.schedule(function()
-        if b64_result.code ~= 0 or not b64_result.stdout then
-          callback(nil)
-          return
-        end
-        local data = b64_result.stdout:gsub("%s+", "")
-        if data == "" then
-          callback(nil)
-          return
-        end
-        callback({ data = data, media_type = "image/png", raw = raw })
-      end)
-    end)
+    callback({ data = data, media_type = media_type, ext = ext, raw = raw })
   end)
 end
 
@@ -811,37 +951,81 @@ function M.attach(buf)
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('"_p', true, false, true), "n", false)
         return
       end
-      local chat_path = vim.api.nvim_buf_get_name(buf)
-      local chat_dir = vim.fn.fnamemodify(chat_path, ":h")
-      local img_dir = chat_dir .. "/images"
-      vim.fn.mkdir(img_dir, "p")
-      local ts = os.date("%Y%m%d-%H%M%S")
-      local filename = ts .. ".png"
-      local filepath = img_dir .. "/" .. filename
-      local f = io.open(filepath, "wb")
-      if f then
-        f:write(img.raw)
-        f:close()
+      M._paste_image(buf, img)
+    end)
+  end)
+  map("i", "<C-v>", function()
+    get_clipboard_image(function(img)
+      if not img then
+        local keys = vim.api.nvim_replace_termcodes("<C-r>+", true, false, true)
+        vim.api.nvim_feedkeys(keys, "n", false)
+        return
       end
-      if not M._pending_images[buf] then M._pending_images[buf] = {} end
-      table.insert(M._pending_images[buf], { data = img.data, media_type = img.media_type })
-      local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-      local insert_row = vim.api.nvim_win_get_cursor(0)[1]
-      for i = insert_row, 1, -1 do
-        if lines[i] and lines[i]:match("^@You%s*$") then
-          for j = i + 1, #lines do
-            if lines[j] == "" or lines[j]:match("^%-%-%-$") or lines[j]:match("^@%w+") then
-              insert_row = j
+      M._paste_image(buf, img)
+    end)
+  end)
+  map("n", "ga", function()
+    local ok, Snacks = pcall(require, "snacks")
+    if not ok then
+      vim.notify("[djinni] snacks.nvim required for file picker", vim.log.levels.ERROR)
+      return
+    end
+    local root = M.get_project_root(buf) or vim.fn.getcwd()
+    Snacks.picker.files({
+      cwd = root,
+      confirm = function(picker, item)
+        picker:close()
+        if not item then return end
+        local filepath = item._path or (root .. "/" .. item.file)
+        local ext = (filepath:match("%.(%w+)$") or ""):lower()
+        if IMAGE_EXTENSIONS[ext] then
+          file_to_image(filepath, function(img)
+            if not img then
+              vim.notify("[djinni] Failed to read image: " .. filepath, vim.log.levels.ERROR)
+              return
+            end
+            M._paste_image(buf, img)
+          end)
+        else
+          local rel = vim.fn.fnamemodify(filepath, ":.")
+          local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+          local insert_row = #lines
+          for i = #lines, 1, -1 do
+            if lines[i] and lines[i]:match("^@You%s*$") then
+              for j = i + 1, #lines do
+                if lines[j] == "" or lines[j]:match("^%-%-%-$") or lines[j]:match("^@%w+") then
+                  insert_row = j
+                  break
+                end
+                insert_row = j + 1
+              end
               break
             end
-            insert_row = j + 1
           end
-          break
+          local ref = "@./" .. rel
+          vim.api.nvim_buf_set_lines(buf, insert_row - 1, insert_row - 1, false, { ref })
+          vim.notify("[djinni] File attached: " .. rel, vim.log.levels.INFO)
         end
-      end
-      local ref = "![image](images/" .. filename .. ")"
-      vim.api.nvim_buf_set_lines(buf, insert_row - 1, insert_row - 1, false, { ref })
-      vim.notify("[djinni] Image pasted: " .. filename, vim.log.levels.INFO)
+      end,
+    })
+  end)
+  map("n", "gA", function()
+    local imgs = M._pending_images[buf]
+    if not imgs or #imgs == 0 then
+      vim.notify("[djinni] No pending attachments", vim.log.levels.INFO)
+      return
+    end
+    local items = {}
+    for i, img in ipairs(imgs) do
+      local size = math.floor(#img.data * 3 / 4 / 1024)
+      table.insert(items, i .. ". " .. img.media_type .. " (" .. size .. " KB)")
+    end
+    vim.ui.select(items, { prompt = "Remove attachment:" }, function(_, idx)
+      if not idx then return end
+      table.remove(imgs, idx)
+      if #imgs == 0 then M._pending_images[buf] = nil end
+      M._update_attach_indicator(buf)
+      vim.notify("[djinni] Attachment removed", vim.log.levels.INFO)
     end)
   end)
   map("n", "dS", function()
@@ -1203,13 +1387,16 @@ function M.quick_input(buf)
   end)
 end
 
-function M.send(buf, text)
+function M.send(buf, text, images)
   if not text or text == "" then
     return
   end
 
-  local images = M._pending_images[buf]
-  M._pending_images[buf] = nil
+  if not images then
+    images = M._pending_images[buf]
+    M._pending_images[buf] = nil
+    M._update_attach_indicator(buf)
+  end
   M._waiting_input[buf] = nil
 
   if text ~= "yes, continue" and not text:match("^The previous tool") then
@@ -1260,7 +1447,7 @@ function M.send(buf, text)
   log.info("send: buf=" .. tostring(buf) .. " sid=" .. tostring(sid) .. " creating=" .. tostring(M._creating_session[buf]) .. " len=" .. tostring(#text))
   if not sid or sid == "" then
     if not M._queue[buf] then M._queue[buf] = {} end
-    table.insert(M._queue[buf], text)
+    table.insert(M._queue[buf], { text = text, images = images })
     log.info("send: queuing message (no session)")
     if not M._creating_session[buf] then
       M._ensure_session(buf)
@@ -2288,10 +2475,12 @@ function M._process_queue(buf)
     M._queue[buf] = nil
     return
   end
-  local text = table.remove(M._queue[buf], 1)
+  local entry = table.remove(M._queue[buf], 1)
   if #M._queue[buf] == 0 then M._queue[buf] = nil end
+  local text = type(entry) == "table" and entry.text or entry
+  local queued_images = type(entry) == "table" and entry.images or nil
   log.info("_process_queue: sending queued message buf=" .. tostring(buf) .. " len=" .. tostring(#text))
-  M.send(buf, text)
+  M.send(buf, text, queued_images)
 end
 
 local function _is_structural_line(line)
@@ -3398,6 +3587,26 @@ function M.statusline()
   end)
   if ok then return result end
   return "djinni"
+end
+
+function M.global_statusline()
+  local ok, result = pcall(function()
+    local running = 0
+    local total_cost = 0
+    for buf in pairs(M._streaming or {}) do
+      if vim.api.nvim_buf_is_valid(buf) then running = running + 1 end
+    end
+    for _, usage in pairs(M._usage or {}) do
+      if usage.cost and usage.cost > 0 then total_cost = total_cost + usage.cost end
+    end
+    if running == 0 and total_cost == 0 then return "" end
+    local parts = "djinni:"
+    if running > 0 then parts = parts .. " " .. running .. "●" end
+    if total_cost > 0 then parts = parts .. " $" .. string.format("%.2f", total_cost) end
+    return parts
+  end)
+  if ok then return result end
+  return ""
 end
 
 vim.api.nvim_create_autocmd("VimLeavePre", {

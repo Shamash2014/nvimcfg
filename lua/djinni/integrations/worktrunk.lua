@@ -1,5 +1,18 @@
 local M = {}
 
+local cache = { basic = nil, full = nil }
+
+function M.invalidate_cache()
+  cache.basic = nil
+  cache.full = nil
+end
+
+function M.refresh_cache()
+  M.invalidate_cache()
+  M.list(function() end)
+  M.list({ full = true }, function() end)
+end
+
 local function run_async(cmd, args, opts_or_cb, cb)
   local opts, callback
   if type(opts_or_cb) == "function" then
@@ -62,6 +75,12 @@ function M.list(opts_or_cb, cb)
     callback = cb
   end
 
+  local key = (opts.full or opts.branches or opts.remotes) and "full" or "basic"
+  if not opts.branches and not opts.remotes and cache[key] then
+    callback(cache[key])
+    return
+  end
+
   local args = { "list", "--format=json" }
   if opts.branches then table.insert(args, "--branches") end
   if opts.remotes then table.insert(args, "--remotes") end
@@ -77,6 +96,9 @@ function M.list(opts_or_cb, cb)
     if not success or type(data) ~= "table" then
       callback(nil, "failed to parse JSON")
       return
+    end
+    if not opts.branches and not opts.remotes then
+      cache[key] = data
     end
     callback(data)
   end)
@@ -99,6 +121,7 @@ function M.create(branch, opts_or_callback, callback)
   if opts.yes then table.insert(args, "--yes") end
   if opts.no_verify then table.insert(args, "--no-verify") end
   run_async("wt", args, function(ok, lines, stderr)
+    M.invalidate_cache()
     if ok then
       local path = nil
       for _, line in ipairs(lines) do
@@ -136,6 +159,7 @@ function M.remove(branches, opts_or_cb, cb)
     table.insert(args, branches)
   end
   run_async("wt", args, function(ok, lines, stderr)
+    M.invalidate_cache()
     callback(ok, table.concat(ok and lines or stderr or {}, "\n"))
   end)
 end
@@ -191,6 +215,7 @@ function M.switch(branch, opts_or_cb, cb)
   if opts.no_verify then table.insert(args, "--no-verify") end
   if branch then table.insert(args, branch) end
   run_async("wt", args, function(ok, lines, stderr)
+    M.invalidate_cache()
     if callback then callback(ok, lines, stderr) end
   end)
 end
@@ -250,32 +275,57 @@ local function show_switch_stats(branch)
   end)
 end
 
+local function apply_switch(branch, path, callback)
+  vim.schedule(function()
+    save_and_clear_buffers()
+    vim.cmd("tcd " .. vim.fn.fnameescape(path))
+    local ok, resession = pcall(require, "resession")
+    if ok then
+      local loaded = pcall(resession.load, "wt:" .. branch, { silence_errors = true })
+      if not loaded then
+        local folder_name = vim.fn.fnamemodify(path, ":t"):lower()
+        pcall(resession.load, folder_name, { silence_errors = true })
+      end
+    end
+    local bufs = vim.tbl_filter(function(b)
+      return vim.bo[b].buflisted and vim.api.nvim_buf_get_name(b) ~= ""
+    end, vim.api.nvim_list_bufs())
+    if #bufs == 0 then
+      vim.cmd("edit " .. vim.fn.fnameescape(path))
+    end
+    show_switch_stats(branch)
+    if callback then callback() end
+  end)
+end
+
 function M.switch_to(branch, callback)
-  M.get_path(branch, function(path)
-    if not path then
-      vim.notify("[wt] Could not find worktree path for: " .. branch, vim.log.levels.ERROR)
+  M.switch(branch, function(ok, lines, stderr)
+    if not ok then
+      vim.schedule(function()
+        vim.notify("[wt] Switch failed: " .. table.concat(stderr or lines or {}, "\n"), vim.log.levels.ERROR)
+      end)
+      if callback then callback() end
       return
     end
-    vim.schedule(function()
-      save_and_clear_buffers()
-      vim.cmd("tcd " .. vim.fn.fnameescape(path))
-      local ok, resession = pcall(require, "resession")
-      if ok then
-        local loaded = pcall(resession.load, "wt:" .. branch, { silence_errors = true })
-        if not loaded then
-          local folder_name = vim.fn.fnamemodify(path, ":t"):lower()
-          pcall(resession.load, folder_name, { silence_errors = true })
+    local path
+    for _, line in ipairs(lines or {}) do
+      local p = line:match("worktree @ (.+)")
+      if p then path = p break end
+    end
+    if path then
+      apply_switch(branch, path, callback)
+    else
+      M.get_path(branch, function(p)
+        if not p then
+          vim.schedule(function()
+            vim.notify("[wt] Could not find worktree path for: " .. branch, vim.log.levels.ERROR)
+          end)
+          if callback then callback() end
+          return
         end
-      end
-      local bufs = vim.tbl_filter(function(b)
-        return vim.bo[b].buflisted and vim.api.nvim_buf_get_name(b) ~= ""
-      end, vim.api.nvim_list_bufs())
-      if #bufs == 0 then
-        vim.cmd("edit " .. vim.fn.fnameescape(path))
-      end
-      show_switch_stats(branch)
-      if callback then callback() end
-    end)
+        apply_switch(branch, p, callback)
+      end)
+    end
   end)
 end
 
@@ -289,29 +339,12 @@ function M.create_for_task(branch, opts_or_cb, cb)
     callback = cb
   end
   M.create(branch, opts, function(ok, path)
-    if ok then
-      if path then
-        vim.schedule(function()
-          save_and_clear_buffers()
-          vim.cmd("tcd " .. vim.fn.fnameescape(path))
-          local rok, resession = pcall(require, "resession")
-          if rok then
-            local loaded = pcall(resession.load, "wt:" .. branch, { silence_errors = true })
-            if not loaded then
-              local folder_name = vim.fn.fnamemodify(path, ":t"):lower()
-              pcall(resession.load, folder_name, { silence_errors = true })
-            end
-          end
-          local bufs = vim.tbl_filter(function(b)
-            return vim.bo[b].buflisted and vim.api.nvim_buf_get_name(b) ~= ""
-          end, vim.api.nvim_list_bufs())
-          if #bufs == 0 then
-            vim.cmd("edit " .. vim.fn.fnameescape(path))
-          end
-          show_switch_stats(branch)
-        end)
-      end
-      if callback then callback(path) end
+    if ok and path then
+      apply_switch(branch, path, function()
+        if callback then callback(path) end
+      end)
+    elseif callback then
+      callback(path)
     end
   end)
 end
@@ -396,7 +429,10 @@ function M.copy_ignored(opts, callback)
   if opts.to then table.insert(args, "--to=" .. opts.to) end
   if opts.force then table.insert(args, "--force") end
   if opts.dry_run then table.insert(args, "--dry-run") end
-  run_async("wt", args, callback)
+  run_async("wt", args, function(ok, lines, stderr)
+    M.invalidate_cache()
+    if callback then callback(ok, lines, stderr) end
+  end)
 end
 
 function M.eval(expr, callback)
