@@ -268,12 +268,6 @@ local function get_assoc_win()
   if M._assoc_win and vim.api.nvim_win_is_valid(M._assoc_win) and M._assoc_win ~= M._win then
     return M._assoc_win
   end
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local cfg = vim.api.nvim_win_get_config(win)
-    if win ~= M._win and (not cfg.relative or cfg.relative == "") then
-      return win
-    end
-  end
   vim.cmd("rightbelow vsplit enew")
   local new_win = vim.api.nvim_get_current_win()
   if M._win and vim.api.nvim_win_is_valid(M._win) then
@@ -1512,13 +1506,13 @@ function M.gen_worktree()
   local branch = task.title:lower():gsub("[^%w%-]", "-"):gsub("%-+", "-"):gsub("^%-", ""):gsub("%-$", "")
   if branch == "" then branch = "task" end
 
-  vim.ui.select({ "Normal (default branch)", "Stacked (from current HEAD)" }, { prompt = "Worktree base:" }, function(choice)
+  vim.ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Worktree base:" }, function(choice)
     if not choice then return end
-    local opts = choice:match("Stacked") and { base = "@" } or {}
-    worktrunk.create(branch, opts, function(ok, path_or_err)
+    local opts = (choice:match("Current") or choice:match("Stacked")) and { base = "@" } or {}
+    worktrunk.create_for_task(branch, opts, function(path)
       vim.schedule(function()
-        if not ok then
-          vim.notify("[djinni] worktree failed: " .. tostring(path_or_err), vim.log.levels.ERROR)
+        if not path then
+          vim.notify("[djinni] worktree failed", vim.log.levels.ERROR)
           return
         end
         write_frontmatter_to_file(task.file_path, "worktree", branch)

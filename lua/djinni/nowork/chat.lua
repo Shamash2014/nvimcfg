@@ -686,7 +686,7 @@ function M.attach(buf)
     local lc = vim.api.nvim_buf_line_count(buf)
     pcall(vim.api.nvim_win_set_cursor, 0, { lc, 0 })
   end)
-  map("n", "<Tab>", "za")
+  map("n", "<leader><Tab>", "za")
   map("n", "<CR>", function()
     local text = M._get_you_block_at_cursor(buf)
     if not text or text == "" then
@@ -769,13 +769,13 @@ function M.attach(buf)
     local title = vim.fn.fnamemodify(path, ":t:r")
     local branch = title:lower():gsub("[^%w%-]", "-"):gsub("%-+", "-"):gsub("^%-", ""):gsub("%-$", "")
     if branch == "" then branch = "task" end
-    vim.ui.select({ "Normal (default branch)", "Stacked (from current HEAD)" }, { prompt = "Worktree base:" }, function(choice)
+    vim.ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Worktree base:" }, function(choice)
       if not choice then return end
-      local opts = choice:match("Stacked") and { base = "@" } or {}
-      worktrunk.create(branch, opts, function(ok, path_or_err)
+      local opts = (choice:match("Current") or choice:match("Stacked")) and { base = "@" } or {}
+      worktrunk.create_for_task(branch, opts, function(path)
         vim.schedule(function()
-          if not ok then
-            vim.notify("[djinni] worktree failed: " .. tostring(path_or_err), vim.log.levels.ERROR)
+          if not path then
+            vim.notify("[djinni] worktree failed", vim.log.levels.ERROR)
             return
           end
           M._set_frontmatter_field(buf, "worktree", branch)
@@ -883,7 +883,7 @@ function M.attach(buf)
       log.show()
     end
   end)
-  map("n", "<C-o>", function()
+  map("n", "gt", function()
     M._open_tool_log(buf)
   end)
   local function smart_insert(buf)

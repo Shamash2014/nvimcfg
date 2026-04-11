@@ -97,31 +97,41 @@ function M.create()
   local p = popup
     .builder()
     :name("NeogitWorktrunkPopup")
+    :switch("f", "force", "Force (ignore uncommitted changes)", { persisted = false })
+    :switch("F", "force-delete", "Force delete branch", { persisted = false })
+    :switch("y", "yes", "Skip confirmations", { persisted = false })
+    :switch("b", "base", "From current branch", { persisted = false, cli_prefix = "--base=", cli_suffix = "@" })
     :group_heading("Switch")
     :action("w", "Switch worktree", function()
       pick_branch("Switch to:", function(branch)
         wt.switch_to(branch)
       end)
     end)
-    :action("c", "Create worktree", function()
+    :action("c", "Create worktree", function(p2)
+      local args = p2:get_arguments()
       vim.ui.input({ prompt = "New branch: " }, function(branch)
         if not branch or branch == "" then return end
-        vim.ui.select({ "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
-          if not choice then return end
-          local opts = choice:match("Stacked") and { base = "@" } or {}
-          wt.create_for_task(branch, opts, function(path)
-            if path then
-              vim.notify("[wt] Created: " .. branch, vim.log.levels.INFO)
-            end
-          end)
+        local opts = {}
+        if vim.tbl_contains(args, "--base=@") then
+          opts.base = "@"
+        end
+        wt.create_for_task(branch, opts, function(path)
+          if path then
+            vim.notify("[wt] Created: " .. branch, vim.log.levels.INFO)
+          end
         end)
       end)
     end)
-    :action("d", "Delete worktree", function()
+    :action("d", "Delete worktree", function(p2)
+      local args = p2:get_arguments()
       pick_branch("Delete:", function(branch)
-        vim.ui.input({ prompt = "Remove '" .. branch .. "'? (y/n): " }, function(answer)
-          if answer ~= "y" then return end
-          wt.remove(branch, function(ok2, msg)
+        local opts = {
+          force = vim.tbl_contains(args, "--force"),
+          force_delete = vim.tbl_contains(args, "--force-delete"),
+          yes = vim.tbl_contains(args, "--yes"),
+        }
+        if opts.yes or opts.force then
+          wt.remove(branch, opts, function(ok2, msg)
             vim.schedule(function()
               if ok2 then
                 vim.notify("[wt] Removed: " .. branch, vim.log.levels.INFO)
@@ -130,21 +140,36 @@ function M.create()
               end
             end)
           end)
-        end)
+        else
+          vim.ui.input({ prompt = "Remove '" .. branch .. "'? (y/n): " }, function(answer)
+            if answer ~= "y" then return end
+            wt.remove(branch, opts, function(ok2, msg)
+              vim.schedule(function()
+                if ok2 then
+                  vim.notify("[wt] Removed: " .. branch, vim.log.levels.INFO)
+                else
+                  vim.notify("[wt] Remove failed: " .. (msg or ""), vim.log.levels.ERROR)
+                end
+              end)
+            end)
+          end)
+        end
       end)
     end)
     :new_action_group("Operations")
-    :action("C", "Commit", function()
+    :action("C", "Commit", function(p2)
+      local args = p2:get_arguments()
       pick_branch("Commit on:", function(branch)
         wt.get_path(branch, function(path)
-          wt.commit({ cwd = path }, notify_and_refresh("commit"))
+          wt.commit({ cwd = path, yes = vim.tbl_contains(args, "--yes") }, notify_and_refresh("commit"))
         end)
       end)
     end)
-    :action("S", "Squash", function()
+    :action("S", "Squash", function(p2)
+      local args = p2:get_arguments()
       pick_branch("Squash on:", function(branch)
         wt.get_path(branch, function(path)
-          wt.squash({ cwd = path }, notify_and_refresh("squash"))
+          wt.squash({ cwd = path, yes = vim.tbl_contains(args, "--yes") }, notify_and_refresh("squash"))
         end)
       end)
     end)
@@ -165,22 +190,24 @@ function M.create()
         end)
       end)
     end)
-    :action("m", "Merge", function()
+    :action("m", "Merge", function(p2)
+      local args = p2:get_arguments()
       pick_branch("Merge branch:", function(branch)
         vim.ui.input({ prompt = "Merge '" .. branch .. "' into (empty=default): " }, function(target)
           if target == nil then return end
           wt.get_path(branch, function(path)
-            wt.merge({ target = target ~= "" and target or nil, cwd = path }, notify_and_refresh("merge"))
+            wt.merge({ target = target ~= "" and target or nil, cwd = path, yes = vim.tbl_contains(args, "--yes") }, notify_and_refresh("merge"))
           end)
         end)
       end)
     end)
-    :action("r", "Rebase", function()
+    :action("r", "Rebase", function(p2)
+      local args = p2:get_arguments()
       pick_branch("Rebase branch:", function(branch)
         vim.ui.input({ prompt = "Rebase '" .. branch .. "' onto (empty=default): " }, function(target)
           if target == nil then return end
           wt.get_path(branch, function(path)
-            wt.rebase({ target = target ~= "" and target or nil, cwd = path }, notify_and_refresh("rebase"))
+            wt.rebase({ target = target ~= "" and target or nil, cwd = path, yes = vim.tbl_contains(args, "--yes") }, notify_and_refresh("rebase"))
           end)
         end)
       end)
@@ -195,17 +222,19 @@ function M.create()
         end)
       end)
     end)
-    :action("i", "Copy ignored files", function()
+    :action("i", "Copy ignored files", function(p2)
+      local args = p2:get_arguments()
       pick_branch("Copy ignored to:", function(branch)
-        wt.copy_ignored({ to = branch }, notify_and_refresh("copy-ignored"))
+        wt.copy_ignored({ to = branch, force = vim.tbl_contains(args, "--force") }, notify_and_refresh("copy-ignored"))
       end)
     end)
-    :action("p", "Push", function()
+    :action("p", "Push", function(p2)
+      local args = p2:get_arguments()
       pick_branch("Push branch:", function(branch)
         vim.ui.input({ prompt = "Push '" .. branch .. "' to (empty=default): " }, function(target)
           if target == nil then return end
           wt.get_path(branch, function(path)
-            wt.push({ target = target ~= "" and target or nil, cwd = path }, notify_and_refresh("push"))
+            wt.push({ target = target ~= "" and target or nil, cwd = path, no_ff = vim.tbl_contains(args, "--force") }, notify_and_refresh("push"))
           end)
         end)
       end)
@@ -216,11 +245,13 @@ function M.create()
         wt.promote({ branch = branch }, notify_and_refresh("promote"))
       end)
     end)
-    :action("x", "Prune", function()
-      wt.prune(notify_and_refresh("prune"))
+    :action("x", "Prune", function(p2)
+      local args = p2:get_arguments()
+      wt.prune({ yes = vim.tbl_contains(args, "--yes") }, notify_and_refresh("prune"))
     end)
-    :action("R", "Relocate", function()
-      wt.relocate(notify_and_refresh("relocate"))
+    :action("R", "Relocate", function(p2)
+      local args = p2:get_arguments()
+      wt.relocate({ yes = vim.tbl_contains(args, "--yes") }, notify_and_refresh("relocate"))
     end)
     :action("e", "Eval", function()
       vim.ui.input({ prompt = "Expression: " }, function(expr)
@@ -249,9 +280,9 @@ end
 function M.quick_create()
   vim.ui.input({ prompt = "New worktree branch: " }, function(branch)
     if not branch or branch == "" then return end
-    vim.ui.select({ "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
+    vim.ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
       if not choice then return end
-      local opts = choice:match("Stacked") and { base = "@" } or {}
+      local opts = (choice:match("Current") or choice:match("Stacked")) and { base = "@" } or {}
       wt.create_for_task(branch, opts, function(path)
         if path then
           vim.notify("[wt] Created and switched to: " .. branch, vim.log.levels.INFO)
