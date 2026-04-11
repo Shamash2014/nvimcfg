@@ -57,6 +57,27 @@ function M.setup(opts)
     require("djinni.nowork.panel").toggle()
   end, {})
 
+  vim.api.nvim_create_user_command("NoworkSplit", function()
+    local chat = require("djinni.nowork.chat")
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local wb = vim.api.nvim_win_get_buf(win)
+      if vim.bo[wb].filetype == "nowork-chat" then
+        vim.cmd("vsplit")
+        vim.api.nvim_set_current_buf(wb)
+        return
+      end
+    end
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_loaded(b) and vim.bo[b].filetype == "nowork-chat" then
+        vim.cmd("vsplit")
+        vim.api.nvim_set_current_buf(b)
+        return
+      end
+    end
+    local root = require("core.utils").get_project_root() or vim.fn.getcwd()
+    chat.create(root, { split = true })
+  end, {})
+
   vim.keymap.set("n", "<leader>oac", function()
     require("djinni.code").create_with_file()
   end, { desc = "Task with file context" })
@@ -64,6 +85,10 @@ function M.setup(opts)
   vim.keymap.set("v", "<leader>oav", function()
     require("djinni.code").create_with_selection()
   end, { desc = "Task with selection context" })
+
+  vim.keymap.set("v", "<leader>oas", function()
+    require("djinni.code").send_selection_to_chat()
+  end, { desc = "Send selection to chat" })
 
   vim.keymap.set("n", "<leader>fp", function()
     require("djinni.nowork.panel").toggle()

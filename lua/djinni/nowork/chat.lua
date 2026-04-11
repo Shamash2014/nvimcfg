@@ -381,12 +381,16 @@ local function build_history_context(buf, current_text)
   if #msgs > 0 and msgs[#msgs].type == "you" then
     msgs[#msgs] = nil
   end
-  if #msgs == 0 then return current_text end
+  local system_prompt = read_frontmatter_field(buf, "system")
+  if #msgs == 0 and not system_prompt then return current_text end
   local max_msgs = 10
   if #msgs > max_msgs then
     msgs = { unpack(msgs, #msgs - max_msgs + 1) }
   end
   local parts = { "<previous_conversation>" }
+  if system_prompt and system_prompt ~= "" then
+    parts[#parts + 1] = "<system>\n" .. system_prompt .. "\n</system>"
+  end
   for _, block in ipairs(msgs) do
     local role = block.type == "you" and "user" or "assistant"
     local content = block.content
@@ -476,7 +480,8 @@ function M.create(project_root, opts)
   end
 
   M._pre_create_path = filepath
-  vim.cmd("edit " .. vim.fn.fnameescape(filepath))
+  local open_cmd = opts.split and "vsplit" or "edit"
+  vim.cmd(open_cmd .. " " .. vim.fn.fnameescape(filepath))
   M._pre_create_path = nil
   local buf = vim.api.nvim_get_current_buf()
   M.attach(buf)
@@ -570,13 +575,18 @@ function M._ensure_session(buf)
   end, sess_opts)
 end
 
-function M.open(file_path)
+function M.open(file_path, opts)
+  opts = opts or {}
   local existing = vim.fn.bufnr(file_path)
   if existing ~= -1 and vim.api.nvim_buf_is_loaded(existing) then
+    if opts.split then
+      vim.cmd("vsplit")
+    end
     vim.api.nvim_set_current_buf(existing)
     return existing
   end
-  vim.cmd("edit! " .. vim.fn.fnameescape(file_path))
+  local cmd = opts.split and "vsplit" or "edit!"
+  vim.cmd(cmd .. " " .. vim.fn.fnameescape(file_path))
   local buf = vim.api.nvim_get_current_buf()
   M.attach(buf)
   M._ensure_session(buf)
@@ -1142,45 +1152,54 @@ function M._get_you_block_at_cursor(buf)
   return text:match("^%s*(.-)%s*$")
 end
 
+function M.quick_input_text(buf, text)
+  if not text or text == "" then return end
+  vim.schedule(function()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local you_line = nil
+    for i = #lines, 1, -1 do
+      local l = lines[i]
+      if l:match("^@Djinni") or l:match("^@System") then break end
+      if l:match("^@You%s*$") then you_line = i; break end
+    end
+    if you_line then
+      local empty = true
+      for i = you_line + 1, #lines do
+        if lines[i]:match("^%-%-%-$") then break end
+        if lines[i]:match("%S") then empty = false; break end
+      end
+      if empty then
+        local text_lines = vim.split(text, "\n", { plain = true })
+        local new = { "@You" }
+        vim.list_extend(new, text_lines)
+        vim.api.nvim_buf_set_lines(buf, you_line - 1, you_line, false, new)
+        if M._streaming[buf] then
+          if not M._queue[buf] then M._queue[buf] = {} end
+          table.insert(M._queue[buf], text)
+        else
+          M.send(buf, text)
+        end
+        return
+      end
+    end
+    local text_lines = vim.split(text, "\n", { plain = true })
+    local you_block = { "", "---", "", "@You" }
+    vim.list_extend(you_block, text_lines)
+    local line_count = vim.api.nvim_buf_line_count(buf)
+    vim.api.nvim_buf_set_lines(buf, line_count, line_count, false, you_block)
+    if M._streaming[buf] then
+      if not M._queue[buf] then M._queue[buf] = {} end
+      table.insert(M._queue[buf], text)
+    else
+      M.send(buf, text)
+    end
+  end)
+end
+
 function M.quick_input(buf)
   vim.ui.input({ prompt = "Message: " }, function(text)
-    if not text or text == "" then return end
-    vim.schedule(function()
-      if not vim.api.nvim_buf_is_valid(buf) then return end
-      local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-      local you_line = nil
-      for i = #lines, 1, -1 do
-        local l = lines[i]
-        if l:match("^@Djinni") or l:match("^@System") then break end
-        if l:match("^@You%s*$") then you_line = i; break end
-      end
-      if you_line then
-        local empty = true
-        for i = you_line + 1, #lines do
-          if lines[i]:match("^%-%-%-$") then break end
-          if lines[i]:match("%S") then empty = false; break end
-        end
-        if empty then
-          vim.api.nvim_buf_set_lines(buf, you_line - 1, you_line, false, { "@You", text })
-          if M._streaming[buf] then
-            if not M._queue[buf] then M._queue[buf] = {} end
-            table.insert(M._queue[buf], text)
-          else
-            M.send(buf, text)
-          end
-          return
-        end
-      end
-      local line_count = vim.api.nvim_buf_line_count(buf)
-      local you_block = { "", "---", "", "@You", text }
-      vim.api.nvim_buf_set_lines(buf, line_count, line_count, false, you_block)
-      if M._streaming[buf] then
-        if not M._queue[buf] then M._queue[buf] = {} end
-        table.insert(M._queue[buf], text)
-      else
-        M.send(buf, text)
-      end
-    end)
+    M.quick_input_text(buf, text)
   end)
 end
 

@@ -136,6 +136,13 @@ map("n", "<Esc>", ":nohlsearch<CR>", { desc = "Clear highlights" })
 map("v", "<", "<gv")
 map("v", ">", ">gv")
 
+-- Restart Neovim
+map("n", "<leader>oR", function()
+  local session = vim.fn.stdpath("state") .. "/restart_session.vim"
+  vim.cmd("mksession! " .. vim.fn.fnameescape(session))
+  vim.cmd("restart source " .. vim.fn.fnameescape(session))
+end, { desc = "Restart Neovim" })
+
 require("core.ui2").setup()
 
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
@@ -185,6 +192,12 @@ vim.api.nvim_create_autocmd("LspAttach", {
     vim.keymap.set("n", "]d", vim.diagnostic.goto_next, opts)
   end,
 })
+
+vim.keymap.set('n', '<leader>oR', function()
+  local session = vim.fn.stdpath('state') .. '/restart_session.vim'
+  vim.cmd('mksession! ' .. vim.fn.fnameescape(session))
+  vim.cmd('restart source ' .. vim.fn.fnameescape(session))
+end, { desc = 'Restart Neovim' })
 
 vim.api.nvim_create_autocmd("LspProgress", {
   callback = function(ev)
