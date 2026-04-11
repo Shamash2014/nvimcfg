@@ -739,7 +739,7 @@ function M._collect_sessions()
   return result
 end
 
-local function _apply_buf_render(buf, buf_ns, lines, hl_marks, virt_texts)
+local function _apply_buf_render(buf, buf_ns, lines, hl_marks, virt_texts, overlay_texts)
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
@@ -757,6 +757,12 @@ local function _apply_buf_render(buf, buf_ns, lines, hl_marks, virt_texts)
       virt_text_pos = "right_align",
     })
   end
+  for line_idx, vt in pairs(overlay_texts or {}) do
+    pcall(vim.api.nvim_buf_set_extmark, buf, buf_ns, line_idx, 0, {
+      virt_text = vt,
+      virt_text_pos = "overlay",
+    })
+  end
 end
 
 function M.render()
@@ -766,6 +772,7 @@ function M.render()
   local lines = {}
   local hl_marks = {}
   local virt_texts = {}
+  local overlay_texts = {}
   M._line_tasks = {}
   M._line_projects = {}
   M._line_sessions = {}
@@ -820,7 +827,12 @@ function M.render()
       col = col + #num + 1
       add_hl(sl - 1, col, col + #icon, status_hl[s.status] or "Comment")
       local vt = render_session_virt(s)
-      if #vt > 0 then virt_texts[sl - 1] = vt end
+      if #vt > 0 then
+        table.insert(lines, "")
+        local il = #lines
+        M._line_sessions[il] = s
+        overlay_texts[il - 1] = vt
+      end
       if s.activity and s.activity ~= "" then
         local act = truncate(s.activity, panel_w - 4)
         table.insert(lines, "    " .. act)
@@ -942,7 +954,7 @@ function M.render()
 
   end -- M._projects_hidden
 
-  _apply_buf_render(M._buf, ns, lines, hl_marks, virt_texts)
+  _apply_buf_render(M._buf, ns, lines, hl_marks, virt_texts, overlay_texts)
 
   if M._win and vim.api.nvim_win_is_valid(M._win) then
     local cur = vim.api.nvim_win_get_cursor(M._win)
@@ -1237,7 +1249,12 @@ function M.archive_task()
   local sess = session_at_cursor()
   if sess then
     local chat = require("djinni.nowork.chat")
+    local path = vim.api.nvim_buf_get_name(sess.buf)
     chat._invalidate_session(sess.buf)
+    pcall(vim.api.nvim_buf_delete, sess.buf, { force = true })
+    if path and path ~= "" then
+      chat.archive_chat_file(path)
+    end
     _tasks_dirty = true
     M.render()
     return
@@ -1270,7 +1287,7 @@ function M.archive_task()
     end
     pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
   end
-  os.remove(task.file_path)
+  require("djinni.nowork.chat").archive_chat_file(task.file_path)
   _tasks_dirty = true
   local row = M._win and vim.api.nvim_win_is_valid(M._win) and vim.api.nvim_win_get_cursor(M._win)[1] or 1
   M.render()

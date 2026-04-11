@@ -248,19 +248,24 @@ function M.execute(buf, text)
   end
 
   if cmd.name == "/clear" then
-    local mcp_mod = require("djinni.nowork.mcp")
+    local session_mod = require("djinni.acp.session")
     local root = chat.get_project_root(buf)
-    if root then mcp_mod.clear_cache(root) end
+    local sid = chat.get_session_id(buf) or chat._sessions[buf]
     if chat._streaming[buf] then
       if chat._stream_cleanup[buf] then chat._stream_cleanup[buf](true) end
     end
-    chat._invalidate_session(buf)
+    if root and sid and sid ~= "" then
+      session_mod.send_message(root, sid, "/clear", function() end)
+    end
+    local mcp_mod = require("djinni.nowork.mcp")
+    if root then mcp_mod.clear_cache(root) end
     chat._set_frontmatter_field(buf, "status", "")
     chat._set_frontmatter_field(buf, "tokens", "")
     chat._set_frontmatter_field(buf, "cost", "")
     chat._continuation_count[buf] = 0
     chat._last_tool_failed[buf] = false
     chat._queue[buf] = nil
+    chat._usage[buf] = nil
     local lines = vim.api.nvim_buf_get_lines(buf, 0, 20, false)
     local fm_end = 0
     for i, line in ipairs(lines) do
@@ -271,14 +276,14 @@ function M.execute(buf, text)
     end
     if fm_end > 0 then
       vim.api.nvim_buf_set_lines(buf, fm_end, -1, false, {
-        "", "@You", "", "", "---", "",
+        "", "@System", "Conversation cleared", "", "---", "", "@You", "", "", "---", "",
       })
       local win = vim.fn.bufwinid(buf)
       if win ~= -1 then
-        vim.api.nvim_win_set_cursor(win, { fm_end + 2, 0 })
+        vim.api.nvim_win_set_cursor(win, { fm_end + 7, 0 })
       end
     end
-    vim.notify("[djinni] Buffer cleared", vim.log.levels.INFO)
+    vim.notify("[djinni] Cleared", vim.log.levels.INFO)
     return true
   end
 

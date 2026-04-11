@@ -48,6 +48,15 @@ M._timer_scheduled = {} -- buf -> true when a vim.schedule is already pending fo
 M._pending_images = {} -- buf -> list of { data = base64, media_type = "image/png" }
 M._stream_gen = {} -- buf -> generation counter to detect stale callbacks
 M._available_commands = {} -- buf -> list of { name, description }
+
+function M.archive_chat_file(filepath)
+  if not filepath or filepath == "" then return false end
+  local dir = vim.fn.fnamemodify(filepath, ":h")
+  local archive_dir = dir .. "/archive"
+  vim.fn.mkdir(archive_dir, "p")
+  local filename = vim.fn.fnamemodify(filepath, ":t")
+  return os.rename(filepath, archive_dir .. "/" .. filename)
+end
 M._config_options = {} -- buf -> list of config options from ACP
 M._creating_session = {} -- buf -> true while create_task_session is in-flight
 M._win_configured = {} -- win -> buf when win options + folds already set
@@ -61,6 +70,7 @@ M._plan_lines = {} -- buf -> { start_line, end_line }
 M._last_tool_title = {} -- buf -> string
 M._think_fold_start = {} -- buf -> line number where current thinking section started
 M._tool_section_start = {} -- buf -> line number where current tool section started
+M._last_tool_line = {} -- buf -> line number of last [*] tool line (for per-tool folding)
 M._djinni_marker_line = {} -- buf -> line number of @Djinni marker (avoids backwards scan)
 M._append_batch = {} -- buf -> list of lines to write in next scheduled flush
 M._append_scheduled = {} -- buf -> true when a flush is already scheduled
@@ -173,11 +183,10 @@ function M._paste_image(buf, img)
   vim.notify("[djinni] Image attached: " .. filename, vim.log.levels.INFO)
 end
 
-function M._close_tool_fold(buf)
-  local start = M._tool_section_start[buf]
+function M._close_last_tool_fold(buf)
+  local start = M._last_tool_line[buf]
   if not start then return end
-  M._tool_section_start[buf] = nil
-  if M._streaming[buf] then return end
+  M._last_tool_line[buf] = nil
   vim.defer_fn(function()
     if not vim.api.nvim_buf_is_valid(buf) then return end
     local win = vim.fn.bufwinid(buf)
@@ -189,6 +198,12 @@ function M._close_tool_fold(buf)
       end)
     end
   end, 50)
+end
+
+function M._close_tool_fold(buf)
+  M._tool_section_start[buf] = nil
+  if M._streaming[buf] then return end
+  M._close_last_tool_fold(buf)
 end
 
 function M._on_session_reconnect(buf)
@@ -627,6 +642,16 @@ function M.create(project_root, opts)
   M.attach(buf)
 
   if opts.no_send then
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    for i = #lines, 1, -1 do
+      if lines[i]:match("^@You%s*$") then
+        local win = vim.fn.bufwinid(buf)
+        if win ~= -1 then
+          vim.api.nvim_win_set_cursor(win, { i + 1, 0 })
+        end
+        break
+      end
+    end
     return filepath
   end
 
@@ -754,72 +779,11 @@ local function migrate_unicode(buf)
   end
 end
 
-function M.attach(buf)
-  if M._attached[buf] then return end
-  M._attached[buf] = true
-  if vim.bo[buf].filetype ~= "nowork-chat" then
-    vim.bo[buf].filetype = "nowork-chat"
-  end
-  vim.bo[buf].modifiable = true
-  vim.bo[buf].buftype = ""
-  vim.bo[buf].fileencoding = "utf-8"
-  vim.bo[buf].textwidth = 120
-  vim.bo[buf].omnifunc = "v:lua.require'djinni.nowork.commands'.omnifunc"
+M._keymaps_set = {}
 
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = blocks.parse(lines)
-  local fm = blocks.get_frontmatter(parsed)
-  if fm.plan and fm.plan ~= "" then
-    M._plan_path[buf] = fm.plan
-  end
-  if fm.mode and fm.mode ~= "" then
-    M._current_mode[buf] = fm.mode
-  end
-  if fm.type == "task" then
-    local task = require("djinni.nowork.task")
-    if not task.is_task_buf(buf) then
-      task._task_bufs[buf] = true
-      task.setup_keymaps(buf)
-      vim.api.nvim_create_autocmd("BufEnter", {
-        buffer = buf,
-        callback = function()
-          if vim.api.nvim_buf_is_valid(buf) then
-            task.update_tasks_section(buf)
-          end
-        end,
-      })
-      vim.api.nvim_create_autocmd("BufWipeout", {
-        buffer = buf,
-        once = true,
-        callback = function()
-          task._task_bufs[buf] = nil
-          task._task_lines[buf] = nil
-          task._line_to_file[buf] = nil
-        end,
-      })
-      task.update_tasks_section(buf)
-    end
-  end
-
-  migrate_unicode(buf)
-  M._unwrap_paragraphs(buf)
-
-  local win = vim.fn.bufwinid(buf)
-  if win ~= -1 and M._win_configured[win] ~= buf then
-    M._win_configured[win] = buf
-    vim.wo[win].wrap = true
-    vim.wo[win].linebreak = true
-    vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
-    vim.wo[win].conceallevel = 2
-    local ok, rm = pcall(require, "render-markdown")
-    if ok then rm.enable() end
-    vim.schedule(function()
-      if not vim.api.nvim_buf_is_valid(buf) then return end
-      local w = vim.fn.bufwinid(buf)
-      if w == -1 then return end
-      pcall(_win_fold_chat, w, buf)
-    end)
-  end
+function M._setup_keymaps(buf)
+  if M._keymaps_set[buf] then return end
+  M._keymaps_set[buf] = true
 
   local function map(mode, lhs, rhs)
     vim.keymap.set(mode, lhs, rhs, { buffer = buf, silent = true, nowait = true })
@@ -1035,13 +999,17 @@ function M.attach(buf)
     local path = vim.api.nvim_buf_get_name(buf)
     local name = vim.fn.fnamemodify(path, ":t")
     vim.ui.select(
-      { "Delete " .. name, "Cancel" },
-      { prompt = "Delete this chat file?" },
+      { "Archive " .. name, "Cancel" },
+      { prompt = "Archive this chat file?" },
       function(choice)
         if not choice or choice == "Cancel" then return end
-        vim.api.nvim_buf_delete(buf, { force = true })
+        if M._streaming[buf] and M._stream_cleanup[buf] then
+          pcall(M._stream_cleanup[buf], true)
+        end
+        M._invalidate_session(buf)
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
         if path and path ~= "" then
-          os.remove(path)
+          M.archive_chat_file(path)
         end
       end
     )
@@ -1136,6 +1104,88 @@ function M.attach(buf)
   map("n", "I", function()
     input.jump_to_input(buf)
   end)
+end
+
+function M.attach(buf)
+  if M._attached[buf] then return end
+  M._attached[buf] = true
+  if vim.bo[buf].filetype ~= "nowork-chat" then
+    vim.bo[buf].filetype = "nowork-chat"
+  end
+  vim.bo[buf].modifiable = true
+  vim.bo[buf].buftype = ""
+  vim.bo[buf].fileencoding = "utf-8"
+  vim.bo[buf].textwidth = 120
+  vim.bo[buf].omnifunc = "v:lua.require'djinni.nowork.commands'.omnifunc"
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local parsed = blocks.parse(lines)
+  local fm = blocks.get_frontmatter(parsed)
+  if fm.plan and fm.plan ~= "" then
+    M._plan_path[buf] = fm.plan
+  end
+  if fm.mode and fm.mode ~= "" then
+    M._current_mode[buf] = fm.mode
+  end
+  if fm.type == "task" then
+    local task = require("djinni.nowork.task")
+    if not task.is_task_buf(buf) then
+      task._task_bufs[buf] = true
+      task.setup_keymaps(buf)
+      vim.api.nvim_create_autocmd("BufEnter", {
+        buffer = buf,
+        callback = function()
+          if vim.api.nvim_buf_is_valid(buf) then
+            task.update_tasks_section(buf)
+          end
+        end,
+      })
+      vim.api.nvim_create_autocmd("BufWipeout", {
+        buffer = buf,
+        once = true,
+        callback = function()
+          task._task_bufs[buf] = nil
+          task._task_lines[buf] = nil
+          task._line_to_file[buf] = nil
+        end,
+      })
+      task.update_tasks_section(buf)
+    end
+  end
+
+  migrate_unicode(buf)
+  M._unwrap_paragraphs(buf)
+
+  local win = vim.fn.bufwinid(buf)
+  if win ~= -1 and M._win_configured[win] ~= buf then
+    M._win_configured[win] = buf
+    vim.wo[win].wrap = true
+    vim.wo[win].linebreak = true
+    vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
+    vim.wo[win].conceallevel = 2
+    local ok, rm = pcall(require, "render-markdown")
+    if ok then rm.enable() end
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      local w = vim.fn.bufwinid(buf)
+      if w == -1 then return end
+      pcall(_win_fold_chat, w, buf)
+    end)
+  end
+
+  M._setup_keymaps(buf)
+
+  vim.api.nvim_create_autocmd("BufEnter", {
+    buffer = buf,
+    callback = function()
+      M._keymaps_set[buf] = nil
+      M._setup_keymaps(buf)
+      local root = M.get_project_root(buf)
+      if root and root ~= "" then
+        pcall(vim.cmd, "lcd " .. vim.fn.fnameescape(root))
+      end
+    end,
+  })
 
   vim.api.nvim_create_autocmd("BufWritePost", {
     buffer = buf,
@@ -1168,6 +1218,7 @@ function M.attach(buf)
       M._last_tool_failed[buf] = nil
       M._last_perm_tool[buf] = nil
       M._attached[buf] = nil
+      M._keymaps_set[buf] = nil
       M._hidden_pending[buf] = nil
       M._pending_images[buf] = nil
       M._stream_gen[buf] = nil
@@ -1934,7 +1985,9 @@ function M._on_session_update(buf, data)
         if not M._tool_section_start[buf] then
           M._tool_section_start[buf] = vim.api.nvim_buf_line_count(buf) + 1
         end
+        M._close_last_tool_fold(buf)
         M._append_line(buf, "[*] " .. title)
+        M._last_tool_line[buf] = vim.api.nvim_buf_line_count(buf)
         M._tool_log[buf] = M._tool_log[buf] or {}
         table.insert(M._tool_log[buf], { name = title, kind = kind, input = nil, output = nil, images = {} })
       end
@@ -2101,8 +2154,9 @@ function M._on_session_update(buf, data)
               entry.status = status
             end
           end
+          M._close_last_tool_fold(buf)
           if (M._active_tool_count[buf] or 0) == 0 then
-            M._close_tool_fold(buf)
+            M._tool_section_start[buf] = nil
           end
         end
       end
