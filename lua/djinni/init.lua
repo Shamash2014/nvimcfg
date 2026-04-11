@@ -116,6 +116,19 @@ function M.setup(opts)
     vim.api.nvim_create_user_command("WorktrunkRemove", function() snacks.action_worktree_remove() end, {})
     vim.api.nvim_create_user_command("WorktrunkMerge", function() snacks.action_worktree_merge() end, {})
 
+    vim.api.nvim_create_user_command("WorktrunkInit", function(cmd)
+      require("djinni.integrations.worktrunk").init({ force = cmd.bang }, function(ok, path, msg)
+        vim.schedule(function()
+          if ok then
+            vim.notify("[wt] " .. msg, vim.log.levels.INFO)
+            if path then vim.cmd("split " .. vim.fn.fnameescape(path)) end
+          else
+            vim.notify("[wt] init failed: " .. (msg or "unknown"), vim.log.levels.ERROR)
+          end
+        end)
+      end)
+    end, { bang = true, desc = "Initialize .config/wt.toml for this repo" })
+
     require("djinni.integrations.worktrunk").start_statusline(30000)
   end
 

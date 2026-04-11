@@ -781,10 +781,21 @@ function M.render()
     M._line_projects[line_nr] = root
   end
 
+  local cfg = get_config()
+  local panel_w = cfg.panel and cfg.panel.width or 40
+
   local all_sessions = M._collect_sessions()
   local sessions = {}
   for _, s in ipairs(all_sessions) do
     if s.status ~= "done" then table.insert(sessions, s) end
+  end
+
+  local function truncate(str, max_w)
+    if vim.fn.strdisplaywidth(str) <= max_w then return str end
+    while vim.fn.strdisplaywidth(str) > max_w - 1 do
+      str = str:sub(1, #str - 1)
+    end
+    return str .. "…"
   end
 
   if #sessions > 0 then
@@ -794,9 +805,12 @@ function M.render()
       local icon = status_icons[s.status] or "◆"
       local is_current = M._current_buf and s.buf == M._current_buf
       local prefix = is_current and ">" or " "
+      local fixed = prefix .. num .. " " .. icon .. " "
+      local fixed_w = vim.fn.strdisplaywidth(fixed)
       local label = s.title
-      if s.project ~= "" then label = label .. "  (" .. s.project .. ")" end
-      table.insert(lines, prefix .. num .. " " .. icon .. " " .. label)
+      if s.project ~= "" then label = label .. " (" .. s.project .. ")" end
+      label = truncate(label, panel_w - fixed_w)
+      table.insert(lines, fixed .. label)
       local sl = #lines
       M._line_sessions[sl] = s
       local col = 0
@@ -808,10 +822,11 @@ function M.render()
       local vt = render_session_virt(s)
       if #vt > 0 then virt_texts[sl - 1] = vt end
       if s.activity and s.activity ~= "" then
-        table.insert(lines, "    " .. s.activity)
+        local act = truncate(s.activity, panel_w - 4)
+        table.insert(lines, "    " .. act)
         local al = #lines
         M._line_sessions[al] = s
-        add_hl(al - 1, 4, #lines[al], "DiagnosticInfo")
+        add_hl(al - 1, 4, 4 + #act, "DiagnosticInfo")
       end
     end
   else
@@ -821,9 +836,7 @@ function M.render()
 
   if not M._projects_hidden then
 
-  local cfg = get_config()
-  local width = cfg.panel and cfg.panel.width or 40
-  local sep = string.rep("─", width)
+  local sep = string.rep("─", panel_w)
   table.insert(lines, sep)
   M._separator_line = #lines
   add_hl(#lines - 1, 0, #sep, "NonText")

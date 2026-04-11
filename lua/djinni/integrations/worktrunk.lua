@@ -773,4 +773,155 @@ function M.pick_op(branch)
   end)
 end
 
+local function wt_detect_tool(name)
+  return vim.fn.executable(name) == 1
+end
+
+local function wt_file_exists(path)
+  return vim.uv.fs_stat(path) ~= nil
+end
+
+local function wt_read_file(path)
+  local f = io.open(path, "r")
+  if not f then return nil end
+  local content = f:read("*a")
+  f:close()
+  return content
+end
+
+local function detect_project_type(root)
+  local details = {}
+  if wt_file_exists(root .. "/package.json") then
+    local content = wt_read_file(root .. "/package.json") or ""
+    details.has_lint = content:match('"lint"%s*:') ~= nil
+    details.has_typecheck = content:match('"typecheck"%s*:') ~= nil
+    details.has_test = content:match('"test"%s*:') ~= nil
+    return "node", details
+  end
+  if wt_file_exists(root .. "/Cargo.toml") then
+    return "rust", details
+  end
+  if wt_file_exists(root .. "/mix.exs") then
+    return "elixir", details
+  end
+  if wt_file_exists(root .. "/pyproject.toml") then
+    details.has_ruff = wt_detect_tool("ruff")
+    details.has_pytest = wt_detect_tool("pytest")
+    return "python", details
+  end
+  local is_lua = wt_file_exists(root .. "/stylua.toml")
+    or wt_file_exists(root .. "/.stylua.toml")
+    or wt_file_exists(root .. "/.luacheckrc")
+    or wt_file_exists(root .. "/init.lua")
+  if is_lua then
+    details.has_stylua = wt_detect_tool("stylua")
+    details.has_luacheck = wt_detect_tool("luacheck") and wt_file_exists(root .. "/.luacheckrc")
+    return "lua", details
+  end
+  return "generic", details
+end
+
+local function toml_line(enabled, line)
+  return enabled and line or ("# " .. line)
+end
+
+local function build_default_toml(ptype, details)
+  details = details or {}
+  local lines = {
+    "# Worktrunk project config — team-wide hooks",
+    "# See https://worktrunk.dev/hook/ for the hook reference.",
+    "# Lifecycle: pre-start -> post-start -> pre-commit -> post-commit -> pre-merge -> pre-remove -> post-remove -> post-merge",
+    "",
+    "[pre-start]",
+  }
+
+  if ptype == "node" then
+    table.insert(lines, 'install = "npm install"')
+  elseif ptype == "rust" then
+    table.insert(lines, '# build = "cargo build"')
+  elseif ptype == "elixir" then
+    table.insert(lines, 'deps = "mix deps.get"')
+  elseif ptype == "python" then
+    table.insert(lines, '# install = "pip install -e ."')
+  elseif ptype == "lua" then
+    table.insert(lines, "# (no deps step for plain Lua projects)")
+  else
+    table.insert(lines, '# install = "<your install command>"')
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, "[pre-commit]")
+  if ptype == "node" then
+    table.insert(lines, toml_line(details.has_lint, 'lint = "npm run lint"'))
+    table.insert(lines, toml_line(details.has_typecheck, 'typecheck = "npm run typecheck"'))
+  elseif ptype == "rust" then
+    table.insert(lines, 'fmt = "cargo fmt --check"')
+    table.insert(lines, 'clippy = "cargo clippy -- -D warnings"')
+  elseif ptype == "elixir" then
+    table.insert(lines, 'format = "mix format --check-formatted"')
+  elseif ptype == "python" then
+    table.insert(lines, toml_line(details.has_ruff, 'ruff = "ruff check ."'))
+  elseif ptype == "lua" then
+    table.insert(lines, toml_line(details.has_stylua, 'stylua = "stylua --check ."'))
+    table.insert(lines, toml_line(details.has_luacheck, 'luacheck = "luacheck lua"'))
+  else
+    table.insert(lines, '# lint = "<your lint command>"')
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, "[pre-merge]")
+  if ptype == "node" then
+    table.insert(lines, toml_line(details.has_test, 'test = "npm test"'))
+  elseif ptype == "rust" then
+    table.insert(lines, 'test = "cargo test"')
+  elseif ptype == "elixir" then
+    table.insert(lines, 'test = "MIX_ENV=test mix test"')
+  elseif ptype == "python" then
+    table.insert(lines, toml_line(details.has_pytest, 'test = "pytest"'))
+  else
+    table.insert(lines, '# test = "<your test command>"')
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, "# post-switch runs in background after switching; use for terminal/IDE updates")
+  table.insert(lines, '# post-switch = "echo switched to {{ branch }}"')
+  table.insert(lines, "")
+
+  return table.concat(lines, "\n")
+end
+
+function M.init(opts, cb)
+  opts = opts or {}
+  cb = cb or function() end
+  run_async("git", { "rev-parse", "--show-toplevel" }, function(ok, lines)
+    if not ok or #lines == 0 then
+      cb(false, nil, "not inside a git repo")
+      return
+    end
+    local root = lines[1]
+    local config_dir = root .. "/.config"
+    local path = config_dir .. "/wt.toml"
+
+    if vim.uv.fs_stat(path) and not opts.force then
+      cb(false, path, ".config/wt.toml already exists (use :WorktrunkInit!)")
+      return
+    end
+
+    vim.fn.mkdir(config_dir, "p")
+
+    local ptype, details = detect_project_type(root)
+    local content = build_default_toml(ptype, details)
+
+    local f, err = io.open(path, "w")
+    if not f then
+      cb(false, path, tostring(err))
+      return
+    end
+    f:write(content)
+    f:close()
+
+    cb(true, path, "Created .config/wt.toml (" .. ptype .. ")")
+  end)
+end
+
 return M

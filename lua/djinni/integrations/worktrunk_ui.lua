@@ -285,6 +285,18 @@ function M.create()
         wt.for_each(cmd, notify_and_refresh("for-each"))
       end)
     end)
+    :action("I", "Init project config", function()
+      wt.init({}, function(ok, path, msg)
+        vim.schedule(function()
+          if ok then
+            vim.notify("[wt] " .. msg, vim.log.levels.INFO)
+            if path then vim.cmd("split " .. vim.fn.fnameescape(path)) end
+          else
+            vim.notify("[wt] init failed: " .. (msg or "unknown"), vim.log.levels.ERROR)
+          end
+        end)
+      end)
+    end)
     :build()
 
   p:show()
