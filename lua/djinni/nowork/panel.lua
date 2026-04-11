@@ -9,6 +9,7 @@ M._tasks = {}
 M._assoc_win = nil
 M._orig_width = nil
 M._collapsed = {}
+M._projects_hidden = false
 M._current_buf = nil
 M._session_history = {}
 M._numbered_sessions = {}
@@ -818,6 +819,8 @@ function M.render()
     add_hl(0, 0, #lines[1], "Comment")
   end
 
+  if not M._projects_hidden then
+
   local cfg = get_config()
   local width = cfg.panel and cfg.panel.width or 40
   local sep = string.rep("─", width)
@@ -924,6 +927,8 @@ function M.render()
     end
   end
 
+  end -- M._projects_hidden
+
   _apply_buf_render(M._buf, ns, lines, hl_marks, virt_texts)
 
   if M._win and vim.api.nvim_win_is_valid(M._win) then
@@ -979,6 +984,7 @@ function M.open()
   map("s", M.dispatch_task)
   map("d", M.archive_task)
   map("h", M.hide_session)
+  map("H", M.toggle_projects)
   map("D", M.remove_project)
   map("q", M.close)
   map("j", M.cursor_down)
@@ -1034,6 +1040,11 @@ function M.toggle_group()
   local root = project_at_cursor()
   if not root or root == "" then return end
   M._collapsed[root] = not M._collapsed[root]
+  M.render()
+end
+
+function M.toggle_projects()
+  M._projects_hidden = not M._projects_hidden
   M.render()
 end
 
@@ -1496,6 +1507,7 @@ function M.show_help()
     "  D       Remove project",
     "  /       Search tasks",
     "  h       Hide session",
+    "  H       Toggle projects",
     "  j / k   Navigate",
     "  q       Close panel",
     "  ?       This help",

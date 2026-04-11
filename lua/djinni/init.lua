@@ -53,9 +53,6 @@ function M.setup(opts)
     require("djinni.integrations.snacks").pick_sessions()
   end, {})
 
-  vim.api.nvim_create_user_command("NoworkSwitch", function()
-    require("djinni.nowork.panel").switch_last_session()
-  end, {})
 
   vim.api.nvim_create_user_command("NoworkConsole", function()
     require("djinni.nowork.panel").toggle()
@@ -106,6 +103,10 @@ function M.setup(opts)
   vim.keymap.set("n", "[c", function()
     require("djinni.nowork.panel").prev_task()
   end, { desc = "Previous task" })
+
+  vim.keymap.set("n", "<C-6>", function()
+    require("djinni.nowork.panel").switch_last_session()
+  end, { desc = "Switch last session" })
 
   if require("djinni.integrations.worktrunk").available() then
     local snacks = require("djinni.integrations.snacks")
