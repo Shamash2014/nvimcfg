@@ -1,16 +1,20 @@
 local M = {}
 
-local cache = { basic = nil, full = nil }
+local cache = { basic = nil, full = nil, basic_at = 0, full_at = 0 }
+local CACHE_TTL_MS = 30000
+local refresh_statusline
 
 function M.invalidate_cache()
   cache.basic = nil
   cache.full = nil
+  cache.basic_at = 0
+  cache.full_at = 0
 end
 
 function M.refresh_cache()
   M.invalidate_cache()
-  M.list(function() end)
   M.list({ full = true }, function() end)
+  if refresh_statusline then refresh_statusline(true) end
 end
 
 local function run_async(cmd, args, opts_or_cb, cb)
@@ -76,7 +80,14 @@ function M.list(opts_or_cb, cb)
   end
 
   local key = (opts.full or opts.branches or opts.remotes) and "full" or "basic"
-  if not opts.branches and not opts.remotes and cache[key] then
+  local now = vim.uv.hrtime() / 1e6
+  local is_cacheable = not opts.branches and not opts.remotes
+  local is_fresh = is_cacheable and cache[key] and (now - cache[key .. "_at"]) < CACHE_TTL_MS
+  if is_fresh then
+    callback(cache[key])
+    return
+  end
+  if opts.stale_ok and is_cacheable and cache[key] then
     callback(cache[key])
     return
   end
@@ -99,6 +110,7 @@ function M.list(opts_or_cb, cb)
     end
     if not opts.branches and not opts.remotes then
       cache[key] = data
+      cache[key .. "_at"] = vim.uv.hrtime() / 1e6
     end
     callback(data)
   end)
@@ -475,10 +487,17 @@ end
 local statusline_cache = ""
 local statusline_timer = nil
 local statusline_refresh_busy = false
+local statusline_last_refresh = 0
+local STATUSLINE_DEBOUNCE_MS = 10000
 
-local function refresh_statusline()
+local function refresh_statusline(force)
   if statusline_refresh_busy then return end
+  if not force then
+    local now = vim.uv.hrtime() / 1e6
+    if (now - statusline_last_refresh) < STATUSLINE_DEBOUNCE_MS then return end
+  end
   statusline_refresh_busy = true
+  statusline_last_refresh = vim.uv.hrtime() / 1e6
   run_async("wt", { "list", "statusline", "--format=claude-code" }, function(ok, lines)
     statusline_refresh_busy = false
     if ok and #lines > 0 then
@@ -498,7 +517,7 @@ function M.start_statusline(interval_ms)
   if statusline_timer then return end
   if not M.available() then return end
 
-  interval_ms = interval_ms or 5000
+  interval_ms = interval_ms or 60000
   refresh_statusline()
 
   local timer = vim.uv.new_timer()

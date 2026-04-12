@@ -2443,7 +2443,6 @@ function M._start_streaming(buf)
         pcall(vim.api.nvim_buf_call, buf, function() vim.cmd("silent! write") end)
       end
     end, 500)
-    M._maybe_collapse_turns(buf)
     local last_perm = M._last_perm_tool[buf]
     M._last_perm_tool[buf] = nil
     local count = M._continuation_count[buf] or 0
@@ -2596,45 +2595,6 @@ function M._unwrap_paragraphs(buf)
 end
 
 M._auto_scroll = {}
-
-M._collapse_threshold = 3000
-
-function M._maybe_collapse_turns(buf)
-  if not vim.api.nvim_buf_is_valid(buf) then return end
-  local line_count = vim.api.nvim_buf_line_count(buf)
-  if line_count < M._collapse_threshold then return end
-
-  local fm_end = M._get_fm_end(buf) or 2
-  local lines = vim.api.nvim_buf_get_lines(buf, fm_end, -1, false)
-
-  local turn_starts = {}
-  for i, line in ipairs(lines) do
-    if line:match("^@You%s*$") or line:match("^@Djinni%s*$") or line:match("^@System%s*$") then
-      turn_starts[#turn_starts + 1] = fm_end + i
-    end
-  end
-
-  if #turn_starts < 6 then return end
-
-  local keep_turns = 4
-  local cut_before = turn_starts[#turn_starts - keep_turns + 1]
-  if not cut_before then return end
-
-  local cut_line = cut_before - 1
-  if cut_line > fm_end + 1 then
-    local collapsed_count = cut_line - fm_end - 1
-    local sep_line = cut_line
-    local prev = vim.api.nvim_buf_get_lines(buf, sep_line - 2, sep_line - 1, false)[1] or ""
-    if prev:match("^%-%-%-$") then
-      sep_line = sep_line - 1
-    end
-    if sep_line > fm_end + 1 then
-      local marker = { "", "--- " .. collapsed_count .. " lines collapsed (see file on disk) ---", "" }
-      vim.api.nvim_buf_set_lines(buf, fm_end, sep_line - 1, false, marker)
-      M._fm_end_cache[buf] = nil
-    end
-  end
-end
 
 function M._apply_stream_chunk(buf, text)
   if not vim.api.nvim_buf_is_valid(buf) then

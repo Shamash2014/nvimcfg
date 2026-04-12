@@ -55,7 +55,7 @@ local function format_worktree(e)
 end
 
 local function pick_branch(prompt, cb)
-  wt.list(function(entries)
+  local function show_picker(entries)
     vim.schedule(function()
       if not entries or #entries == 0 then
         vim.notify("[wt] No worktrees", vim.log.levels.WARN)
@@ -73,7 +73,7 @@ local function pick_branch(prompt, cb)
       for i, e in ipairs(items) do
         items_by_branch[e.branch] = i
       end
-      wt.list({ full = true }, function(full_entries)
+      wt.list({ full = true, stale_ok = true }, function(full_entries)
         if not full_entries then return end
         vim.schedule(function()
           for _, fe in ipairs(full_entries) do
@@ -89,6 +89,13 @@ local function pick_branch(prompt, cb)
         if choice then cb(choice.branch) end
       end)
     end)
+  end
+  wt.list({ stale_ok = true }, function(entries)
+    if entries and #entries > 0 then
+      show_picker(entries)
+    else
+      wt.list(show_picker)
+    end
   end)
 end
 

@@ -11,6 +11,6 @@ return {
   cmd = { "Worktrunk" },
   config = function()
     require("djinni.integrations.worktrunk_ui").setup()
-    require("djinni.integrations.worktrunk").start_statusline()
+    require("djinni.integrations.worktrunk").start_statusline(60000)
   end,
 }
