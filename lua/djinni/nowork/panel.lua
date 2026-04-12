@@ -700,7 +700,8 @@ function M._collect_sessions()
       local tool_title = chat._last_tool_title[buf]
       activity = tool_title or "streaming…"
     elseif chat._last_perm_tool[buf] then
-      activity = "⚠ " .. chat._last_perm_tool[buf]
+      local perm = chat._last_perm_tool[buf]
+      activity = "⚠ " .. (type(perm) == "table" and perm.desc or tostring(perm))
     elseif chat._waiting_input and chat._waiting_input[buf] then
       activity = "⚠ waiting for input"
     end
@@ -791,7 +792,8 @@ function M._collect_all_sessions()
         local tool_title = chat._last_tool_title[agent.buf]
         activity = tool_title or "streaming…"
       elseif chat._last_perm_tool[agent.buf] then
-        activity = chat._last_perm_tool[agent.buf]
+        local perm = chat._last_perm_tool[agent.buf]
+        activity = type(perm) == "table" and perm.desc or tostring(perm)
       elseif chat._waiting_input and chat._waiting_input[agent.buf] then
         activity = "waiting for input"
       end

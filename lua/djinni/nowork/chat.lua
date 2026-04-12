@@ -490,6 +490,14 @@ local function inject_skills(buf, root, prompt)
   return prompt
 end
 
+local function inject_lessons(buf, root, prompt)
+  local toggle = read_frontmatter_field(buf, "lessons")
+  if toggle and toggle:lower() == "off" then return prompt end
+  local block = lessons.format_for_injection(root)
+  if block then return block .. prompt end
+  return prompt
+end
+
 local function build_history_context(buf, current_text)
   local line_count = vim.api.nvim_buf_line_count(buf)
   local scan_from = math.max(0, line_count - 500)
@@ -1524,7 +1532,7 @@ function M.send(buf, text, images)
   if not M._first_msg_sent or not M._first_msg_sent[buf] then
     M._first_msg_sent = M._first_msg_sent or {}
     M._first_msg_sent[buf] = true
-    msg = inject_skills(buf, root, build_history_context(buf, text))
+    msg = inject_lessons(buf, root, inject_skills(buf, root, build_history_context(buf, text)))
   end
   session.send_message(root, sid, msg, function(err, prompt_result)
     log.info("session/prompt callback: " .. (err and ("err=" .. vim.inspect(err)) or "ok"))
