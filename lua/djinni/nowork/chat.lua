@@ -946,7 +946,7 @@ function M._setup_keymaps(buf)
       M._paste_image(buf, img)
     end)
   end)
-  map("n", "ga", function()
+  map("n", "<localleader>a", function()
     local ok, Snacks = pcall(require, "snacks")
     if not ok then
       vim.notify("[djinni] snacks.nvim required for file picker", vim.log.levels.ERROR)
