@@ -54,6 +54,80 @@ local function format_worktree(e)
   return mark .. name .. suffix
 end
 
+local function strip_remote_prefix(branch)
+  return branch:gsub("^origin/", "")
+end
+
+local function format_remote(e)
+  local name = strip_remote_prefix(e.branch or "?")
+  local parts = { "[remote]" }
+  if e.commit then
+    local age = ""
+    if e.commit.timestamp then
+      local delta = os.time() - e.commit.timestamp
+      if delta < 3600 then age = string.format(" %dm", math.floor(delta / 60))
+      elseif delta < 86400 then age = string.format(" %dh", math.floor(delta / 3600))
+      else age = string.format(" %dd", math.floor(delta / 86400))
+      end
+    end
+    table.insert(parts, e.commit.short_sha .. age .. " " .. (e.commit.message or ""))
+  end
+  return "  " .. name .. "  " .. table.concat(parts, "  ")
+end
+
+local function pick_branch_with_remotes(prompt, cb)
+  wt.list({ stale_ok = true }, function(wt_entries)
+    wt.list({ remotes = true }, function(remote_entries)
+      vim.schedule(function()
+        local items = {}
+        local wt_branches = {}
+
+        if wt_entries then
+          for _, e in ipairs(wt_entries) do
+            if e.kind == "worktree" then
+              table.insert(items, e)
+              if e.branch then wt_branches[e.branch] = true end
+            end
+          end
+        end
+
+        if remote_entries then
+          for _, e in ipairs(remote_entries) do
+            if e.kind == "branch" then
+              local bare = strip_remote_prefix(e.branch or "")
+              if bare ~= "" and not wt_branches[bare] then
+                e._source = "remote"
+                e._bare_branch = bare
+                table.insert(items, e)
+              end
+            end
+          end
+        end
+
+        if #items == 0 then
+          vim.notify("[wt] No worktrees or remote branches", vim.log.levels.WARN)
+          return
+        end
+
+        vim.ui.select(items, {
+          prompt = prompt,
+          format_item = function(e)
+            if e._source == "remote" then
+              return format_remote(e)
+            end
+            return format_worktree(e)
+          end,
+        }, function(choice)
+          if choice then
+            local branch = choice._source == "remote" and choice._bare_branch or choice.branch
+            cb(branch, choice._source == "remote")
+          end
+        end)
+      end)
+    end)
+  end)
+end
+
 local function pick_branch(prompt, cb)
   local function show_picker(entries)
     vim.schedule(function()
@@ -123,8 +197,8 @@ function M.create()
     :switch("b", "base", "From current branch", { persisted = false, cli_prefix = "--base=", cli_suffix = "@" })
     :group_heading("Switch")
     :action("w", "Switch worktree", function()
-      pick_branch("Switch to:", function(branch)
-        wt.switch_to(branch)
+      pick_branch_with_remotes("Switch to:", function(branch, is_remote)
+        wt.switch_to(branch, is_remote and { remotes = true } or {})
       end)
     end)
     :action("c", "Create worktree", function(p2)
@@ -311,8 +385,8 @@ function M.create()
 end
 
 function M.quick_switch()
-  pick_branch("Switch to:", function(branch)
-    wt.switch_to(branch)
+  pick_branch_with_remotes("Switch to:", function(branch, is_remote)
+    wt.switch_to(branch, is_remote and { remotes = true } or {})
   end)
 end
 

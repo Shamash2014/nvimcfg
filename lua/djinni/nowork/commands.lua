@@ -23,6 +23,8 @@ M.commands = {
   { name = "/clear", args = false, forward = false },
   { name = "/fork", args = false, forward = false },
   { name = "/tree", args = false, forward = false },
+  { name = "/lesson", args = true, forward = false },
+  { name = "/lessons", args = false, forward = false },
   { name = "/help", args = false, forward = false },
 }
 
@@ -284,6 +286,61 @@ function M.execute(buf, text)
       end
     end
     vim.notify("[djinni] Cleared", vim.log.levels.INFO)
+    return true
+  end
+
+  if cmd.name == "/lesson" then
+    local lessons_mod = require("djinni.nowork.lessons")
+    local root = chat.get_project_root(buf)
+    if not root then
+      vim.notify("[djinni] No project root", vim.log.levels.WARN)
+      return true
+    end
+    if not args or args == "" or args == "list" then
+      local lessons = lessons_mod.list(root)
+      if #lessons == 0 then
+        vim.notify("[djinni] No lessons saved", vim.log.levels.INFO)
+      else
+        local out = {}
+        for _, l in ipairs(lessons) do
+          out[#out + 1] = string.format("[%s] %s", l.id, l.text)
+        end
+        vim.notify("[djinni] Lessons:\n" .. table.concat(out, "\n"), vim.log.levels.INFO)
+      end
+      return true
+    end
+    if args == "clear" then
+      lessons_mod.clear(root)
+      vim.notify("[djinni] All lessons cleared", vim.log.levels.INFO)
+      return true
+    end
+    local remove_id = args:match("^remove%s+(%S+)$")
+    if remove_id then
+      if lessons_mod.remove(root, remove_id) then
+        vim.notify("[djinni] Lesson " .. remove_id .. " removed", vim.log.levels.INFO)
+      else
+        vim.notify("[djinni] Lesson " .. remove_id .. " not found", vim.log.levels.WARN)
+      end
+      return true
+    end
+    local source = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
+    local lesson = lessons_mod.add(root, args, source)
+    vim.notify("[djinni] Lesson saved: " .. lesson.text, vim.log.levels.INFO)
+    local lc = vim.api.nvim_buf_line_count(buf)
+    vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
+      "", "---", "", "@System", "Lesson saved: " .. lesson.text, "",
+    })
+    return true
+  end
+
+  if cmd.name == "/lessons" then
+    local root = chat.get_project_root(buf)
+    if not root then
+      vim.notify("[djinni] No project root", vim.log.levels.WARN)
+      return true
+    end
+    local extract_prompt = "Analyze this conversation and extract reusable lessons — patterns, corrections, project insights, or things that worked well. Output each as <lesson>one concise sentence</lesson>. Only extract genuinely useful patterns, not obvious things."
+    chat.send(buf, extract_prompt)
     return true
   end
 

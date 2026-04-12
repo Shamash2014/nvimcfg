@@ -1,27 +1,31 @@
 local M = {}
 
-local commands = {
-  {
-    title = "Churn Hotspots (most-changed files, 1 year)",
-    cmd = { "sh", "-c", 'git log --format=format: --name-only --since="1 year ago" | sort | uniq -c | sort -nr | head -20' },
-  },
-  {
-    title = "Bus Factor (contributors by commits)",
-    cmd = { "sh", "-c", "git shortlog -sn --no-merges" },
-  },
-  {
-    title = "Bug Clusters (files with bug-related commits)",
-    cmd = { "sh", "-c", [[git log -i -E --grep="fix|bug|broken" --name-only --format='' | sort | uniq -c | sort -nr | head -20]] },
-  },
-  {
-    title = "Project Velocity (commits by month)",
-    cmd = { "sh", "-c", "git log --format='%ad' --date=format:'%Y-%m' | sort | uniq -c" },
-  },
-  {
-    title = "Firefighting (reverts/hotfixes, 1 year)",
-    cmd = { "sh", "-c", [[git log --oneline --since="1 year ago" | grep -iE 'revert|hotfix|emergency|rollback']] },
-  },
-}
+local function make_commands(years)
+  local since = string.format('--since="%d year ago"', years)
+  local label = years .. "y"
+  return {
+    {
+      title = "Churn Hotspots (most-changed files, " .. label .. ")",
+      cmd = { "sh", "-c", 'git log --format=format: --name-only ' .. since .. ' | sort | uniq -c | sort -nr | head -20' },
+    },
+    {
+      title = "Bus Factor (contributors by commits, " .. label .. ")",
+      cmd = { "sh", "-c", "git shortlog -sn --no-merges " .. since },
+    },
+    {
+      title = "Bug Clusters (files with bug-related commits, " .. label .. ")",
+      cmd = { "sh", "-c", 'git log -i -E --grep="fix|bug|broken" --name-only --format=\'\' ' .. since .. ' | sort | uniq -c | sort -nr | head -20' },
+    },
+    {
+      title = "Project Velocity (commits by month, " .. label .. ")",
+      cmd = { "sh", "-c", "git log --format='%ad' --date=format:'%Y-%m' " .. since .. " | sort | uniq -c" },
+    },
+    {
+      title = "Firefighting (reverts/hotfixes, " .. label .. ")",
+      cmd = { "sh", "-c", 'git log --oneline ' .. since .. ' | grep -iE "revert|hotfix|emergency|rollback"' },
+    },
+  }
+end
 
 local function open_float(lines)
   local buf = vim.api.nvim_create_buf(false, true)
@@ -55,13 +59,8 @@ local function open_float(lines)
   vim.keymap.set("n", "<Esc>", close, { buffer = buf, nowait = true, silent = true })
 end
 
-function M.open()
-  local check = vim.system({ "git", "rev-parse", "--is-inside-work-tree" }, { text = true }):wait()
-  if check.code ~= 0 then
-    vim.notify("Not a git repository", vim.log.levels.WARN)
-    return
-  end
-
+local function run_analysis(years)
+  local commands = make_commands(years)
   local results = {}
   local remaining = #commands
 
@@ -89,6 +88,20 @@ function M.open()
       end
     end)
   end
+end
+
+function M.open()
+  local check = vim.system({ "git", "rev-parse", "--is-inside-work-tree" }, { text = true }):wait()
+  if check.code ~= 0 then
+    vim.notify("Not a git repository", vim.log.levels.WARN)
+    return
+  end
+
+  vim.ui.select({ "1 year", "3 years", "5 years" }, { prompt = "Analysis period:" }, function(choice)
+    if not choice then return end
+    local years = tonumber(choice:match("^(%d+)"))
+    run_analysis(years)
+  end)
 end
 
 return M

@@ -6,6 +6,7 @@ local log = require("djinni.nowork.log")
 local mcp = require("djinni.nowork.mcp")
 local tools = require("djinni.nowork.tools")
 local skills = require("djinni.nowork.skills")
+local lessons = require("djinni.nowork.lessons")
 
 local ns_id = vim.api.nvim_create_namespace("djinni_chat")
 
@@ -537,7 +538,10 @@ local function build_history_context(buf, current_text)
     msgs[#msgs] = nil
   end
   local system_prompt = read_frontmatter_field(buf, "system")
-  if #msgs == 0 and not system_prompt then return current_text end
+  local root_for_lessons = read_frontmatter_field(buf, "root")
+  local lessons_mod = require("djinni.nowork.lessons")
+  local has_lessons = root_for_lessons and lessons_mod.has_any(root_for_lessons)
+  if #msgs == 0 and not system_prompt and not has_lessons then return current_text end
   local max_msgs = 10
   if #msgs > max_msgs then
     msgs = { unpack(msgs, #msgs - max_msgs + 1) }
@@ -545,6 +549,12 @@ local function build_history_context(buf, current_text)
   local parts = { "<previous_conversation>" }
   if system_prompt and system_prompt ~= "" then
     parts[#parts + 1] = "<system>\n" .. system_prompt .. "\n</system>"
+  end
+  if has_lessons then
+    local injection = lessons_mod.format_for_injection(root_for_lessons)
+    if injection then
+      parts[#parts + 1] = injection
+    end
   end
   for _, block in ipairs(msgs) do
     local role = block.type == "you" and "user" or "assistant"
@@ -1732,6 +1742,20 @@ function M._flush_pending(buf)
   end
   if not vim.api.nvim_buf_is_valid(buf) then
     return
+  end
+  local lessons_mod = require("djinni.nowork.lessons")
+  local extracted, cleaned = lessons_mod.extract_from_text(pending)
+  if #extracted > 0 then
+    pending = cleaned
+    local root = M.get_project_root(buf)
+    if root then
+      local source = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
+      for _, text in ipairs(extracted) do
+        lessons_mod.add(root, text, source)
+        vim.notify("[djinni] Lesson learned: " .. text, vim.log.levels.INFO)
+      end
+    end
+    if pending:match("^%s*$") then return end
   end
   local MAX_CHUNK = 4096
   if #pending > MAX_CHUNK then

@@ -310,8 +310,16 @@ local function apply_switch(branch, path, callback)
   end)
 end
 
-function M.switch_to(branch, callback)
-  M.switch(branch, function(ok, lines, stderr)
+function M.switch_to(branch, opts_or_cb, cb)
+  local opts, callback
+  if type(opts_or_cb) == "function" then
+    opts = {}
+    callback = opts_or_cb
+  else
+    opts = opts_or_cb or {}
+    callback = cb
+  end
+  M.switch(branch, opts, function(ok, lines, stderr)
     if not ok then
       vim.schedule(function()
         vim.notify("[wt] Switch failed: " .. table.concat(stderr or lines or {}, "\n"), vim.log.levels.ERROR)
