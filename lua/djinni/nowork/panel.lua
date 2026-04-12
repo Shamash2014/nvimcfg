@@ -293,7 +293,9 @@ M._hidden_sessions = {}
 local function session_at_cursor()
   if not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
   local row = vim.api.nvim_win_get_cursor(M._win)[1]
-  return M._line_sessions[row]
+  local entry = M._line_index[row]
+  if entry and entry.type == "session" then return entry.session end
+  return nil
 end
 
 local function task_at_cursor()

@@ -6,9 +6,9 @@ return {
   },
   cmd = { "Difft", "DifftPick", "DifftPickRange", "DifftClose" },
   keys = {
-    { "<leader>gd", "<cmd>Difft<cr>", desc = "Difftastic diff" },
+    { "<leader>gD", "<cmd>Difft<cr>", desc = "Difftastic diff" },
     { "<leader>gs", "<cmd>Difft --staged<cr>", desc = "Difftastic staged" },
-    { "<leader>gp", "<cmd>DifftPick<cr>", desc = "Difftastic pick commit" },
+    { "<leader>gP", "<cmd>DifftPick<cr>", desc = "Difftastic pick commit" },
   },
   config = function()
     require("difftastic-nvim").setup({

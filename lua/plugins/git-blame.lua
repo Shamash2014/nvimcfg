@@ -4,7 +4,7 @@ return {
   keys = {
     { "<leader>gb", "<cmd>GitBlameToggle<cr>", desc = "Toggle blame" },
     { "<leader>go", "<cmd>GitBlameOpenCommitURL<cr>", desc = "Open commit URL" },
-    { "<leader>gc", "<cmd>GitBlameCopySHA<cr>", desc = "Copy SHA" },
+    { "<leader>bY", "<cmd>GitBlameCopySHA<cr>", desc = "Copy SHA (blame)" },
   },
   opts = {
     enabled = false,
