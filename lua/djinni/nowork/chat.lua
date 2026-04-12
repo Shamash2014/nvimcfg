@@ -3605,18 +3605,6 @@ end
 
 function M.global_statusline()
   local ok, result = pcall(function()
-    local hive_ok, hive = pcall(require, "djinni.nowork.hive")
-    if hive_ok and hive.statusline then
-      local hive_status = hive.statusline()
-      if hive_status ~= "" then
-        local total_cost = 0
-        for _, usage in pairs(M._usage or {}) do
-          if usage.cost and usage.cost > 0 then total_cost = total_cost + usage.cost end
-        end
-        local cost_str = total_cost > 0 and (" $" .. string.format("%.2f", total_cost)) or ""
-        return hive_status .. cost_str
-      end
-    end
     local running = 0
     local total_cost = 0
     for buf in pairs(M._streaming or {}) do

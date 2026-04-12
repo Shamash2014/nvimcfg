@@ -108,28 +108,6 @@ function M.setup(opts)
     require("djinni.nowork.panel").switch_last_session()
   end, { desc = "Switch last session" })
 
-  -- Hive: multi-agent commands
-  local hive = require("djinni.nowork.hive")
-
-  vim.api.nvim_create_user_command("H", function(cmd)
-    hive.command(cmd.args, cmd.bang)
-  end, { nargs = "*", bang = true, desc = "Hive: tell active agent" })
-
-  for c = 97, 122 do -- a-z
-    local letter = string.char(c)
-    vim.api.nvim_create_user_command("H" .. letter, function()
-      hive.switch(letter)
-    end, { desc = "Hive: switch to agent " .. letter })
-  end
-
-  vim.keymap.set("n", "ga", function()
-    return hive.give()
-  end, { expr = true, desc = "Hive: give code to agent" })
-
-  vim.keymap.set("n", "gn", function()
-    return hive.annotate()
-  end, { expr = true, desc = "Hive: annotate code" })
-
   if require("djinni.integrations.worktrunk").available() then
     local snacks = require("djinni.integrations.snacks")
 
