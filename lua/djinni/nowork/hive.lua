@@ -8,6 +8,7 @@ M._buf_for = {} -- letter -> buf
 M._letter = {} -- buf -> letter
 M._active = nil -- active letter
 M._annotations = {} -- bufnr -> { { start_line, end_line, text } }
+M._ann_ns = vim.api.nvim_create_namespace("djinni_hive_ann")
 
 local function get_root()
   local ok, utils = pcall(require, "core.utils")
@@ -30,6 +31,7 @@ function M.assign(letter, buf)
   M._buf_for[letter] = buf
   M._letter[buf] = letter
   if not M._active then M._active = letter end
+  M._setup_indicator()
 end
 
 function M.start(letter, opts)
@@ -56,6 +58,7 @@ function M.stop(letter)
   M._letter[buf] = nil
   M._buf_for[letter] = nil
   if M._active == letter then M._active = next(M._buf_for) end
+  if not next(M._buf_for) then M._teardown_indicator() end
   require("djinni.nowork.panel").schedule_render()
 end
 
@@ -198,11 +201,26 @@ function M.resp_to_loclist()
   vim.cmd("lopen")
 end
 
--- ga{motion}: give code to active agent
+-- ga{motion}: give code to active agent (with optional note)
+-- If no active agent, stores annotation with virtual text for later.
 function M._give_operatorfunc(_)
   local start_line = vim.fn.line("'[")
   local end_line = vim.fn.line("']")
   local bufnr = vim.api.nvim_get_current_buf()
+
+  vim.ui.input({ prompt = "Note (Esc to skip): " }, function(note)
+    vim.schedule(function()
+      local has_agent = M.active_buf() ~= nil
+      if not has_agent then
+        M._store_annotation(bufnr, start_line, end_line, note)
+        return
+      end
+      M._send_give(bufnr, start_line, end_line, note)
+    end)
+  end)
+end
+
+function M._send_give(bufnr, start_line, end_line, note)
   local lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
   local rel = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ":~:.")
 
@@ -211,32 +229,35 @@ function M._give_operatorfunc(_)
   for _, ann in ipairs(anns) do
     table.insert(parts, ann.text)
   end
-  if #anns > 0 then table.insert(parts, "") end
+  if note and note ~= "" then table.insert(parts, note) end
+  if #parts > 0 then table.insert(parts, "") end
   table.insert(parts, ("```%s %s:%d-%d"):format(vim.bo[bufnr].filetype or "", rel, start_line, end_line))
   vim.list_extend(parts, lines)
   table.insert(parts, "```")
   M.tell(table.concat(parts, "\n"))
 end
 
+function M._store_annotation(bufnr, start_line, end_line, text)
+  if not M._annotations[bufnr] then M._annotations[bufnr] = {} end
+  table.insert(M._annotations[bufnr], { start_line = start_line, end_line = end_line, text = text or "" })
+  M._render_annotations(bufnr)
+end
+
+function M._render_annotations(bufnr)
+  vim.api.nvim_buf_clear_namespace(bufnr, M._ann_ns, 0, -1)
+  local anns = M._annotations[bufnr]
+  if not anns then return end
+  for _, a in ipairs(anns) do
+    local label = a.text ~= "" and ("\u{1f4dd} " .. a.text) or "\u{1f4dd}"
+    pcall(vim.api.nvim_buf_set_extmark, bufnr, M._ann_ns, a.start_line - 1, 0, {
+      virt_text = { { label, "DiagnosticInfo" } },
+      virt_text_pos = "eol",
+    })
+  end
+end
+
 function M.give()
   vim.o.operatorfunc = "v:lua.require'djinni.nowork.hive'._give_operatorfunc"
-  return "g@"
-end
-
--- gn{motion}: annotate code
-function M._annotate_operatorfunc(_)
-  local start_line = vim.fn.line("'[")
-  local end_line = vim.fn.line("']")
-  local bufnr = vim.api.nvim_get_current_buf()
-  vim.ui.input({ prompt = "Annotation: " }, function(text)
-    if not text or text == "" then return end
-    if not M._annotations[bufnr] then M._annotations[bufnr] = {} end
-    table.insert(M._annotations[bufnr], { start_line = start_line, end_line = end_line, text = text })
-  end)
-end
-
-function M.annotate()
-  vim.o.operatorfunc = "v:lua.require'djinni.nowork.hive'._annotate_operatorfunc"
   return "g@"
 end
 
@@ -252,6 +273,7 @@ function M._consume_annotations(bufnr, start_line, end_line)
     end
   end
   M._annotations[bufnr] = #keep > 0 and keep or nil
+  M._render_annotations(bufnr)
   return hit
 end
 
@@ -264,6 +286,46 @@ function M.statusline()
     table.insert(parts, (a.active and "*" or " ") .. a.letter .. (icons[a.status] or "○"))
   end
   return "[" .. table.concat(parts, "") .. "]"
+end
+
+-- Active agent gutter indicator
+M._indicator_ns = vim.api.nvim_create_namespace("djinni_hive_indicator")
+M._indicator_augroup = nil
+
+function M._update_indicator()
+  local win = vim.api.nvim_get_current_win()
+  local buf = vim.api.nvim_win_get_buf(win)
+  vim.api.nvim_buf_clear_namespace(buf, M._indicator_ns, 0, -1)
+
+  if not M._active or not M._buf_for[M._active] then return end
+  if M._letter[buf] then return end
+
+  local row = vim.api.nvim_win_get_cursor(win)[1] - 1
+  pcall(vim.api.nvim_buf_set_extmark, buf, M._indicator_ns, row, 0, {
+    sign_text = M._active,
+    sign_hl_group = "CursorLineNr",
+    id = 1,
+  })
+end
+
+function M._setup_indicator()
+  if M._indicator_augroup then return end
+  M._indicator_augroup = vim.api.nvim_create_augroup("djinni_hive_indicator", { clear = true })
+  vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "WinEnter" }, {
+    group = M._indicator_augroup,
+    callback = function() M._update_indicator() end,
+  })
+end
+
+function M._teardown_indicator()
+  if not M._indicator_augroup then return end
+  vim.api.nvim_del_augroup_by_id(M._indicator_augroup)
+  M._indicator_augroup = nil
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_clear_namespace, buf, M._indicator_ns, 0, -1)
+    end
+  end
 end
 
 function M.command(args, bang)

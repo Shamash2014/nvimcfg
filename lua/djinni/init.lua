@@ -124,11 +124,7 @@ function M.setup(opts)
 
   vim.keymap.set("n", "ga", function()
     return hive.give()
-  end, { expr = true, desc = "Hive: give code to agent" })
-
-  vim.keymap.set("n", "gn", function()
-    return hive.annotate()
-  end, { expr = true, desc = "Hive: annotate code" })
+  end, { expr = true, desc = "Hive: give code to agent (note prompt after motion)" })
 
   if require("djinni.integrations.worktrunk").available() then
     local snacks = require("djinni.integrations.snacks")

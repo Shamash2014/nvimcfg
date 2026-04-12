@@ -1132,7 +1132,9 @@ function M._setup_keymaps()
   map("x", M.interrupt_task)
   map("*", M.hive_set_active)
   map("!", M.hive_approve)
+  map("A", M.hive_approve_all)
   map("~", M.hive_deny)
+  vim.keymap.set("x", "!", M.hive_approve_visual, { buffer = M._buf, nowait = true })
   map("c", M.create_task)
   map("d", M.archive_task)
   map("/", M.search_tasks)
@@ -1310,6 +1312,36 @@ function M.hive_deny()
     chat._permission_action(entry.agent.buf, "deny")
     M.schedule_render()
   end
+end
+
+function M.hive_approve_all()
+  local hive = require("djinni.nowork.hive")
+  local chat_mod = require("djinni.nowork.chat")
+  local count = 0
+  for _, buf in pairs(hive._buf_for) do
+    if vim.api.nvim_buf_is_valid(buf) and chat_mod._pending_permission[buf] then
+      chat_mod._permission_action(buf, "allow")
+      count = count + 1
+    end
+  end
+  if count > 0 then M.schedule_render() end
+end
+
+function M.hive_approve_visual()
+  local start_line = vim.fn.line("v")
+  local end_line = vim.fn.line(".")
+  if start_line > end_line then start_line, end_line = end_line, start_line end
+  local chat_mod = require("djinni.nowork.chat")
+  local count = 0
+  for row = start_line, end_line do
+    local entry = M._line_hive and M._line_hive[row]
+    if entry and entry.type == "permission" and entry.agent then
+      chat_mod._permission_action(entry.agent.buf, "allow")
+      count = count + 1
+    end
+  end
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+  if count > 0 then M.schedule_render() end
 end
 
 function M.hive_set_active()
@@ -1826,6 +1858,8 @@ function M.show_help()
     "",
     "Permissions",
     "  !       approve",
+    "  A       approve all",
+    "  v!      approve selected (visual)",
     "  ~       deny",
     "",
     "Tasks",
