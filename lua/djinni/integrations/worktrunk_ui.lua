@@ -76,55 +76,67 @@ local function format_remote(e)
 end
 
 local function pick_branch_with_remotes(prompt, cb)
-  wt.list({ stale_ok = true }, function(wt_entries)
-    wt.list({ remotes = true }, function(remote_entries)
-      vim.schedule(function()
-        local items = {}
-        local wt_branches = {}
+  local results = { wt = nil, remote = nil }
+  local pending = 2
 
-        if wt_entries then
-          for _, e in ipairs(wt_entries) do
-            if e.kind == "worktree" then
+  local function on_ready()
+    pending = pending - 1
+    if pending > 0 then return end
+    vim.schedule(function()
+      local items = {}
+      local wt_branches = {}
+
+      if results.wt then
+        for _, e in ipairs(results.wt) do
+          if e.kind == "worktree" then
+            table.insert(items, e)
+            if e.branch then wt_branches[e.branch] = true end
+          end
+        end
+      end
+
+      if results.remote then
+        for _, e in ipairs(results.remote) do
+          if e.kind == "branch" then
+            local bare = strip_remote_prefix(e.branch or "")
+            if bare ~= "" and not wt_branches[bare] then
+              e._source = "remote"
+              e._bare_branch = bare
               table.insert(items, e)
-              if e.branch then wt_branches[e.branch] = true end
             end
           end
         end
+      end
 
-        if remote_entries then
-          for _, e in ipairs(remote_entries) do
-            if e.kind == "branch" then
-              local bare = strip_remote_prefix(e.branch or "")
-              if bare ~= "" and not wt_branches[bare] then
-                e._source = "remote"
-                e._bare_branch = bare
-                table.insert(items, e)
-              end
-            end
+      if #items == 0 then
+        vim.notify("[wt] No worktrees or remote branches", vim.log.levels.WARN)
+        return
+      end
+
+      vim.ui.select(items, {
+        prompt = prompt,
+        format_item = function(e)
+          if e._source == "remote" then
+            return format_remote(e)
           end
+          return format_worktree(e)
+        end,
+      }, function(choice)
+        if choice then
+          local branch = choice._source == "remote" and choice._bare_branch or choice.branch
+          cb(branch, choice._source == "remote")
         end
-
-        if #items == 0 then
-          vim.notify("[wt] No worktrees or remote branches", vim.log.levels.WARN)
-          return
-        end
-
-        vim.ui.select(items, {
-          prompt = prompt,
-          format_item = function(e)
-            if e._source == "remote" then
-              return format_remote(e)
-            end
-            return format_worktree(e)
-          end,
-        }, function(choice)
-          if choice then
-            local branch = choice._source == "remote" and choice._bare_branch or choice.branch
-            cb(branch, choice._source == "remote")
-          end
-        end)
       end)
     end)
+  end
+
+  wt.list({ stale_ok = true }, function(entries)
+    results.wt = entries
+    on_ready()
+  end)
+  wt.list({ remotes = true, stale_ok = true }, function(entries)
+    results.remote = entries
+    on_ready()
   end)
 end
 

@@ -1,14 +1,17 @@
 local M = {}
 
-local cache = { basic = nil, full = nil, basic_at = 0, full_at = 0 }
+local cache = { basic = nil, full = nil, remotes = nil, basic_at = 0, full_at = 0, remotes_at = 0 }
 local CACHE_TTL_MS = 30000
+local REMOTE_CACHE_TTL_MS = 60000
 local refresh_statusline
 
 function M.invalidate_cache()
   cache.basic = nil
   cache.full = nil
+  cache.remotes = nil
   cache.basic_at = 0
   cache.full_at = 0
+  cache.remotes_at = 0
 end
 
 function M.refresh_cache()
@@ -79,10 +82,11 @@ function M.list(opts_or_cb, cb)
     callback = cb
   end
 
-  local key = (opts.full or opts.branches or opts.remotes) and "full" or "basic"
+  local key = opts.remotes and "remotes" or opts.branches and "full" or (opts.full and "full" or "basic")
   local now = vim.uv.hrtime() / 1e6
-  local is_cacheable = not opts.branches and not opts.remotes
-  local is_fresh = is_cacheable and cache[key] and (now - cache[key .. "_at"]) < CACHE_TTL_MS
+  local is_cacheable = not opts.branches
+  local ttl = opts.remotes and REMOTE_CACHE_TTL_MS or CACHE_TTL_MS
+  local is_fresh = is_cacheable and cache[key] and (now - cache[key .. "_at"]) < ttl
   if is_fresh then
     callback(cache[key])
     return
@@ -108,7 +112,7 @@ function M.list(opts_or_cb, cb)
       callback(nil, "failed to parse JSON")
       return
     end
-    if not opts.branches and not opts.remotes then
+    if not opts.branches then
       cache[key] = data
       cache[key .. "_at"] = vim.uv.hrtime() / 1e6
     end
