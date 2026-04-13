@@ -124,6 +124,10 @@ function M.register_autocmds(buf)
     group = group,
     buffer = buf,
     callback = function()
+      local ok, chat = pcall(require, "djinni.nowork.chat")
+      if ok and chat and chat._streaming and chat._streaming[buf] then
+        return
+      end
       if debounce_timers[buf] then
         debounce_timers[buf]:stop()
       end

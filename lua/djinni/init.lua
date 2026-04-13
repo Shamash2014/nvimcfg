@@ -123,8 +123,8 @@ function M.setup(opts)
   end
 
   vim.keymap.set("n", "ga", function()
-    return hive.give()
-  end, { expr = true, desc = "Hive: give code to agent (note prompt after motion)" })
+    return require("djinni.code").ga_operator()
+  end, { expr = true, desc = "Capture draft task from motion" })
 
   if require("djinni.integrations.worktrunk").available() then
     local snacks = require("djinni.integrations.snacks")

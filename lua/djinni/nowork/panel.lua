@@ -466,7 +466,7 @@ function M._scan_tasks()
           local f = io.open(path, "r")
           if f then
             local title = name:gsub("%.md$", "")
-            local status = "idle"
+            local status = ""
             local time = ""
             local model = ""
             local provider = ""
@@ -994,7 +994,13 @@ function M.render()
   })
 
   if M._view == "sessions" then
-    local perms, streaming, waiting, idle = {}, {}, {}, {}
+    local drafts, perms, streaming, waiting, idle = {}, {}, {}, {}, {}
+    M._scan_tasks()
+    for _, task in ipairs(M._tasks) do
+      if task.status == nil or task.status == "" then
+        table.insert(drafts, task)
+      end
+    end
     for _, s in ipairs(sessions) do
       if s.status == "permission" then table.insert(perms, s)
       elseif s.status == "running" then table.insert(streaming, s)
@@ -1004,6 +1010,7 @@ function M.render()
     end
 
     local secs = {
+      { id = "drafts", title = "Drafts", items = drafts, is_task_section = true },
       { id = "perms", title = "Permissions", items = perms },
       { id = "streaming", title = "Streaming", items = streaming },
       { id = "waiting", title = "Ready", items = waiting },
@@ -1014,8 +1021,14 @@ function M.render()
       if #sec.items > 0 then
         local folded = M._collapsed[sec.id]
         if section_header(sec.id, sec.title, #sec.items, folded) then
-          for _, s in ipairs(sec.items) do
-            session_line(s)
+          if sec.is_task_section then
+            for _, task in ipairs(sec.items) do
+              file_line(task)
+            end
+          else
+            for _, s in ipairs(sec.items) do
+              session_line(s)
+            end
           end
         end
       end
@@ -1040,10 +1053,14 @@ function M.render()
       local root = task.root or ""
       if root ~= "" and root ~= "." then
         if not by_root[root] then
-          by_root[root] = { root = root, name = vim.fn.fnamemodify(root, ":t"), sessions = {}, files = {} }
+          by_root[root] = { root = root, name = vim.fn.fnamemodify(root, ":t"), sessions = {}, files = {}, drafts = {} }
         end
         if not session_files[task.file_path] then
-          table.insert(by_root[root].files, task)
+          if task.status == nil or task.status == "" then
+            table.insert(by_root[root].drafts, task)
+          else
+            table.insert(by_root[root].files, task)
+          end
         end
       end
     end
@@ -1094,6 +1111,13 @@ function M.render()
         for _, s in ipairs(root_data.sessions) do
           session_line(s, "  ")
         end
+        if #root_data.drafts > 0 then
+          add("  • Drafts")
+          hl(ln() - 1, 0, 100, "Comment")
+          for _, task in ipairs(root_data.drafts) do
+            file_line(task, "    ")
+          end
+        end
         for _, task in ipairs(root_data.files) do
           file_line(task, "  ")
         end
@@ -1129,6 +1153,14 @@ function M._setup_keymaps()
 
   map("<CR>", M.open_in_vsplit)
   map("v", M.open_in_vsplit)
+  map("s", function()
+    if not M._win or not vim.api.nvim_win_is_valid(M._win) then return end
+    local row = vim.api.nvim_win_get_cursor(M._win)[1]
+    local entry = M._line_index[row]
+    if entry and entry.type == "file" and entry.task and (entry.task.status == nil or entry.task.status == "") then
+      M.open_in_vsplit()
+    end
+  end)
   map("<Tab>", M.toggle_fold)
   map("+", M.hive_start)
   map("x", M.interrupt_task)

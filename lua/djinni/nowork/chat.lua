@@ -81,24 +81,40 @@ M._last_activity_touch = {} -- buf -> last timestamp we called touch_activity
 M._checktime_dirty = false
 M._FILE_MUTATING = { edit=true, create=true, write=true, delete=true, move=true }
 
-local function _win_fold_chat(win, buf)
+local function _compute_manual_folds(win, buf)
   if not vim.api.nvim_buf_is_valid(buf) then return end
   if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_win_get_buf(win) ~= buf then return end
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local ranges = {}
+  local fold_start = nil
+  for i, line in ipairs(lines) do
+    if line:match("^%*%*Thinking") or line:match("^%[%*%]") or line:match("^%[%+%]") or line:match("^%[!%]") then
+      if not fold_start then fold_start = i end
+    elseif line:match("^@%w") or line:match("^%-%-%-$") or line == "" then
+      if fold_start and i - 1 >= fold_start + 1 then
+        ranges[#ranges + 1] = { fold_start, i - 1 }
+      end
+      fold_start = nil
+    end
+  end
+  if fold_start and #lines >= fold_start + 1 then
+    ranges[#ranges + 1] = { fold_start, #lines }
+  end
   vim.api.nvim_win_call(win, function()
-    vim.cmd("noautocmd setlocal foldmethod=expr")
-    vim.cmd("noautocmd setlocal foldexpr=v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)")
+    vim.cmd("noautocmd setlocal foldmethod=manual")
     vim.cmd("noautocmd setlocal foldtext=v:lua.require('djinni.nowork.chat').foldtext()")
     vim.cmd("noautocmd setlocal foldenable")
     vim.cmd("noautocmd setlocal foldlevel=0")
-  end)
-  local fml = vim.api.nvim_get_option_value("foldminlines", { win = win })
-  if fml ~= 1 then
-    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf and vim.api.nvim_buf_is_valid(buf) then
-      vim.api.nvim_win_call(win, function()
-        vim.cmd("noautocmd setlocal foldminlines=1")
-      end)
+    vim.cmd("noautocmd setlocal foldminlines=1")
+    vim.cmd("normal! zE")
+    for _, r in ipairs(ranges) do
+      pcall(vim.cmd, r[1] .. "," .. r[2] .. "fold")
     end
-  end
+  end)
+end
+
+local function _win_fold_chat(win, buf)
+  _compute_manual_folds(win, buf)
 end
 
 local function _win_fold_manual(win, buf)
@@ -109,13 +125,22 @@ local function _win_fold_manual(win, buf)
   end)
 end
 
-local function _win_fold_restore_expr(win, buf)
+local function _rm_disable(buf)
   if not vim.api.nvim_buf_is_valid(buf) then return end
-  if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_win_get_buf(win) ~= buf then return end
-  vim.api.nvim_win_call(win, function()
-    vim.cmd("noautocmd setlocal foldmethod=expr")
-    vim.cmd("noautocmd setlocal foldexpr=v:lua.require('djinni.nowork.chat').foldexpr(v:lnum)")
+  pcall(function()
+    require("render-markdown.core.manager").set_buf(buf, false)
   end)
+end
+
+local function _rm_enable(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  pcall(function()
+    require("render-markdown.core.manager").set_buf(buf, true)
+  end)
+end
+
+local function _win_fold_restore_expr(win, buf)
+  _compute_manual_folds(win, buf)
 end
 
 function M._invalidate_session(buf)
@@ -376,12 +401,10 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
       vim.wo[win].wrap = true
       vim.wo[win].linebreak = true
       vim.wo[win].conceallevel = 2
-      local ok, rm = pcall(require, "render-markdown")
-      if ok then rm.enable() end
       vim.schedule(function()
         if not vim.api.nvim_buf_is_valid(b) then return end
         local w = vim.fn.bufwinid(b)
-        if w ~= -1 then
+        if w ~= -1 and vim.api.nvim_buf_line_count(b) <= 3000 then
           pcall(_win_fold_chat, w, b)
         end
       end)
@@ -648,7 +671,7 @@ function M.create(project_root, opts)
     f:close()
   end
 
-  if opts.no_open then
+  if opts.no_open or opts.silent then
     return filepath
   end
 
@@ -776,7 +799,11 @@ function M.open(file_path, opts)
   return buf
 end
 
+M._migrated = {}
+
 local function migrate_unicode(buf)
+  if M._migrated[buf] then return end
+  M._migrated[buf] = true
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local changed = false
   for i, line in ipairs(lines) do
@@ -1139,8 +1166,15 @@ function M.attach(buf)
   vim.bo[buf].textwidth = 120
   vim.bo[buf].omnifunc = "v:lua.require'djinni.nowork.commands'.omnifunc"
 
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local parsed = blocks.parse(lines)
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  local large = line_count > 3000
+
+  if large then
+    vim.treesitter.stop(buf)
+  end
+
+  local fm_lines = vim.api.nvim_buf_get_lines(buf, 0, math.min(20, line_count), false)
+  local parsed = blocks.parse(fm_lines)
   local fm = blocks.get_frontmatter(parsed)
   if fm.plan and fm.plan ~= "" then
     M._plan_path[buf] = fm.plan
@@ -1174,8 +1208,10 @@ function M.attach(buf)
     end
   end
 
-  migrate_unicode(buf)
-  M._unwrap_paragraphs(buf)
+  if not large then
+    migrate_unicode(buf)
+    M._unwrap_paragraphs(buf)
+  end
 
   local win = vim.fn.bufwinid(buf)
   if win ~= -1 and M._win_configured[win] ~= buf then
@@ -1184,13 +1220,13 @@ function M.attach(buf)
     vim.wo[win].linebreak = true
     vim.wo[win].statusline = "%{%v:lua._djinni_chat_statusline()%} %f %m"
     vim.wo[win].conceallevel = 2
-    local ok, rm = pcall(require, "render-markdown")
-    if ok then rm.enable() end
     vim.schedule(function()
       if not vim.api.nvim_buf_is_valid(buf) then return end
       local w = vim.fn.bufwinid(buf)
       if w == -1 then return end
-      pcall(_win_fold_chat, w, buf)
+      if not large then
+        pcall(_win_fold_chat, w, buf)
+      end
     end)
   end
 
@@ -1239,6 +1275,7 @@ function M.attach(buf)
       M._last_tool_failed[buf] = nil
       M._last_perm_tool[buf] = nil
       M._attached[buf] = nil
+      M._migrated[buf] = nil
       M._keymaps_set[buf] = nil
       M._hidden_pending[buf] = nil
       M._pending_images[buf] = nil
@@ -2435,7 +2472,10 @@ function M._start_streaming(buf)
     pcall(_win_fold_manual, win, buf)
   end
 
+  _rm_disable(buf)
+
   local function cleanup()
+    _rm_enable(buf)
     M._streaming[buf] = nil
     M._stream_cleanup[buf] = nil
     M._cleanup_deferred[buf] = nil
@@ -2480,9 +2520,6 @@ function M._start_streaming(buf)
       local cwin = vim.fn.bufwinid(buf)
       if cwin == -1 then return end
       pcall(_win_fold_restore_expr, cwin, buf)
-      pcall(vim.api.nvim_win_call, cwin, function()
-        vim.cmd("normal! zx")
-      end)
     end, 300)
     vim.defer_fn(function()
       if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].modified then

@@ -47,16 +47,21 @@ function M._create_task(s, e)
   end
   local selection = table.concat(lines, "\n")
   local project_root = utils.get_project_root() or vim.fn.getcwd()
+  local ft = vim.bo.filetype or ""
 
-  local reference = "From `" .. rel_path .. ":" .. s .. "-" .. e .. "`:\n\n```\n" .. selection .. "\n```"
+  local reference = "From `" .. rel_path .. ":" .. s .. "-" .. e .. "`:\n\n```" .. ft .. "\n" .. selection .. "\n```"
 
-  vim.notify("Adding reference from " .. rel_path .. ":" .. s .. "-" .. e, vim.log.levels.INFO)
+  local basename = vim.fn.fnamemodify(rel_path, ":t:r")
+  local title = "draft-" .. basename .. "-" .. s .. "-" .. e
 
   require("djinni.nowork.chat").create(project_root, {
     prompt = reference,
-    title = "ref-" .. vim.fn.fnamemodify(rel_path, ":t:r"),
+    title = title,
     no_send = true,
+    silent = true,
   })
+
+  vim.notify("Draft captured: " .. rel_path .. ":" .. s .. "-" .. e, vim.log.levels.INFO)
 end
 
 function M.generate_task_from_visual()
