@@ -997,7 +997,7 @@ function M.render()
     local drafts, perms, streaming, waiting, idle = {}, {}, {}, {}, {}
     M._scan_tasks()
     for _, task in ipairs(M._tasks) do
-      if task.status == nil or task.status == "" then
+      if task.status == "draft" then
         table.insert(drafts, task)
       end
     end
