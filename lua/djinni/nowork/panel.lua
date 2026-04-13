@@ -1041,7 +1041,7 @@ function M.render()
     for _, s in ipairs(sessions) do
       if s.root then
         if not by_root[s.root] then
-          by_root[s.root] = { root = s.root, name = vim.fn.fnamemodify(s.root, ":t"), sessions = {}, files = {} }
+          by_root[s.root] = { root = s.root, name = vim.fn.fnamemodify(s.root, ":t"), sessions = {}, files = {}, drafts = {} }
         end
         table.insert(by_root[s.root].sessions, s)
         local buf_name = vim.api.nvim_buf_get_name(s.buf)
@@ -1056,7 +1056,7 @@ function M.render()
           by_root[root] = { root = root, name = vim.fn.fnamemodify(root, ":t"), sessions = {}, files = {}, drafts = {} }
         end
         if not session_files[task.file_path] then
-          if task.status == nil or task.status == "" then
+          if task.status == "draft" then
             table.insert(by_root[root].drafts, task)
           else
             table.insert(by_root[root].files, task)

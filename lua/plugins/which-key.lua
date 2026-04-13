@@ -37,7 +37,11 @@ return {
       { "[", group = "Prev" },
       { "]", group = "Next" },
       { "g", group = "Goto" },
-      { "ga", group = "AI", mode = { "n", "v" } },
+      { "ga", group = "AI" },
+      { "gac", desc = "Task with file context" },
+      { "ga", group = "AI", mode = "v" },
+      { "gav", desc = "Task with selection", mode = "v" },
+      { "gas", desc = "Send selection to chat", mode = "v" },
     },
   },
 }

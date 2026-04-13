@@ -79,17 +79,6 @@ function M.setup(opts)
     chat.create(root, { split = true })
   end, {})
 
-  vim.keymap.set("n", "gac", function()
-    require("djinni.code").create_with_file()
-  end, { desc = "Task with file context" })
-
-  vim.keymap.set("v", "gav", function()
-    require("djinni.code").create_with_selection()
-  end, { desc = "Task with selection context" })
-
-  vim.keymap.set("v", "gas", function()
-    require("djinni.code").send_selection_to_chat()
-  end, { desc = "Send selection to chat" })
 
   vim.keymap.set("n", "<C-q>", function()
     require("djinni.nowork.panel").toggle()
@@ -121,10 +110,6 @@ function M.setup(opts)
       hive.switch(letter)
     end, { desc = "Hive: switch to agent " .. letter })
   end
-
-  vim.keymap.set("n", "ga", function()
-    return require("djinni.code").ga_operator()
-  end, { expr = true, desc = "Capture draft task from motion" })
 
   if require("djinni.integrations.worktrunk").available() then
     local snacks = require("djinni.integrations.snacks")
