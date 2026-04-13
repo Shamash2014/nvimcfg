@@ -1,30 +1,30 @@
 local function dark_palette()
   return {
-    bg      = "#0d0c0c",
-    bg1     = "#141414",
-    bg2     = "#1c1c1c",
-    bg3     = "#252525",
-    dim     = "#2d2d2d",
-    muted   = "#3d3d3d",
-    mid     = "#5e5e5e",
-    text    = "#DCD7BA",
-    bright  = "#F0F0F0",
-    white   = "#FFFFFF",
-    comment = "#505050",
-    err     = "#FF5D62",
-    warn    = "#DCA561",
-    info    = "#7E9CD8",
-    hint    = "#6A9589",
-    add_fg  = "#76946A",
-    add_bg  = "#2B3328",
-    chg_fg  = "#DCA561",
-    chg_bg  = "#49443C",
-    del_fg  = "#C34043",
-    del_bg  = "#43242B",
-    md_h1_bg = "#1a1a1a",
-    md_h2_bg = "#181818",
-    md_h3_bg = "#161616",
-    md_h4_bg = "#141414",
+    bg      = "#080808",
+    bg1     = "#0f0f0f",
+    bg2     = "#171717",
+    bg3     = "#202020",
+    dim     = "#282828",
+    muted   = "#505050",
+    mid     = "#888888",
+    text    = "#bcbcbc",
+    bright  = "#d0d0d0",
+    white   = "#e0e0e0",
+    comment = "#606060",
+    err     = "#FF6673",
+    warn    = "#E8B468",
+    info    = "#8CACD8",
+    hint    = "#7AAE9E",
+    add_fg  = "#87A77C",
+    add_bg  = "#1A2618",
+    chg_fg  = "#E8B468",
+    chg_bg  = "#2E2A1E",
+    del_fg  = "#D4484B",
+    del_bg  = "#2B1418",
+    md_h1_bg = "#121212",
+    md_h2_bg = "#101010",
+    md_h3_bg = "#0e0e0e",
+    md_h4_bg = "#0c0c0c",
     md_link  = "#7E9CD8",
     none    = "NONE",
   }
@@ -32,32 +32,32 @@ end
 
 local function light_palette()
   return {
-    bg      = "#FFFFFF",
-    bg1     = "#F7F4ED",
-    bg2     = "#EDEAD8",
-    bg3     = "#E4E0CE",
-    dim     = "#D5D1C0",
-    muted   = "#B5B1A4",
-    mid     = "#8A8680",
-    text    = "#545464",
-    bright  = "#3C3C54",
-    white   = "#1F1F28",
-    comment = "#A09D94",
-    err     = "#E82424",
-    warn    = "#DCA561",
-    info    = "#7E9CD8",
-    hint    = "#6A9589",
-    add_fg  = "#5E7955",
-    add_bg  = "#E0EDDA",
-    chg_fg  = "#B8860B",
-    chg_bg  = "#F0E8D0",
-    del_fg  = "#B33040",
-    del_bg  = "#F5DDE0",
-    md_h1_bg = "#EDE8D8",
-    md_h2_bg = "#F0ECE0",
-    md_h3_bg = "#F3F0E8",
-    md_h4_bg = "#F5F3ED",
-    md_link  = "#7E9CD8",
+    bg      = "#f2ead8",
+    bg1     = "#e9e1ce",
+    bg2     = "#dfd7c4",
+    bg3     = "#d4ccb8",
+    dim     = "#c4bca8",
+    muted   = "#948c78",
+    mid     = "#605848",
+    text    = "#352f28",
+    bright  = "#1e1a14",
+    white   = "#0e0c08",
+    comment = "#a09888",
+    err     = "#b82020",
+    warn    = "#9a6010",
+    info    = "#35608a",
+    hint    = "#407058",
+    add_fg  = "#3a5828",
+    add_bg  = "#dde8d4",
+    chg_fg  = "#805510",
+    chg_bg  = "#ece0c8",
+    del_fg  = "#902828",
+    del_bg  = "#eed8d8",
+    md_h1_bg = "#e5dfd6",
+    md_h2_bg = "#e8e2da",
+    md_h3_bg = "#ece7e0",
+    md_h4_bg = "#efebe5",
+    md_link  = "#35608a",
     none    = "NONE",
   }
 end
@@ -116,37 +116,37 @@ local function apply()
   hl("SpellLocal",   { undercurl = true, sp = p.mid })
   hl("SpellRare",    { undercurl = true, sp = p.mid })
 
-  -- Syntax (monochrome)
+  -- Syntax (Alabaster: only strings, comments, errors get distinction)
   hl("Comment",      { fg = p.comment, italic = true })
-  hl("Constant",     { fg = p.bright })
+  hl("Constant",     { fg = p.text })
   hl("String",       { fg = p.mid })
   hl("Character",    { fg = p.mid })
-  hl("Number",       { fg = p.bright })
-  hl("Boolean",      { fg = p.bright })
-  hl("Float",        { fg = p.bright })
+  hl("Number",       { fg = p.text })
+  hl("Boolean",      { fg = p.text })
+  hl("Float",        { fg = p.text })
   hl("Identifier",   { fg = p.text })
-  hl("Function",     { fg = p.white, bold = true })
-  hl("Statement",    { fg = p.white, bold = true })
-  hl("Conditional",  { fg = p.white, bold = true })
-  hl("Repeat",       { fg = p.white, bold = true })
-  hl("Label",        { fg = p.bright })
+  hl("Function",     { fg = p.bright, bold = true })
+  hl("Statement",    { fg = p.text })
+  hl("Conditional",  { fg = p.text })
+  hl("Repeat",       { fg = p.text })
+  hl("Label",        { fg = p.text })
   hl("Operator",     { fg = p.muted })
-  hl("Keyword",      { fg = p.white, bold = true })
-  hl("Exception",    { fg = p.bright })
-  hl("PreProc",      { fg = p.bright })
-  hl("Include",      { fg = p.bright })
-  hl("Define",       { fg = p.bright })
-  hl("Macro",        { fg = p.bright })
-  hl("PreCondit",    { fg = p.bright })
-  hl("Type",         { fg = p.bright })
-  hl("StorageClass", { fg = p.bright })
-  hl("Structure",    { fg = p.bright })
-  hl("Typedef",      { fg = p.bright })
-  hl("Special",      { fg = p.mid })
+  hl("Keyword",      { fg = p.text })
+  hl("Exception",    { fg = p.text })
+  hl("PreProc",      { fg = p.text })
+  hl("Include",      { fg = p.text })
+  hl("Define",       { fg = p.text })
+  hl("Macro",        { fg = p.text })
+  hl("PreCondit",    { fg = p.text })
+  hl("Type",         { fg = p.text })
+  hl("StorageClass", { fg = p.text })
+  hl("Structure",    { fg = p.text })
+  hl("Typedef",      { fg = p.text })
+  hl("Special",      { fg = p.text })
   hl("SpecialChar",  { fg = p.mid })
-  hl("Tag",          { fg = p.bright })
+  hl("Tag",          { fg = p.text })
   hl("Delimiter",    { fg = p.muted })
-  hl("Debug",        { fg = p.mid })
+  hl("Debug",        { fg = p.text })
   hl("Underlined",   { fg = p.text, underline = true })
   hl("Error",        { fg = p.err })
   hl("Todo",         { fg = p.white, bg = p.bg3, bold = true })
@@ -161,39 +161,39 @@ local function apply()
   hl("@string.special", { fg = p.mid })
   hl("@character",      { fg = p.mid })
 
-  hl("@constant",         { fg = p.bright })
-  hl("@constant.builtin", { fg = p.bright })
-  hl("@number",           { fg = p.bright })
-  hl("@boolean",          { fg = p.bright })
-  hl("@float",            { fg = p.bright })
+  hl("@constant",         { fg = p.text })
+  hl("@constant.builtin", { fg = p.text })
+  hl("@number",           { fg = p.text })
+  hl("@boolean",          { fg = p.text })
+  hl("@float",            { fg = p.text })
 
-  hl("@function",         { fg = p.white, bold = true })
-  hl("@function.builtin", { fg = p.bright })
-  hl("@function.call",    { fg = p.bright })
-  hl("@method",           { fg = p.white, bold = true })
-  hl("@method.call",      { fg = p.bright })
-  hl("@constructor",      { fg = p.bright })
+  hl("@function",         { fg = p.bright, bold = true })
+  hl("@function.builtin", { fg = p.text })
+  hl("@function.call",    { fg = p.text })
+  hl("@method",           { fg = p.bright, bold = true })
+  hl("@method.call",      { fg = p.text })
+  hl("@constructor",      { fg = p.text })
 
-  hl("@keyword",           { fg = p.white, bold = true })
-  hl("@keyword.function",  { fg = p.white, bold = true })
-  hl("@keyword.operator",  { fg = p.bright })
-  hl("@keyword.return",    { fg = p.white, bold = true })
-  hl("@keyword.import",    { fg = p.bright })
-  hl("@conditional",       { fg = p.white, bold = true })
-  hl("@repeat",            { fg = p.white, bold = true })
-  hl("@exception",         { fg = p.bright })
-  hl("@label",             { fg = p.mid })
+  hl("@keyword",           { fg = p.text })
+  hl("@keyword.function",  { fg = p.text })
+  hl("@keyword.operator",  { fg = p.muted })
+  hl("@keyword.return",    { fg = p.text })
+  hl("@keyword.import",    { fg = p.text })
+  hl("@conditional",       { fg = p.text })
+  hl("@repeat",            { fg = p.text })
+  hl("@exception",         { fg = p.text })
+  hl("@label",             { fg = p.text })
 
   hl("@variable",         { fg = p.text })
-  hl("@variable.builtin", { fg = p.bright })
+  hl("@variable.builtin", { fg = p.text })
   hl("@variable.member",  { fg = p.text })
   hl("@parameter",        { fg = p.text })
   hl("@property",         { fg = p.text })
 
-  hl("@type",            { fg = p.bright })
-  hl("@type.builtin",    { fg = p.bright })
-  hl("@type.qualifier",  { fg = p.bright })
-  hl("@type.definition", { fg = p.bright })
+  hl("@type",            { fg = p.text })
+  hl("@type.builtin",    { fg = p.text })
+  hl("@type.qualifier",  { fg = p.text })
+  hl("@type.definition", { fg = p.text })
 
   hl("@operator",              { fg = p.muted })
   hl("@punctuation",           { fg = p.muted })
@@ -201,42 +201,42 @@ local function apply()
   hl("@punctuation.delimiter", { fg = p.muted })
   hl("@punctuation.special",   { fg = p.muted })
 
-  hl("@tag",           { fg = p.bright })
+  hl("@tag",           { fg = p.text })
   hl("@tag.attribute", { fg = p.text })
   hl("@tag.delimiter", { fg = p.muted })
 
-  hl("@namespace", { fg = p.mid })
-  hl("@module",    { fg = p.mid })
+  hl("@namespace", { fg = p.text })
+  hl("@module",    { fg = p.text })
 
-  hl("@attribute",  { fg = p.mid })
-  hl("@annotation", { fg = p.mid })
+  hl("@attribute",  { fg = p.text })
+  hl("@annotation", { fg = p.text })
 
-  hl("@markup.heading",   { fg = p.white, bold = true })
+  hl("@markup.heading",   { fg = p.bright, bold = true })
   hl("@markup.heading.1", { fg = p.white, bg = p.md_h1_bg, bold = true })
   hl("@markup.heading.2", { fg = p.bright, bg = p.md_h2_bg, bold = true })
   hl("@markup.heading.3", { fg = p.bright, bg = p.md_h3_bg })
   hl("@markup.heading.4", { fg = p.text, bg = p.md_h4_bg })
-  hl("@markup.strong",    { fg = p.white, bold = true })
-  hl("@markup.italic",    { fg = p.bright, italic = true })
+  hl("@markup.strong",    { fg = p.bright, bold = true })
+  hl("@markup.italic",    { fg = p.text, italic = true })
   hl("@markup.link",      { fg = p.md_link, underline = true })
   hl("@markup.link.url",  { fg = p.mid, underline = true })
   hl("@markup.raw",       { fg = p.mid, bg = p.bg1 })
-  hl("@markup.list",      { fg = p.bright })
+  hl("@markup.list",      { fg = p.muted })
 
   -- LSP semantic tokens
-  hl("@lsp.type.namespace",  { fg = p.mid })
-  hl("@lsp.type.type",       { fg = p.bright })
-  hl("@lsp.type.class",      { fg = p.bright })
-  hl("@lsp.type.enum",       { fg = p.bright })
-  hl("@lsp.type.interface",  { fg = p.bright })
-  hl("@lsp.type.struct",     { fg = p.bright })
+  hl("@lsp.type.namespace",  { fg = p.text })
+  hl("@lsp.type.type",       { fg = p.text })
+  hl("@lsp.type.class",      { fg = p.text })
+  hl("@lsp.type.enum",       { fg = p.text })
+  hl("@lsp.type.interface",  { fg = p.text })
+  hl("@lsp.type.struct",     { fg = p.text })
   hl("@lsp.type.parameter",  { fg = p.text })
   hl("@lsp.type.variable",   { fg = p.text })
   hl("@lsp.type.property",   { fg = p.text })
-  hl("@lsp.type.function",   { fg = p.white, bold = true })
-  hl("@lsp.type.method",     { fg = p.white, bold = true })
-  hl("@lsp.type.macro",      { fg = p.bright })
-  hl("@lsp.type.decorator",  { fg = p.mid })
+  hl("@lsp.type.function",   { fg = p.bright, bold = true })
+  hl("@lsp.type.method",     { fg = p.bright, bold = true })
+  hl("@lsp.type.macro",      { fg = p.text })
+  hl("@lsp.type.decorator",  { fg = p.text })
   hl("@lsp.mod.deprecated",  { strikethrough = true })
 
   -- Diagnostics
@@ -348,10 +348,13 @@ local function apply()
   hl("RenderMarkdownLink",       { fg = p.md_link, underline = true })
   hl("RenderMarkdownQuote",      { fg = p.comment, italic = true })
 
-  -- Djinni
-  hl("DjinniYou",    { fg = p.bright, bold = true })
-  hl("DjinniAI",     { fg = p.white, bold = true })
-  hl("DjinniSystem", { fg = p.mid, bold = true })
+  -- Djinni (chat buffers / nowork panel)
+  hl("DjinniYou",    { fg = p.white, bold = true })
+  hl("DjinniAI",     { fg = p.bright, bold = true })
+  hl("DjinniSystem", { fg = p.muted, bold = true })
+  hl("DjinniPanel",       { fg = p.text, bg = p.bg1 })
+  hl("DjinniPanelBorder", { fg = p.dim, bg = p.bg1 })
+  hl("DjinniPanelTitle",  { fg = p.white, bg = p.bg1, bold = true })
 end
 
 return {
@@ -360,7 +363,7 @@ return {
   lazy = false,
   priority = 1000,
   config = function()
-    vim.o.background = "dark"
+    vim.o.background = "light"
     apply()
     vim.api.nvim_create_autocmd("ColorScheme", {
       callback = apply,
