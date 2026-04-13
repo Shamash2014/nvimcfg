@@ -1736,7 +1736,7 @@ end
 function M._flush_pending(buf)
   local pt = M._pending_text[buf]
   if not pt or #pt == 0 then return end
-  M._text_dirty = false
+  M._text_dirty[buf] = nil
   local pending = table.concat(pt)
   M._pending_text[buf] = {}
   if pending == "" then return end
@@ -1801,7 +1801,8 @@ end
 
 M._watchdog_tick = 0
 M._checktime_tick = 0
-M._text_dirty = false
+M._text_dirty = {}
+M._flush_robin = 0
 
 function M._start_global_timer()
   if M._global_timer then return end
@@ -1817,53 +1818,61 @@ function M._start_global_timer()
       local do_watchdog = M._watchdog_tick % 6 == 0
 
       local any_streaming = false
+      local stream_bufs = {}
       for buf, _ in pairs(M._streaming) do
         if not vim.api.nvim_buf_is_valid(buf) then
           M._streaming[buf] = nil
           if M._stream_cleanup[buf] then
             M._stream_cleanup[buf](true)
           end
-          goto next_buf
+        else
+          any_streaming = true
+          stream_bufs[#stream_bufs + 1] = buf
         end
+      end
 
-        any_streaming = true
-
-        if M._text_dirty and vim.fn.bufwinid(buf) ~= -1 then
+      local MAX_FLUSH = 2
+      local n = #stream_bufs
+      local flushed = 0
+      for i = 1, n do
+        local idx = ((M._flush_robin + i - 1) % n) + 1
+        local buf = stream_bufs[idx]
+        if flushed < MAX_FLUSH and M._text_dirty[buf] and vim.fn.bufwinid(buf) ~= -1 then
           M._flush_pending(buf)
+          flushed = flushed + 1
         end
 
         if do_watchdog then
           if M._pending_permission and M._pending_permission[buf] then
             M._last_event_time[buf] = vim.uv.now()
-            goto next_buf
-          end
-          local client = M._stream_client[buf]
-          local ok_alive, alive = pcall(function() return client and client:is_alive() end)
-          local dead = not ok_alive or not alive
-          local has_active_tool = (M._active_tool_count[buf] or 0) > 0
-          local elapsed = vim.uv.now() - (M._last_event_time[buf] or vim.uv.now())
-          local no_events = not M._events_received[buf] and elapsed > 180000
-          local tool_stuck = has_active_tool and elapsed > 300000
-          local stale = not dead and not has_active_tool and M._events_received[buf] and elapsed > 900000
-          if dead or no_events or tool_stuck or stale then
-            local exit_info = dead and client and client.exit_code and " (exit " .. tostring(client.exit_code) .. ")" or ""
-            local reason = dead and ("Process died" .. exit_info) or no_events and "No events received for 180s" or stale and "No events for 900s" or "Tool stuck for 300s"
-            log.warn("watchdog triggered: " .. reason)
-            local pt = M._pending_text[buf]
-            if not pt then pt = {}; M._pending_text[buf] = pt end
-            pt[#pt + 1] = "\n\n**" .. reason .. "**\n"
-            M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
-            M._invalidate_session(buf)
-            M._last_tool_failed[buf] = false
-            M._continuation_count[buf] = 0
-            if M._stream_cleanup[buf] then
-              M._stream_cleanup[buf](true)
+          else
+            local client = M._stream_client[buf]
+            local ok_alive, alive = pcall(function() return client and client:is_alive() end)
+            local dead = not ok_alive or not alive
+            local has_active_tool = (M._active_tool_count[buf] or 0) > 0
+            local elapsed = vim.uv.now() - (M._last_event_time[buf] or vim.uv.now())
+            local no_events = not M._events_received[buf] and elapsed > 180000
+            local tool_stuck = has_active_tool and elapsed > 300000
+            local stale = not dead and not has_active_tool and M._events_received[buf] and elapsed > 900000
+            if dead or no_events or tool_stuck or stale then
+              local exit_info = dead and client and client.exit_code and " (exit " .. tostring(client.exit_code) .. ")" or ""
+              local reason = dead and ("Process died" .. exit_info) or no_events and "No events received for 180s" or stale and "No events for 900s" or "Tool stuck for 300s"
+              log.warn("watchdog triggered: " .. reason)
+              local pt = M._pending_text[buf]
+              if not pt then pt = {}; M._pending_text[buf] = pt end
+              pt[#pt + 1] = "\n\n**" .. reason .. "**\n"
+              M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
+              M._invalidate_session(buf)
+              M._last_tool_failed[buf] = false
+              M._continuation_count[buf] = 0
+              if M._stream_cleanup[buf] then
+                M._stream_cleanup[buf](true)
+              end
             end
           end
         end
-
-        ::next_buf::
       end
+      M._flush_robin = M._flush_robin + MAX_FLUSH
 
       if any_streaming then
         local panel_ok, panel = pcall(require, "djinni.nowork.panel")
@@ -1995,7 +2004,7 @@ function M._on_session_update(buf, data)
         local pt = M._pending_text[buf]
         if not pt then pt = {}; M._pending_text[buf] = pt end
         pt[#pt + 1] = text
-        M._text_dirty = true
+        M._text_dirty[buf] = true
       end
 
     elseif update_type == "agent_thought_chunk" then
@@ -2004,7 +2013,7 @@ function M._on_session_update(buf, data)
         local pt = M._pending_text[buf]
         if not pt then pt = {}; M._pending_text[buf] = pt end
         pt[#pt + 1] = text
-        M._text_dirty = true
+        M._text_dirty[buf] = true
       end
 
     elseif update_type == "tool_call" then

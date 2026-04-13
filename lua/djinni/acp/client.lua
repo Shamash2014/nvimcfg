@@ -266,12 +266,27 @@ function M:_on_stdout(data)
   self:_start_drain()
 end
 
+function M:_drain_interval()
+  local n = 0
+  for _ in pairs(self.subscribers) do n = n + 1 end
+  return math.min(200, 50 * math.max(1, n))
+end
+
 function M:_start_drain()
-  if self._drain_timer then return end
+  local interval = self:_drain_interval()
+  if self._drain_timer then
+    if self._drain_interval_ms == interval then return end
+    if not self._drain_timer:is_closing() then
+      self._drain_timer:stop()
+      self._drain_timer:close()
+    end
+    self._drain_timer = nil
+  end
+  self._drain_interval_ms = interval
   self._drain_timer = vim.uv.new_timer()
   local client = self
   self._drain_scheduled = false
-  self._drain_timer:start(8, 50, function()
+  self._drain_timer:start(8, interval, function()
     if client._drain_scheduled then return end
     client._drain_scheduled = true
     vim.schedule(function()
@@ -338,6 +353,7 @@ function M:_drain_all()
       self._drain_timer:close()
     end
     self._drain_timer = nil
+    self._drain_interval_ms = nil
   end
 end
 
@@ -477,6 +493,7 @@ end
 
 function M:unsubscribe(session_id)
   self.subscribers[session_id] = nil
+  if self._drain_timer then self:_start_drain() end
 end
 
 function M:is_alive()
