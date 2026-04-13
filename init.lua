@@ -43,6 +43,7 @@ o.colorcolumn = "80"
 o.cursorline = false
 o.equalalways = true
 o.eadirection = "both"
+o.guicursor = "n-v-c:block-Cursor-blinkon500-blinkoff500,i-ci-ve:ver25-Cursor-blinkon500-blinkoff500,r-cr:hor20-Cursor-blinkon500-blinkoff500"
 
 -- Command line and messages
 o.cmdheight = 1
