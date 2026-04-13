@@ -269,7 +269,7 @@ end
 function M:_drain_interval()
   local n = 0
   for _ in pairs(self.subscribers) do n = n + 1 end
-  return math.min(200, 50 * math.max(1, n))
+  return math.min(200, 80 * math.max(1, n))
 end
 
 function M:_start_drain()
@@ -342,6 +342,8 @@ function M:_drain_all()
           log.err("subscriber update error: " .. tostring(h_err))
         end
       end
+    elseif not sub then
+      self._update_queue[sid] = nil
     elseif #uq > 0 then
       has_work = true
     end
@@ -493,6 +495,7 @@ end
 
 function M:unsubscribe(session_id)
   self.subscribers[session_id] = nil
+  self._update_queue[session_id] = nil
   if self._drain_timer then self:_start_drain() end
 end
 

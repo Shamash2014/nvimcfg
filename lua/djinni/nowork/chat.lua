@@ -2266,7 +2266,9 @@ function M._on_session_update(buf, data)
       end
       local result_text = update.resultText or update.message
       if result_text and result_text ~= "" then
-        M._pending_text[buf] = (M._pending_text[buf] or "") .. "\n" .. result_text
+        local pt = M._pending_text[buf]
+        if not pt then pt = {}; M._pending_text[buf] = pt end
+        pt[#pt + 1] = "\n" .. result_text
       end
 
     elseif update_type == "system" or update_type == "system_message" then
