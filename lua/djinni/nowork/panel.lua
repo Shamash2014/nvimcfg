@@ -923,7 +923,7 @@ function M.render()
     else marker = "·" end
 
     local letter_part = s.letter and (s.letter .. " ") or "  "
-    local name = s.status == "permission" and s.activity or s.name
+    local name = s.name
     local text = indent .. marker .. " " .. letter_part .. truncate(name, panel_w - #indent - 6)
     add(text)
     local i = ln()
@@ -934,6 +934,8 @@ function M.render()
       input = "DiagnosticWarn", idle = "NonText",
     })[s.status] or "Comment"
     hl(i - 1, #indent, #indent + #marker, marker_hl)
+    local name_start = #indent + #marker + 1 + #letter_part
+    hl(i - 1, name_start, #text, "DjinniSessionName")
     if s.letter then
       hl(i - 1, #indent + #marker + 1, #indent + #marker + 2, s.active and "CursorLineNr" or "Identifier")
     end
@@ -949,7 +951,7 @@ function M.render()
     end
     if #vt_parts > 0 then virt(i - 1, vt_parts) end
 
-    if s.activity and s.activity ~= "" and s.status ~= "permission" then
+    if s.activity and s.activity ~= "" then
       local act = indent .. "  " .. truncate(s.activity, panel_w - #indent - 4)
       add(act)
       local ai = ln()
@@ -1077,7 +1079,7 @@ function M.render()
       local hi = ln()
       M._line_index[hi] = { type = "project", root = root_data.root, id = root_data.root }
       hl(hi - 1, 0, #arrow, "NonText")
-      hl(hi - 1, #arrow + 1, #header, "Directory")
+      hl(hi - 1, #arrow + 1, #header, "DjinniSessionName")
       local hdr_vt = {}
       if n_sessions > 0 then
         table.insert(hdr_vt, { n_sessions .. " live", "DiagnosticOk" })
@@ -1250,14 +1252,16 @@ end
 
 function M.close()
   local source = M._source_tab
-  if M._buf and vim.api.nvim_buf_is_valid(M._buf) then
-    pcall(vim.api.nvim_buf_delete, M._buf, { force = true })
-  end
+  local buf = M._buf
   M._buf = nil
   M._win = nil
   M._tab = nil
-  if source and pcall(vim.api.nvim_set_current_tabpage, source) then
-    M._source_tab = nil
+  M._source_tab = nil
+  if source and vim.api.nvim_tabpage_is_valid(source) then
+    vim.api.nvim_set_current_tabpage(source)
+  end
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
   end
 end
 

@@ -930,7 +930,7 @@ function M._setup_keymaps(buf)
   map("n", "p", function()
     get_clipboard_image(function(img)
       if not img then
-        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('"_p', true, false, true), "n", false)
+        vim.cmd("normal! p")
         return
       end
       M._paste_image(buf, img)

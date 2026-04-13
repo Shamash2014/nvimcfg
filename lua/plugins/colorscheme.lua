@@ -32,12 +32,12 @@ end
 
 local function light_palette()
   return {
-    bg      = "#f2ead8",
-    bg1     = "#e9e1ce",
-    bg2     = "#dfd7c4",
-    bg3     = "#d4ccb8",
-    dim     = "#c4bca8",
-    muted   = "#948c78",
+    bg      = "#eee8d5",
+    bg1     = "#e5dfcb",
+    bg2     = "#dbd5c1",
+    bg3     = "#d0cab6",
+    dim     = "#bfb9a5",
+    muted   = "#887a64",
     mid     = "#605848",
     text    = "#352f28",
     bright  = "#1e1a14",
@@ -298,6 +298,7 @@ local function apply()
   hl("BlinkCmpKind",           { fg = p.mid })
   hl("BlinkCmpDoc",            { fg = p.text, bg = p.bg1 })
   hl("BlinkCmpDocBorder",      { fg = p.dim, bg = p.bg1 })
+  hl("BlinkCmpGhostText",     { fg = p.muted, italic = true })
 
   -- Which-key
   hl("WhichKey",          { fg = p.white, bold = true })
@@ -355,6 +356,7 @@ local function apply()
   hl("DjinniPanel",       { fg = p.text, bg = p.bg1 })
   hl("DjinniPanelBorder", { fg = p.dim, bg = p.bg1 })
   hl("DjinniPanelTitle",  { fg = p.white, bg = p.bg1, bold = true })
+  hl("DjinniSessionName", { fg = p.bright, bold = true })
 end
 
 return {
