@@ -928,9 +928,12 @@ function M._setup_keymaps(buf)
     end
   end)
   map("n", "p", function()
+    local reg = vim.fn.getreg(vim.v.register)
+    local regtype = vim.fn.getregtype(vim.v.register)
     get_clipboard_image(function(img)
       if not img then
-        vim.cmd("normal! p")
+        vim.fn.setreg("z", reg, regtype)
+        vim.cmd('normal! "zp')
         return
       end
       M._paste_image(buf, img)
@@ -1212,7 +1215,7 @@ function M.attach(buf)
     end,
   })
 
-  vim.api.nvim_create_autocmd("BufWipeout", {
+  vim.api.nvim_create_autocmd("BufDelete", {
     buffer = buf,
     once = true,
     callback = function()
