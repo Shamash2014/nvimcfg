@@ -250,20 +250,29 @@ function M.execute(buf, text)
   end
 
   if cmd.name == "/clear" then
-    local session_mod = require("djinni.acp.session")
     local root = chat.get_project_root(buf)
     local sid = chat.get_session_id(buf) or chat._sessions[buf]
+    local provider_name = chat.get_provider(buf)
     if chat._streaming[buf] then
       if chat._stream_cleanup[buf] then chat._stream_cleanup[buf](true) end
     end
     if root and sid and sid ~= "" then
-      session_mod.send_message(root, sid, "/clear", function() end)
+      local session_mod = require("djinni.acp.session")
+      session_mod.send_message(root, sid, "/clear", function()
+        vim.schedule(function()
+          session_mod.close_task_session(root, sid, provider_name)
+        end)
+      end, nil, provider_name)
+      session_mod.unsubscribe_session(root, sid, provider_name)
     end
+    chat._sessions[buf] = nil
     local mcp_mod = require("djinni.nowork.mcp")
     if root then mcp_mod.clear_cache(root) end
     chat._set_frontmatter_field(buf, "status", "")
+    chat._set_frontmatter_field(buf, "session", "")
     chat._set_frontmatter_field(buf, "tokens", "")
     chat._set_frontmatter_field(buf, "cost", "")
+    chat._waiting_input[buf] = nil
     chat._continuation_count[buf] = 0
     chat._last_tool_failed[buf] = false
     chat._queue[buf] = nil
