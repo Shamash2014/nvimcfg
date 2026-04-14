@@ -1,5 +1,23 @@
 local M = {}
 
+local LOCAL_COMMAND_META = {
+  ["/model"] = { description = "Set or select the active model", input_hint = "model id" },
+  ["/provider"] = { description = "Switch the active ACP provider", input_hint = "provider name" },
+  ["/compact"] = { description = "Ask the agent to compact the conversation" },
+  ["/new"] = { description = "Start a new local chat session" },
+  ["/cost"] = { description = "Ask the agent for cost details" },
+  ["/mode"] = { description = "Set or cycle the session mode", input_hint = "mode id" },
+  ["/skill"] = { description = "Toggle a project skill", input_hint = "skill name" },
+  ["/mcp"] = { description = "Toggle an MCP server", input_hint = "server name" },
+  ["/clear"] = { description = "Clear the conversation and reset session state" },
+  ["/resume"] = { description = "Resume an existing ACP session if supported" },
+  ["/fork"] = { description = "Fork this chat into a new task buffer" },
+  ["/tree"] = { description = "Show the task tree" },
+  ["/lesson"] = { description = "Save or manage a lesson", input_hint = "lesson text" },
+  ["/lessons"] = { description = "Extract reusable lessons from the conversation" },
+  ["/help"] = { description = "Show chat help" },
+}
+
 function M.get_models(buf)
   local chat = require("djinni.nowork.chat")
   local session = require("djinni.acp.session")
@@ -21,6 +39,7 @@ M.commands = {
   { name = "/skill", args = true, forward = false },
   { name = "/mcp", args = true, forward = false },
   { name = "/clear", args = false, forward = false },
+  { name = "/resume", args = false, forward = false },
   { name = "/fork", args = false, forward = false },
   { name = "/tree", args = false, forward = false },
   { name = "/lesson", args = true, forward = false },
@@ -34,6 +53,62 @@ function M.get_names()
     table.insert(names, cmd.name)
   end
   return names
+end
+
+local function add_slash_command(items, seen, item)
+  local slash = item and item.slash
+  if not slash or slash == "" or seen[slash] then return end
+  seen[slash] = true
+  items[#items + 1] = item
+end
+
+function M.get_slash_commands(buf)
+  local chat = require("djinni.nowork.chat")
+  local skills_mod = require("djinni.nowork.skills")
+  local root = chat.get_project_root(buf)
+  local items = {}
+  local seen = {}
+
+  for _, cmd in ipairs(M.commands) do
+    local meta = LOCAL_COMMAND_META[cmd.name] or {}
+    add_slash_command(items, seen, {
+      name = cmd.name:sub(2),
+      slash = cmd.name,
+      description = meta.description or "",
+      input = cmd.args and { hint = meta.input_hint or "arguments" } or nil,
+      source = "local",
+      forward = cmd.forward,
+      args = cmd.args,
+    })
+  end
+
+  local advertised = chat._available_commands[buf] or {}
+  for _, cmd in ipairs(advertised) do
+    local name = cmd.name
+    if type(name) == "string" and name ~= "" then
+      add_slash_command(items, seen, {
+        name = name,
+        slash = "/" .. name,
+        description = cmd.description or "",
+        input = cmd.input,
+        source = "agent",
+      })
+    end
+  end
+
+  if root then
+    local discovered = skills_mod.discover(root)
+    for _, skill in ipairs(discovered) do
+      add_slash_command(items, seen, {
+        name = skill.name,
+        slash = "/" .. skill.name,
+        description = skill.description or "",
+        source = "skill",
+      })
+    end
+  end
+
+  return items
 end
 
 function M.match(text)
@@ -244,6 +319,11 @@ function M.execute(buf, text)
     return true
   end
 
+  if cmd.name == "/resume" then
+    chat.resume_session(buf, args and vim.trim(args) ~= "" and vim.trim(args) or nil)
+    return true
+  end
+
   if cmd.name == "/tree" then
     chat.show_tree(buf)
     return true
@@ -393,25 +473,22 @@ function M.omnifunc(findstart, base)
   end
 
   local matches = {}
-  for _, cmd in ipairs(M.commands) do
-    if cmd.name:find(base, 1, true) == 1 then
-      table.insert(matches, {
-        word = cmd.name,
-        menu = cmd.args and "<args>" or "",
-      })
-    end
-  end
-
-  local ok_chat, chat = pcall(require, "djinni.nowork.chat")
-  local ok_skills, skills_mod = pcall(require, "djinni.nowork.skills")
-  if ok_chat and ok_skills then
-    local root = chat.get_project_root(vim.api.nvim_get_current_buf())
-    local discovered = skills_mod.discover(root)
-    for _, skill in ipairs(discovered) do
-      local word = "/" .. skill.name
-      if word:find(base, 1, true) == 1 then
-        table.insert(matches, { word = word, menu = skill.description or "" })
+  local source_labels = {
+    ["local"] = "[local]",
+    agent = "[agent]",
+    skill = "[skill]",
+  }
+  local slash_cmds = M.get_slash_commands(vim.api.nvim_get_current_buf())
+  for _, item in ipairs(slash_cmds) do
+    local word = item.slash
+    if word and word:find(base, 1, true) == 1 then
+      local menu = source_labels[item.source] or ""
+      if item.description and item.description ~= "" then
+        menu = menu ~= "" and (menu .. " " .. item.description) or item.description
+      elseif item.input and item.input.hint then
+        menu = menu ~= "" and (menu .. " " .. item.input.hint) or item.input.hint
       end
+      table.insert(matches, { word = word, menu = menu })
     end
   end
 

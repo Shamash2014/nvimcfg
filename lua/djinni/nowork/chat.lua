@@ -2954,6 +2954,104 @@ function M.restart_session(buf)
   M._fresh_restart(buf, root)
 end
 
+function M.resume_session(buf, target_session_id)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local root = M.get_project_root(buf)
+  if not root then
+    vim.notify("[djinni] No project root", vim.log.levels.WARN)
+    return
+  end
+
+  local provider_name = get_provider(buf)
+  local sess_opts = build_session_opts(buf, root)
+
+  local function attach_session(session_id, label)
+    if not session_id or session_id == "" then return end
+    if M._streaming[buf] and M._stream_cleanup[buf] then
+      M._stream_cleanup[buf](true)
+    end
+    local old_sid = M.get_session_id(buf) or M._sessions[buf]
+    if old_sid and old_sid ~= "" and old_sid ~= session_id then
+      session.unsubscribe_session(root, old_sid, provider_name)
+      session.close_task_session(root, old_sid, provider_name)
+    end
+    M._set_frontmatter_field(buf, "session", "")
+    M._sessions[buf] = nil
+    M._waiting_input[buf] = nil
+    M._continuation_count[buf] = 0
+    M._last_tool_failed[buf] = false
+    M._queue[buf] = nil
+    M._usage[buf] = nil
+    M._available_commands[buf] = nil
+    M._modes[buf] = nil
+    M._current_mode[buf] = nil
+    M._config_options[buf] = nil
+    M._pending_text[buf] = {}
+    M._append_batch[buf] = nil
+
+    session.load_task_session(root, session_id, function(err, result)
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        if err then
+          vim.notify("[djinni] Resume failed: " .. (err.message or "unknown"), vim.log.levels.WARN)
+          return
+        end
+        M._set_frontmatter_field(buf, "session", session_id)
+        M._sessions[buf] = session_id
+        M._subscribe_session(buf, root, session_id)
+        M._restore_mode(buf, root, session_id, result)
+        local lc = vim.api.nvim_buf_line_count(buf)
+        vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
+          "", "---", "", "@System", "Session resumed" .. (label and (": " .. label) or ""), "",
+        })
+        vim.notify("[djinni] Session resumed", vim.log.levels.INFO)
+      end)
+    end, sess_opts)
+  end
+
+  if target_session_id and target_session_id ~= "" then
+    attach_session(target_session_id, target_session_id)
+    return
+  end
+
+  session.list_task_sessions(root, function(err, sessions)
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      if err then
+        vim.notify("[djinni] /resume not supported: " .. (err.message or "unknown"), vim.log.levels.WARN)
+        return
+      end
+      if not sessions or #sessions == 0 then
+        vim.notify("[djinni] No resumable sessions", vim.log.levels.INFO)
+        return
+      end
+
+      table.sort(sessions, function(a, b)
+        local at = a.updatedAt or ""
+        local bt = b.updatedAt or ""
+        if at == bt then
+          return (a.title or a.sessionId or "") < (b.title or b.sessionId or "")
+        end
+        return at > bt
+      end)
+
+      vim.ui.select(sessions, {
+        prompt = "Resume session:",
+        format_item = function(item)
+          local title = item.title or "(untitled)"
+          local updated = item.updatedAt or "unknown time"
+          return title .. "  [" .. updated .. "]  " .. (item.sessionId or "")
+        end,
+      }, function(choice)
+        if not choice or not choice.sessionId then return end
+        vim.schedule(function()
+          attach_session(choice.sessionId, choice.title or choice.sessionId)
+        end)
+      end)
+    end)
+  end, sess_opts)
+end
+
 
 function M.switch_provider(buf, choice)
   if not vim.api.nvim_buf_is_valid(buf) then return end
@@ -3038,24 +3136,57 @@ function M.pick_mode(buf)
 end
 
 function M.get_slash_commands(buf)
-  return M._available_commands[buf] or {}
+  return commands.get_slash_commands(buf)
 end
 
 function M.pick_command(buf)
-  local cmds = M._available_commands[buf]
+  local cmds = M.get_slash_commands(buf)
   if not cmds or #cmds == 0 then
     vim.notify("[djinni] No slash commands available", vim.log.levels.WARN)
     return
   end
+  local source_labels = {
+    ["local"] = "[local]",
+    agent = "[agent]",
+    skill = "[skill]",
+  }
+  local function run_command(cmd, input)
+    local text = cmd.slash or ("/" .. cmd.name)
+    if input and input ~= "" then
+      text = text .. " " .. input
+    end
+    if cmd.source == "skill" then
+      commands.execute(buf, "/skill " .. cmd.name)
+      return
+    end
+    if commands.execute(buf, text) then
+      return
+    end
+    M.send(buf, text)
+  end
   vim.ui.select(cmds, {
     prompt = "Slash command:",
     format_item = function(cmd)
-      return "/" .. cmd.name .. "  " .. (cmd.description or "")
+      local parts = { cmd.slash or ("/" .. cmd.name) }
+      local source = source_labels[cmd.source]
+      if source then parts[#parts + 1] = source end
+      if cmd.description and cmd.description ~= "" then
+        parts[#parts + 1] = cmd.description
+      elseif cmd.input and cmd.input.hint then
+        parts[#parts + 1] = cmd.input.hint
+      end
+      return table.concat(parts, "  ")
     end,
   }, function(cmd)
-    if cmd then
-      M.send(buf, "/" .. cmd.name)
+    if not cmd then return end
+    if cmd.input and cmd.input.hint then
+      vim.ui.input({ prompt = (cmd.slash or ("/" .. cmd.name)) .. " ", }, function(value)
+        if value == nil then return end
+        vim.schedule(function() run_command(cmd, vim.trim(value)) end)
+      end)
+      return
     end
+    run_command(cmd)
   end)
 end
 

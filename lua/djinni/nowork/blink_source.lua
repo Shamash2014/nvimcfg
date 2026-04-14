@@ -93,25 +93,23 @@ function source:get_completions(ctx, callback)
   if before_cursor:match("^%s*/") then
     local typed = before_cursor:match("/(.*)$") or ""
     local commands = require("djinni.nowork.commands")
-    local skills = require("djinni.nowork.skills")
-    local root = vim.fn.getcwd()
-    for _, cmd in ipairs(commands.commands) do
-      if cmd.name:find("/" .. typed, 1, true) == 1 then
+    local source_kinds = {
+      ["local"] = vim.lsp.protocol.CompletionItemKind.Function,
+      agent = vim.lsp.protocol.CompletionItemKind.Interface,
+      skill = vim.lsp.protocol.CompletionItemKind.EnumMember,
+    }
+    local buf = vim.api.nvim_get_current_buf()
+    for _, cmd in ipairs(commands.get_slash_commands(buf)) do
+      local slash = cmd.slash or ("/" .. cmd.name)
+      if slash:find("/" .. typed, 1, true) == 1 then
+        local docs = cmd.description
+        if (not docs or docs == "") and cmd.input and cmd.input.hint then
+          docs = cmd.input.hint
+        end
         table.insert(items, {
-          label = cmd.name,
-          kind = vim.lsp.protocol.CompletionItemKind.Function,
-          documentation = cmd.args and { kind = "markdown", value = "Takes arguments" } or nil,
-        })
-      end
-    end
-    local discovered = skills.discover(root)
-    for _, skill in ipairs(discovered) do
-      local slash_name = "/" .. skill.name
-      if slash_name:find("/" .. typed, 1, true) == 1 then
-        table.insert(items, {
-          label = slash_name,
-          kind = vim.lsp.protocol.CompletionItemKind.EnumMember,
-          documentation = skill.description ~= "" and { kind = "markdown", value = skill.description } or nil,
+          label = slash,
+          kind = source_kinds[cmd.source] or vim.lsp.protocol.CompletionItemKind.Text,
+          documentation = docs and docs ~= "" and { kind = "markdown", value = docs } or nil,
         })
       end
     end

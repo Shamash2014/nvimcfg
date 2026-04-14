@@ -123,10 +123,12 @@ function M:_initialize()
       self:_flush_ready_error("initialize failed: " .. (err.message or "unknown"))
       return
     end
-    log.info("initialize OK caps=" .. tostring(result and result.agentCapabilities ~= nil) .. " auth=" .. tostring(result and result.authMethods ~= nil))
+    log.info("initialize OK caps=" .. tostring(result and (result.serverCapabilities ~= nil or result.agentCapabilities ~= nil)) .. " auth=" .. tostring(result and result.authMethods ~= nil))
     if result then
-      self.agent_capabilities = result.agentCapabilities
-      self.agent_info = result.agentInfo
+      self.server_capabilities = result.serverCapabilities or result.agentCapabilities
+      self.agent_capabilities = result.agentCapabilities or result.serverCapabilities
+      self.server_info = result.serverInfo or result.agentInfo
+      self.agent_info = result.agentInfo or result.serverInfo
       self.auth_methods = result.authMethods
     end
     if self.auth_methods and #self.auth_methods > 0 then

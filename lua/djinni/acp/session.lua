@@ -79,6 +79,53 @@ local function spawn_client(project_root, provider_name)
   return client
 end
 
+local function get_client_capabilities(client)
+  if not client then return nil end
+  return client.server_capabilities or client.agent_capabilities or nil
+end
+
+local function get_resume_config(client, provider_name)
+  local caps = get_client_capabilities(client)
+  local session_caps = caps and caps.sessionCapabilities or nil
+  if (caps and caps.loadSession) or (session_caps and session_caps.resume) then
+    return { method = "session/load", needs_cwd = true }
+  end
+  local provider = Provider.get(provider_name)
+  return provider.resume or { method = "session/resume" }
+end
+
+local function supports_session_list(client)
+  local caps = get_client_capabilities(client)
+  local session_caps = caps and caps.sessionCapabilities or nil
+  return (caps and caps.sessionList) or (session_caps and session_caps.list) or false
+end
+
+local function build_resume_params(resume_cfg, project_root, session_id, opts)
+  if resume_cfg.needs_cwd then
+    return {
+      sessionId = session_id,
+      cwd = project_root,
+      mcpServers = build_mcp_servers(opts.mcpServers),
+    }
+  end
+  return { sessionId = session_id }
+end
+
+local function apply_session_result(entry, session_id, result, opts)
+  entry.model_config_option = result and extract_model_config_option(result.configOptions)
+  if not entry.model_config_option and result and (result.models or result.availableModels) then
+    entry.available_models = result.models or result.availableModels
+  end
+  register_session(session_id, entry)
+
+  if opts.model and opts.model ~= "" then
+    local model_id = Provider.resolve_model(entry.provider_name, opts.model, M.get_available_models(session_id))
+    if model_id then
+      M.set_model(nil, session_id, model_id)
+    end
+  end
+end
+
 local function register_session(session_id, entry)
   M.sessions_by_id[session_id] = entry
 
@@ -140,19 +187,8 @@ function M.create_task_session(project_root, callback, opts)
         client = client,
         provider_name = provider_name,
         project_root = project_root,
-        model_config_option = result and extract_model_config_option(result.configOptions),
       }
-      if not entry.model_config_option and result and (result.models or result.availableModels) then
-        entry.available_models = result.models or result.availableModels
-      end
-      register_session(session_id, entry)
-
-      if opts.model and opts.model ~= "" then
-        local model_id = Provider.resolve_model(provider_name, opts.model, M.get_available_models(session_id))
-        if model_id then
-          M.set_model(nil, session_id, model_id)
-        end
-      end
+      apply_session_result(entry, session_id, result, opts)
 
       if callback then
         callback(nil, session_id, result)
@@ -176,15 +212,8 @@ function M.load_task_session(project_root, session_id, callback, opts)
       return
     end
 
-    local provider = Provider.get(provider_name)
-    local resume_cfg = provider.resume or { method = "session/resume" }
-
-    local params
-    if resume_cfg.needs_cwd then
-      params = { sessionId = session_id, cwd = project_root, mcpServers = build_mcp_servers(opts.mcpServers) }
-    else
-      params = { sessionId = session_id }
-    end
+    local resume_cfg = get_resume_config(client, provider_name)
+    local params = build_resume_params(resume_cfg, project_root, session_id, opts)
 
     client:request(resume_cfg.method, params, function(err, result)
       if err then
@@ -198,19 +227,8 @@ function M.load_task_session(project_root, session_id, callback, opts)
         client = client,
         provider_name = provider_name,
         project_root = project_root,
-        model_config_option = result and extract_model_config_option(result.configOptions),
       }
-      if not entry.model_config_option and result and (result.models or result.availableModels) then
-        entry.available_models = result.models or result.availableModels
-      end
-      register_session(session_id, entry)
-
-      if opts.model and opts.model ~= "" then
-        local model_id = Provider.resolve_model(provider_name, opts.model, M.get_available_models(session_id))
-        if model_id then
-          M.set_model(nil, session_id, model_id)
-        end
-      end
+      apply_session_result(entry, session_id, result, opts)
 
       if callback then callback(nil, result) end
     end, { timeout = 30000 })
@@ -255,19 +273,8 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
           client = client,
           provider_name = provider_name,
           project_root = project_root,
-          model_config_option = result and extract_model_config_option(result.configOptions),
         }
-        if not entry.model_config_option and result and (result.models or result.availableModels) then
-          entry.available_models = result.models or result.availableModels
-        end
-        register_session(new_sid, entry)
-
-        if opts.model and opts.model ~= "" then
-          local model_id = Provider.resolve_model(provider_name, opts.model, M.get_available_models(new_sid))
-          if model_id then
-            M.set_model(nil, new_sid, model_id)
-          end
-        end
+        apply_session_result(entry, new_sid, result, opts)
 
         log.info("create_or_resume: new session OK sid=" .. new_sid)
         if callback then callback(nil, new_sid, result) end
@@ -275,14 +282,8 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
     end
 
     if session_id and session_id ~= "" then
-      local provider = Provider.get(provider_name)
-      local resume_cfg = provider.resume or { method = "session/resume" }
-      local params
-      if resume_cfg.needs_cwd then
-        params = { sessionId = session_id, cwd = project_root, mcpServers = build_mcp_servers(opts.mcpServers) }
-      else
-        params = { sessionId = session_id }
-      end
+      local resume_cfg = get_resume_config(client, provider_name)
+      local params = build_resume_params(resume_cfg, project_root, session_id, opts)
 
       log.info("create_or_resume: trying resume sid=" .. session_id)
       client:request(resume_cfg.method, params, function(err, result)
@@ -296,19 +297,8 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
           client = client,
           provider_name = provider_name,
           project_root = project_root,
-          model_config_option = result and extract_model_config_option(result.configOptions),
         }
-        if not entry.model_config_option and result and (result.models or result.availableModels) then
-          entry.available_models = result.models or result.availableModels
-        end
-        register_session(session_id, entry)
-
-        if opts.model and opts.model ~= "" then
-          local model_id = Provider.resolve_model(provider_name, opts.model, M.get_available_models(session_id))
-          if model_id then
-            M.set_model(nil, session_id, model_id)
-          end
-        end
+        apply_session_result(entry, session_id, result, opts)
 
         log.info("create_or_resume: resume OK sid=" .. session_id)
         if callback then callback(nil, session_id, result) end
@@ -316,6 +306,67 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
     else
       do_create()
     end
+  end)
+end
+
+function M.list_task_sessions(project_root, callback, opts)
+  opts = opts or {}
+  local config = get_config()
+  local provider_name = opts.provider or config.provider
+  local log = require("djinni.nowork.log")
+  local client = spawn_client(project_root, provider_name)
+
+  client:when_ready(function(ready_err)
+    if ready_err then
+      pcall(function() client:shutdown(true) end)
+      if callback then callback(ready_err, nil) end
+      return
+    end
+
+    if not supports_session_list(client) then
+      pcall(function() client:shutdown(true) end)
+      if callback then callback({ message = "session/list not supported" }, nil) end
+      return
+    end
+
+    local all_sessions = {}
+    local function fetch_page(cursor)
+      local params = {}
+      if project_root and project_root ~= "" then
+        params.cwd = project_root
+      end
+      if cursor and cursor ~= "" then
+        params.cursor = cursor
+      end
+      if next(params) == nil then
+        params = vim.empty_dict()
+      end
+
+      client:request("session/list", params, function(err, result)
+        if err then
+          pcall(function() client:shutdown(true) end)
+          log.warn("list_task_sessions: session/list error: " .. vim.inspect(err))
+          if callback then callback(err, nil) end
+          return
+        end
+
+        local sessions = result and (result.sessions or result.items or result) or {}
+        for _, item in ipairs(sessions) do
+          all_sessions[#all_sessions + 1] = item
+        end
+
+        local next_cursor = result and result.nextCursor or nil
+        if next_cursor and next_cursor ~= "" then
+          fetch_page(next_cursor)
+          return
+        end
+
+        pcall(function() client:shutdown(true) end)
+        if callback then callback(nil, all_sessions) end
+      end, { timeout = 30000 })
+    end
+
+    fetch_page(nil)
   end)
 end
 
