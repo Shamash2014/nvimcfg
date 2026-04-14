@@ -1615,6 +1615,12 @@ function M.send(buf, text, images)
 
   local sid = M.get_session_id(buf) or M._sessions[buf]
   log.info("send: buf=" .. tostring(buf) .. " sid=" .. tostring(sid) .. " creating=" .. tostring(M._creating_session[buf]) .. " len=" .. tostring(#text))
+  if M._streaming[buf] then
+    if not M._queue[buf] then M._queue[buf] = {} end
+    table.insert(M._queue[buf], { text = text, images = images })
+    log.info("send: queuing message (streaming)")
+    return
+  end
   if not sid or sid == "" then
     if not M._queue[buf] then M._queue[buf] = {} end
     table.insert(M._queue[buf], { text = text, images = images })
@@ -1735,20 +1741,28 @@ local FORCE_KILL_WINDOW = 2
 function M.interrupt(buf)
   local now = vim.uv.hrtime() / 1e9
   local last = M._last_interrupt_time[buf]
-  M._last_interrupt_time[buf] = now
 
-  if last and (now - last) < FORCE_KILL_WINDOW and not M._streaming[buf] then
+  if last and (now - last) < FORCE_KILL_WINDOW then
     local root = M.get_project_root(buf)
     local force_sid = M.get_session_id(buf) or M._sessions[buf]
     if root and force_sid and force_sid ~= "" then
       session.close_task_session(root, force_sid, get_provider(buf))
       vim.notify("[djinni] Force-killed process", vim.log.levels.WARN)
     end
+    if M._stream_cleanup[buf] then
+      M._stream_cleanup[buf](true)
+    else
+      M._streaming[buf] = nil
+      M._schedule_panel_render()
+      M._cleanup_empty_djinni(buf)
+    end
     M._last_interrupt_time[buf] = nil
     M._sessions[buf] = nil
     M._set_frontmatter_field(buf, "session", "")
     return
   end
+
+  M._last_interrupt_time[buf] = now
 
   local root = M.get_project_root(buf)
   local sid = M.get_session_id(buf) or M._sessions[buf]
