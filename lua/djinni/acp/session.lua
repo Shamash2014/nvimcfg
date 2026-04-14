@@ -111,6 +111,8 @@ local function build_resume_params(resume_cfg, project_root, session_id, opts)
   return { sessionId = session_id }
 end
 
+local register_session
+
 local function apply_session_result(entry, session_id, result, opts)
   entry.model_config_option = result and extract_model_config_option(result.configOptions)
   if not entry.model_config_option and result and (result.models or result.availableModels) then
@@ -126,7 +128,7 @@ local function apply_session_result(entry, session_id, result, opts)
   end
 end
 
-local function register_session(session_id, entry)
+register_session = function(session_id, entry)
   M.sessions_by_id[session_id] = entry
 
   entry.client:on("client_reconnected", function()
