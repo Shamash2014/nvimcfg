@@ -1259,22 +1259,25 @@ function M.render()
 end
 
 function M._setup_keymaps()
-  local function map(key, fn)
-    vim.keymap.set("n", key, fn, { buffer = M._buf, nowait = true })
+  local function map(key, fn, desc)
+    vim.keymap.set("n", key, fn, { buffer = M._buf, nowait = true, desc = desc })
   end
 
-  map("j", M.cursor_down)
-  map("k", M.cursor_up)
-  map("{", M.jump_prev_section)
-  map("}", M.jump_next_section)
+  map("j", M.cursor_down, "Next item")
+  map("k", M.cursor_up, "Previous item")
+  map("{", M.jump_prev_section, "Previous section")
+  map("}", M.jump_next_section, "Next section")
+  map("[[", M.jump_prev_section, "Previous section")
+  map("]]", M.jump_next_section, "Next section")
 
   map("p", function()
     M._view = M._view == "sessions" and "projects" or "sessions"
     M.render()
-  end)
+  end, "Toggle sessions/projects")
 
-  map("<CR>", M.open_in_vsplit)
-  map("v", M.open_in_vsplit)
+  map("<CR>", M.open_in_vsplit, "Open selected item")
+  map("o", M.open_in_vsplit, "Open selected item")
+  map("v", M.open_in_vsplit, "Open selected item in vertical split")
   map("s", function()
     if not M._win or not vim.api.nvim_win_is_valid(M._win) then return end
     local row = vim.api.nvim_win_get_cursor(M._win)[1]
@@ -1282,23 +1285,26 @@ function M._setup_keymaps()
     if entry and entry.type == "file" and entry.task and (entry.task.status == nil or entry.task.status == "") then
       M.open_in_vsplit()
     end
-  end)
-  map("<Tab>", M.toggle_fold)
-  map("+", M.hive_start)
-  map("x", M.interrupt_task)
-  map("*", M.hive_set_active)
-  map("!", M.hive_approve)
-  map("A", M.hive_approve_all)
-  map("~", M.hive_deny)
-  vim.keymap.set("x", "!", M.hive_approve_visual, { buffer = M._buf, nowait = true })
-  map("c", M.create_task)
-  map("d", M.archive_task)
-  map("R", M.refresh)
-  map("?", M.show_help)
-  map("q", M.close)
+  end, "Open draft in vertical split")
+  map("<Tab>", M.toggle_fold, "Toggle fold")
+  map("za", M.toggle_fold, "Toggle fold")
+  map("+", M.hive_start, "Start agent")
+  map("x", M.interrupt_task, "Interrupt task")
+  map("*", M.hive_set_active, "Set active")
+  map("!", M.hive_approve, "Approve")
+  map("A", M.hive_approve_all, "Approve all")
+  map("~", M.hive_deny, "Deny")
+  vim.keymap.set("x", "!", M.hive_approve_visual, { buffer = M._buf, nowait = true, desc = "Approve selected" })
+  map("c", M.create_task, "Create task")
+  map("d", M.archive_task, "Archive task")
+  map("r", M.refresh, "Refresh panel")
+  map("R", M.refresh, "Refresh panel")
+  map("?", M.show_help, "Show help")
+  map("g?", M.show_help, "Show help")
+  map("q", M.close, "Close panel")
 
   for n = 1, 9 do
-    map(tostring(n), function() M.jump_session(n) end)
+    map(tostring(n), function() M.jump_session(n) end, "Jump to session " .. n)
   end
 end
 
@@ -1402,14 +1408,14 @@ function M.open_in_vsplit()
 end
 
 function M.close()
-  local source = M._source_tab
   local buf = M._buf
+  local win = M._win
   M._buf = nil
   M._win = nil
   M._tab = nil
   M._source_tab = nil
-  if source and vim.api.nvim_tabpage_is_valid(source) then
-    vim.api.nvim_set_current_tabpage(source)
+  if win and vim.api.nvim_win_is_valid(win) then
+    pcall(vim.api.nvim_win_close, win, true)
   end
   if buf and vim.api.nvim_buf_is_valid(buf) then
     pcall(vim.api.nvim_buf_delete, buf, { force = true })
@@ -1970,12 +1976,13 @@ function M.show_help()
   local help = {
     "Navigation",
     "  j/k     next/prev item",
-    "  {/}     next/prev section",
-    "  TAB     toggle fold",
+    "  {/} [[/]] prev/next section",
+    "  TAB/za  toggle fold",
     "  p       toggle sessions/projects",
     "",
     "Agent",
-    "  CR/v    open chat (vsplit)",
+    "  CR/o    open chat",
+    "  v       open chat (vsplit)",
     "  +       start new agent",
     "  x       stop/interrupt",
     "  *       set active",
@@ -1991,7 +1998,7 @@ function M.show_help()
     "  d       archive",
     "  <leader>fo search",
     "",
-    "  R refresh   q close   ? help",
+    "  r/R refresh   q close   ?/g? help",
   }
 
   local buf = vim.api.nvim_create_buf(false, true)
