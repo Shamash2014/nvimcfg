@@ -1,4 +1,5 @@
 local M = {}
+local ui = require("djinni.integrations.snacks_ui")
 
 M._task_bufs = {}
 M._task_lines = {}
@@ -672,7 +673,7 @@ function M.clear(root)
 
   if #to_remove == 0 then return end
 
-  vim.ui.select({ "Yes", "No" }, { prompt = "Clear " .. #to_remove .. " task(s)?" }, function(choice)
+  ui.select({ "Yes", "No" }, { prompt = "Clear " .. #to_remove .. " task(s)?" }, function(choice)
     if choice ~= "Yes" then return end
 
     for _, path in ipairs(to_remove) do

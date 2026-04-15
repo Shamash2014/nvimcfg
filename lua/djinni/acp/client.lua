@@ -209,6 +209,13 @@ local CHUNK_TYPES = {
   usage_update = true,
 }
 
+local function subscriber_list(subscribers, sid)
+  local subs = subscribers[sid]
+  if not subs then return nil end
+  if subs.on_update or subs.on_permission then return { subs } end
+  return subs
+end
+
 local function coalesce_updates(queue)
   local out = {}
   local i = 1
@@ -270,7 +277,10 @@ end
 
 function M:_drain_interval()
   local n = 0
-  for _ in pairs(self.subscribers) do n = n + 1 end
+  for sid in pairs(self.subscribers) do
+    local subs = subscriber_list(self.subscribers, sid)
+    n = n + (subs and #subs or 0)
+  end
   return math.min(200, 80 * math.max(1, n))
 end
 
@@ -333,18 +343,22 @@ function M:_drain_all()
 
   local has_work = false
   for sid, uq in pairs(self._update_queue) do
-    local sub = self.subscribers[sid]
-    if sub and sub.on_update then
+    local subs = subscriber_list(self.subscribers, sid)
+    if subs and #subs > 0 then
       has_work = true
       self._update_queue[sid] = nil
       local coalesced = coalesce_updates(uq)
       for _, params in ipairs(coalesced) do
-        local h_ok, h_err = pcall(sub.on_update, params)
-        if not h_ok then
-          log.err("subscriber update error: " .. tostring(h_err))
+        for _, sub in ipairs(subs) do
+          if sub.on_update then
+            local h_ok, h_err = pcall(sub.on_update, params)
+            if not h_ok then
+              log.err("subscriber update error: " .. tostring(h_err))
+            end
+          end
         end
       end
-    elseif not sub then
+    elseif not subs then
       self._update_queue[sid] = nil
     elseif #uq > 0 then
       has_work = true
@@ -381,11 +395,20 @@ function M:_route_message(msg)
       vim.fn.chansend(self.job_id, resp .. "\n")
     end
     local sid = msg.params and msg.params.sessionId
-    local sub = sid and self.subscribers[sid]
-    if sub and sub.on_permission and msg.method == "session/request_permission" then
-      local s_ok, err = pcall(sub.on_permission, msg.params, respond)
-      if not s_ok then
-        log.err("subscriber permission error: " .. tostring(err))
+    local subs = sid and subscriber_list(self.subscribers, sid)
+    if subs and msg.method == "session/request_permission" then
+      local sub = nil
+      for i = #subs, 1, -1 do
+        if subs[i].on_permission then
+          sub = subs[i]
+          break
+        end
+      end
+      if sub then
+        local s_ok, err = pcall(sub.on_permission, msg.params, respond)
+        if not s_ok then
+          log.err("subscriber permission error: " .. tostring(err))
+        end
       end
     elseif self.request_handlers[msg.method] then
       local s_ok, err = pcall(self.request_handlers[msg.method], msg.params, respond)
@@ -491,13 +514,37 @@ function M:off(event, handler)
 end
 
 function M:subscribe(session_id, handlers)
-  self.subscribers[session_id] = handlers
+  local subs = subscriber_list(self.subscribers, session_id)
+  if not subs then
+    subs = {}
+    self.subscribers[session_id] = subs
+  elseif subs ~= self.subscribers[session_id] then
+    self.subscribers[session_id] = subs
+  end
+  subs[#subs + 1] = handlers
   self:_start_drain()
 end
 
-function M:unsubscribe(session_id)
-  self.subscribers[session_id] = nil
-  self._update_queue[session_id] = nil
+function M:unsubscribe(session_id, handlers)
+  if handlers then
+    local subs = subscriber_list(self.subscribers, session_id)
+    if subs then
+      for i = #subs, 1, -1 do
+        if subs[i] == handlers then
+          table.remove(subs, i)
+        end
+      end
+      if #subs == 0 then
+        self.subscribers[session_id] = nil
+        self._update_queue[session_id] = nil
+      else
+        self.subscribers[session_id] = subs
+      end
+    end
+  else
+    self.subscribers[session_id] = nil
+    self._update_queue[session_id] = nil
+  end
   if self._drain_timer then self:_start_drain() end
 end
 

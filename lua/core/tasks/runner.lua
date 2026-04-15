@@ -1,4 +1,5 @@
 local M = {}
+local ui = require("djinni.integrations.snacks_ui")
 
 local state = {
   tests = {},
@@ -410,7 +411,7 @@ local function remove_test()
   local test = get_current_test()
   if not test then return end
 
-  vim.ui.select({ "Yes", "No" }, { prompt = "Remove " .. test.id .. "?" }, function(choice)
+  ui.select({ "Yes", "No" }, { prompt = "Remove " .. test.id .. "?" }, function(choice)
     if choice == "Yes" then
       local removed_id = test.id
       table.remove(state.tests, state.current_test_idx)

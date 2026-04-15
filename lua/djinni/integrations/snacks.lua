@@ -1,4 +1,5 @@
 local M = {}
+local ui = require("djinni.integrations.snacks_ui")
 
 function M.pick_task(opts)
   opts = opts or {}
@@ -236,7 +237,7 @@ end
 
 function M.action_worktree_remove()
   M.pick_worktree("Remove worktree", function(item)
-    vim.ui.select({ "remove", "remove --force" }, { prompt = "Remove worktree '" .. item.branch .. "':" }, function(choice)
+    ui.select({ "remove", "remove --force" }, { prompt = "Remove worktree '" .. item.branch .. "':" }, function(choice)
       if not choice then return end
       local wt = require("djinni.integrations.worktrunk")
       local opts = { yes = true }

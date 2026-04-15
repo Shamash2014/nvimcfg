@@ -1,4 +1,5 @@
 local M = {}
+local ui = require("djinni.integrations.snacks_ui")
 
 local LOCAL_COMMAND_META = {
   ["/model"] = { description = "Set or select the active model", input_hint = "model id" },
@@ -220,7 +221,7 @@ function M.execute(buf, text)
       end
       local current_set = {}
       for _, s in ipairs(current) do current_set[s] = true end
-      vim.ui.select(discovered, {
+      ui.select(discovered, {
         prompt = "Toggle skill",
         format_item = function(item)
           local mark = current_set[item.name] and "[x] " or "[ ] "
@@ -263,7 +264,7 @@ function M.execute(buf, text)
       for _, name in ipairs(available) do
         table.insert(items, { name = name, active = current_set[name] })
       end
-      vim.ui.select(items, {
+      ui.select(items, {
         prompt = "Toggle MCP server",
         format_item = function(item)
           return (item.active and "[x] " or "[ ] ") .. item.name

@@ -7,6 +7,7 @@ local mcp = require("djinni.nowork.mcp")
 local tools = require("djinni.nowork.tools")
 local skills = require("djinni.nowork.skills")
 local lessons = require("djinni.nowork.lessons")
+local ui = require("djinni.integrations.snacks_ui")
 
 local ns_id = vim.api.nvim_create_namespace("djinni_chat")
 
@@ -1059,7 +1060,7 @@ function M._setup_keymaps(buf)
     local title = vim.fn.fnamemodify(path, ":t:r")
     local branch = title:lower():gsub("[^%w%-]", "-"):gsub("%-+", "-"):gsub("^%-", ""):gsub("%-$", "")
     if branch == "" then branch = "task" end
-    vim.ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Worktree base:" }, function(choice)
+    ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Worktree base:" }, function(choice)
       if not choice then return end
       local opts = (choice:match("Current") or choice:match("Stacked")) and { base = "@" } or {}
       worktrunk.create_for_task(branch, opts, function(path)
@@ -1166,7 +1167,7 @@ function M._setup_keymaps(buf)
       local size = math.floor(#img.data * 3 / 4 / 1024)
       table.insert(items, i .. ". " .. img.media_type .. " (" .. size .. " KB)")
     end
-    vim.ui.select(items, { prompt = "Remove attachment:" }, function(_, idx)
+    ui.select(items, { prompt = "Remove attachment:" }, function(_, idx)
       if not idx then return end
       table.remove(imgs, idx)
       if #imgs == 0 then M._pending_images[buf] = nil end
@@ -1180,7 +1181,7 @@ function M._setup_keymaps(buf)
   map("n", "<C-q>", function()
     local path = vim.api.nvim_buf_get_name(buf)
     local name = vim.fn.fnamemodify(path, ":t")
-    vim.ui.select(
+    ui.select(
       { "Archive " .. name, "Cancel" },
       { prompt = "Archive this chat file?" },
       function(choice)
@@ -3148,7 +3149,7 @@ function M.resume_session(buf, target_session_id)
         return at > bt
       end)
 
-      vim.ui.select(sessions, {
+      ui.select(sessions, {
         prompt = "Resume session:",
         format_item = function(item)
           local title = item.title or "(untitled)"
@@ -3209,7 +3210,7 @@ function M.select_provider(buf)
   local providers = Provider.list()
 
   vim.schedule(function()
-    vim.ui.select(providers, { prompt = "Select provider:" }, function(choice)
+    ui.select(providers, { prompt = "Select provider:" }, function(choice)
       if not choice then return end
       vim.schedule(function() M.switch_provider(buf, choice) end)
     end)
@@ -3277,7 +3278,7 @@ function M.pick_command(buf)
     end
     M.send(buf, text)
   end
-  vim.ui.select(cmds, {
+  ui.select(cmds, {
     prompt = "Slash command:",
     format_item = function(cmd)
       local parts = { cmd.slash or ("/" .. cmd.name) }
@@ -3317,7 +3318,7 @@ function M.pick_model(buf)
       }
     end
 
-    vim.ui.select(items, {
+    ui.select(items, {
       prompt = "Select model",
       format_item = function(item)
         return item.label or item.id or ""
@@ -3363,36 +3364,18 @@ function M.show_help()
     "  ?         This help",
   }
 
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, help)
-  vim.bo[buf].modifiable = false
-  vim.bo[buf].bufhidden = "wipe"
-
-  local width = 38
-  local height = #help
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    col = math.floor((vim.o.columns - width) / 2),
-    row = vim.o.lines - height - 4,
-    style = "minimal",
-    border = "rounded",
+  ui.popup(help, {
     title = " Help ",
-    title_pos = "center",
-  })
-
-  vim.keymap.set("n", "q", function()
-    vim.api.nvim_win_close(win, true)
-  end, { buffer = buf, nowait = true })
-
-  vim.api.nvim_create_autocmd("BufLeave", {
-    buffer = buf,
-    once = true,
-    callback = function()
-      if vim.api.nvim_win_is_valid(win) then
-        vim.api.nvim_win_close(win, true)
-      end
+    width = 38,
+    height = #help,
+    on_buf = function(win)
+      vim.api.nvim_create_autocmd("BufLeave", {
+        buffer = win.buf,
+        once = true,
+        callback = function()
+          win:close()
+        end,
+      })
     end,
   })
 end
@@ -3577,39 +3560,16 @@ function M._open_tool_log(buf)
     table.insert(lines, "")
   end
 
-  local vw = vim.o.columns
-  local vh = vim.o.lines
-  local w = math.floor(vw * 0.88)
-  local h = math.floor(vh * 0.85)
-  local row = math.floor((vh - h) / 2)
-  local col = math.floor((vw - w) / 2)
-
-  local fbuf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(fbuf, 0, -1, false, lines)
-  vim.bo[fbuf].filetype = "markdown"
-  vim.bo[fbuf].modifiable = false
-  vim.bo[fbuf].bufhidden = "wipe"
-
-  local win = vim.api.nvim_open_win(fbuf, true, {
-    relative = "editor",
-    row = row,
-    col = col,
-    width = w,
-    height = h,
-    style = "minimal",
-    border = "rounded",
+  ui.popup(lines, {
     title = " Tool Log ",
-    title_pos = "center",
+    filetype = "markdown",
+    width = 0.88,
+    height = 0.85,
+    wo = {
+      wrap = true,
+      conceallevel = 0,
+    },
   })
-  vim.wo[win].wrap = true
-  vim.wo[win].conceallevel = 0
-
-  vim.keymap.set("n", "q", function()
-    vim.api.nvim_win_close(win, true)
-  end, { buffer = fbuf, silent = true, nowait = true })
-  vim.keymap.set("n", "<Esc>", function()
-    vim.api.nvim_win_close(win, true)
-  end, { buffer = fbuf, silent = true, nowait = true })
 end
 
 function M._edit_block(buf)
@@ -3757,7 +3717,7 @@ function M._permission_action(buf, action)
       table.insert(labels, opt.label)
     end
     vim.schedule(function()
-      vim.ui.select(labels, { prompt = "Permission:" }, function(choice, idx)
+      ui.select(labels, { prompt = "Permission:" }, function(choice, idx)
         if not choice or not idx then return end
         M._pending_permission[buf] = nil
         local deferred = M._cleanup_deferred[buf]
@@ -4203,60 +4163,38 @@ function M.show_tree(buf)
   width = math.max(width + 4, 30)
   local height = math.min(#tree_lines + 2, 20)
 
-  local title = " Chat Tree "
-  local float_buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(float_buf, 0, -1, false, tree_lines)
-
-  local ui = vim.api.nvim_list_uis()[1] or { width = 80, height = 24 }
-  local win = vim.api.nvim_open_win(float_buf, true, {
-    relative = "editor",
+  ui.popup(tree_lines, {
+    title = " Chat Tree ",
     width = width,
     height = height,
-    col = math.floor((ui.width - width) / 2),
-    row = math.floor((ui.height - height) / 2),
-    style = "minimal",
-    border = "rounded",
-    title = title,
-    title_pos = "center",
+    keys = {
+      ["<CR>"] = function(win)
+        local row = vim.api.nvim_win_get_cursor(win.win)[1]
+        local fname = tree_files[row]
+        if fname then
+          win:close()
+          M.open(chat_dir .. "/" .. fname)
+        end
+      end,
+    },
+    on_buf = function(win)
+      local tree_ns = vim.api.nvim_create_namespace("djinni_tree")
+      for i, line in ipairs(tree_lines) do
+        if line:find("◀") then
+          vim.api.nvim_buf_add_highlight(win.buf, tree_ns, "CursorLine", i - 1, 0, -1)
+        end
+        local conn_end = line:find("[^│├└─ ]")
+        if conn_end and conn_end > 1 then
+          vim.api.nvim_buf_add_highlight(win.buf, tree_ns, "Comment", i - 1, 0, conn_end - 1)
+        end
+      end
+    end,
+    on_win = function(win)
+      if current_line > 0 then
+        vim.api.nvim_win_set_cursor(win.win, { current_line, 0 })
+      end
+    end,
   })
-
-  vim.bo[float_buf].buftype = "nofile"
-  vim.bo[float_buf].bufhidden = "wipe"
-  vim.bo[float_buf].modifiable = false
-
-  local tree_ns = vim.api.nvim_create_namespace("djinni_tree")
-  for i, line in ipairs(tree_lines) do
-    if line:find("◀") then
-      vim.api.nvim_buf_add_highlight(float_buf, tree_ns, "CursorLine", i - 1, 0, -1)
-    end
-    local conn_end = line:find("[^│├└─ ]")
-    if conn_end and conn_end > 1 then
-      vim.api.nvim_buf_add_highlight(float_buf, tree_ns, "Comment", i - 1, 0, conn_end - 1)
-    end
-  end
-
-  if current_line > 0 then
-    vim.api.nvim_win_set_cursor(win, { current_line, 0 })
-  end
-
-  local function close()
-    if vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_win_close(win, true)
-    end
-  end
-
-  local function open_at_cursor()
-    local row = vim.api.nvim_win_get_cursor(win)[1]
-    local fname = tree_files[row]
-    if fname then
-      close()
-      M.open(chat_dir .. "/" .. fname)
-    end
-  end
-
-  vim.keymap.set("n", "<CR>", open_at_cursor, { buffer = float_buf, nowait = true })
-  vim.keymap.set("n", "q", close, { buffer = float_buf, nowait = true })
-  vim.keymap.set("n", "<Esc>", close, { buffer = float_buf, nowait = true })
 end
 
 return M

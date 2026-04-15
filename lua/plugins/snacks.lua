@@ -11,6 +11,8 @@ return {
     terminal = {
       enabled = true,
       win = {
+        position = "right",
+        width = 0.4,
         keys = {
           term_normal = { "jk", function() vim.cmd("stopinsert") end, mode = "t", desc = "Exit terminal mode" },
         },
@@ -85,6 +87,6 @@ return {
     { "<leader>ol", function() Snacks.picker.loclist({ layout = { preset = "vscode" } }) end, desc = "Location List" },
     { "<leader>om", function() Snacks.picker.marks({ layout = { preset = "vscode" } }) end, desc = "Marks" },
     { "<leader>cd", function() Snacks.picker.diagnostics({ layout = { preset = "vscode" } }) end, desc = "Diagnostics" },
-    { "<leader>ot", function() Snacks.terminal() end, desc = "Open Terminal" },
+    { "<leader>ot", function() Snacks.terminal(nil, { win = { position = "right", width = 0.4 } }) end, desc = "Open Terminal" },
   },
 }

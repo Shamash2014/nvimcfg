@@ -1,6 +1,7 @@
 local M = {}
 
 local async = require("core.async")
+local ui = require("djinni.integrations.snacks_ui")
 local uv = vim.uv or vim.loop
 
 -- Track running tasks
@@ -593,13 +594,10 @@ function M.run_task(task, opts)
   local cmd = task.cmd:gsub("%%", vim.fn.expand("%"))
   local cwd = task.cwd or vim.fs.root(0, { ".git" }) or vim.fn.getcwd()
 
-  -- Default to splits (smaller vertical for custom commands, horizontal for others)
-  -- Check if this is a custom command (starts with "custom:")
   local is_custom = task.name:match("^custom:") ~= nil
   local win_config = not opts.background and {
-    position = is_custom and "right" or "bottom",
-    height = not is_custom and 0.3 or nil,
-    width = is_custom and 0.3 or nil,
+    position = "right",
+    width = is_custom and 0.3 or 0.4,
   } or nil
 
   local timestamp = tostring(vim.loop.hrtime())
@@ -663,8 +661,9 @@ function M.run_task(task, opts)
         -- Make terminal interactive again
         self.term.opts.interactive = true
 
-        -- Open in a natural split (Neovim decides based on available space)
-        -- Use default split behavior without specifying position
+        self.term.opts.win = self.term.opts.win or {}
+        self.term.opts.win.position = "right"
+        self.term.opts.win.width = self.term.opts.win.width or 0.4
         self.term:show()
 
         self.term:focus()
@@ -865,7 +864,7 @@ function M.attach_to_task()
     return
   end
 
-  vim.ui.select(attachable_tasks, {
+  ui.select(attachable_tasks, {
     prompt = "Attach to task:",
     format_item = function(item)
       return item.text .. " • " .. item.desc
@@ -1017,7 +1016,7 @@ function M.pick_task()
       end
     end
 
-    vim.ui.select(items, {
+    ui.select(items, {
       prompt = "Select task to run:",
       format_item = function(item)
         if item.desc and item.desc ~= "" then
@@ -1299,7 +1298,7 @@ function M.pick_schedules()
     })
   end
 
-  vim.ui.select(items, {
+  ui.select(items, {
     prompt = "Schedules:",
     format_item = function(item)
       if item.desc and item.desc ~= "" then
@@ -1323,7 +1322,7 @@ function M.pick_schedules()
         end)
       end)
     elseif item.schedule_id then
-      vim.ui.select({ "Remove", "Cancel" }, { prompt = "Action for schedule #" .. item.schedule_id .. ":" }, function(choice)
+      ui.select({ "Remove", "Cancel" }, { prompt = "Action for schedule #" .. item.schedule_id .. ":" }, function(choice)
         if choice == "Remove" then
           if scheduler.remove(item.schedule_id) then
             vim.notify(string.format("[schedule] Removed #%d", item.schedule_id), vim.log.levels.INFO)
@@ -1381,8 +1380,7 @@ function M.show_running_tasks()
     action = "kill_all"
   })
 
-  -- Use vim.ui.select to show running tasks
-  vim.ui.select(items, {
+  ui.select(items, {
     prompt = "Running Tasks:",
     format_item = function(item)
       if item.desc and item.desc ~= "" then
@@ -1550,8 +1548,8 @@ function M.toggle_terminal()
   else
     M.terminal_instance = require("snacks").terminal(nil, {
       win = {
-        position = "bottom",
-        height = 0.3,
+        position = "right",
+        width = 0.4,
       },
       env = build_terminal_env(),
     })
@@ -1621,7 +1619,7 @@ function M.setup()
       return
     end
 
-    vim.ui.select(visible_tasks, {
+    ui.select(visible_tasks, {
       prompt = "Send task to background:",
       format_item = function(item)
         return item.text .. " • " .. item.desc

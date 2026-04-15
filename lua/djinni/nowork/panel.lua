@@ -1,4 +1,5 @@
 local M = {}
+local ui = require("djinni.integrations.snacks_ui")
 
 M._buf = nil
 M._win = nil
@@ -1866,7 +1867,7 @@ function M.gen_worktree()
   local branch = task.title:lower():gsub("[^%w%-]", "-"):gsub("%-+", "-"):gsub("^%-", ""):gsub("%-$", "")
   if branch == "" then branch = "task" end
 
-  vim.ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Worktree base:" }, function(choice)
+  ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Worktree base:" }, function(choice)
     if not choice then return end
     local opts = (choice:match("Current") or choice:match("Stacked")) and { base = "@" } or {}
     worktrunk.create_for_task(branch, opts, function(path)
@@ -2001,42 +2002,28 @@ function M.show_help()
     "  r/R refresh   q close   ?/g? help",
   }
 
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, help)
-  vim.bo[buf].modifiable = false
-  vim.bo[buf].bufhidden = "wipe"
-
-  local width = 36
-  local height = #help
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    col = math.floor((vim.o.columns - width) / 2),
-    row = math.floor((vim.o.lines - height) / 2),
-    style = "minimal",
-    border = "rounded",
+  ui.popup(help, {
     title = " Nowork ",
-    title_pos = "center",
-  })
-
-  local help_ns = vim.api.nvim_create_namespace("nowork_help")
-  for i, line in ipairs(help) do
-    if line ~= "" and not line:match("^%s") then
-      vim.api.nvim_buf_set_extmark(buf, help_ns, i - 1, 0, {
-        end_col = #line, hl_group = "DjinniPanelTitle",
+    width = 36,
+    height = #help,
+    keys = {
+      ["?"] = "close",
+    },
+    on_buf = function(win)
+      local help_ns = vim.api.nvim_create_namespace("nowork_help")
+      for i, line in ipairs(help) do
+        if line ~= "" and not line:match("^%s") then
+          vim.api.nvim_buf_set_extmark(win.buf, help_ns, i - 1, 0, {
+            end_col = #line, hl_group = "DjinniPanelTitle",
+          })
+        end
+      end
+      vim.api.nvim_create_autocmd("BufLeave", {
+        buffer = win.buf, once = true,
+        callback = function()
+          win:close()
+        end,
       })
-    end
-  end
-
-  vim.keymap.set("n", "<Esc>", function() vim.api.nvim_win_close(win, true) end, { buffer = buf, nowait = true })
-  vim.keymap.set("n", "q", function() vim.api.nvim_win_close(win, true) end, { buffer = buf, nowait = true })
-  vim.keymap.set("n", "?", function() vim.api.nvim_win_close(win, true) end, { buffer = buf, nowait = true })
-
-  vim.api.nvim_create_autocmd("BufLeave", {
-    buffer = buf, once = true,
-    callback = function()
-      if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
     end,
   })
 end

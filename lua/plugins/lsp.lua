@@ -4,6 +4,7 @@ return {
   dependencies = { "b0o/SchemaStore.nvim", "mrjones2014/codesettings.nvim" },
   event = "VeryLazy",
   config = function()
+    local ui = require("djinni.integrations.snacks_ui")
     local ok_blink, blink = pcall(require, "blink.cmp")
     local capabilities = ok_blink and blink.get_lsp_capabilities() or {}
 
@@ -377,7 +378,7 @@ return {
             vim.notify("No DAP configurations for dart", vim.log.levels.ERROR)
             return
           end
-          vim.ui.select(configs, {
+          ui.select(configs, {
             prompt = "Debug configuration:",
             format_item = function(c) return c.name end,
           }, function(choice)
@@ -404,8 +405,8 @@ return {
             env = { PATH = vim.env.PATH },
             interactive = true,
             win = {
-              position = "bottom",
-              height = 0.3,
+              position = "right",
+              width = 0.4,
               border = "rounded",
             },
           })
@@ -623,8 +624,8 @@ return {
           require("snacks").terminal("go test -v ./...", {
             cwd = current_file,
             win = {
-              position = "bottom",
-              height = 0.3,
+              position = "right",
+              width = 0.4,
             },
           })
         end, vim.tbl_extend("force", opts, { desc = "Run tests" }))
@@ -633,8 +634,8 @@ return {
           local current_file = vim.fn.expand("%")
           require("snacks").terminal("go run " .. current_file, {
             win = {
-              position = "bottom",
-              height = 0.3,
+              position = "right",
+              width = 0.4,
             },
           })
         end, vim.tbl_extend("force", opts, { desc = "Run current file" }))
@@ -642,8 +643,8 @@ return {
         vim.keymap.set("n", "<localleader>b", function()
           require("snacks").terminal("go build", {
             win = {
-              position = "bottom",
-              height = 0.3,
+              position = "right",
+              width = 0.4,
             },
           })
         end, vim.tbl_extend("force", opts, { desc = "Build project" }))
@@ -716,8 +717,8 @@ return {
         vim.keymap.set("n", "<localleader>b", function()
           require("snacks").terminal("npm run build", {
             win = {
-              position = "bottom",
-              height = 0.3,
+              position = "right",
+              width = 0.4,
             },
           })
         end, vim.tbl_extend("force", opts, { desc = "Build Astro project" }))
@@ -725,8 +726,8 @@ return {
         vim.keymap.set("n", "<localleader>d", function()
           require("snacks").terminal("npm run dev", {
             win = {
-              position = "bottom",
-              height = 0.3,
+              position = "right",
+              width = 0.4,
             },
           })
         end, vim.tbl_extend("force", opts, { desc = "Start dev server" }))
@@ -898,8 +899,8 @@ return {
         vim.keymap.set("n", "<localleader>b", function()
           require("snacks").terminal("xcede build", {
             win = {
-              position = "bottom",
-              height = 0.3,
+              position = "right",
+              width = 0.4,
             },
           })
         end, vim.tbl_extend("force", opts, { desc = "Build with xcede" }))
@@ -907,8 +908,8 @@ return {
         vim.keymap.set("n", "<localleader>br", function()
           require("snacks").terminal("xcede buildrun", {
             win = {
-              position = "bottom",
-              height = 0.3,
+              position = "right",
+              width = 0.4,
             },
           })
         end, vim.tbl_extend("force", opts, { desc = "Build and run with xcede" }))
@@ -916,8 +917,8 @@ return {
         vim.keymap.set("n", "<localleader>t", function()
           require("snacks").terminal("xcede test", {
             win = {
-              position = "bottom",
-              height = 0.3,
+              position = "right",
+              width = 0.4,
             },
           })
         end, vim.tbl_extend("force", opts, { desc = "Test with xcede" }))
@@ -925,8 +926,8 @@ return {
         vim.keymap.set("n", "<localleader>c", function()
           require("snacks").terminal("xcede clean", {
             win = {
-              position = "bottom",
-              height = 0.3,
+              position = "right",
+              width = 0.4,
             },
           })
         end, vim.tbl_extend("force", opts, { desc = "Clean with xcede" }))
@@ -942,15 +943,15 @@ return {
                 local schemes = table.concat(j:result(), "\n")
                 if schemes == "" then
                   require("snacks").terminal("xcede build", {
-                    win = { position = "bottom", height = 0.3 },
+                    win = { position = "right", width = 0.4 },
                   })
                 else
-                  vim.ui.select(vim.split(schemes, "\n"), {
+                  ui.select(vim.split(schemes, "\n"), {
                     prompt = "Select scheme to build:",
                   }, function(choice)
                     if choice then
                       require("snacks").terminal("xcede build --scheme " .. choice, {
-                        win = { position = "bottom", height = 0.3 },
+                        win = { position = "right", width = 0.4 },
                       })
                     end
                   end)
@@ -971,15 +972,15 @@ return {
                 local devices = table.concat(j:result(), "\n")
                 if devices == "" then
                   require("snacks").terminal("xcede buildrun", {
-                    win = { position = "bottom", height = 0.3 },
+                    win = { position = "right", width = 0.4 },
                   })
                 else
-                  vim.ui.select(vim.split(devices, "\n"), {
+                  ui.select(vim.split(devices, "\n"), {
                     prompt = "Select device:",
                   }, function(choice)
                     if choice then
                       require("snacks").terminal("xcede buildrun --device '" .. choice .. "'", {
-                        win = { position = "bottom", height = 0.3 },
+                        win = { position = "right", width = 0.4 },
                       })
                     end
                   end)
@@ -994,8 +995,8 @@ return {
           if vim.fn.filereadable("Package.swift") == 1 then
             require("snacks").terminal("swift build", {
               win = {
-                position = "bottom",
-                height = 0.3,
+                position = "right",
+                width = 0.4,
               },
             })
           else
@@ -1008,8 +1009,8 @@ return {
             local package_name = vim.fn.fnamemodify(vim.fn.getcwd(), ":t")
             require("snacks").terminal("swift run " .. package_name, {
               win = {
-                position = "bottom",
-                height = 0.3,
+                position = "right",
+                width = 0.4,
               },
             })
           else
@@ -1021,8 +1022,8 @@ return {
           if vim.fn.filereadable("Package.swift") == 1 then
             require("snacks").terminal("swift test", {
               win = {
-                position = "bottom",
-                height = 0.3,
+                position = "right",
+                width = 0.4,
               },
             })
           else
@@ -1045,8 +1046,8 @@ return {
         vim.keymap.set("n", "<localleader>l", function()
           require("snacks").terminal("xcede list", {
             win = {
-              position = "bottom",
-              height = 0.4,
+              position = "right",
+              width = 0.4,
             },
           })
         end, vim.tbl_extend("force", opts, { desc = "List schemes and devices" }))
@@ -1064,15 +1065,15 @@ return {
                   local targets = table.concat(j:result(), "\n")
                   if targets == "" then
                     require("snacks").terminal("xcode-build-server build", {
-                      win = { position = "bottom", height = 0.3 },
+                      win = { position = "right", width = 0.4 },
                     })
                   else
-                    vim.ui.select(vim.split(targets, "\n"), {
+                    ui.select(vim.split(targets, "\n"), {
                       prompt = "Select build target:",
                     }, function(choice)
                       if choice then
                         require("snacks").terminal("xcode-build-server build --target " .. choice, {
-                          win = { position = "bottom", height = 0.3 },
+                          win = { position = "right", width = 0.4 },
                         })
                       end
                     end)
@@ -1093,15 +1094,15 @@ return {
                   local targets = table.concat(j:result(), "\n")
                   if targets == "" then
                     require("snacks").terminal("xcode-build-server test", {
-                      win = { position = "bottom", height = 0.3 },
+                      win = { position = "right", width = 0.4 },
                     })
                   else
-                    vim.ui.select(vim.split(targets, "\n"), {
+                    ui.select(vim.split(targets, "\n"), {
                       prompt = "Select test target:",
                     }, function(choice)
                       if choice then
                         require("snacks").terminal("xcode-build-server test --target " .. choice, {
-                          win = { position = "bottom", height = 0.3 },
+                          win = { position = "right", width = 0.4 },
                         })
                       end
                     end)
@@ -1115,8 +1116,8 @@ return {
           vim.keymap.set("n", "<localleader>bc", function()
             require("snacks").terminal("xcode-build-server clean", {
               win = {
-                position = "bottom",
-                height = 0.3,
+                position = "right",
+                width = 0.4,
               },
             })
           end, vim.tbl_extend("force", opts, { desc = "BSP clean" }))
@@ -1125,8 +1126,8 @@ return {
           vim.keymap.set("n", "<localleader>bl", function()
             require("snacks").terminal("xcode-build-server buildTargets", {
               win = {
-                position = "bottom",
-                height = 0.4,
+                position = "right",
+                width = 0.4,
               },
             })
           end, vim.tbl_extend("force", opts, { desc = "List BSP build targets" }))
@@ -1136,8 +1137,8 @@ return {
             vim.notify("Restarting Xcode Build Server...", vim.log.levels.INFO)
             require("snacks").terminal("pkill -f xcode-build-server && sleep 1 && xcode-build-server", {
               win = {
-                position = "bottom",
-                height = 0.3,
+                position = "right",
+                width = 0.4,
               },
             })
           end, vim.tbl_extend("force", opts, { desc = "Restart BSP server" }))
@@ -1146,8 +1147,8 @@ return {
           vim.keymap.set("n", "<localleader>bg", function()
             require("snacks").terminal("xcode-build-server compileCommands", {
               win = {
-                position = "bottom",
-                height = 0.3,
+                position = "right",
+                width = 0.4,
               },
             })
           end, vim.tbl_extend("force", opts, { desc = "Generate compile commands" }))
@@ -1168,15 +1169,15 @@ return {
             table.insert(choices, { name = "BSP test", cmd = "xcode-build-server test" })
           end
 
-          vim.ui.select(choices, {
+          ui.select(choices, {
             prompt = "Select build system:",
             format_item = function(item) return item.name end,
           }, function(choice)
             if choice then
               require("snacks").terminal(choice.cmd, {
                 win = {
-                  position = "bottom",
-                  height = 0.3,
+                  position = "right",
+                  width = 0.4,
                 },
               })
             end

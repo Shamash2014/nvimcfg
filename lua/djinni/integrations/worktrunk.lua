@@ -1,4 +1,5 @@
 local M = {}
+local ui = require("djinni.integrations.snacks_ui")
 
 local cache = { basic = nil, full = nil, remotes = nil, basic_at = 0, full_at = 0, remotes_at = 0 }
 local CACHE_TTL_MS = 30000
@@ -553,26 +554,13 @@ function M.stop_statusline()
 end
 
 function M.open_diff_buf(lines)
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].filetype = "diff"
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  local width = math.floor(vim.o.columns * 0.9)
   local height = math.min(#lines + 2, math.floor(vim.o.lines * 0.8))
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    col = math.floor((vim.o.columns - width) / 2),
-    row = math.floor((vim.o.lines - height) / 2),
-    style = "minimal",
-    border = "rounded",
+  ui.popup(lines, {
     title = " wt diff ",
-    title_pos = "center",
+    filetype = "diff",
+    width = 0.9,
+    height = height,
   })
-  vim.keymap.set("n", "q", function() vim.api.nvim_win_close(win, true) end, { buffer = buf, nowait = true })
-  vim.keymap.set("n", "<Esc>", function() vim.api.nvim_win_close(win, true) end, { buffer = buf, nowait = true })
 end
 
 local wt_ops = {
@@ -710,15 +698,12 @@ function M.pick_op(branch)
     table.insert(items, op)
   end
 
-  local labels = vim.tbl_map(function(op) return op.label end, items)
   local title = branch and ("wt ops — " .. branch) or "wt ops (global)"
 
-  vim.ui.select(labels, { prompt = title .. ":" }, function(choice)
-    if not choice then return end
-    local op
-    for _, item in ipairs(items) do
-      if item.label == choice then op = item break end
-    end
+  ui.select(items, {
+    prompt = title .. ":",
+    format_item = function(op) return op.label end,
+  }, function(op)
     if not op then return end
 
     local function run_op(args_extra)

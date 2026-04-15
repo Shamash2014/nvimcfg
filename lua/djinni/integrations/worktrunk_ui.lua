@@ -1,5 +1,6 @@
 local M = {}
 local wt = require("djinni.integrations.worktrunk")
+local ui = require("djinni.integrations.snacks_ui")
 
 local function branch_display(e)
   local b = e.branch
@@ -113,7 +114,7 @@ local function pick_branch_with_remotes(prompt, cb)
         return
       end
 
-      vim.ui.select(items, {
+      ui.select(items, {
         prompt = prompt,
         format_item = function(e)
           if e._source == "remote" then
@@ -168,7 +169,7 @@ local function pick_branch(prompt, cb)
           end
         end)
       end)
-      vim.ui.select(items, {
+      ui.select(items, {
         prompt = prompt,
         format_item = format_worktree,
       }, function(choice)
@@ -228,7 +229,7 @@ function M.create()
       if vim.tbl_contains(args, "--base=@") then
         prompt_branch({ base = "@" })
       else
-        vim.ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
+        ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
           if not choice then return end
           local opts = (choice:match("Current") or choice:match("Stacked")) and { base = "@" } or {}
           prompt_branch(opts)
@@ -403,7 +404,7 @@ function M.quick_switch()
 end
 
 function M.quick_create()
-  vim.ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
+  ui.select({ "Current branch", "Default branch", "Stacked (from current HEAD)" }, { prompt = "Base:" }, function(choice)
     if not choice then return end
     local opts = (choice:match("Current") or choice:match("Stacked")) and { base = "@" } or {}
     vim.ui.input({ prompt = "New worktree branch: " }, function(branch)

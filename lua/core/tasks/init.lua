@@ -4,6 +4,7 @@ local parser = require("core.tasks.parser")
 local runner = require("core.tasks.runner")
 local results = require("core.tasks.results")
 local issues = require("core.tasks.issues")
+local ui = require("djinni.integrations.snacks_ui")
 
 M.config = {
   keymaps = {
@@ -63,7 +64,7 @@ function M.pick_test()
     table.insert(items, string.format("%d. %s: %s", i, test.id, test.name))
   end
 
-  vim.ui.select(items, { prompt = "Select test:" }, function(choice, idx)
+  ui.select(items, { prompt = "Select test:" }, function(choice, idx)
     if choice and idx then
       runner.start_at_test(parsed.tests, filepath, idx)
     end

@@ -1,4 +1,5 @@
 local M = {}
+local ui = require("djinni.integrations.snacks_ui")
 
 local function make_commands(years)
   local since = string.format('--since="%d year ago"', years)
@@ -28,35 +29,13 @@ local function make_commands(years)
 end
 
 local function open_float(lines)
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].modifiable = false
-  vim.bo[buf].filetype = "git-analysis"
-
-  local width = math.floor(vim.o.columns * 0.8)
   local height = math.min(#lines, math.floor(vim.o.lines * 0.8))
-
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    col = math.floor((vim.o.columns - width) / 2),
-    row = math.floor((vim.o.lines - height) / 2),
-    style = "minimal",
-    border = "rounded",
+  ui.popup(lines, {
     title = " Git Analysis ",
-    title_pos = "center",
+    filetype = "git-analysis",
+    width = 0.8,
+    height = height,
   })
-
-  local close = function()
-    if vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_win_close(win, true)
-    end
-  end
-  vim.keymap.set("n", "q", close, { buffer = buf, nowait = true, silent = true })
-  vim.keymap.set("n", "<Esc>", close, { buffer = buf, nowait = true, silent = true })
 end
 
 local function run_analysis(years)
@@ -97,7 +76,7 @@ function M.open()
     return
   end
 
-  vim.ui.select({ "1 year", "3 years", "5 years" }, { prompt = "Analysis period:" }, function(choice)
+  ui.select({ "1 year", "3 years", "5 years" }, { prompt = "Analysis period:" }, function(choice)
     if not choice then return end
     local years = tonumber(choice:match("^(%d+)"))
     run_analysis(years)

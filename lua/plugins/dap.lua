@@ -20,6 +20,7 @@ return {
       { "<leader>dv", "<cmd>DapViewToggle<cr>",                          desc = "Toggle DAP View" },
     },
     config = function()
+      local ui = require("djinni.integrations.snacks_ui")
       local dap = require("dap")
 
       local function flutter_pick_device(cb)
@@ -39,7 +40,7 @@ return {
               return
             end
             vim.schedule(function()
-              vim.ui.select(devices, {
+              ui.select(devices, {
                 prompt = "Select device:",
                 format_item = function(d) return d.name .. " (" .. d.id .. ")" end,
               }, function(choice)
