@@ -1,6 +1,76 @@
 local M = {}
 local ui = require("djinni.integrations.snacks_ui")
 
+local function win_id(value)
+  if type(value) == "number" then return value end
+  if type(value) == "table" then
+    if type(value.win) == "number" then return value.win end
+    if type(value.winid) == "number" then return value.winid end
+  end
+  return nil
+end
+
+local function normal_win(preferred)
+  preferred = win_id(preferred)
+  if preferred and vim.api.nvim_win_is_valid(preferred) then
+    local ok, cfg = pcall(vim.api.nvim_win_get_config, preferred)
+    if ok and cfg.relative == "" then return preferred end
+  end
+  local current = vim.api.nvim_get_current_win()
+  local ok, cfg = pcall(vim.api.nvim_win_get_config, current)
+  if ok and cfg.relative == "" then return current end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    ok, cfg = pcall(vim.api.nvim_win_get_config, win)
+    if ok and cfg.relative == "" then return win end
+  end
+  return nil
+end
+
+local function bufwinid_in_tab(buf, tab)
+  if not tab or not vim.api.nvim_tabpage_is_valid(tab) then return -1 end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
+      return win
+    end
+  end
+  return -1
+end
+
+local function after_picker(fn)
+  vim.defer_fn(fn, 20)
+end
+
+local function close_picker(picker)
+  if picker then pcall(function() picker:close() end) end
+end
+
+local function open_buf_in_vsplit(buf, source_win)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  local win = bufwinid_in_tab(buf, vim.api.nvim_get_current_tabpage())
+  if win ~= -1 then
+    vim.api.nvim_set_current_win(win)
+    return
+  end
+  win = normal_win(source_win)
+  if win then vim.api.nvim_set_current_win(win) end
+  vim.cmd("rightbelow vsplit")
+  vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), buf)
+end
+
+local function open_chat_in_vsplit(file_path, source_win)
+  if not file_path or file_path == "" then return end
+  local chat = require("djinni.nowork.chat")
+  local existing = vim.fn.bufnr(file_path)
+  if existing ~= -1 and vim.api.nvim_buf_is_loaded(existing) then
+    open_buf_in_vsplit(existing, source_win)
+    return
+  end
+  local win = normal_win(source_win)
+  if win then vim.api.nvim_set_current_win(win) end
+  vim.cmd("rightbelow vsplit")
+  chat.open(file_path)
+end
+
 function M.pick_task(opts)
   opts = opts or {}
   local projects = require("djinni.integrations.projects")
@@ -37,10 +107,11 @@ function M.pick_task(opts)
     unknown = "?",
   }
 
-  Snacks.picker({
+  local source_win = normal_win(vim.api.nvim_get_current_win())
+  ui.picker({
     title = "Nowork Tasks",
     items = items,
-    format = function(item, picker)
+    format = function(item)
       local icon = status_icons[item.status] or "?"
       return {
         { "[" .. icon .. "] ", "Comment" },
@@ -48,9 +119,12 @@ function M.pick_task(opts)
         { "(" .. item.project .. ")", "Comment" },
       }
     end,
-    confirm = function(_, item)
+    confirm = function(picker, item)
+      close_picker(picker)
       if item and item.file_path then
-        require("djinni.nowork.chat").open(item.file_path)
+        after_picker(function()
+          pcall(open_chat_in_vsplit, item.file_path, source_win)
+        end)
       end
     end,
   })
@@ -91,7 +165,8 @@ function M.pick_sessions()
     return
   end
 
-  Snacks.picker({
+  local source_win = normal_win(vim.api.nvim_get_current_win())
+  ui.picker({
     title = "Background Sessions",
     items = items,
     format = function(item)
@@ -108,15 +183,18 @@ function M.pick_sessions()
       return {{ "> ", "Comment" }, { item.text }}
     end,
     confirm = function(picker, item)
-      picker:close()
+      close_picker(picker)
       if item and item.buf then
-        vim.schedule(function()
-          local win = vim.fn.bufwinid(item.buf)
-          if win ~= -1 then
-            vim.api.nvim_set_current_win(win)
-          else
-            vim.cmd("buffer " .. item.buf)
-          end
+        after_picker(function()
+          pcall(function()
+            open_buf_in_vsplit(item.buf, source_win)
+            if item.kind == "chat" then
+              local root = require("djinni.nowork.chat").get_project_root(item.buf)
+              if root and root ~= "" then
+                vim.cmd("lcd " .. vim.fn.fnameescape(root))
+              end
+            end
+          end)
         end)
       end
     end,
@@ -137,10 +215,12 @@ function M.trim_bg_terminals()
 end
 
 function M.pick_project(callback)
-  Snacks.picker.projects({
+  local picker = ui.get_picker()
+  if not picker then return end
+  picker.projects({
     title = "Add Project",
-    confirm = function(picker, item)
-      picker:close()
+    confirm = function(p, item)
+      p:close()
       if item and item.file then
         vim.schedule(function()
           callback(tostring(item.file))
@@ -185,7 +265,7 @@ function M.pick_worktree(prompt, callback)
       })
     end
 
-    Snacks.picker({
+    ui.picker({
       title = prompt or "Worktrees",
       items = items,
       format = function(item)

@@ -661,9 +661,10 @@ function M.run_task(task, opts)
         -- Make terminal interactive again
         self.term.opts.interactive = true
 
-        self.term.opts.win = self.term.opts.win or {}
-        self.term.opts.win.position = "right"
-        self.term.opts.win.width = self.term.opts.win.width or 0.4
+        if self.term.win then
+          self.term.win.opts.position = "right"
+          self.term.win.opts.width = self.term.win.opts.width or 0.4
+        end
         self.term:show()
 
         self.term:focus()
