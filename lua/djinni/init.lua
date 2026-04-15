@@ -53,6 +53,10 @@ function M.setup(opts)
     require("djinni.integrations.snacks").pick_sessions()
   end, {})
 
+  vim.api.nvim_create_user_command("NoworkTranscript", function(cmd)
+    require("djinni.nowork.transcript").open(vim.api.nvim_get_current_buf(), { quickfix = cmd.bang })
+  end, { bang = true, desc = "Open current chat transcript in loclist" })
+
 
   vim.api.nvim_create_user_command("NoworkConsole", function()
     require("djinni.nowork.panel").toggle()

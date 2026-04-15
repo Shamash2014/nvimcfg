@@ -960,8 +960,8 @@ function M._setup_keymaps(buf)
   if M._keymaps_set[buf] then return end
   M._keymaps_set[buf] = true
 
-  local function map(mode, lhs, rhs)
-    vim.keymap.set(mode, lhs, rhs, { buffer = buf, silent = true, nowait = true })
+  local function map(mode, lhs, rhs, desc)
+    vim.keymap.set(mode, lhs, rhs, { buffer = buf, silent = true, nowait = true, desc = desc })
   end
 
   map("n", "]]", function()
@@ -1152,6 +1152,9 @@ function M._setup_keymaps(buf)
       end,
     })
   end)
+  map("n", "<localleader>t", function()
+    require("djinni.nowork.transcript").open(buf)
+  end, "Open transcript loclist")
   map("n", "gA", function()
     local imgs = M._pending_images[buf]
     if not imgs or #imgs == 0 then
