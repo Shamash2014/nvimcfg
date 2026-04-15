@@ -36,6 +36,7 @@ M._spinner_chars = { "/", "-", "\\", "|" }
 M._modes = {} -- buf -> { {id, name}, ... }
 M._current_mode = {} -- buf -> mode_id
 M._pending_text = {} -- buf -> accumulated text during streaming
+M._assistant_output_seen = {} -- buf -> true once assistant text arrives in current turn
 M._scroll_pending = {} -- buf -> true when scroll needed after flush
 M._stream_client = {} -- buf -> client ref for watchdog checks
 M._global_timer = nil
@@ -46,6 +47,14 @@ M._last_tool_failed = {} -- buf -> bool
 M._max_continuations = 8
 M._plan_path = {} -- buf -> plan file path
 M._usage = {} -- buf -> { input_tokens, output_tokens, cost }
+M._turn_started_at = {}
+M._turn_elapsed_ms = {}
+M._turn_usage = {}
+M._diff_stats = {}
+M._STATUS_DIFF_MAX_BYTES = 512 * 1024
+M._STATUS_REDRAW_MIN_MS = 250
+M._status_redraw_last = 0
+M._status_redraw_pending = false
 M._attached = {} -- buf -> true
 M._last_code_buf = nil
 M._cleanup_deferred = {} -- buf -> true when stream_cleanup was called but blocked by pending permission
@@ -91,6 +100,68 @@ M._checktime_dirty = false
 M._FILE_MUTATING = { edit=true, create=true, write=true, delete=true, move=true }
 
 local LARGE_CHAT_THRESHOLD = 3000
+
+local function _fmt_k(n)
+  n = tonumber(n) or 0
+  if n >= 1000000 then return string.format("%.1fm", n / 1000000) end
+  if n >= 1000 then return string.format("%.1fk", n / 1000) end
+  return tostring(n)
+end
+
+local function _fmt_elapsed(ms)
+  ms = tonumber(ms) or 0
+  local seconds = math.floor(ms / 1000)
+  local hours = math.floor(seconds / 3600)
+  local minutes = math.floor((seconds % 3600) / 60)
+  seconds = seconds % 60
+  if hours > 0 then
+    return string.format("%d:%02d:%02d", hours, minutes, seconds)
+  end
+  return string.format("%d:%02d", minutes, seconds)
+end
+
+local function _split_diff_lines(text)
+  local lines = vim.split(text or "", "\n", { plain = true })
+  if #lines > 0 and lines[#lines] == "" then table.remove(lines) end
+  return lines
+end
+
+local function _count_diff_lines(old_text, new_text)
+  local total_bytes = #(old_text or "") + #(new_text or "")
+  if total_bytes > M._STATUS_DIFF_MAX_BYTES then return nil, nil end
+  local old_lines = _split_diff_lines(old_text)
+  local new_lines = _split_diff_lines(new_text)
+  local ok, hunks = pcall(vim.diff, old_text or "", new_text or "", { result_type = "indices" })
+  if not ok or type(hunks) ~= "table" then
+    return math.max(#new_lines - #old_lines, 0), math.max(#old_lines - #new_lines, 0)
+  end
+  local added = 0
+  local deleted = 0
+  for _, hunk in ipairs(hunks) do
+    deleted = deleted + (hunk[2] or 0)
+    added = added + (hunk[4] or 0)
+  end
+  return added, deleted
+end
+
+local function _redraw_status()
+  local now = vim.uv.now()
+  local elapsed = now - (M._status_redraw_last or 0)
+  if elapsed >= M._STATUS_REDRAW_MIN_MS then
+    M._status_redraw_last = now
+    pcall(vim.cmd, "redrawstatus")
+    return
+  end
+  if M._status_redraw_pending then return end
+  M._status_redraw_pending = true
+  vim.defer_fn(function()
+    M._status_redraw_pending = false
+    M._status_redraw_last = vim.uv.now()
+    pcall(vim.cmd, "redrawstatus")
+  end, M._STATUS_REDRAW_MIN_MS - elapsed)
+end
+
+M._redraw_status = _redraw_status
 
 local function _is_large_chat(buf)
   return vim.api.nvim_buf_line_count(buf) > LARGE_CHAT_THRESHOLD
@@ -937,6 +1008,7 @@ function M._setup_keymaps(buf)
     vim.cmd("stopinsert")
     local text = M._get_you_block_at_cursor(buf)
     if not text or text == "" then return end
+    M._migrate_you_block(buf)
     if M._streaming[buf] then
       if not M._queue[buf] then M._queue[buf] = {} end
       table.insert(M._queue[buf], text)
@@ -1341,6 +1413,7 @@ function M.attach(buf)
       M._stream_gen[buf] = nil
       M._send_retries[buf] = nil
       M._pending_text[buf] = nil
+      M._assistant_output_seen[buf] = nil
       M._stream_client[buf] = nil
       M._scroll_pending[buf] = nil
       M._active_tool_count[buf] = nil
@@ -1444,29 +1517,32 @@ function M._migrate_you_block(buf)
   end
   local after_you = false
   for i = you_end + 1, #lines do
-    if lines[i]:match("^@Djinni") or lines[i]:match("^@System") then
+    if lines[i]:match("^@%w+%s*$") then
       after_you = true
       break
     end
-    if lines[i]:match("^%-%-%-$") then break end
   end
   if not after_you then return end
-  local block_lines = {}
-  local del_from = you_start
-  if del_from > 1 and lines[del_from - 1] == "---" then del_from = del_from - 1 end
-  if del_from > 1 and lines[del_from - 1] == "" then del_from = del_from - 1 end
-  for i = you_start, you_end do
-    block_lines[#block_lines + 1] = lines[i]
+
+  local del_from = you_end + 1
+  while del_from <= #lines and lines[del_from] == "" do
+    del_from = del_from + 1
   end
-  vim.api.nvim_buf_set_lines(buf, del_from - 1, you_end, false, {})
-  local lc = vim.api.nvim_buf_line_count(buf)
-  local migrated = { "", "---", "" }
-  for _, l in ipairs(block_lines) do migrated[#migrated + 1] = l end
-  vim.api.nvim_buf_set_lines(buf, lc, lc, false, migrated)
+  if del_from <= #lines and lines[del_from]:match("^%-%-%-$") then
+    vim.api.nvim_buf_set_lines(buf, del_from - 1, #lines, false, {})
+  else
+    vim.api.nvim_buf_set_lines(buf, you_end, #lines, false, {})
+  end
+
+  M._invalidate_session(buf)
+  M._creating_session[buf] = nil
+  M._first_msg_sent = M._first_msg_sent or {}
+  M._first_msg_sent[buf] = nil
   local win = vim.fn.bufwinid(buf)
   if win ~= -1 then
-    vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(buf) - (#block_lines - 2), 0 })
+    vim.api.nvim_win_set_cursor(win, { math.min(you_end, vim.api.nvim_buf_line_count(buf)), 0 })
   end
+  return true
 end
 
 function M._get_you_block_at_cursor(buf)
@@ -1705,7 +1781,7 @@ function M.send(buf, text, images)
         local total = (tok.inputTokens or 0) + (tok.outputTokens or 0)
         if total == 0 then
           local sr = prompt_result and prompt_result.stopReason
-          if sr == "end_turn" then
+          if sr == "end_turn" and M._assistant_output_seen[buf] then
             log.info("0-token end_turn — agent waiting for input, keeping session")
             M._waiting_input[buf] = true
             M._send_retries[buf] = 0
@@ -2015,6 +2091,8 @@ function M._start_global_timer()
 
       if not any_streaming then
         M._stop_global_timer()
+      else
+        _redraw_status()
       end
     end)
   end)
@@ -2112,6 +2190,9 @@ function M._on_session_update(buf, data)
       M._last_perm_tool[buf] = nil
       local text = update.content and update.content.text
       if text then
+        if text:match("%S") then
+          M._assistant_output_seen[buf] = true
+        end
         local pt = M._pending_text[buf]
         if not pt then pt = {}; M._pending_text[buf] = pt end
         pt[#pt + 1] = text
@@ -2238,6 +2319,13 @@ function M._on_session_update(buf, data)
           log.dbg("tool completed: path=" .. (file_path or "nil") .. " from_title=" .. (last_tool_title or ""))
           M._last_tool_title[buf] = nil
           if diff_content then
+            local added, deleted = _count_diff_lines(diff_content.old, diff_content.new)
+            local stats = M._diff_stats[buf] or { files = 0, added = 0, deleted = 0 }
+            stats.files = stats.files + 1
+            stats.added = stats.added + (added or 0)
+            stats.deleted = stats.deleted + (deleted or 0)
+            M._diff_stats[buf] = stats
+            _redraw_status()
             local codediff = require("djinni.nowork.codediff")
             local diff_lines_out = codediff.compute(diff_content.old, diff_content.new, diff_content.path)
             local diff_batch = {}
@@ -2533,10 +2621,13 @@ function M._start_streaming(buf)
   vim.api.nvim_buf_set_lines(buf, line_count, line_count, false, streaming_lines)
 
   M._pending_text[buf] = {}
+  M._assistant_output_seen[buf] = nil
   M._djinni_marker_line[buf] = line_count + 3
   M._active_tool_count[buf] = 0
   M._tool_section_start[buf] = nil
   M._last_event_time[buf] = vim.uv.now()
+  M._turn_started_at[buf] = M._last_event_time[buf]
+  M._turn_usage[buf] = { input_tokens = 0, output_tokens = 0, cost = 0 }
   M._events_received[buf] = false
   M._plan_lines[buf] = nil
   M._last_tool_title[buf] = nil
@@ -2552,6 +2643,11 @@ function M._start_streaming(buf)
 
   local function cleanup()
     _rm_enable(buf)
+    if M._turn_started_at[buf] then
+      M._turn_elapsed_ms[buf] = vim.uv.now() - M._turn_started_at[buf]
+      M._turn_started_at[buf] = nil
+    end
+    M._turn_usage[buf] = nil
     M._streaming[buf] = nil
     M._stream_cleanup[buf] = nil
     M._cleanup_deferred[buf] = nil
@@ -3634,6 +3730,11 @@ function M._retry_block(buf)
   end
   pcall(vim.api.nvim_buf_set_lines, buf, del_from - 1, #lines, false, {})
 
+  M._invalidate_session(buf)
+  M._creating_session[buf] = nil
+  M._first_msg_sent = M._first_msg_sent or {}
+  M._first_msg_sent[buf] = nil
+
   M.send(buf, you_text)
 end
 
@@ -3798,6 +3899,23 @@ function M._restore_mode(buf, root, sid, result)
   M._extract_modes(buf, result)
   if saved_mode then
     local current = result and result.modes and result.modes.currentModeId
+    local modes = M._modes[buf] or {}
+    if #modes > 0 then
+      local supported = false
+      for _, mode in ipairs(modes) do
+        if mode.id == saved_mode then
+          supported = true
+          break
+        end
+      end
+      if not supported then
+        if current then
+          M._current_mode[buf] = current
+          M._set_frontmatter_field(buf, "mode", current)
+        end
+        return
+      end
+    end
     M._current_mode[buf] = saved_mode
     M._set_frontmatter_field(buf, "mode", saved_mode)
     if saved_mode ~= current and root and sid then
@@ -3834,23 +3952,47 @@ function M._accumulate_usage(buf, result)
   if not result then return end
   local u = M._usage[buf] or { input_tokens = 0, output_tokens = 0, cost = 0, context_used = 0, context_size = 0 }
   local tok = result.tokenUsage or result.usage or {}
-  u.input_tokens = u.input_tokens + (tok.inputTokens or tok.input_tokens or 0)
-  u.output_tokens = u.output_tokens + (tok.outputTokens or tok.output_tokens or 0)
-  if result.used then u.context_used = result.used end
-  if result.size then u.context_size = result.size end
+  local input_tokens = tok.inputTokens or tok.input_tokens or 0
+  local output_tokens = tok.outputTokens or tok.output_tokens or 0
+  local has_token_fields = tok.inputTokens ~= nil or tok.input_tokens ~= nil or tok.outputTokens ~= nil or tok.output_tokens ~= nil
+  local cost = nil
   if result.costUSD then
-    u.cost = u.cost + (tonumber(result.costUSD) or 0)
+    cost = tonumber(result.costUSD) or 0
   elseif result.cost then
     local c = result.cost
     if type(c) == "table" then
-      u.cost = u.cost + (tonumber(c.amount) or 0)
+      cost = tonumber(c.amount) or 0
     else
-      u.cost = u.cost + (tonumber(c) or 0)
+      cost = tonumber(c) or 0
     end
   elseif result.totalCost then
-    u.cost = u.cost + (tonumber(result.totalCost) or 0)
+    cost = tonumber(result.totalCost) or 0
+  end
+  local turn = M._turn_usage[buf]
+  if turn and has_token_fields then
+    local input_delta = math.max(0, input_tokens - (turn.input_tokens or 0))
+    local output_delta = math.max(0, output_tokens - (turn.output_tokens or 0))
+    u.input_tokens = u.input_tokens + input_delta
+    u.output_tokens = u.output_tokens + output_delta
+    turn.input_tokens = math.max(turn.input_tokens or 0, input_tokens)
+    turn.output_tokens = math.max(turn.output_tokens or 0, output_tokens)
+  else
+    u.input_tokens = u.input_tokens + input_tokens
+    u.output_tokens = u.output_tokens + output_tokens
+  end
+  if result.used then u.context_used = result.used end
+  if result.size then u.context_size = result.size end
+  if cost then
+    if turn then
+      local cost_delta = math.max(0, cost - (turn.cost or 0))
+      u.cost = u.cost + cost_delta
+      turn.cost = math.max(turn.cost or 0, cost)
+    else
+      u.cost = u.cost + cost
+    end
   end
   M._usage[buf] = u
+  _redraw_status()
 end
 
 M._auto_compact_threshold = 0.80
@@ -3870,22 +4012,35 @@ end
 function M.statusline()
   local ok, result = pcall(function()
     local buf = vim.api.nvim_get_current_buf()
+    local parts = { "djinni" }
     local mode = M._current_mode[buf]
-    local mode_str = mode and (" [" .. tostring(mode) .. "]") or ""
+    if mode then parts[#parts + 1] = "[" .. tostring(mode) .. "]" end
+    if M._streaming[buf] then
+      local idx = (M._spinner_frame % #M._spinner_chars) + 1
+      parts[#parts + 1] = M._spinner_chars[idx]
+    end
+    local started = M._turn_started_at[buf]
+    local elapsed = started and (vim.uv.now() - started) or M._turn_elapsed_ms[buf]
+    if elapsed and elapsed > 0 then
+      parts[#parts + 1] = _fmt_elapsed(elapsed)
+    end
     local usage = M._usage[buf]
-    local usage_str = ""
+    if usage then
+      local input_tokens = usage.input_tokens or 0
+      local output_tokens = usage.output_tokens or 0
+      if input_tokens + output_tokens > 0 then
+        parts[#parts + 1] = "↓" .. _fmt_k(input_tokens) .. " ↑" .. _fmt_k(output_tokens)
+      end
+    end
+    local diff = M._diff_stats[buf]
+    if diff and ((diff.files or 0) > 0 or (diff.added or 0) > 0 or (diff.deleted or 0) > 0) then
+      parts[#parts + 1] = "Δ" .. _fmt_k(diff.files or 0) .. " +" .. _fmt_k(diff.added or 0) .. " -" .. _fmt_k(diff.deleted or 0)
+    end
     if usage and usage.cost and usage.cost > 0 then
-      usage_str = string.format(" $%.2f", usage.cost)
-    elseif usage and ((usage.input_tokens or 0) + (usage.output_tokens or 0)) > 0 then
-      local total_k = ((usage.input_tokens or 0) + (usage.output_tokens or 0)) / 1000
-      usage_str = string.format(" %.1fk", total_k)
+      parts[#parts + 1] = string.format("$%.2f", usage.cost)
     end
-    if not M._streaming[buf] then
-      if mode or usage_str ~= "" then return "djinni" .. mode_str .. usage_str end
-      return ""
-    end
-    local idx = (M._spinner_frame % #M._spinner_chars) + 1
-    return "djinni" .. mode_str .. " " .. M._spinner_chars[idx] .. usage_str
+    if #parts == 1 and not M._streaming[buf] then return "" end
+    return table.concat(parts, " ")
   end)
   if ok then return result end
   return "djinni"

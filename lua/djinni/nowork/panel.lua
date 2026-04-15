@@ -28,15 +28,82 @@ local status_icons = {
 }
 
 local status_hl = {
-  running = "DiagnosticOk",
-  input = "DiagnosticWarn",
-  idle = "Comment",
-  done = "DiagnosticHint",
+  running = "DjinniPanelRunning",
+  input = "DjinniPanelInput",
+  idle = "DjinniPanelIdle",
+  done = "DjinniPanelDone",
 }
 
 local status_order = { running = 1, input = 2, idle = 3, done = 4 }
 
 local ns = vim.api.nvim_create_namespace("nowork_panel")
+
+local function hl_fg(name, fallback)
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
+  if ok and hl and hl.fg then return string.format("#%06x", hl.fg) end
+  return fallback
+end
+
+local function hl_bg(name, fallback)
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
+  if ok and hl and hl.bg then return string.format("#%06x", hl.bg) end
+  return fallback
+end
+
+function M._setup_highlights()
+  local normal = hl_fg("Normal", "#d0d0d0")
+  local muted = hl_fg("Comment", "#7a7f88")
+  local bg = hl_bg("NormalFloat", hl_bg("Pmenu", hl_bg("Normal", nil)))
+  local cursor_bg = hl_bg("Visual", hl_bg("CursorLine", nil))
+  local title = hl_fg("Title", hl_fg("Function", "#7aa2f7"))
+  local section = hl_fg("Statement", hl_fg("Type", "#bb9af7"))
+  local project = hl_fg("Directory", "#7dcfff")
+  local active = hl_fg("CursorLineNr", "#e0af68")
+  local running = hl_fg("DiagnosticOk", hl_fg("String", "#9ece6a"))
+  local input = hl_fg("DiagnosticWarn", hl_fg("WarningMsg", "#e0af68"))
+  local done = hl_fg("DiagnosticHint", muted)
+  local error = hl_fg("DiagnosticError", "#f7768e")
+  local info = hl_fg("DiagnosticInfo", "#7dcfff")
+  local cost = hl_fg("String", running)
+  local tokens = hl_fg("Number", "#ff9e64")
+  local add = hl_fg("Added", hl_fg("DiffAdd", running))
+  local delete = hl_fg("Removed", hl_fg("DiffDelete", error))
+
+  vim.api.nvim_set_hl(0, "DjinniPanelNormal", { fg = normal, bg = bg, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelCursorLine", { bg = cursor_bg, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelWinSeparator", { fg = section, bg = bg, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelEndOfBuffer", { fg = bg or muted, bg = bg, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelTitle", { fg = title, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelSection", { fg = section, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelProject", { fg = project, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelSession", { fg = normal, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelActive", { fg = active, bg = cursor_bg, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelMuted", { fg = muted, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelSeparator", { fg = muted, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelRunning", { fg = running, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelInput", { fg = input, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelIdle", { fg = muted, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelDone", { fg = done, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelError", { fg = error, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelActivity", { fg = info, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelCost", { fg = cost, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelTokens", { fg = tokens, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelAdd", { fg = add, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelDelete", { fg = delete, default = true })
+end
+
+function M._apply_window_highlights(win)
+  if not win or not vim.api.nvim_win_is_valid(win) then return end
+  M._setup_highlights()
+  local groups = {
+    "Normal:DjinniPanelNormal",
+    "NormalNC:DjinniPanelNormal",
+    "CursorLine:DjinniPanelCursorLine",
+    "WinSeparator:DjinniPanelWinSeparator",
+    "EndOfBuffer:DjinniPanelEndOfBuffer",
+  }
+  vim.wo[win].winhighlight = table.concat(groups, ",")
+end
 
 local _wt_stats = {}
 local _wt_stats_ttl = 30
@@ -283,6 +350,62 @@ local function get_assoc_win()
     vim.cmd(M._tab .. "tabnext")
   end
   return new_win
+end
+
+local function bufwinid_in_tab(buf, tab)
+  if not tab or not vim.api.nvim_tabpage_is_valid(tab) then return -1 end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
+      return win
+    end
+  end
+  return -1
+end
+
+local function open_buf_in_panel_vsplit(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  if M._tab and vim.api.nvim_tabpage_is_valid(M._tab) then
+    pcall(vim.api.nvim_set_current_tabpage, M._tab)
+  end
+  local current_tab = vim.api.nvim_get_current_tabpage()
+  local existing = bufwinid_in_tab(buf, current_tab)
+  if existing ~= -1 then
+    vim.api.nvim_set_current_win(existing)
+    return
+  end
+  if M._win and vim.api.nvim_win_is_valid(M._win) then
+    pcall(vim.api.nvim_set_current_win, M._win)
+  end
+  vim.cmd("rightbelow vsplit")
+  local new_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(new_win, buf)
+  local chat = require("djinni.nowork.chat")
+  local root = chat.get_project_root(buf)
+  if root then
+    vim.api.nvim_win_call(new_win, function()
+      vim.cmd("lcd " .. vim.fn.fnameescape(root))
+    end)
+  end
+end
+
+local function open_chat_file_in_panel_vsplit(path, root)
+  if not path or path == "" then return end
+  local bufnr = vim.fn.bufnr(path)
+  if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+    open_buf_in_panel_vsplit(bufnr)
+    return
+  end
+  if M._tab and vim.api.nvim_tabpage_is_valid(M._tab) then
+    pcall(vim.api.nvim_set_current_tabpage, M._tab)
+  end
+  if M._win and vim.api.nvim_win_is_valid(M._win) then
+    pcall(vim.api.nvim_set_current_win, M._win)
+  end
+  vim.cmd("rightbelow vsplit")
+  if root and root ~= "" then
+    vim.cmd("lcd " .. vim.fn.fnameescape(root))
+  end
+  require("djinni.nowork.chat").open(path)
 end
 
 M._line_tasks = {}
@@ -592,21 +715,21 @@ end
 local function render_ai_virt(task)
   local vt = {}
   if task.context_pct then
-    local pct_hl = task.context_pct >= 80 and "DiagnosticError" or task.context_pct >= 50 and "DiagnosticWarn" or "Comment"
+    local pct_hl = task.context_pct >= 80 and "DjinniPanelError" or task.context_pct >= 50 and "DjinniPanelInput" or "DjinniPanelMuted"
     table.insert(vt, { task.context_pct .. "%", pct_hl })
   end
   local model_str = format_model(task.model)
   if model_str ~= "" then
-    if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
-    table.insert(vt, { model_str, "Comment" })
+    if #vt > 0 then table.insert(vt, { " │ ", "DjinniPanelSeparator" }) end
+    table.insert(vt, { model_str, "DjinniPanelMuted" })
   end
   if task.tokens ~= "" then
-    if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
-    table.insert(vt, { task.tokens, "Number" })
+    if #vt > 0 then table.insert(vt, { " │ ", "DjinniPanelSeparator" }) end
+    table.insert(vt, { task.tokens, "DjinniPanelTokens" })
   end
   if task.cost ~= "" then
-    if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
-    table.insert(vt, { "$" .. task.cost, "String" })
+    if #vt > 0 then table.insert(vt, { " │ ", "DjinniPanelSeparator" }) end
+    table.insert(vt, { "$" .. task.cost, "DjinniPanelCost" })
   end
   return vt
 end
@@ -615,12 +738,12 @@ local function render_stats_virt(stats)
   local vt = {}
   if not stats then return vt end
   if stats.added > 0 or stats.deleted > 0 then
-    table.insert(vt, { "+" .. stats.added .. " ", "String" })
-    table.insert(vt, { "-" .. stats.deleted, "DiagnosticError" })
+    table.insert(vt, { "+" .. stats.added .. " ", "DjinniPanelAdd" })
+    table.insert(vt, { "-" .. stats.deleted, "DjinniPanelDelete" })
   end
   if stats.uncommitted > 0 then
-    if #vt > 0 then table.insert(vt, { "  ", "NonText" }) end
-    table.insert(vt, { stats.uncommitted .. "U", "DiagnosticWarn" })
+    if #vt > 0 then table.insert(vt, { "  ", "DjinniPanelSeparator" }) end
+    table.insert(vt, { stats.uncommitted .. "U", "DjinniPanelInput" })
   end
   return vt
 end
@@ -629,16 +752,16 @@ local function render_session_virt(s)
   local vt = {}
   if s.context ~= "" then
     local pct = tonumber(s.context:match("(%d+)")) or 0
-    local pct_hl = pct >= 80 and "DiagnosticError" or pct >= 50 and "DiagnosticWarn" or "Comment"
+    local pct_hl = pct >= 80 and "DjinniPanelError" or pct >= 50 and "DjinniPanelInput" or "DjinniPanelMuted"
     table.insert(vt, { s.context, pct_hl })
   end
   if s.tokens ~= "" then
-    if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
-    table.insert(vt, { s.tokens, "Number" })
+    if #vt > 0 then table.insert(vt, { " │ ", "DjinniPanelSeparator" }) end
+    table.insert(vt, { s.tokens, "DjinniPanelTokens" })
   end
   if s.cost ~= "" then
-    if #vt > 0 then table.insert(vt, { " │ ", "NonText" }) end
-    table.insert(vt, { s.cost, "String" })
+    if #vt > 0 then table.insert(vt, { " │ ", "DjinniPanelSeparator" }) end
+    table.insert(vt, { s.cost, "DjinniPanelCost" })
   end
   return vt
 end
@@ -876,6 +999,7 @@ end
 
 function M.render()
   if not M._buf or not vim.api.nvim_buf_is_valid(M._buf) then return end
+  M._setup_highlights()
 
   local lines = {}
   local hl_marks = {}
@@ -908,8 +1032,8 @@ function M.render()
     add(text)
     local i = ln()
     M._line_index[i] = { type = "section", id = id }
-    hl(i - 1, 0, #arrow, "NonText")
-    hl(i - 1, #arrow + 1, #text, "Statement")
+    hl(i - 1, 0, #arrow, "DjinniPanelSeparator")
+    hl(i - 1, #arrow + 1, #text, "DjinniPanelSection")
     return not folded
   end
 
@@ -930,24 +1054,24 @@ function M.render()
     M._line_index[i] = { type = "session", session = s }
 
     local marker_hl = ({
-      permission = "WarningMsg", running = "DiagnosticOk",
-      input = "DiagnosticWarn", idle = "NonText",
-    })[s.status] or "Comment"
+      permission = "DjinniPanelInput", running = "DjinniPanelRunning",
+      input = "DjinniPanelInput", idle = "DjinniPanelIdle",
+    })[s.status] or "DjinniPanelDone"
     hl(i - 1, #indent, #indent + #marker, marker_hl)
     local name_start = #indent + #marker + 1 + #letter_part
-    hl(i - 1, name_start, #text, "DjinniSessionName")
+    hl(i - 1, name_start, #text, "DjinniPanelSession")
     if s.letter then
-      hl(i - 1, #indent + #marker + 1, #indent + #marker + 2, s.active and "CursorLineNr" or "Identifier")
+      hl(i - 1, #indent + #marker + 1, #indent + #marker + 2, s.active and "DjinniPanelActive" or "DjinniPanelProject")
     end
 
     local vt_parts = {}
     if s.context_pct then
-      local phl = s.context_pct > 80 and "DiagnosticError" or s.context_pct > 50 and "DiagnosticWarn" or "Comment"
+      local phl = s.context_pct > 80 and "DjinniPanelError" or s.context_pct > 50 and "DjinniPanelInput" or "DjinniPanelMuted"
       table.insert(vt_parts, { s.context_pct .. "%", phl })
     end
     if s.cost and s.cost ~= "" then
-      if #vt_parts > 0 then table.insert(vt_parts, { " ", "NonText" }) end
-      table.insert(vt_parts, { s.cost, "Comment" })
+      if #vt_parts > 0 then table.insert(vt_parts, { " ", "DjinniPanelSeparator" }) end
+      table.insert(vt_parts, { s.cost, "DjinniPanelCost" })
     end
     if #vt_parts > 0 then virt(i - 1, vt_parts) end
 
@@ -956,7 +1080,7 @@ function M.render()
       add(act)
       local ai = ln()
       M._line_index[ai] = { type = "activity", session = s }
-      hl(ai - 1, 0, #act, "DiagnosticInfo")
+      hl(ai - 1, 0, #act, "DjinniPanelActivity")
     end
 
   end
@@ -968,8 +1092,8 @@ function M.render()
     add(text)
     local i = ln()
     M._line_index[i] = { type = "file", task = task }
-    hl(i - 1, #indent, #indent + #marker, status_hl[task.status] or "Comment")
-    hl(i - 1, #indent + #marker + 1, #text, "Comment")
+    hl(i - 1, #indent, #indent + #marker, status_hl[task.status] or "DjinniPanelDone")
+    hl(i - 1, #indent + #marker + 1, #text, "DjinniPanelSession")
 
     local vt = render_ai_virt(task)
     if #vt > 0 then virt(i - 1, vt) end
@@ -985,12 +1109,12 @@ function M.render()
   end
 
   add("nowork")
-  hl(0, 0, 6, "Title")
+  hl(0, 0, 6, "DjinniPanelTitle")
   local view_label = M._view == "sessions" and "sessions" or "projects"
   virt(0, {
-    { view_label, "Statement" },
-    { "  " .. #sessions .. " active", "Comment" },
-    { "  " .. string.format("$%.2f", total_cost), "String" },
+    { view_label, "DjinniPanelSection" },
+    { "  " .. #sessions .. " active", "DjinniPanelMuted" },
+    { "  " .. string.format("$%.2f", total_cost), "DjinniPanelCost" },
   })
 
   if M._view == "sessions" then
@@ -1095,15 +1219,15 @@ function M.render()
       add(header)
       local hi = ln()
       M._line_index[hi] = { type = "project", root = root_data.root, id = root_data.root }
-      hl(hi - 1, 0, #arrow, "NonText")
-      hl(hi - 1, #arrow + 1, #header, "DjinniSessionName")
+      hl(hi - 1, 0, #arrow, "DjinniPanelSeparator")
+      hl(hi - 1, #arrow + 1, #header, "DjinniPanelProject")
       local hdr_vt = {}
       if n_sessions > 0 then
-        table.insert(hdr_vt, { n_sessions .. " live", "DiagnosticOk" })
+        table.insert(hdr_vt, { n_sessions .. " live", "DjinniPanelRunning" })
       end
       if n_files > 0 then
-        if #hdr_vt > 0 then table.insert(hdr_vt, { "  ", "NonText" }) end
-        table.insert(hdr_vt, { n_files .. " chats", "Comment" })
+        if #hdr_vt > 0 then table.insert(hdr_vt, { "  ", "DjinniPanelSeparator" }) end
+        table.insert(hdr_vt, { n_files .. " chats", "DjinniPanelMuted" })
       end
       if #hdr_vt > 0 then virt(hi - 1, hdr_vt) end
 
@@ -1113,7 +1237,7 @@ function M.render()
         end
         if #root_data.drafts > 0 then
           add("  • Drafts")
-          hl(ln() - 1, 0, 100, "Comment")
+          hl(ln() - 1, 0, 100, "DjinniPanelMuted")
           for _, task in ipairs(root_data.drafts) do
             file_line(task, "    ")
           end
@@ -1171,7 +1295,6 @@ function M._setup_keymaps()
   vim.keymap.set("x", "!", M.hive_approve_visual, { buffer = M._buf, nowait = true })
   map("c", M.create_task)
   map("d", M.archive_task)
-  map("/", M.search_tasks)
   map("R", M.refresh)
   map("?", M.show_help)
   map("q", M.close)
@@ -1210,6 +1333,7 @@ function M.open()
   vim.wo[M._win].relativenumber = false
   vim.wo[M._win].foldenable = false
   vim.wo[M._win].statuscolumn = ""
+  M._apply_window_highlights(M._win)
 
   M._setup_keymaps()
 
@@ -1250,10 +1374,7 @@ function M.open_in_vsplit()
 
   if entry.type == "file" and entry.task then
     local path = entry.task.file_path
-    if M._source_tab then
-      pcall(vim.api.nvim_set_current_tabpage, M._source_tab)
-    end
-    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    open_chat_file_in_panel_vsplit(path, entry.task.root)
     return
   end
 
@@ -1263,7 +1384,7 @@ function M.open_in_vsplit()
   end
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
 
-  local existing = vim.fn.bufwinid(buf)
+  local existing = bufwinid_in_tab(buf, vim.api.nvim_get_current_tabpage())
   if existing ~= -1 then
     vim.api.nvim_set_current_win(existing)
     return
@@ -1477,7 +1598,7 @@ function M.search_tasks()
       text = task.project .. "/" .. fname,
       file = task.file_path,
       icon = icon,
-      icon_hl = status_hl[task.status] or "Comment",
+      icon_hl = status_hl[task.status] or "DjinniPanelDone",
     })
   end
   Snacks.picker({
@@ -1552,26 +1673,14 @@ function M.open_task()
   if entry and (entry.type == "agent" or entry.type == "permission") and entry.agent then
     local buf = entry.agent.buf
     if buf and vim.api.nvim_buf_is_valid(buf) then
-      local existing = vim.fn.bufwinid(buf)
-      if existing ~= -1 then
-        vim.api.nvim_set_current_win(existing)
-      else
-        local win = get_assoc_win()
-        if win then vim.api.nvim_win_set_buf(win, buf) end
-      end
+      open_buf_in_panel_vsplit(buf)
     end
     return
   end
 
   local session = session_at_cursor()
   if session and vim.api.nvim_buf_is_valid(session.buf) then
-    local existing = vim.fn.bufwinid(session.buf)
-    if existing ~= -1 then
-      vim.api.nvim_set_current_win(existing)
-    else
-      local win = get_assoc_win()
-      if win then vim.api.nvim_win_set_buf(win, session.buf) end
-    end
+    open_buf_in_panel_vsplit(session.buf)
     return
   end
 
@@ -1579,21 +1688,13 @@ function M.open_task()
   if not task then return end
 
   local bufnr = vim.fn.bufnr(task.file_path)
-  local existing = bufnr ~= -1 and vim.fn.bufwinid(bufnr) or -1
+  local existing = bufnr ~= -1 and bufwinid_in_tab(bufnr, vim.api.nvim_get_current_tabpage()) or -1
   if existing ~= -1 then
     vim.api.nvim_set_current_win(existing)
     return
   end
 
-  local win = get_assoc_win()
-  if win then
-    vim.api.nvim_win_call(win, function()
-      if task.root and task.root ~= "" then
-        vim.cmd("lcd " .. vim.fn.fnameescape(task.root))
-      end
-      require("djinni.nowork.chat").open(task.file_path)
-    end)
-  end
+  open_chat_file_in_panel_vsplit(task.file_path, task.root)
 end
 
 function M.hide_session()
@@ -1856,29 +1957,18 @@ end
 function M.jump_session(n)
   local s = M._numbered_sessions[n]
   if not s or not vim.api.nvim_buf_is_valid(s.buf) then return end
-  local existing = vim.fn.bufwinid(s.buf)
-  if existing ~= -1 then
-    vim.api.nvim_set_current_win(existing)
-  else
-    local win = get_assoc_win()
-    if win then vim.api.nvim_win_set_buf(win, s.buf) end
-  end
+  open_buf_in_panel_vsplit(s.buf)
 end
 
 function M.switch_last_session()
   local hist = M._session_history
   local target = hist[2]
   if not target or not vim.api.nvim_buf_is_valid(target) then return end
-  local existing = vim.fn.bufwinid(target)
-  if existing ~= -1 then
-    vim.api.nvim_set_current_win(existing)
-  else
-    local win = get_assoc_win()
-    if win then vim.api.nvim_win_set_buf(win, target) end
-  end
+  open_buf_in_panel_vsplit(target)
 end
 
 function M.show_help()
+  M._setup_highlights()
   local help = {
     "Navigation",
     "  j/k     next/prev item",
@@ -1901,7 +1991,7 @@ function M.show_help()
     "Tasks",
     "  c       create task",
     "  d       archive",
-    "  /       search",
+    "  <leader>fo search",
     "",
     "  R refresh   q close   ? help",
   }
@@ -1929,7 +2019,7 @@ function M.show_help()
   for i, line in ipairs(help) do
     if line ~= "" and not line:match("^%s") then
       vim.api.nvim_buf_set_extmark(buf, help_ns, i - 1, 0, {
-        end_col = #line, hl_group = "Title",
+        end_col = #line, hl_group = "DjinniPanelTitle",
       })
     end
   end
