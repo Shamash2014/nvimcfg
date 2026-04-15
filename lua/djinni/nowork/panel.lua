@@ -71,7 +71,6 @@ function M._setup_highlights()
 
   vim.api.nvim_set_hl(0, "DjinniPanelNormal", { fg = normal, bg = bg, default = true })
   vim.api.nvim_set_hl(0, "DjinniPanelCursorLine", { bg = cursor_bg, default = true })
-  vim.api.nvim_set_hl(0, "DjinniPanelWinSeparator", { fg = section, bg = bg, default = true })
   vim.api.nvim_set_hl(0, "DjinniPanelEndOfBuffer", { fg = bg or muted, bg = bg, default = true })
   vim.api.nvim_set_hl(0, "DjinniPanelTitle", { fg = title, bold = true, default = true })
   vim.api.nvim_set_hl(0, "DjinniPanelSection", { fg = section, bold = true, default = true })
@@ -99,7 +98,6 @@ function M._apply_window_highlights(win)
     "Normal:DjinniPanelNormal",
     "NormalNC:DjinniPanelNormal",
     "CursorLine:DjinniPanelCursorLine",
-    "WinSeparator:DjinniPanelWinSeparator",
     "EndOfBuffer:DjinniPanelEndOfBuffer",
   }
   vim.wo[win].winhighlight = table.concat(groups, ",")
