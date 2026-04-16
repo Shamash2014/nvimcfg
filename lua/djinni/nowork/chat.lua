@@ -625,6 +625,10 @@ local function build_session_opts(buf, root)
   if provider and provider ~= "" then
     opts.provider = provider
   end
+  local profile = read_frontmatter_field(buf, "profile")
+  if profile and profile ~= "" then
+    opts.profile = profile
+  end
   return opts
 end
 
@@ -776,6 +780,7 @@ function M.create(project_root, opts)
     "root: " .. project_root,
     "session:",
     "provider: " .. (opts.provider or (config.acp and config.acp.provider) or "claude-code"),
+    "profile: " .. (opts.profile or ""),
     "model:",
     "mcp: " .. mcp_value,
     "parent: " .. (opts.parent or ""),
@@ -839,26 +844,89 @@ function M.create(project_root, opts)
       M._subscribe_session(buf, project_root, sid)
       M._streaming[buf] = true
       M._start_streaming(buf)
-      M._restore_mode(buf, project_root, sid, result)
-      local msg = inject_skills(buf, project_root, prompt .. context_refs)
-      log.info("sending prompt on sid=" .. tostring(sid) .. " len=" .. tostring(#msg))
-      session.send_message(project_root, sid, msg, function(_err, prompt_result)
-        log.info("session/prompt callback: " .. (_err and ("err=" .. vim.inspect(_err)) or "ok"))
-        if prompt_result then
-          log.info("prompt_result: stopReason=" .. tostring(prompt_result.stopReason))
-          if prompt_result.usage then log.info("usage: " .. vim.inspect(prompt_result.usage)) end
+      local gen = M._stream_gen[buf]
+      local raw_msg = prompt .. context_refs
+      local function cleanup_first_prompt()
+        M._streaming[buf] = nil
+        M._stream_cleanup[buf] = nil
+        M._cleanup_deferred[buf] = nil
+        M._interrupt_pending[buf] = nil
+        M._stream_client[buf] = nil
+        M._cleanup_empty_djinni(buf)
+        M._schedule_panel_render()
+      end
+      local function retry_first_prompt(reason)
+        M._send_retries[buf] = (M._send_retries[buf] or 0) + 1
+        if M._send_retries[buf] > M._max_send_retries then
+          log.warn("max create retries (" .. M._max_send_retries .. ") reached: " .. reason)
+          M._send_retries[buf] = 0
+          M._update_system_block(buf, "Failed after " .. M._max_send_retries .. " retries: " .. reason .. ". Send a message to try again.")
+          return
         end
-        vim.schedule(function()
+        local delay = 1000 * math.pow(2, (M._send_retries[buf] or 1) - 1)
+        vim.defer_fn(function()
           if not vim.api.nvim_buf_is_valid(buf) then return end
-          M._accumulate_usage(buf, prompt_result)
-          if prompt_result and prompt_result.stopReason == "end_turn" then
-            M._waiting_input[buf] = true
+          M.send(buf, raw_msg)
+        end, delay)
+      end
+      local function handle_first_prompt_failure(reason)
+        if M._stream_gen[buf] ~= gen then return end
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        cleanup_first_prompt()
+        M._invalidate_session(buf)
+        M._update_system_block(buf, "Error: " .. reason .. " — reconnecting...")
+        retry_first_prompt(reason)
+      end
+      M._restore_mode(buf, project_root, sid, result, function(mode_err)
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        if mode_err then
+          local msg = mode_err.message or (mode_err.data and mode_err.data.details) or vim.inspect(mode_err)
+          handle_first_prompt_failure(msg)
+          return
+        end
+        local msg = inject_skills(buf, project_root, raw_msg)
+        log.info("sending prompt on sid=" .. tostring(sid) .. " len=" .. tostring(#msg))
+        session.send_message(project_root, sid, msg, function(_err, prompt_result)
+          log.info("session/prompt callback: " .. (_err and ("err=" .. vim.inspect(_err)) or "ok"))
+          if prompt_result then
+            log.info("prompt_result: stopReason=" .. tostring(prompt_result.stopReason))
+            if prompt_result.usage then log.info("usage: " .. vim.inspect(prompt_result.usage)) end
           end
-          if M._stream_cleanup[buf] then
-            M._stream_cleanup[buf]()
-          end
-        end)
-      end, nil, get_provider(buf))
+          vim.schedule(function()
+            if not vim.api.nvim_buf_is_valid(buf) then return end
+            if _err then
+              local err_msg = _err.message or (_err.data and _err.data.details) or vim.inspect(_err)
+              handle_first_prompt_failure(err_msg)
+              return
+            end
+            M._accumulate_usage(buf, prompt_result)
+            local tok = prompt_result and (prompt_result.tokenUsage or prompt_result.usage) or {}
+            local total = (tok.inputTokens or 0) + (tok.outputTokens or 0)
+            if total == 0 then
+              local sr = prompt_result and prompt_result.stopReason
+              if sr == "end_turn" and M._assistant_output_seen[buf] then
+                log.info("0-token initial end_turn — agent waiting for input, keeping session")
+                M._waiting_input[buf] = true
+                M._send_retries[buf] = 0
+                if M._stream_cleanup[buf] then
+                  M._stream_cleanup[buf]()
+                end
+                return
+              end
+              log.warn("0-token initial response, stopReason=" .. tostring(sr) .. " — invalidating session")
+              handle_first_prompt_failure("empty response")
+              return
+            end
+            M._send_retries[buf] = 0
+            if prompt_result and prompt_result.stopReason == "end_turn" then
+              M._waiting_input[buf] = true
+            end
+            if M._stream_cleanup[buf] then
+              M._stream_cleanup[buf]()
+            end
+          end)
+        end, nil, get_provider(buf))
+      end)
     end)
   end, sess_opts)
 
@@ -3341,6 +3409,17 @@ function M.pick_model(buf)
   end)
 end
 
+function M.pick_profile(buf)
+  vim.schedule(function()
+    local current = read_frontmatter_field(buf, "profile") or ""
+    vim.ui.input({ prompt = "Codex profile: ", default = current }, function(input)
+      if input == nil then return end
+      M._set_frontmatter_field(buf, "profile", vim.trim(input))
+      M.restart_session(buf)
+    end)
+  end)
+end
+
 function M.show_help()
   local help = {
     "Chat Keybinds",
@@ -3354,6 +3433,7 @@ function M.show_help()
     "  <Tab>     Toggle fold",
     "  <CR>      Context action",
     "  p         Switch provider",
+    "  /profile  Set Codex profile for this chat",
     "  R         Restart session",
     "  D         Delta diff (on tool line)",
     "  dd        Delete block",
@@ -3832,6 +3912,40 @@ function M._permission_action(buf, action)
   end
 end
 
+local function desired_title_path(path, title)
+  if not title or title == "" then return nil end
+  local dir = vim.fn.fnamemodify(path, ":h")
+  local base = vim.fn.fnamemodify(path, ":t")
+  local name = slug(title)
+  if name == "" or name == "chat" then return nil end
+  local date = base:match("^(%d%d%d%d%-%d%d%-%d%d)%-")
+  if date then
+    return dir .. "/" .. date .. "-" .. name .. ".md"
+  end
+  return dir .. "/" .. name .. ".md"
+end
+
+local function maybe_redirect_after_title_save(buf)
+  local path = vim.api.nvim_buf_get_name(buf)
+  if path == "" then return end
+  local title = read_frontmatter_field(buf, "title")
+  local target = desired_title_path(path, title)
+  if not target or target == path then return end
+  if vim.fn.filereadable(target) == 1 then
+    vim.notify("[djinni] Name saved, but rename skipped: file exists", vim.log.levels.WARN)
+    return
+  end
+  local ok, err = os.rename(path, target)
+  if not ok then
+    vim.notify("[djinni] Name saved, but rename failed: " .. tostring(err), vim.log.levels.WARN)
+    return
+  end
+  vim.api.nvim_buf_set_name(buf, target)
+  vim.bo[buf].modified = false
+  M._schedule_panel_render()
+  vim.notify("[djinni] Name saved: " .. title, vim.log.levels.INFO)
+end
+
 function M._on_save(buf)
   local win = vim.fn.bufwinid(buf)
   if win ~= -1 then
@@ -3839,6 +3953,7 @@ function M._on_save(buf)
       vim.cmd("normal! zR")
     end)
   end
+  maybe_redirect_after_title_save(buf)
 end
 
 function M._extract_modes(buf, result)
@@ -3857,7 +3972,7 @@ function M._extract_modes(buf, result)
   end
 end
 
-function M._restore_mode(buf, root, sid, result)
+function M._restore_mode(buf, root, sid, result, callback)
   local saved_mode = M._current_mode[buf]
   M._extract_modes(buf, result)
   if saved_mode then
@@ -3876,15 +3991,24 @@ function M._restore_mode(buf, root, sid, result)
           M._current_mode[buf] = current
           M._set_frontmatter_field(buf, "mode", current)
         end
+        if callback then callback() end
         return
       end
     end
     M._current_mode[buf] = saved_mode
     M._set_frontmatter_field(buf, "mode", saved_mode)
     if saved_mode ~= current and root and sid then
-      session.set_mode(root, sid, saved_mode, get_provider(buf))
+      session.set_mode(root, sid, saved_mode, get_provider(buf), function(err)
+        if err and callback then
+          vim.schedule(function() callback(err) end)
+          return
+        end
+        if callback then vim.schedule(callback) end
+      end)
+      return
     end
   end
+  if callback then callback() end
 end
 
 function M._resolve_refs(text, source_buf)

@@ -4,6 +4,7 @@ local ui = require("djinni.integrations.snacks_ui")
 local LOCAL_COMMAND_META = {
   ["/model"] = { description = "Set or select the active model", input_hint = "model id" },
   ["/provider"] = { description = "Switch the active ACP provider", input_hint = "provider name" },
+  ["/profile"] = { description = "Set the Codex profile for this chat", input_hint = "profile name" },
   ["/compact"] = { description = "Ask the agent to compact the conversation" },
   ["/new"] = { description = "Start a new local chat session" },
   ["/cost"] = { description = "Ask the agent for cost details" },
@@ -33,6 +34,7 @@ end
 M.commands = {
   { name = "/model", args = true, forward = true },
   { name = "/provider", args = true, forward = false },
+  { name = "/profile", args = true, forward = false },
   { name = "/compact", args = false, forward = true },
   { name = "/new", args = false, forward = false },
   { name = "/cost", args = false, forward = true },
@@ -162,6 +164,21 @@ function M.execute(buf, text)
 
   if cmd.name == "/provider" and args and args ~= "" then
     chat.switch_provider(buf, args)
+    return true
+  end
+
+  if cmd.name == "/profile" then
+    if args and args ~= "" then
+      chat._set_frontmatter_field(buf, "profile", args)
+      vim.notify("[djinni] Profile: " .. args, vim.log.levels.INFO)
+      local lc = vim.api.nvim_buf_line_count(buf)
+      vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
+        "", "---", "", "@System", "Profile: " .. args, "",
+      })
+      chat.restart_session(buf)
+    else
+      chat.pick_profile(buf)
+    end
     return true
   end
 

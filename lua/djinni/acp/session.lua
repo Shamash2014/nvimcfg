@@ -63,9 +63,49 @@ local function build_mcp_servers(mcp_dict)
   return mcp_servers
 end
 
-local function spawn_client(project_root, provider_name)
+local function merge_provider_args(base_args, extra_args)
+  local merged = {}
+  for _, arg in ipairs(base_args or {}) do
+    merged[#merged + 1] = arg
+  end
+  for _, arg in ipairs(extra_args or {}) do
+    merged[#merged + 1] = arg
+  end
+  return merged
+end
+
+local function effective_provider_args(provider_name, profile)
+  if provider_name == "codex" and profile and profile ~= "" then
+    return { "--profile", profile }
+  end
+  return nil
+end
+
+local function request_timeout(provider_name, method)
+  if provider_name == "claude-code" and (method == "session/new" or method == "session/load") then
+    return 90000
+  end
+  return 30000
+end
+
+local function enrich_error(client, err)
+  if not err then return nil end
+  local out = vim.deepcopy(err)
+  local hint = client and client.get_error_hint and client:get_error_hint() or nil
+  if hint and hint ~= "" then
+    out.message = ((out.message and out.message ~= "") and (out.message .. " — ") or "") .. hint
+  end
+  return out
+end
+
+local function spawn_client(project_root, provider_name, opts)
+  opts = opts or {}
   local provider = Provider.get(provider_name)
-  local client = Client.new(provider.command, provider.args, project_root)
+  local client = Client.new(
+    provider.command,
+    merge_provider_args(provider.args, effective_provider_args(provider_name, opts.profile)),
+    project_root
+  )
 
   client:on_request("session/request_permission", function(params, respond)
     local handlers = client.event_handlers["permission_request"]
@@ -156,7 +196,7 @@ function M.create_task_session(project_root, callback, opts)
   local provider_name = opts.provider or config.provider
   local log = require("djinni.nowork.log")
 
-  local client = spawn_client(project_root, provider_name)
+  local client = spawn_client(project_root, provider_name, opts)
 
   log.info("create_task_session: root=" .. project_root .. " provider=" .. tostring(provider_name))
   client:when_ready(function(ready_err)
@@ -171,6 +211,7 @@ function M.create_task_session(project_root, callback, opts)
     log.info("create_task_session: sending session/new cwd=" .. project_root)
     client:request("session/new", req, function(err, result)
       if err then
+        err = enrich_error(client, err)
         log.warn("create_task_session: session/new error: " .. vim.inspect(err))
         pcall(function() client:shutdown(true) end)
         if callback then callback(err, nil) end
@@ -195,7 +236,7 @@ function M.create_task_session(project_root, callback, opts)
       if callback then
         callback(nil, session_id, result)
       end
-    end, { timeout = 30000 })
+    end, { timeout = request_timeout(provider_name, "session/new") })
   end)
 end
 
@@ -205,7 +246,7 @@ function M.load_task_session(project_root, session_id, callback, opts)
   local provider_name = opts.provider or config.provider
   local log = require("djinni.nowork.log")
 
-  local client = spawn_client(project_root, provider_name)
+  local client = spawn_client(project_root, provider_name, opts)
 
   client:when_ready(function(ready_err)
     if ready_err then
@@ -219,6 +260,7 @@ function M.load_task_session(project_root, session_id, callback, opts)
 
     client:request(resume_cfg.method, params, function(err, result)
       if err then
+        err = enrich_error(client, err)
         log.warn("load_task_session: resume error sid=" .. tostring(session_id) .. " err=" .. vim.inspect(err))
         pcall(function() client:shutdown(true) end)
         if callback then callback(err, nil) end
@@ -233,7 +275,7 @@ function M.load_task_session(project_root, session_id, callback, opts)
       apply_session_result(entry, session_id, result, opts)
 
       if callback then callback(nil, result) end
-    end, { timeout = 30000 })
+    end, { timeout = request_timeout(provider_name, resume_cfg.method) })
   end)
 end
 
@@ -243,7 +285,7 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
   local provider_name = opts.provider or config.provider
   local log = require("djinni.nowork.log")
 
-  local client = spawn_client(project_root, provider_name)
+  local client = spawn_client(project_root, provider_name, opts)
 
   client:when_ready(function(ready_err)
     if ready_err then
@@ -258,6 +300,7 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
       log.info("create_or_resume: creating new session cwd=" .. project_root)
       client:request("session/new", req, function(err, result)
         if err then
+          err = enrich_error(client, err)
           log.warn("create_or_resume: session/new error: " .. vim.inspect(err))
           pcall(function() client:shutdown(true) end)
           if callback then callback(err, nil, nil) end
@@ -280,7 +323,7 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
 
         log.info("create_or_resume: new session OK sid=" .. new_sid)
         if callback then callback(nil, new_sid, result) end
-      end, { timeout = 30000 })
+      end, { timeout = request_timeout(provider_name, "session/new") })
     end
 
     if session_id and session_id ~= "" then
@@ -290,6 +333,7 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
       log.info("create_or_resume: trying resume sid=" .. session_id)
       client:request(resume_cfg.method, params, function(err, result)
         if err then
+          err = enrich_error(client, err)
           log.info("create_or_resume: resume failed sid=" .. session_id .. " — falling back to create")
           do_create()
           return
@@ -304,7 +348,7 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
 
         log.info("create_or_resume: resume OK sid=" .. session_id)
         if callback then callback(nil, session_id, result) end
-      end, { timeout = 30000 })
+      end, { timeout = request_timeout(provider_name, resume_cfg.method) })
     else
       do_create()
     end
@@ -346,6 +390,7 @@ function M.list_task_sessions(project_root, callback, opts)
 
       client:request("session/list", params, function(err, result)
         if err then
+          err = enrich_error(client, err)
           pcall(function() client:shutdown(true) end)
           log.warn("list_task_sessions: session/list error: " .. vim.inspect(err))
           if callback then callback(err, nil) end
@@ -365,7 +410,7 @@ function M.list_task_sessions(project_root, callback, opts)
 
         pcall(function() client:shutdown(true) end)
         if callback then callback(nil, all_sessions) end
-      end, { timeout = 30000 })
+      end, { timeout = request_timeout(provider_name, "session/list") })
     end
 
     fetch_page(nil)
@@ -422,14 +467,27 @@ function M.send_message(_, session_id, content, callback, images, _provider_name
   end)
 end
 
-function M.set_mode(_, session_id, mode_id, _provider_name)
+function M.set_mode(_, session_id, mode_id, _provider_name, callback)
   local entry = M.sessions_by_id[session_id]
-  if not entry then return end
+  if not entry then
+    if callback then callback({ message = "Session not found" }, nil) end
+    return
+  end
+  if entry.provider_name == "claude-code" then
+    entry.client:request("session/prompt", {
+      sessionId = session_id,
+      prompt = { { type = "text", text = "/mode " .. mode_id } },
+    }, function(err, result)
+      if callback then callback(err, result) end
+    end, { timeout = 15000 })
+    return
+  end
   entry.client:request("session/set_mode", {
     sessionId = session_id,
     modeId = mode_id,
-  }, function(err, result) -- response is minimal; ignore err/result for now
-  end)
+  }, function(err, result)
+    if callback then callback(err, result) end
+  end, { timeout = 15000 })
 end
 
 function M.interrupt(_, session_id, _provider_name)

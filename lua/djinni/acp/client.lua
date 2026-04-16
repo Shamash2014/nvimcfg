@@ -34,6 +34,8 @@ function M.new(cmd, args, cwd)
   self.subscribers = {}
   self._reconnect_count = 0
   self._shutting_down = false
+  self._stderr_recent = {}
+  self._stderr_hint = nil
 
   self:_spawn()
   return self
@@ -54,6 +56,13 @@ function M:_spawn()
       if not data then return end
       for _, line in ipairs(data) do
         if line ~= "" then
+          self._stderr_recent[#self._stderr_recent + 1] = line
+          if #self._stderr_recent > 20 then
+            table.remove(self._stderr_recent, 1)
+          end
+          if line:match("EMFILE") or line:match("too many open files") then
+            self._stderr_hint = "Claude settings watcher hit EMFILE while creating the session"
+          end
           local ignore = false
           for _, pat in ipairs(STDERR_IGNORE) do
             if line:match(pat) then ignore = true; break end
@@ -475,6 +484,14 @@ function M:request(method, params, callback, opts)
 
   vim.fn.chansend(self.job_id, msg .. "\n")
   return id
+end
+
+function M:get_error_hint()
+  return self._stderr_hint
+end
+
+function M:get_recent_stderr()
+  return vim.deepcopy(self._stderr_recent)
 end
 
 function M:notify(method, params)

@@ -3,7 +3,6 @@ local M = {}
 M.providers = {
   ["claude-code"] = {
     command = "claude-agent-acp",
-    args = {},
     models = {},
     resume = { method = "session/resume" },
   },

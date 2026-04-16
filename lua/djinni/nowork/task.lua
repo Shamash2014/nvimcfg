@@ -299,13 +299,13 @@ function M.update_tasks_section(buf)
   end
 end
 
-function M.open_task_at_cursor(buf)
+function M.open_task_at_cursor(buf, opts)
   local map = M._line_to_file[buf]
   if not map then return false end
   local row = vim.api.nvim_win_get_cursor(0)[1]
   local file = map[row]
   if not file then return false end
-  require("djinni.nowork.chat").open(file)
+  require("djinni.nowork.chat").open(file, opts)
   return true
 end
 
@@ -342,6 +342,10 @@ function M.setup_keymaps(buf)
     end
   end, { buffer = buf, silent = true, nowait = true })
 
+  vim.keymap.set("n", "v", function()
+    M.open_task_at_cursor(buf, { split = true })
+  end, { buffer = buf, silent = true, desc = "Open task in vertical split" })
+
   vim.keymap.set("n", "gc", function()
     M.clear_conversation(buf)
   end, { buffer = buf, silent = true, desc = "Clear task conversation" })
@@ -356,6 +360,7 @@ function M.setup_keymaps(buf)
       " Task Dashboard Help",
       "",
       " <CR>   Open task at cursor / Send message",
+      " v      Open task at cursor in vertical split",
       " gc     Clear conversation (keep tasks)",
       " gx     Clear all task .chat files",
       " ?      Show this help",

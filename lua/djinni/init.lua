@@ -10,7 +10,6 @@ local defaults = {
   acp = {
     provider = "claude-code",
     command = "claude-agent-acp",
-    args = {},
     idle_timeout = 300000,
     providers = {},
   },
