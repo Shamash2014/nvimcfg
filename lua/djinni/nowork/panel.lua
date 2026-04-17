@@ -22,20 +22,34 @@ M._hive_fold = {} -- section_id -> bool (true = folded)
 M._hive_project_filter = "current" -- "current" | "all"
 
 local status_icons = {
-  running = "●",
-  input = "⚠",
-  idle = "◆",
-  done = "✓",
+  running  = "●",
+  awaiting = "⚠",
+  review   = "👁",
+  ready    = "◆",
+  done     = "✓",
+  input    = "⚠",
+  idle     = "◆",
 }
 
 local status_hl = {
-  running = "DjinniPanelRunning",
-  input = "DjinniPanelInput",
-  idle = "DjinniPanelIdle",
-  done = "DjinniPanelDone",
+  running  = "DjinniPanelRunning",
+  awaiting = "DjinniPanelAwaiting",
+  review   = "DjinniPanelReview",
+  ready    = "DjinniPanelReady",
+  done     = "DjinniPanelDone",
+  input    = "DjinniPanelAwaiting",
+  idle     = "DjinniPanelReady",
 }
 
-local status_order = { running = 1, input = 2, idle = 3, done = 4 }
+local status_order = {
+  running  = 1,
+  awaiting = 2,
+  review   = 3,
+  ready    = 4,
+  done     = 5,
+  input    = 2,
+  idle     = 4,
+}
 
 local ns = vim.api.nvim_create_namespace("nowork_panel")
 
@@ -61,7 +75,9 @@ function M._setup_highlights()
   local project = hl_fg("Directory", "#7dcfff")
   local active = hl_fg("CursorLineNr", "#e0af68")
   local running = hl_fg("DiagnosticOk", hl_fg("String", "#9ece6a"))
-  local input = hl_fg("DiagnosticWarn", hl_fg("WarningMsg", "#e0af68"))
+  local awaiting = hl_fg("DiagnosticWarn", hl_fg("WarningMsg", "#e0af68"))
+  local review = hl_fg("DiagnosticInfo", hl_fg("Special", "#7dcfff"))
+  local ready = hl_fg("DiagnosticHint", hl_fg("Comment", "#7aa2f7"))
   local done = hl_fg("DiagnosticHint", muted)
   local error = hl_fg("DiagnosticError", "#f7768e")
   local info = hl_fg("DiagnosticInfo", "#7dcfff")
@@ -81,8 +97,11 @@ function M._setup_highlights()
   vim.api.nvim_set_hl(0, "DjinniPanelMuted", { fg = muted, default = true })
   vim.api.nvim_set_hl(0, "DjinniPanelSeparator", { fg = muted, default = true })
   vim.api.nvim_set_hl(0, "DjinniPanelRunning", { fg = running, bold = true, default = true })
-  vim.api.nvim_set_hl(0, "DjinniPanelInput", { fg = input, bold = true, default = true })
-  vim.api.nvim_set_hl(0, "DjinniPanelIdle", { fg = muted, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelAwaiting", { fg = awaiting, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelReview", { fg = review, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelReady", { fg = ready, default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelInput", { link = "DjinniPanelAwaiting", default = true })
+  vim.api.nvim_set_hl(0, "DjinniPanelIdle", { link = "DjinniPanelReady", default = true })
   vim.api.nvim_set_hl(0, "DjinniPanelDone", { fg = done, default = true })
   vim.api.nvim_set_hl(0, "DjinniPanelError", { fg = error, bold = true, default = true })
   vim.api.nvim_set_hl(0, "DjinniPanelActivity", { fg = info, default = true })
@@ -811,21 +830,21 @@ function M._collect_sessions()
     local usage = chat._usage[buf]
 
     local status
-    if chat._streaming[buf] then status = "running"
-    elseif chat._last_perm_tool[buf] then status = "input"
-    elseif chat._waiting_input and chat._waiting_input[buf] then status = "input"
-    elseif chat._sessions[buf] then status = "idle"
-    else status = "done" end
-
     local activity = ""
     if chat._streaming[buf] then
-      local tool_title = chat._last_tool_title[buf]
-      activity = tool_title or "streaming…"
+      status = "running"
+      activity = chat._last_tool_title[buf] or "streaming…"
     elseif chat._last_perm_tool[buf] then
+      status = "awaiting"
       local perm = chat._last_perm_tool[buf]
       activity = "⚠ " .. (type(perm) == "table" and perm.desc or tostring(perm))
     elseif chat._waiting_input and chat._waiting_input[buf] then
-      activity = "⚠ waiting for input"
+      status = "review"
+      activity = "awaiting review"
+    elseif chat._sessions[buf] then
+      status = "ready"
+    else
+      status = "done"
     end
 
     local tokens = ""
@@ -861,9 +880,8 @@ function M._collect_sessions()
   end
 
   table.sort(result, function(a, b)
-    local order = { running = 1, input = 2, idle = 3, done = 4 }
-    local oa = order[a.status] or 9
-    local ob = order[b.status] or 9
+    local oa = status_order[a.status] or 9
+    local ob = status_order[b.status] or 9
     if oa ~= ob then return oa < ob end
     if a.project ~= b.project then return a.project < b.project end
     return a.title < b.title
@@ -1039,10 +1057,10 @@ function M.render()
   local function session_line(s, indent)
     indent = indent or "  "
     local marker
-    if s.status == "permission" then marker = "!"
+    if s.status == "permission" or s.status == "awaiting" or s.status == "input" then marker = "⚠"
     elseif s.status == "running" then marker = "●"
-    elseif s.status == "input" then marker = "▶"
-    elseif s.status == "idle" then marker = "○"
+    elseif s.status == "review" then marker = "👁"
+    elseif s.status == "ready" or s.status == "idle" then marker = "◆"
     else marker = "·" end
 
     local letter_part = s.letter and (s.letter .. " ") or "  "
@@ -1124,19 +1142,22 @@ function M.render()
         table.insert(drafts, task)
       end
     end
+    local review, ready = {}, {}
     for _, s in ipairs(sessions) do
-      if s.status == "permission" then table.insert(perms, s)
+      if s.status == "permission" or s.status == "awaiting" or s.status == "input" then table.insert(perms, s)
       elseif s.status == "running" then table.insert(streaming, s)
-      elseif s.status == "input" or s.status == "idle" then table.insert(waiting, s)
+      elseif s.status == "review" then table.insert(review, s)
+      elseif s.status == "ready" or s.status == "idle" then table.insert(ready, s)
       else table.insert(idle, s)
       end
     end
 
     local secs = {
       { id = "drafts", title = "Drafts", items = drafts, is_task_section = true },
-      { id = "perms", title = "Permissions", items = perms },
-      { id = "streaming", title = "Streaming", items = streaming },
-      { id = "waiting", title = "Ready", items = waiting },
+      { id = "perms", title = "Awaiting input", items = perms },
+      { id = "streaming", title = "Running", items = streaming },
+      { id = "review", title = "In review", items = review },
+      { id = "waiting", title = "Ready", items = ready },
       { id = "idle", title = "Ended", items = idle },
     }
 

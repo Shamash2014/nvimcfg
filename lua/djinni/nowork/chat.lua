@@ -15,11 +15,26 @@ local get_provider
 
 local M = {}
 
-function M._schedule_panel_render()
-  local ok, panel = pcall(require, "djinni.nowork.panel")
-  if ok and panel and panel.schedule_render then
-    panel.schedule_render()
+function M._schedule_panel_render() end
+
+local function djinni_inform(buf, text, level)
+  level = level or vim.log.levels.INFO
+  if buf and vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "nowork-chat" then
+    if M._flush_pending then pcall(M._flush_pending, buf) end
+    local lc = vim.api.nvim_buf_line_count(buf)
+    vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "@System", text, "" })
+    return
   end
+  if level ~= vim.log.levels.ERROR then
+    local cur = vim.api.nvim_get_current_buf()
+    if vim.api.nvim_buf_is_valid(cur) and vim.bo[cur].filetype == "nowork-chat" then
+      if M._flush_pending then pcall(M._flush_pending, cur) end
+      local lc = vim.api.nvim_buf_line_count(cur)
+      vim.api.nvim_buf_set_lines(cur, lc, lc, false, { "", "@System", text, "" })
+      return
+    end
+  end
+  vim.notify(text, level)
 end
 
 _G._djinni_chat_statusline = function()
@@ -87,12 +102,12 @@ M._events_received = {} -- buf -> bool
 M._plan_lines = {} -- buf -> { start_line, end_line }
 M._last_tool_title = {} -- buf -> string
 M._think_fold_start = {} -- buf -> line number where current thinking section started
-M._tool_section_start = {} -- buf -> line number where current tool section started
-M._last_tool_line = {} -- buf -> line number of last [*] tool line (for per-tool folding)
-M._djinni_marker_line = {} -- buf -> line number of @Djinni marker (avoids backwards scan)
-M._append_batch = {} -- buf -> list of lines to write in next scheduled flush
-M._append_scheduled = {} -- buf -> true when a flush is already scheduled
-M._fm_end_cache = {} -- buf -> frontmatter closing line index (1-based)
+M._tool_section_start = {}
+M._last_tool_line = {}
+M._djinni_marker_line = {}
+M._append_batch = {}
+M._append_scheduled = {}
+M._fm_end_cache = {}
 M._cached_root = {} -- buf -> cached project root (avoids reading frontmatter per event)
 M._last_activity_touch = {} -- buf -> last timestamp we called touch_activity
 M._stream_tail_row = {} -- buf -> current writable tail row (1-based)
@@ -217,11 +232,22 @@ local function _compute_manual_folds(win, buf)
   if _is_large_chat(buf) then return end
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local ranges = {}
+  if lines[1] == "---" then
+    for i = 2, math.min(#lines, 40) do
+      if lines[i] == "---" then
+        ranges[#ranges + 1] = { 1, i }
+        break
+      end
+    end
+  end
   local fold_start = nil
   for i, line in ipairs(lines) do
-    if line:match("^%*%*Thinking") or line:match("^%[%*%]") or line:match("^%[%+%]") or line:match("^%[!%]") then
+    local is_header = line:match("^%*%*Thinking") or line:match("^%[%*%]") or line:match("^%[%+%]") or line:match("^%[!%]")
+    local is_diff_body = line:match("^[%+%-]%s") or line:match("^  %S") or line:match("^  $")
+    local is_terminator = line:match("^@%w") or line:match("^%-%-%-$") or (line == "" and not is_diff_body)
+    if is_header then
       if not fold_start then fold_start = i end
-    elseif line:match("^@%w") or line:match("^%-%-%-$") or line == "" then
+    elseif is_terminator then
       if fold_start and i - 1 >= fold_start + 1 then
         ranges[#ranges + 1] = { fold_start, i - 1 }
       end
@@ -382,13 +408,11 @@ function M._on_session_reconnect(buf)
   M._creating_session[buf] = nil
   M._update_system_block(buf, "Reconnecting...")
   M._ensure_session(buf)
-  vim.notify("[djinni] Reconnected — re-establishing session", vim.log.levels.WARN)
+  djinni_inform(nil, "Reconnected — re-establishing session", vim.log.levels.WARN)
 end
 
-local function hide_snacks_notif(id)
-  if not id then return end
-  local ok, Snacks = pcall(require, "snacks")
-  if ok and Snacks.notifier then Snacks.notifier.hide(id) end
+local function hide_snacks_notif(_id)
+  return
 end
 
 local IMAGE_EXTENSIONS = { png = "image/png", jpg = "image/jpeg", jpeg = "image/jpeg", gif = "image/gif", webp = "image/webp", svg = "image/svg+xml" }
@@ -506,7 +530,7 @@ local function file_to_image(filepath, callback)
 end
 
 local function you_block()
-  return { "", "---", "", "@You", "", "", "---", "" }
+  return { "", "---", "", "@You", "", "" }
 end
 
 vim.api.nvim_create_autocmd("BufLeave", {
@@ -797,8 +821,6 @@ function M.create(project_root, opts)
     "@You",
     prompt .. context_refs,
     "",
-    "---",
-    "",
   }, "\n")
 
   local f = io.open(filepath, "w")
@@ -1045,6 +1067,15 @@ function M._setup_keymaps(buf)
     pcall(vim.api.nvim_win_set_cursor, 0, { lc, 0 })
   end)
   map("n", "<leader><Tab>", "za")
+  map("n", "<Tab>", function()
+    local lnum = vim.fn.line(".")
+    if vim.fn.foldclosed(lnum) ~= -1 then
+      vim.cmd("normal! zO")
+    else
+      vim.cmd("silent! normal! zC")
+    end
+  end, "Tab: always reveal diff; collapse when already open")
+  map("n", "<S-Tab>", "zM", "Close all folds")
   map("n", "<CR>", function()
     local text = M._get_you_block_at_cursor(buf)
     if not text or text == "" then
@@ -1096,11 +1127,11 @@ function M._setup_keymaps(buf)
         return
       end
     end
-    vim.notify("[djinni] No plan section", vim.log.levels.INFO)
+    djinni_inform(nil, "No plan section", vim.log.levels.INFO)
   end)
   map("n", "<C-c>", function()
     M.interrupt(buf)
-    vim.notify("[djinni] Interrupted", vim.log.levels.WARN)
+    djinni_inform(nil, "Interrupted", vim.log.levels.WARN)
   end)
   map("n", "gP", function()
     M.select_provider(buf)
@@ -1121,7 +1152,7 @@ function M._setup_keymaps(buf)
   map("n", "<C-w>", function()
     local worktrunk = require("djinni.integrations.worktrunk")
     if not worktrunk.available() then
-      vim.notify("[djinni] worktrunk not available", vim.log.levels.WARN)
+      djinni_inform(nil, "worktrunk not available", vim.log.levels.WARN)
       return
     end
     local path = vim.api.nvim_buf_get_name(buf)
@@ -1227,7 +1258,7 @@ function M._setup_keymaps(buf)
   map("n", "gA", function()
     local imgs = M._pending_images[buf]
     if not imgs or #imgs == 0 then
-      vim.notify("[djinni] No pending attachments", vim.log.levels.INFO)
+      djinni_inform(nil, "No pending attachments", vim.log.levels.INFO)
       return
     end
     local items = {}
@@ -1240,7 +1271,7 @@ function M._setup_keymaps(buf)
       table.remove(imgs, idx)
       if #imgs == 0 then M._pending_images[buf] = nil end
       M._update_attach_indicator(buf)
-      vim.notify("[djinni] Attachment removed", vim.log.levels.INFO)
+      djinni_inform(nil, "Attachment removed", vim.log.levels.INFO)
     end)
   end)
   map("n", "dS", function()
@@ -1322,7 +1353,7 @@ function M._setup_keymaps(buf)
       end
       local new_lines
       if has_border then
-        new_lines = { "", "@You", "", "", "---", "" }
+        new_lines = { "", "@You", "", "" }
       else
         new_lines = you_block()
       end
@@ -1542,22 +1573,40 @@ end
 function M.foldtext()
   local start = vim.v.foldstart
   local end_line = vim.v.foldend
+  if start == 1 and vim.fn.getline(1) == "---" and vim.fn.getline(end_line) == "---" then
+    local title
+    for i = 2, end_line - 1 do
+      local t = vim.fn.getline(i):match("^title:%s*(.+)$")
+      if t and t ~= "" then title = t break end
+    end
+    local n = end_line - start + 1
+    return "+-- " .. n .. " lines: " .. (title or "frontmatter") .. " "
+  end
   local tool_count = 0
   local names = {}
+  local added, deleted = 0, 0
   for i = start, end_line do
     local l = vim.fn.getline(i)
     local name = l:match("^%[.%] (.+)")
     if name then
       tool_count = tool_count + 1
       if #names < 3 then names[#names + 1] = name end
+    elseif l:sub(1, 2) == "+ " then
+      added = added + 1
+    elseif l:sub(1, 2) == "- " then
+      deleted = deleted + 1
     end
   end
   local lines = end_line - start + 1
+  local diff_suffix = ""
+  if added > 0 or deleted > 0 then
+    diff_suffix = " [+" .. added .. "/-" .. deleted .. "]"
+  end
   if tool_count > 0 then
     if tool_count <= 3 then
-      return table.concat(names, ", ") .. " (" .. lines .. " lines)"
+      return table.concat(names, ", ") .. diff_suffix .. " (" .. lines .. " lines)"
     end
-    return names[1] .. " + " .. (tool_count - 1) .. " more (" .. lines .. " lines)"
+    return names[1] .. " + " .. (tool_count - 1) .. " more" .. diff_suffix .. " (" .. lines .. " lines)"
   end
   local first = vim.fn.getline(start)
   if first:match("^%*%*Thinking") then
@@ -1895,7 +1944,7 @@ function M.interrupt(buf)
     local force_sid = M.get_session_id(buf) or M._sessions[buf]
     if root and force_sid and force_sid ~= "" then
       session.close_task_session(root, force_sid, get_provider(buf))
-      vim.notify("[djinni] Force-killed process", vim.log.levels.WARN)
+      djinni_inform(nil, "Force-killed process", vim.log.levels.WARN)
     end
     if M._stream_cleanup[buf] then
       M._stream_cleanup[buf](true)
@@ -1964,7 +2013,7 @@ function M.interrupt_all()
   else
     local cur = vim.api.nvim_get_current_buf()
     M.interrupt(cur)
-    vim.notify("[djinni] Interrupted", vim.log.levels.WARN)
+    djinni_inform(nil, "Interrupted", vim.log.levels.WARN)
   end
 end
 
@@ -2627,24 +2676,6 @@ function M._on_permission(buf, params, respond)
   M._flush_pending(buf)
   vim.schedule(function()
     if not vim.api.nvim_buf_is_valid(buf) then return end
-    local ok_snacks, Snacks = pcall(require, "snacks")
-    local notif_id = "djinni_perm_" .. tostring(buf)
-    if ok_snacks and Snacks.notify then
-      Snacks.notify.warn("Permission: " .. tool_desc, {
-        title = "djinni",
-        id = notif_id,
-        timeout = 0,
-        actions = {
-          { label = "Allow (ya)", key = "a", fn = function() M._permission_action(buf, "allow") end },
-          { label = "Always (yA)", key = "A", fn = function() M._permission_action(buf, "always") end },
-          { label = "Deny (yn)", key = "d", fn = function() M._permission_action(buf, "deny") end },
-          { label = "Pick (s)", key = "s", fn = function() M._permission_action(buf, "select") end },
-        },
-      })
-    else
-      notif_id = nil
-      vim.notify("[djinni] Permission: " .. tool_desc, vim.log.levels.WARN)
-    end
     local lc = vim.api.nvim_buf_line_count(buf)
     local perm_lines = {
       "",
@@ -2658,7 +2689,7 @@ function M._on_permission(buf, params, respond)
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, perm_lines)
 
     M._pending_permission = M._pending_permission or {}
-    M._pending_permission[buf] = { respond = respond, options = options, tool_desc = tool_desc, tool_kind = tool_kind, notif_id = notif_id }
+    M._pending_permission[buf] = { respond = respond, options = options, tool_desc = tool_desc, tool_kind = tool_kind }
     M._schedule_panel_render()
   end)
 end
@@ -3140,7 +3171,7 @@ function M.resume_session(buf, target_session_id)
   if not vim.api.nvim_buf_is_valid(buf) then return end
   local root = M.get_project_root(buf)
   if not root then
-    vim.notify("[djinni] No project root", vim.log.levels.WARN)
+    djinni_inform(nil, "No project root", vim.log.levels.WARN)
     return
   end
 
@@ -3186,7 +3217,7 @@ function M.resume_session(buf, target_session_id)
         vim.api.nvim_buf_set_lines(buf, lc, lc, false, {
           "", "---", "", "@System", "Session resumed" .. (label and (": " .. label) or ""), "",
         })
-        vim.notify("[djinni] Session resumed", vim.log.levels.INFO)
+        djinni_inform(nil, "Session resumed", vim.log.levels.INFO)
       end)
     end, sess_opts)
   end
@@ -3204,7 +3235,7 @@ function M.resume_session(buf, target_session_id)
         return
       end
       if not sessions or #sessions == 0 then
-        vim.notify("[djinni] No resumable sessions", vim.log.levels.INFO)
+        djinni_inform(nil, "No resumable sessions", vim.log.levels.INFO)
         return
       end
 
@@ -3288,7 +3319,7 @@ end
 function M.pick_mode(buf)
   local modes = M._modes[buf]
   if not modes or #modes == 0 then
-    vim.notify("[djinni] No modes available", vim.log.levels.WARN)
+    djinni_inform(nil, "No modes available", vim.log.levels.WARN)
     return
   end
 
@@ -3324,7 +3355,7 @@ end
 function M.pick_command(buf)
   local cmds = M.get_slash_commands(buf)
   if not cmds or #cmds == 0 then
-    vim.notify("[djinni] No slash commands available", vim.log.levels.WARN)
+    djinni_inform(nil, "No slash commands available", vim.log.levels.WARN)
     return
   end
   local source_labels = {
@@ -3587,7 +3618,7 @@ function M._context_action(_buf) end
 function M._open_tool_log(buf)
   local log = M._tool_log[buf]
   if not log or #log == 0 then
-    vim.notify("[djinni] No tool calls recorded", vim.log.levels.INFO)
+    djinni_inform(nil, "No tool calls recorded", vim.log.levels.INFO)
     return
   end
 
@@ -3783,7 +3814,7 @@ end
 
 function M._permission_action(buf, action)
   if not M._pending_permission or not M._pending_permission[buf] then
-    vim.notify("[djinni] No pending permission", vim.log.levels.WARN)
+    djinni_inform(nil, "No pending permission", vim.log.levels.WARN)
     return
   end
 
@@ -3932,7 +3963,7 @@ local function maybe_redirect_after_title_save(buf)
   local target = desired_title_path(path, title)
   if not target or target == path then return end
   if vim.fn.filereadable(target) == 1 then
-    vim.notify("[djinni] Name saved, but rename skipped: file exists", vim.log.levels.WARN)
+    djinni_inform(nil, "Name saved, but rename skipped: file exists", vim.log.levels.WARN)
     return
   end
   local ok, err = os.rename(path, target)
@@ -4177,7 +4208,7 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 function M.show_tree(buf)
   local root = M.get_project_root(buf)
   if not root then
-    vim.notify("[djinni] No project root", vim.log.levels.WARN)
+    djinni_inform(nil, "No project root", vim.log.levels.WARN)
     return
   end
 
@@ -4187,7 +4218,7 @@ function M.show_tree(buf)
 
   local handle = vim.loop.fs_scandir(chat_dir)
   if not handle then
-    vim.notify("[djinni] No chat directory", vim.log.levels.WARN)
+    djinni_inform(nil, "No chat directory", vim.log.levels.WARN)
     return
   end
 
@@ -4276,7 +4307,7 @@ function M.show_tree(buf)
   end
 
   if #tree_lines <= 1 and not children[ancestor] then
-    vim.notify("[djinni] No forks found", vim.log.levels.INFO)
+    djinni_inform(nil, "No forks found", vim.log.levels.INFO)
     return
   end
 

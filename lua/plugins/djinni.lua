@@ -8,9 +8,7 @@ return {
   },
   ft = { "nowork-chat" },
   keys = {
-    { "<leader>fo", function()
-      require("djinni.nowork.panel").search_tasks()
-    end, desc = "Nowork tasks" },
+    { "<leader>fo", function() require("neowork.index").open({ tab = false }) end, desc = "Neowork sessions" },
     { "<leader>fp", function() require("djinni.nowork.panel").toggle() end, desc = "Nowork panel" },
     { "<leader>ft", function() require("djinni.nowork.panel").toggle() end, desc = "Nowork panel" },
     { "ga", function() return require("djinni.code").ga_operator() end, expr = true, desc = "AI task operator" },

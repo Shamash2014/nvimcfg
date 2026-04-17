@@ -34,33 +34,45 @@ local function build_mcp_servers(mcp_dict)
   for name, cfg in pairs(mcp_dict or {}) do
     local t = cfg.type
     if t == "http" or t == "sse" then
-      local headers = {}
-      for k, v in pairs(cfg.headers or {}) do
-        headers[#headers + 1] = { name = k, value = v }
+      if type(cfg.url) == "string" and cfg.url ~= "" then
+        local headers = {}
+        for k, v in pairs(cfg.headers or {}) do
+          headers[#headers + 1] = { name = k, value = v }
+        end
+        mcp_servers[#mcp_servers + 1] = {
+          name    = name,
+          type    = t,
+          url     = cfg.url,
+          headers = headers,
+        }
       end
-      mcp_servers[#mcp_servers + 1] = {
-        name    = name,
-        type    = t,
-        url     = cfg.url,
-        headers = headers,
-      }
     else
-      local env = {}
-      for k, v in pairs(cfg.env or {}) do
-        env[#env + 1] = { name = k, value = v }
+      if type(cfg.command) == "string" and cfg.command ~= "" then
+        local env = {}
+        for k, v in pairs(cfg.env or {}) do
+          env[#env + 1] = { name = k, value = v }
+        end
+        mcp_servers[#mcp_servers + 1] = {
+          name    = name,
+          command = cfg.command,
+          args    = cfg.args or {},
+          env     = env,
+        }
       end
-      mcp_servers[#mcp_servers + 1] = {
-        name    = name,
-        command = cfg.command,
-        args    = cfg.args or {},
-        env     = env,
-      }
     end
   end
   if #mcp_servers == 0 then
     return setmetatable({}, { __jsontype = "array" })
   end
   return mcp_servers
+end
+
+local function normalize_cwd(project_root)
+  if type(project_root) ~= "string" or project_root == "" then return nil end
+  local abs = vim.fn.fnamemodify(project_root, ":p")
+  if abs == "" then return nil end
+  abs = abs:gsub("/+$", "")
+  return abs
 end
 
 local function merge_provider_args(base_args, extra_args)
@@ -207,8 +219,14 @@ function M.create_task_session(project_root, callback, opts)
       return
     end
 
-    local req = { cwd = project_root, mcpServers = build_mcp_servers(opts.mcpServers) }
-    log.info("create_task_session: sending session/new cwd=" .. project_root)
+    local cwd = normalize_cwd(project_root)
+    if not cwd then
+      pcall(function() client:shutdown(true) end)
+      local e = { message = "invalid project root: '" .. tostring(project_root) .. "'" }
+      if callback then callback(e, nil) end
+      return
+    end
+    local req = { cwd = cwd, mcpServers = build_mcp_servers(opts.mcpServers) }
     client:request("session/new", req, function(err, result)
       if err then
         err = enrich_error(client, err)
@@ -296,8 +314,14 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
     end
 
     local function do_create()
-      local req = { cwd = project_root, mcpServers = build_mcp_servers(opts.mcpServers) }
-      log.info("create_or_resume: creating new session cwd=" .. project_root)
+      local cwd = normalize_cwd(project_root)
+      if not cwd then
+        pcall(function() client:shutdown(true) end)
+        local e = { message = "invalid project root: '" .. tostring(project_root) .. "'" }
+        if callback then callback(e, nil, nil) end
+        return
+      end
+      local req = { cwd = cwd, mcpServers = build_mcp_servers(opts.mcpServers) }
       client:request("session/new", req, function(err, result)
         if err then
           err = enrich_error(client, err)

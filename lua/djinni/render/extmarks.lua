@@ -39,12 +39,12 @@ local function apply_line(buf, lnum, line)
     return
   end
 
-  if line:match("●●● streaming") or line:match("●●● working") then
+  if line:match("^● streaming") or line:match("^● working") then
     vim.api.nvim_buf_set_extmark(buf, ns, lnum, 0, { end_col = #line, hl_group = "DiagnosticInfo", hl_mode = "combine" })
     return
   end
 
-  if line:match("●●● interrupted") then
+  if line:match("^● interrupted") then
     vim.api.nvim_buf_set_extmark(buf, ns, lnum, 0, { end_col = #line, hl_group = "DiagnosticError" })
     return
   end
@@ -68,9 +68,7 @@ local function apply_line(buf, lnum, line)
 
   for pos in function() return line:find("●", pos and pos + 1 or 1) end do
     local byte_end = pos + #"●" - 1
-    if not line:match("●●●", pos) then
-      vim.api.nvim_buf_set_extmark(buf, ns, lnum, pos - 1, { end_col = byte_end, hl_group = "DiagnosticOk" })
-    end
+    vim.api.nvim_buf_set_extmark(buf, ns, lnum, pos - 1, { end_col = byte_end, hl_group = "DiagnosticOk" })
   end
 
   for pos in function() return line:find("⚠", pos and pos + 1 or 1) end do
@@ -128,7 +126,7 @@ end
 
 function M.apply_streaming_indicator(buf, line_nr)
   return vim.api.nvim_buf_set_extmark(buf, ns, line_nr, 0, {
-    virt_text = { { " ●●●", "DiagnosticInfo" } },
+    virt_text = { { " ●", "DiagnosticInfo" } },
     virt_text_pos = "eol",
   })
 end
