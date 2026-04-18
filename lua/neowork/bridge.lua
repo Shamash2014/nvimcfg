@@ -10,6 +10,13 @@ local const = require("neowork.const")
 local get_document = util.lazy("neowork.document")
 local get_stream = util.lazy("neowork.stream")
 
+local function notify_index()
+  local ok, index = pcall(require, "neowork.index")
+  if ok and index and index.refresh_all then
+    vim.schedule(function() pcall(index.refresh_all) end)
+  end
+end
+
 M._sessions = {}
 M._bufs = {}
 M._clients = {}
@@ -250,13 +257,27 @@ function M.resume_session(buf, session_id, callback)
   end)
 end
 
+M._last_user_row = M._last_user_row or {}
+
 function M._retry_with_new_session(buf, text)
+  local doc = get_document()
+  local you_row = M._last_user_row[buf]
+  if you_row and doc.truncate_after_user_row then
+    pcall(doc.truncate_after_user_row, buf, you_row)
+  end
+
   local old_sid = M._sessions[buf]
   if old_sid then M._bufs[old_sid] = nil end
   M._sessions[buf] = nil
   M._inflight[buf] = nil
+  M._streaming[buf] = false
+  M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
+
   M.create_session(buf, function(err, new_sid)
-    if err then return end
+    if err then
+      vim.notify("neowork: retry failed: " .. tostring(err.message or err), vim.log.levels.ERROR)
+      return
+    end
     M._do_send(buf, new_sid, text)
   end)
 end
@@ -321,6 +342,7 @@ function M._do_send(buf, session_id, text)
   doc.set_frontmatter_field(buf, "status", const.session_status.running)
 
   store.append_event(session_id, root, { type = "user", content = text })
+  notify_index()
 
   local summary_mod = require("neowork.summary")
   if summary_mod.get(buf) == "" then
@@ -328,6 +350,10 @@ function M._do_send(buf, session_id, text)
     local seed = first_line:gsub("^%s+", ""):gsub("%s+$", "")
     if #seed > 80 then seed = seed:sub(1, 79) .. "…" end
     if seed ~= "" then summary_mod.set(buf, seed) end
+  end
+
+  if doc.find_last_role_row then
+    M._last_user_row[buf] = doc.find_last_role_row(buf, "You")
   end
 
   M._begin_turn(buf)
@@ -342,6 +368,7 @@ function M._do_send(buf, session_id, text)
     vim.schedule(function()
       M._streaming[buf] = false
       get_stream().stop(buf, gen)
+      notify_index()
 
       if not vim.api.nvim_buf_is_valid(buf) then return end
 
@@ -420,6 +447,7 @@ function M.interrupt(buf)
   local client = M._clients[buf]
   if sid and client and client:is_alive() then
     client:notify("session/cancel", { sessionId = sid })
+    notify_index()
   end
 end
 
@@ -470,15 +498,20 @@ function M._handle_permission(buf, params, respond)
       end_right_gravity = true,
     })
   end
+  notify_index()
   M._pending_permission[buf] = {
     options = options,
     respond = respond,
     title = title,
     tool_desc = params.toolCall and params.toolCall.title,
     tool_kind = params.toolCall and params.toolCall.kind,
+    raw_input = params.toolCall and params.toolCall.rawInput,
+    content = params.toolCall and params.toolCall.content,
+    locations = params.toolCall and params.toolCall.locations,
     mark_id = mark_id,
     line_count = #lines,
   }
+  notify_index()
 end
 
 function M.permission_action(buf, action)
@@ -498,6 +531,7 @@ function M.permission_action(buf, action)
       M._pending_permission[buf] = nil
       remove_permission_ui(buf, perm)
       pcall(perm.respond, { outcome = { outcome = "selected", optionId = perm.options[idx].id } })
+      notify_index()
     end)
     return
   end
@@ -520,10 +554,25 @@ function M.permission_action(buf, action)
   M._pending_permission[buf] = nil
   remove_permission_ui(buf, perm)
   pcall(perm.respond, { outcome = { outcome = "selected", optionId = option_id } })
+  notify_index()
 end
 
 function M.has_pending_permission(buf)
   return M._pending_permission[buf] ~= nil
+end
+
+function M.get_pending_permission(buf)
+  local p = M._pending_permission[buf]
+  if not p then return nil end
+  return {
+    title = p.title,
+    tool_kind = p.tool_kind,
+    tool_desc = p.tool_desc,
+    raw_input = p.raw_input,
+    content = p.content,
+    locations = p.locations,
+    options = p.options,
+  }
 end
 
 function M.is_streaming(buf)
@@ -553,10 +602,6 @@ function M.set_mode_id(buf, mode_id)
     vim.notify("neowork: no modes reported for this session", vim.log.levels.WARN)
     return
   end
-  if M._streaming[buf] then
-    vim.notify("neowork: mode switch pending…", vim.log.levels.WARN)
-    return
-  end
   local sid = M._sessions[buf]
   local client = M._clients[buf]
   if not sid or not client or not client:is_alive() then
@@ -574,21 +619,29 @@ function M.set_mode_id(buf, mode_id)
 
   local doc = get_document()
   local provider_name = doc.read_frontmatter_field(buf, "provider") or config.get("provider")
-  if provider_name == "claude-code" then
-    local text = "/mode " .. target.id
-    doc.insert_turn(buf, "You", text)
-    M._do_send(buf, sid, text)
-  else
-    client:notify("session/set_mode", { sessionId = sid, modeId = target.id })
-    m.current_id = target.id
-  end
-  vim.notify("neowork: mode " .. (target.name or target.id), vim.log.levels.INFO)
+  local Session = require("djinni.acp.session")
+
+  Session.set_mode(nil, sid, target.id, provider_name, function(err)
+    vim.schedule(function()
+      if err then
+        vim.notify("neowork: mode switch failed: " .. tostring(err.message or err), vim.log.levels.ERROR)
+        return
+      end
+      m.current_id = target.id
+      doc.set_frontmatter_field(buf, "mode", target.id)
+      vim.notify("neowork: mode " .. (target.name or target.id), vim.log.levels.INFO)
+    end)
+  end)
 end
 
 function M.set_mode(buf)
   local m = M._modes[buf]
-  if not m or not m.available or #m.available < 2 then
-    vim.notify("neowork: no alternate modes", vim.log.levels.INFO)
+  if not m or not m.available or #m.available == 0 then
+    vim.notify("neowork: no modes reported yet (send a message first)", vim.log.levels.WARN)
+    return
+  end
+  if #m.available < 2 then
+    vim.notify("neowork: only one mode available (" .. (m.available[1].name or m.available[1].id) .. ")", vim.log.levels.WARN)
     return
   end
   local idx = 1
@@ -597,6 +650,37 @@ function M.set_mode(buf)
   end
   local next_mode = m.available[(idx % #m.available) + 1]
   M.set_mode_id(buf, next_mode.id)
+end
+
+function M.switch_model(buf)
+  local sid = M._sessions[buf]
+  local client = M._clients[buf]
+  if not sid or not client or not client:is_alive() then
+    vim.notify("neowork: no active session", vim.log.levels.WARN)
+    return
+  end
+  local doc = get_document()
+  local provider_name = doc.read_frontmatter_field(buf, "provider") or config.get("provider")
+  local Session = require("djinni.acp.session")
+  local session_models = Session.get_available_models(sid)
+  local items = Provider.list_models(session_models, provider_name)
+  if #items == 0 then
+    vim.notify("neowork: no models reported by " .. provider_name, vim.log.levels.WARN)
+    return
+  end
+  vim.ui.select(items, {
+    prompt = "Model (" .. provider_name .. "):",
+    format_item = function(it) return it.label end,
+  }, function(choice)
+    if not choice then return end
+    local ok, err = pcall(Session.set_model, nil, sid, choice.id, provider_name)
+    if not ok then
+      vim.notify("neowork: set_model failed: " .. tostring(err), vim.log.levels.ERROR)
+      return
+    end
+    doc.set_frontmatter_field(buf, "model", choice.id)
+    vim.notify("neowork: model " .. choice.label, vim.log.levels.INFO)
+  end)
 end
 
 function M.switch_provider(buf)

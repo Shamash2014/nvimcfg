@@ -113,11 +113,7 @@ function M.attach(buf)
     vim.api.nvim_win_call(win, function()
       vim.cmd("lcd " .. vim.fn.fnameescape(root))
     end)
-    vim.wo[win].foldmethod = "manual"
-    vim.wo[win].foldenable = true
-    vim.wo[win].foldlevel = 0
-    vim.wo[win].foldminlines = 1
-    vim.wo[win].foldtext = "v:lua.require('neowork.document').foldtext()"
+    vim.wo[win].foldminlines = 0
     vim.wo[win].winbar = ""
     vim.wo[win].statusline = "%{%v:lua.require'neowork.summary'.statusline()%}"
     vim.wo[win].conceallevel = 2
@@ -289,6 +285,43 @@ function M.ensure_composer(buf)
   if not has_terminator then
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "---" })
   end
+end
+
+function M.find_last_role_row(buf, role)
+  local compose = M.find_compose_line(buf)
+  local upper
+  if compose then
+    upper = compose - 2
+  else
+    upper = vim.api.nvim_buf_line_count(buf) - 1
+  end
+  local pat = "^@" .. role
+  for i = upper, 0, -1 do
+    local line = vim.api.nvim_buf_get_lines(buf, i, i + 1, false)[1]
+    if line and line:match(pat) then return i end
+  end
+  return nil
+end
+
+function M.truncate_after_user_row(buf, user_row)
+  local total = vim.api.nvim_buf_line_count(buf)
+  local sep_after
+  for i = user_row + 1, total - 1 do
+    local l = vim.api.nvim_buf_get_lines(buf, i, i + 1, false)[1] or ""
+    if l == "---" then sep_after = i break end
+  end
+  if not sep_after then return end
+
+  local compose = M.find_compose_line(buf)
+  if not compose then return end
+  local composer_you = compose - 1
+  local sep_before_composer = composer_you - 1
+  if sep_before_composer <= sep_after then return end
+
+  local lstart = sep_after + 1
+  local lend = sep_before_composer
+  if lend <= lstart then return end
+  vim.api.nvim_buf_set_lines(buf, lstart, lend, false, {})
 end
 
 function M.find_compose_line(buf)

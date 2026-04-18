@@ -104,7 +104,49 @@ function M.close(buf)
   _ = buf
 end
 
+local function render_tool_content(content, cap)
+  local out, n = {}, 0
+  local function push(text)
+    if n >= cap then return end
+    for line in tostring(text or ""):gmatch("[^\r\n]+") do
+      if n >= cap then out[#out + 1] = "… (more)"; return end
+      out[#out + 1] = line
+      n = n + 1
+    end
+  end
+  local function walk(c)
+    if type(c) ~= "table" then return end
+    if c.type == "diff" then
+      out[#out + 1] = "```diff"
+      if c.path then out[#out + 1] = "--- " .. c.path end
+      if c.oldText then for line in tostring(c.oldText):gmatch("[^\r\n]+") do out[#out + 1] = "-" .. line end end
+      if c.newText then for line in tostring(c.newText):gmatch("[^\r\n]+") do out[#out + 1] = "+" .. line end end
+      out[#out + 1] = "```"
+      return
+    end
+    if c.text and not c.type then push(c.text); return end
+    if c.content then walk(c.content); return end
+    if #c > 0 then
+      for _, entry in ipairs(c) do walk(entry) end
+      return
+    end
+    local text = (c.content and c.content.text) or c.text
+    if text then push(text) end
+  end
+  walk(content)
+  return out
+end
+
 local function render_events(events)
+  local ok_cfg, config = pcall(require, "neowork.config")
+  local cap = ok_cfg and (config.get and config.get("max_tool_output_lines") or 20) or 20
+  local seen_tool = {}
+  local tool_final = {}
+  for _, ev in ipairs(events) do
+    if ev.type == "tool_call" and ev.toolCallId then
+      if ev.terminal or ev.content then tool_final[ev.toolCallId] = ev end
+    end
+  end
   local out = {}
   for _, ev in ipairs(events) do
     local ts = ev.ts or ""
@@ -125,7 +167,19 @@ local function render_events(events)
       out[#out + 1] = "---"
       out[#out + 1] = ""
     elseif ev.type == "tool_call" then
-      out[#out + 1] = string.format("[*] %s (%s) — %s", ev.title or ev.kind or "tool", ev.status or "?", ts)
+      local tcid = ev.toolCallId
+      if tcid and seen_tool[tcid] then
+        -- already emitted the final version
+      else
+        if tcid then seen_tool[tcid] = true end
+        local final = (tcid and tool_final[tcid]) or ev
+        out[#out + 1] = string.format("[*] %s (%s) — %s", final.title or final.kind or "tool", final.status or "?", ts)
+        if final.content then
+          local body = render_tool_content(final.content, cap)
+          for _, l in ipairs(body) do out[#out + 1] = l end
+        end
+        out[#out + 1] = ""
+      end
     elseif ev.type == "plan" then
       out[#out + 1] = "### Plan  " .. ts
       for _, e in ipairs(ev.entries or {}) do
@@ -170,16 +224,13 @@ function M.open_full(buf, opts)
   vim.api.nvim_buf_set_lines(scratch, 0, -1, false, lines)
   vim.bo[scratch].modifiable = false
   vim.bo[scratch].filetype = "markdown"
+  vim.bo[scratch].syntax = "markdown"
   vim.b[scratch].neowork_chat = true
+  vim.b[scratch].neowork_transcript = true
 
-  local title = " Full Transcript — " .. sid:sub(1, 12) .. " (" .. #events .. " events) "
-  local split = opts.split or "float"
   local win
-  if split == "vsplit" then
-    vim.cmd("vsplit")
-    win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(win, scratch)
-  else
+  if opts.float then
+    local title = " Full Transcript — " .. sid:sub(1, 12) .. " (" .. #events .. " events) "
     local width = math.floor(vim.o.columns * 0.9)
     local height = math.floor(vim.o.lines * 0.9)
     win = vim.api.nvim_open_win(scratch, true, {
@@ -188,6 +239,13 @@ function M.open_full(buf, opts)
       col = math.floor((vim.o.columns - width) / 2),
       style = "minimal", border = "rounded", title = title, title_pos = "center",
     })
+  else
+    local mods = opts.mods
+    if not mods or mods == "" then mods = "botright" end
+    local split = opts.split == "vsplit" and "vsplit" or "split"
+    vim.cmd(mods .. " " .. split)
+    win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(win, scratch)
   end
 
   vim.wo[win].wrap = true
@@ -214,7 +272,7 @@ function M.open_full(buf, opts)
     vim.keymap.set("n", key, close, { buffer = scratch, silent = true, nowait = true })
   end
   vim.keymap.set("n", "R", reload, { buffer = scratch, silent = true, nowait = true, desc = "neowork: reload full transcript" })
-  if split ~= "vsplit" then
+  if opts.float then
     vim.api.nvim_create_autocmd("BufLeave", { buffer = scratch, once = true, callback = close })
   end
 end

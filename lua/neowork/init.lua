@@ -129,16 +129,30 @@ function M._setup_autocmds()
     end,
   })
 
+  local function detach_buf(buf)
+    for _, modname in ipairs({ "neowork.bridge", "neowork.stream", "neowork.plan", "neowork.keymaps", "neowork.commands", "neowork.document" }) do
+      local mod = package.loaded[modname]
+      if mod and type(mod.detach) == "function" then
+        pcall(mod.detach, buf)
+      end
+    end
+  end
+
   vim.api.nvim_create_autocmd("BufDelete", {
     group = group,
     callback = function(ev)
-      local buf = ev.buf
-      if not vim.b[buf].neowork_chat then return end
-      for _, modname in ipairs({ "neowork.bridge", "neowork.stream", "neowork.plan", "neowork.keymaps", "neowork.document" }) do
-        local mod = package.loaded[modname]
-        if mod and type(mod.detach) == "function" then
-          pcall(mod.detach, buf)
-        end
+      if not vim.b[ev.buf].neowork_chat then return end
+      detach_buf(ev.buf)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd({ "VimLeavePre", "ExitPre" }, {
+    group = group,
+    callback = function()
+      local bridge = package.loaded["neowork.bridge"]
+      if not bridge then return end
+      for buf, _ in pairs(bridge._sessions or {}) do
+        pcall(detach_buf, buf)
       end
     end,
   })

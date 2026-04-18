@@ -375,25 +375,26 @@ function M.on_event(buf, su, gen)
       for _, c in ipairs(entries) do
         if type(c) == "table" then
           if c.type == "diff" or c.oldText or c.newText then
-            emit_diff(c)
+            if not (tcid and seen[tcid]) then
+              emit_diff(c)
+              if tcid then seen[tcid] = true end
+            end
           elseif c.type == "content" and type(c.content) == "table" then
             walk_content(c.content)
           elseif c.type ~= "image" then
             local text = (c.content and c.content.text) or c.text
-            if text then push_capped(text) end
+            if text and is_initial then push_capped(text) end
           end
         end
       end
     end
 
-    local content_allowed = tcid == nil or not seen[tcid]
-    if content_allowed and type(su.content) == "table" then
+    if type(su.content) == "table" then
       if su.content.text and not su.content.type then
-        push_capped(su.content.text)
+        if is_initial then push_capped(su.content.text) end
       else
         walk_content(su.content)
       end
-      if tcid then seen[tcid] = true end
     end
 
     if terminal then
@@ -424,8 +425,27 @@ function M.on_event(buf, su, gen)
           title = su.title,
           status = su.status,
           toolCallId = su.toolCallId,
+          content = su.content,
+          rawOutput = su.rawOutput,
+          locations = su.locations,
         })
         require("neowork.summary").bump_tool_count(sid)
+      end
+    elseif terminal then
+      local root = get_document().read_frontmatter_field(buf, "root") or vim.fn.getcwd()
+      local sid = get_bridge().get_session_id(buf)
+      if sid then
+        store.append_event(sid, root, {
+          type = const.event.tool_call,
+          kind = su.kind,
+          title = su.title,
+          status = su.status,
+          toolCallId = su.toolCallId,
+          content = su.content,
+          rawOutput = su.rawOutput,
+          locations = su.locations,
+          terminal = true,
+        })
       end
     end
 

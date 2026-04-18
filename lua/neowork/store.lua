@@ -60,6 +60,128 @@ function M.transcript_exists(session_id, root)
 end
 
 M._scan_cache = {}
+M._last_turn_cache = {}
+M._last_action_cache = {}
+
+local function first_line(text)
+  for line in tostring(text or ""):gmatch("[^\r\n]+") do
+    local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if trimmed ~= "" then return trimmed end
+  end
+  return ""
+end
+
+function M.get_last_agent_turn(session_id, root)
+  if not session_id or session_id == "" then return nil end
+  local transcripts_dir = config.get_transcripts_dir(root)
+  local path = transcripts_dir .. "/" .. session_id .. ".jsonl"
+  local stat = vim.uv.fs_stat(path)
+  if not stat then return nil end
+  local key = path
+  local cached = M._last_turn_cache[key]
+  if cached and cached.mtime == stat.mtime.sec then return cached.turn end
+  local fd = io.open(path, "r")
+  if not fd then return nil end
+  local last_line = nil
+  for line in fd:lines() do
+    if line ~= "" and (line:find('"type":"assistant"', 1, true) or line:find('"type":"agent_message"', 1, true)) then
+      last_line = line
+    end
+  end
+  fd:close()
+  local turn
+  if last_line then
+    local ok, ev = pcall(vim.json.decode, last_line)
+    if ok and ev and (ev.type == "assistant" or ev.type == "agent_message") then
+      turn = first_line(ev.content)
+    end
+  end
+  M._last_turn_cache[key] = { mtime = stat.mtime.sec, turn = turn }
+  return turn
+end
+
+local function short(text, n)
+  n = n or 80
+  local s = first_line(text)
+  if #s > n then s = s:sub(1, n - 1) .. "…" end
+  return s
+end
+
+local function derive_action(ev)
+  local t = ev.type or ev.sessionUpdate or ""
+  if t == "tool_call" or t == "tool_call_update" then
+    local name = ev.title or ev.name or (ev.tool and (ev.tool.name or ev.tool.kind)) or ev.kind or "tool"
+    local sum = short(ev.rawInput and (ev.rawInput.command or ev.rawInput.path or ev.rawInput.description)
+      or ev.content or ev.title or name)
+    return { kind = "tool", summary = "→ " .. tostring(name) .. (sum ~= "" and sum ~= name and ("  " .. sum) or "") }
+  end
+  if t == "plan" then
+    local entries = ev.entries or ev.plan or {}
+    local pending = 0
+    for _, e in ipairs(entries) do
+      if (e.status or "") ~= "completed" then pending = pending + 1 end
+    end
+    return { kind = "plan", summary = "✎ plan · " .. tostring(#entries) .. " steps (" .. pending .. " pending)" }
+  end
+  if t == "assistant" or t == "agent_message" or t == "agent_message_chunk" then
+    return { kind = "message", summary = "» " .. short(ev.content) }
+  end
+  if t == "agent_thought_chunk" or t == "thinking" then
+    return { kind = "thinking", summary = "… " .. short(ev.content) }
+  end
+  if t == "error" then
+    return { kind = "error", summary = "⚠ " .. short(ev.content or ev.message) }
+  end
+  return nil
+end
+
+function M.get_last_action(session_id, root)
+  if not session_id or session_id == "" then return nil end
+  local transcripts_dir = config.get_transcripts_dir(root)
+  local path = transcripts_dir .. "/" .. session_id .. ".jsonl"
+  local stat = vim.uv.fs_stat(path)
+  if not stat then return nil end
+  local key = path
+  local cached = M._last_action_cache[key]
+  if cached and cached.mtime == stat.mtime.sec then return cached.action end
+  local fd = io.open(path, "r")
+  if not fd then return nil end
+  local lines = {}
+  for line in fd:lines() do
+    if line ~= "" then lines[#lines + 1] = line end
+  end
+  fd:close()
+  local action
+  for i = #lines, 1, -1 do
+    local ok, ev = pcall(vim.json.decode, lines[i])
+    if ok and ev and ev.type ~= "user" and ev.type ~= "result" then
+      local a = derive_action(ev)
+      if a then action = a; break end
+    end
+  end
+  M._last_action_cache[key] = { mtime = stat.mtime.sec, action = action }
+  return action
+end
+
+function M.get_current_plan(session_id, root)
+  if not session_id or session_id == "" then return nil end
+  local transcripts_dir = config.get_transcripts_dir(root)
+  local path = transcripts_dir .. "/" .. session_id .. ".jsonl"
+  local fd = io.open(path, "r")
+  if not fd then return nil end
+  local lines = {}
+  for line in fd:lines() do
+    if line ~= "" then lines[#lines + 1] = line end
+  end
+  fd:close()
+  for i = #lines, 1, -1 do
+    local ok, ev = pcall(vim.json.decode, lines[i])
+    if ok and ev and (ev.type == "plan" or ev.sessionUpdate == "plan") then
+      return ev.entries or ev.plan or {}
+    end
+  end
+  return nil
+end
 
 function M.scan_sessions(root)
   local neowork_dir = config.get_neowork_dir(root)

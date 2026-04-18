@@ -8,6 +8,7 @@ M._fold_state = M._fold_state or {}
 M._last_data = M._last_data or {}
 M._filter = M._filter or {}
 M._hidden_sessions = M._hidden_sessions
+M._expanded = M._expanded or {}
 
 function M._foldtext()
   local v = vim.v
@@ -84,12 +85,17 @@ local function resolve_runtime_status(s)
     if buf > 0 and vim.api.nvim_buf_is_valid(buf) then
       local bridge = get_bridge_mod()
       if bridge then
-        if bridge.is_streaming and bridge.is_streaming(buf) then return "running" end
-        if bridge.has_pending_permission and bridge.has_pending_permission(buf) then return "awaiting" end
+        if bridge.has_pending_permission and bridge.has_pending_permission(buf) then
+          local perm = bridge.get_pending_permission and bridge.get_pending_permission(buf) or {}
+          return "awaiting", { kind = "perm", title = perm.title, tool_kind = perm.tool_kind, tool_desc = perm.tool_desc }
+        end
+        if bridge.is_streaming and bridge.is_streaming(buf) then
+          return "running", { kind = "streaming" }
+        end
       end
     end
   end
-  return normalize_status(s.status)
+  return normalize_status(s.status), nil
 end
 
 local function pad_l(s, w)
@@ -165,7 +171,13 @@ local function collect_sessions(home)
         if sid ~= "" then seen_sid[sid] = true end
         s._project_root = root
         s._project_name = project
-        s.status = resolve_runtime_status(s)
+        local st, req = resolve_runtime_status(s)
+        s.status = st
+        s._required = req
+        if s.session and s.session ~= "" then
+          s._last_turn = store.get_last_agent_turn(s.session, root)
+          s._last_action = store.get_last_action(s.session, root)
+        end
         total_cost = total_cost + (tonumber(s.cost or 0) or 0)
         all[#all + 1] = s
       end
@@ -175,6 +187,21 @@ local function collect_sessions(home)
 end
 
 local COL_PROJ, COL_AGE, COL_CTX, COL_COST = 14, 4, 5, 7
+
+local STATUS_SIGIL = {
+  running  = "●",
+  awaiting = "!",
+  review   = "◐",
+  ready    = "○",
+  done     = "·",
+}
+local STATUS_TOKEN_HL = {
+  running  = "NeoworkIdxStatusRun",
+  awaiting = "NeoworkIdxStatusPerm",
+  review   = "NeoworkIdxStatusRvw",
+  ready    = "NeoworkIdxStatusRdy",
+  done     = "NeoworkIdxStatusEnd",
+}
 
 local function capture_fold_state(buf)
   local prev = M._fold_state[buf] or {}
@@ -239,47 +266,171 @@ function M._render(buf, sessions, total_cost)
   local function render_session(s, indent)
     indent = indent or "  "
     local slug = s._slug or "unnamed"
-    local project = (#indent <= 2) and (s._project_name or "") or ""
-    local age = time_ago(s.created)
-    local ctx = s.context_pct and (s.context_pct .. "%") or ""
-    local cost = (s.cost and tonumber(s.cost or 0) > 0) and ("$" .. s.cost) or ""
+    local show_project = (#indent <= 2)
+    local name_field
+    if show_project and s._project_name and s._project_name ~= "" then
+      name_field = s._project_name .. "/" .. slug
+    else
+      name_field = slug
+    end
 
-    local meta_w = COL_PROJ + COL_AGE + COL_CTX + COL_COST + 8
-    local name_w = math.max(16, math.min(60, panel_w - #indent - meta_w - 2))
+    local sigil = STATUS_SIGIL[s.status] or STATUS_SIGIL.done
+    local sigil_bytes = #sigil
 
-    local slug_s = pad_l(slug, name_w)
-    local proj_s = pad_l(project, COL_PROJ)
-    local age_s  = pad_r(age, COL_AGE)
-    local ctx_s  = pad_r(ctx, COL_CTX)
-    local cost_s = pad_r(cost, COL_COST)
+    local required_text, required_hl
+    if s._required and s._required.kind == "perm" then
+      required_text = "[PERM " .. (s._required.tool_kind or "req") .. "] !/~/A"
+      required_hl = "NeoworkIdxRequiredPerm"
+    elseif s._required and s._required.kind == "streaming" then
+      required_text = "[streaming]"
+      required_hl = "NeoworkIdxRequiredRun"
+    else
+      local bits = {}
+      local age = time_ago(s.created)
+      if age ~= "" then bits[#bits + 1] = age end
+      if s.context_pct and s.context_pct > 0 then bits[#bits + 1] = s.context_pct .. "%" end
+      if s.cost and tonumber(s.cost or 0) > 0 then bits[#bits + 1] = "$" .. s.cost end
+      required_text = table.concat(bits, " · ")
+      required_hl = "NeoworkIdxMuted"
+    end
 
-    local text = indent .. slug_s .. "  " .. proj_s .. "  " .. age_s .. "  " .. ctx_s .. "  " .. cost_s
+    local action_text = ""
+    if s._last_action and s._last_action.summary then
+      action_text = s._last_action.summary
+    elseif s._last_turn and s._last_turn ~= "" then
+      action_text = "» " .. s._last_turn
+    end
+
+    local right_w = vim.api.nvim_strwidth(required_text)
+    local name_w_disp = vim.api.nvim_strwidth(name_field)
+    local sigil_disp = vim.api.nvim_strwidth(sigil)
+    local fixed = #indent + sigil_disp + 2 + name_w_disp + 2
+    local avail = math.max(4, panel_w - fixed - right_w - 2)
+    local action_disp = vim.api.nvim_strwidth(action_text)
+    if action_disp > avail then
+      local keep = math.max(1, avail - 1)
+      local byte_len = vim.fn.byteidx(action_text, keep)
+      if byte_len and byte_len > 0 then
+        action_text = action_text:sub(1, byte_len) .. "…"
+        action_disp = vim.api.nvim_strwidth(action_text)
+      end
+    end
+
+    local pad = panel_w - fixed - action_disp - right_w
+    if pad < 2 then pad = 2 end
+    local text = indent .. sigil .. "  " .. name_field .. "  " .. action_text .. string.rep(" ", pad) .. required_text
     add(text)
     local i = ln()
     M._line_index[buf][i] = { type = "session", session = s }
     local r = i - 1
 
     local pos = #indent
-    hl(r, pos, pos + name_w, "NeoworkIdxSession")
-    pos = pos + name_w + 2
-    if project ~= "" then hl(r, pos, pos + COL_PROJ, "NeoworkIdxColProject") end
-    pos = pos + COL_PROJ + 2
-    if age ~= "" then hl(r, pos, pos + COL_AGE, "NeoworkIdxColAge") end
-    pos = pos + COL_AGE + 2
-    if ctx ~= "" then
-      local ctx_hl = "NeoworkIdxColCtx"
-      if s.context_pct and s.context_pct > 80 then ctx_hl = "NeoworkIdxColCtxErr"
-      elseif s.context_pct and s.context_pct > 50 then ctx_hl = "NeoworkIdxColCtxWarn" end
-      hl(r, pos, pos + COL_CTX, ctx_hl)
+    hl(r, pos, pos + sigil_bytes, STATUS_TOKEN_HL[s.status] or "NeoworkIdxStatusEnd")
+    pos = pos + sigil_bytes + 2
+    hl(r, pos, pos + #name_field, "NeoworkIdxSession")
+    pos = pos + #name_field + 2
+    if action_text ~= "" then
+      local prefix_len = 0
+      if s._last_action and s._last_action.kind then
+        for _, p in ipairs({ "→ ", "✎ ", "» ", "… ", "⚠ " }) do
+          if action_text:sub(1, #p) == p then prefix_len = #p; break end
+        end
+      elseif action_text:sub(1, #"» ") == "» " then
+        prefix_len = #"» "
+      end
+      if prefix_len > 0 then
+        hl(r, pos, pos + prefix_len, "NeoworkIdxActionKind")
+      end
+      hl(r, pos + prefix_len, pos + #action_text, "NeoworkIdxMuted")
     end
-    pos = pos + COL_CTX + 2
-    if cost ~= "" then hl(r, pos, pos + COL_COST, "NeoworkIdxColCost") end
+    if required_text ~= "" then
+      local rpos = #text - #required_text
+      hl(r, rpos, rpos + #required_text, required_hl)
+    end
 
-    sign_marks[#sign_marks + 1] = {
-      row = r,
-      text = status_markers[s.status] or "·",
-      hl = status_sign_hl[s.status] or "NeoworkIdxSignDone",
-    }
+    if s._required and s._required.kind == "perm" then
+      local prefix = indent .. "     ↳ "
+      local title = s._required.title or "permission request"
+      local desc = s._required.tool_desc and s._required.tool_desc ~= title and (" — " .. s._required.tool_desc) or ""
+      local max_w = math.max(20, panel_w - #prefix - 2)
+      local body = title .. desc .. "  (!/~/A)"
+      if #body > max_w then body = body:sub(1, max_w - 1) .. "…" end
+      local line = prefix .. body
+      add(line)
+      local ti = ln()
+      M._line_index[buf][ti] = { type = "activity", session = s }
+      hl(ti - 1, #prefix, #line, "NeoworkIdxMuted")
+    end
+
+    local exp = M._expanded[buf] or {}
+    if exp[s._filepath or ""] then
+      local detail_prefix = indent .. "     │ "
+      local function add_detail(text, caption_len, extra_marks)
+        local max_w = math.max(20, panel_w - #detail_prefix - 2)
+        local t = tostring(text or "")
+        if #t > max_w then t = t:sub(1, max_w - 1) .. "…" end
+        local line = detail_prefix .. t
+        add(line)
+        local di = ln()
+        M._line_index[buf][di] = { type = "detail", session = s }
+        local row = di - 1
+        hl(row, 0, #detail_prefix, "NeoworkIdxRule")
+        if caption_len and caption_len > 0 then
+          hl(row, #detail_prefix, #detail_prefix + caption_len, "NeoworkIdxSection")
+          hl(row, #detail_prefix + caption_len, #line, "NeoworkIdxMuted")
+        else
+          hl(row, #detail_prefix, #line, "NeoworkIdxMuted")
+        end
+        if extra_marks then
+          for _, m in ipairs(extra_marks) do
+            hl(row, #detail_prefix + m[1], #detail_prefix + m[2], m[3])
+          end
+        end
+      end
+
+      local sb = s._filepath and vim.fn.bufnr(s._filepath) or -1
+      if sb > 0 and vim.api.nvim_buf_is_valid(sb) then
+        local bridge = get_bridge_mod()
+        if bridge and bridge.get_pending_permission then
+          local p = bridge.get_pending_permission(sb)
+          if p then
+            add_detail("PERM  " .. (p.tool_kind or "?"), 4)
+            if p.tool_desc and p.tool_desc ~= p.title then add_detail("      " .. p.tool_desc) end
+            if type(p.raw_input) == "table" then
+              for k, v in pairs(p.raw_input) do
+                local val = type(v) == "table" and vim.json.encode(v) or tostring(v)
+                add_detail("      " .. tostring(k) .. ": " .. val)
+              end
+            end
+            if p.locations and #p.locations > 0 then
+              for _, loc in ipairs(p.locations) do
+                add_detail("      @ " .. (loc.path or vim.inspect(loc)))
+              end
+            end
+          end
+        end
+      end
+
+      if s.session and s.session ~= "" then
+        local entries = require("neowork.store").get_current_plan(s.session, s._project_root or s.root)
+        if entries and #entries > 0 then
+          add_detail("PLAN  " .. #entries .. " steps", 4)
+          for _, e in ipairs(entries) do
+            local mark, mark_hl
+            local status = e.status or ""
+            if status == "completed" then mark, mark_hl = "✓", "NeoworkIdxStatusRun"
+            elseif status == "in_progress" then mark, mark_hl = "→", "NeoworkIdxActionKind"
+            else mark, mark_hl = "·", "NeoworkIdxMuted" end
+            local prefix = "  " .. mark .. " "
+            add_detail(prefix .. (e.content or e.title or ""), 0, { { #"  ", #"  " + #mark, mark_hl } })
+          end
+        end
+      end
+
+      if s._last_turn and s._last_turn ~= "" then
+        add_detail("LAST  » " .. s._last_turn, 4)
+      end
+    end
   end
 
   local function open_range(id)
@@ -293,6 +444,18 @@ function M._render(buf, sessions, total_cost)
     end
   end
 
+
+  do
+    local hdr = string.format("  NEOWORK · %d active · $%.2f", #sessions, total_cost or 0)
+    add(hdr)
+    hl(ln() - 1, 2, #"  NEOWORK", "NeoworkIdxTitle")
+    hl(ln() - 1, #"  NEOWORK", #hdr, "NeoworkIdxMuted")
+    local rule_w = math.max(20, panel_w - 2)
+    local rule = "  " .. string.rep("─", rule_w)
+    add(rule)
+    hl(ln() - 1, 0, #rule, "NeoworkIdxRule")
+    add("")
+  end
 
   local buckets = { awaiting = {}, running = {}, review = {}, ready = {}, ended = {} }
   for _, s in ipairs(sessions) do
@@ -325,14 +488,15 @@ function M._render(buf, sessions, total_cost)
   for _, sec in ipairs(secs) do
     if #sec.items > 0 then
       local chev = prev_folds[sec.id] and "▸ " or "▾ "
-      local header = string.format("%s%-20s %d", chev, sec.title, #sec.items)
+      local count = "(" .. #sec.items .. ")"
+      local header = chev .. sec.title .. " " .. count
       add(header)
       local i = ln()
       M._line_index[buf][i] = { type = "section", id = sec.id }
       local chev_bytes = #chev
       hl(i - 1, 0, chev_bytes, "NeoworkIdxChevron")
-      hl(i - 1, chev_bytes, chev_bytes + 20, "NeoworkIdxSection")
-      hl(i - 1, chev_bytes + 21, #header, "NeoworkIdxMuted")
+      hl(i - 1, chev_bytes, chev_bytes + #sec.title, "NeoworkIdxSection")
+      hl(i - 1, chev_bytes + #sec.title + 1, #header, "NeoworkIdxCount")
       open_range(sec.id)
       for _, s in ipairs(sec.items) do render_session(s, "  ") end
       close_range()
@@ -365,14 +529,15 @@ function M._render(buf, sessions, total_cost)
 
   if #root_order > 0 then
     local pchev = prev_folds["__projects__"] and "▸ " or "▾ "
-    local header = string.format("%s%-20s %d", pchev, "Projects", #root_order)
+    local pcount = "(" .. #root_order .. ")"
+    local header = pchev .. "Projects " .. pcount
     add(header)
     local i = ln()
     M._line_index[buf][i] = { type = "section", id = "__projects__" }
     local pchev_bytes = #pchev
     hl(i - 1, 0, pchev_bytes, "NeoworkIdxChevron")
-    hl(i - 1, pchev_bytes, pchev_bytes + 20, "NeoworkIdxSection")
-    hl(i - 1, pchev_bytes + 21, #header, "NeoworkIdxMuted")
+    hl(i - 1, pchev_bytes, pchev_bytes + #"Projects", "NeoworkIdxSection")
+    hl(i - 1, pchev_bytes + #"Projects" + 1, #header, "NeoworkIdxCount")
     open_range("__projects__")
     for _, rd in ipairs(root_order) do
       local n_live = 0
@@ -380,14 +545,15 @@ function M._render(buf, sessions, total_cost)
         if s.status == "running" or s.status == "awaiting" or s.status == "review" then n_live = n_live + 1 end
       end
       local rchev = prev_folds[rd.root] and "▸ " or "▾ "
-      local phdr = string.format("  %s%-18s %d live  %d idle", rchev, rd.name, n_live, #rd.sessions - n_live)
+      local rcount = "(" .. n_live .. " live · " .. (#rd.sessions - n_live) .. " idle)"
+      local phdr = "  " .. rchev .. rd.name .. " " .. rcount
       add(phdr)
       local pi = ln()
       M._line_index[buf][pi] = { type = "project", root = rd.root }
       local rchev_bytes = #rchev
       hl(pi - 1, 2, 2 + rchev_bytes, "NeoworkIdxChevron")
-      hl(pi - 1, 2 + rchev_bytes, 2 + rchev_bytes + 18, "NeoworkIdxProject")
-      hl(pi - 1, 2 + rchev_bytes + 19, #phdr, "NeoworkIdxMuted")
+      hl(pi - 1, 2 + rchev_bytes, 2 + rchev_bytes + #rd.name, "NeoworkIdxProject")
+      hl(pi - 1, 2 + rchev_bytes + #rd.name + 1, #phdr, "NeoworkIdxCount")
       open_range(rd.root)
       for _, s in ipairs(sort_sessions(rd.sessions)) do render_session(s, "    ") end
       close_range()
@@ -415,9 +581,7 @@ function M._render(buf, sessions, total_cost)
   apply_folds(buf, fold_ranges, prev_folds)
 
   for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-    pcall(function()
-      vim.wo[win].winbar = string.format("  %%#NeoworkIdxTitle#NEOWORK%%*  %%#NeoworkIdxMuted#%d active · $%.2f%%*", #sessions, total_cost)
-    end)
+    pcall(function() vim.wo[win].winbar = "" end)
   end
 end
 
@@ -428,7 +592,7 @@ end
 
 local function session_at_cursor(buf)
   local e = entry_at_cursor(buf)
-  if e and (e.type == "session" or e.type == "activity") then return e.session end
+  if e and (e.type == "session" or e.type == "activity" or e.type == "detail") then return e.session end
   return nil
 end
 
@@ -463,6 +627,8 @@ function M._show_help()
     " [[ ]]             Prev/next section",
     " gf                Follow session file (vsplit)",
     " <C-g>             Session info in cmdline",
+    " <Tab>             Toggle inline details (permission, plan, last turn)",
+    " !  ~  A           Permission: allow / deny / always",
     " R                 Refresh",
     " q                 Close",
     " ?                 This help",
@@ -803,6 +969,12 @@ function M._setup_buffer(buf)
   map("d", function() do_delete(buf, false) end,   "Delete")
   map("r", function() do_rename(buf) end,          "Rename")
   map("x", function() do_interrupt(buf) end,       "Interrupt")
+  map("<Tab>", function()
+    local s = session_at_cursor(buf); if not s or not s._filepath then return end
+    M._expanded[buf] = M._expanded[buf] or {}
+    M._expanded[buf][s._filepath] = not M._expanded[buf][s._filepath]
+    M._last_data[buf] = nil; M._last_refresh[buf] = nil; M.refresh(buf)
+  end, "Toggle details")
   map("!", function() do_perm(buf, "allow") end,   "Permission: allow")
   map("~", function() do_perm(buf, "deny") end,    "Permission: deny")
   map("A", function() do_perm(buf, "always") end,  "Permission: always")
@@ -840,13 +1012,20 @@ function M._setup_autocmds(buf)
       M._fold_state[buf] = nil
       M._last_data[buf] = nil
       M._filter[buf] = nil
+      M._expanded[buf] = nil
       pcall(vim.api.nvim_del_augroup_by_name, "NeoworkIndex_" .. buf)
     end,
   })
 end
 
-local function sessions_signature(sessions, total_cost)
+local function sessions_signature(sessions, total_cost, expanded)
   local parts = { string.format("%.4f", total_cost or 0), tostring(#sessions) }
+  if expanded then
+    local keys = {}
+    for k, v in pairs(expanded) do if v then keys[#keys + 1] = k end end
+    table.sort(keys)
+    parts[#parts + 1] = "exp:" .. table.concat(keys, ",")
+  end
   for _, s in ipairs(sessions) do
     parts[#parts + 1] = table.concat({
       s._filepath or "",
@@ -855,6 +1034,9 @@ local function sessions_signature(sessions, total_cost)
       tostring(s.cost or ""),
       tostring(s.context_pct or ""),
       tostring(s.summary or ""),
+      tostring(s._last_turn or ""),
+      tostring(s._last_action and (s._last_action.kind .. "|" .. (s._last_action.summary or "")) or ""),
+      tostring(s._required and (s._required.kind .. "|" .. (s._required.tool_kind or "") .. "|" .. (s._required.title or "")) or ""),
     }, "\t")
   end
   return table.concat(parts, "\n")
@@ -866,7 +1048,7 @@ function M.refresh(buf)
   if M._last_refresh[buf] and (now - M._last_refresh[buf]) < 2000 then return end
   M._last_refresh[buf] = now
   local sessions, total_cost = collect_sessions(M._roots[buf])
-  local sig = sessions_signature(sessions, total_cost)
+  local sig = sessions_signature(sessions, total_cost, M._expanded[buf])
   local prev = M._last_data[buf]
   if prev and prev.sig == sig then return end
   M._last_data[buf] = { sessions = sessions, total_cost = total_cost, sig = sig }
@@ -878,17 +1060,28 @@ function M._rerender_cached(buf)
   if data then M._render(buf, data.sessions, data.total_cost) end
 end
 
+function M.refresh_all()
+  for _, buf in pairs(M._bufs) do
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      M._last_refresh[buf] = nil
+      M._last_data[buf] = nil
+      vim.schedule(function() M.refresh(buf) end)
+    end
+  end
+end
+
 local function apply_window_style(win)
   if not win or not vim.api.nvim_win_is_valid(win) then return end
   vim.wo[win].cursorline = true
+  pcall(function() vim.wo[win].cursorlineopt = "line" end)
   vim.wo[win].wrap = false
-  vim.wo[win].signcolumn = "yes:1"
+  vim.wo[win].signcolumn = "no"
   vim.wo[win].number = false
   vim.wo[win].relativenumber = false
   vim.wo[win].foldmethod = "manual"
   vim.wo[win].foldenable = true
   vim.wo[win].foldtext = "v:lua.require'neowork.index'._foldtext()"
-  vim.wo[win].foldcolumn = "1"
+  vim.wo[win].foldcolumn = "0"
   vim.wo[win].fillchars = "fold: ,foldopen:▾,foldclose:▸,foldsep: ,eob: "
   vim.wo[win].statuscolumn = ""
   vim.wo[win].winhighlight = "Normal:NeoworkIdxNormal,CursorLine:NeoworkIdxCursorLine,Folded:NeoworkIdxSection"

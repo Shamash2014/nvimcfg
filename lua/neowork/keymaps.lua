@@ -6,30 +6,33 @@ function M.detach(buf)
   M._keymaps_set[buf] = nil
 end
 
-local slash_commands = {
-  clear = function(buf, args)
-    local purge = args == "purge"
-    require("neowork.document").clear(buf, { purge_transcript = purge })
-    vim.notify("neowork: cleared" .. (purge and " (+transcript)" or ""), vim.log.levels.INFO)
-  end,
-  summary = function(buf, args)
-    local text = (args or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    require("neowork.summary").set(buf, text)
-    vim.notify("neowork: summary " .. (text == "" and "cleared" or "set"), vim.log.levels.INFO)
-  end,
-  plan = function(buf)
-    require("neowork.plan").toggle(buf)
-  end,
-}
 
 function M.setup_document_keymaps(buf)
   if M._keymaps_set[buf] then return end
   M._keymaps_set[buf] = true
   local document = require("neowork.document")
 
+  require("neowork.commands").setup(buf)
+  require("neowork.textobjects").setup(buf)
+
   local function map(mode, lhs, rhs, desc)
     vim.keymap.set(mode, lhs, rhs, { buffer = buf, silent = true, nowait = true, desc = "neowork: " .. desc })
   end
+
+  local local_slash = {
+    fork = function() document.fork_at_cursor(buf) end,
+    new = function(args)
+      local root = document.read_frontmatter_field(buf, "root") or vim.fn.getcwd()
+      local function go(name)
+        local fp = require("neowork.util").new_session(root, name)
+        if fp then document.open(fp, { split = "edit" }) end
+      end
+      if args and args ~= "" then go(args)
+      else vim.ui.input({ prompt = "New session name: " }, function(n) if n and n ~= "" then go(n) end end) end
+    end,
+    help = function() require("neowork.commands").open_help() end,
+    ["?"] = function() require("neowork.commands").open_help() end,
+  }
 
   local function do_send()
     document.ensure_composer(buf)
@@ -38,20 +41,30 @@ function M.setup_document_keymaps(buf)
       vim.notify("neowork: compose area is empty", vim.log.levels.WARN)
       return
     end
-    local name, args = text:match("^/(%S+)%s*(.-)%s*$")
-    if name then
+
+    local first_nl = text:find("\n", 1, true)
+    local head = first_nl and text:sub(1, first_nl - 1) or text
+    local name, args = head:match("^/([%w%?%-_]+)%s*(.-)%s*$")
+    local lname = name and name:lower() or nil
+
+    if lname and not first_nl and local_slash[lname] then
       document.clear_compose(buf)
-      local handler = slash_commands[name]
-      if handler then
-        handler(buf, args or "")
-      else
-        vim.notify("neowork: unknown command /" .. name, vim.log.levels.WARN)
-      end
+      local_slash[lname](args ~= "" and args or nil)
       return
     end
+
     document.clear_compose(buf)
     document.insert_turn(buf, "You", text)
     require("neowork.bridge").send(buf, text)
+
+    if lname == "clear" and not first_nl then
+      vim.schedule(function()
+        document.clear(buf, {
+          purge_transcript = args and args:match("purge") ~= nil,
+          start_session = false,
+        })
+      end)
+    end
   end
 
   local function do_send_from_insert()
@@ -64,6 +77,42 @@ function M.setup_document_keymaps(buf)
   local util = require("neowork.util")
   map("n", "]]", function() util.jump_to_marker(buf, 1) end, "next turn")
   map("n", "[[", function() util.jump_to_marker(buf, -1) end, "previous turn")
+
+  local function plan_section()
+    return require("neowork.plan")._section_lines[buf]
+  end
+
+  map("n", "gp", function()
+    local section = plan_section()
+    if section then
+      vim.api.nvim_win_set_cursor(0, { section.start + 1, 0 })
+    else
+      vim.cmd("NwPlan")
+    end
+  end, "jump to plan")
+
+  local function jump_entry(direction)
+    local section = plan_section()
+    if not section then return end
+    local row = vim.api.nvim_win_get_cursor(0)[1]
+    local lines = vim.api.nvim_buf_get_lines(buf, section.start, section["end"], false)
+    local target
+    if direction > 0 then
+      for i, l in ipairs(lines) do
+        local abs = section.start + i
+        if abs > row and l:match("^%- %[") then target = abs; break end
+      end
+    else
+      for i, l in ipairs(lines) do
+        local abs = section.start + i
+        if abs < row and l:match("^%- %[") then target = abs end
+      end
+    end
+    if target then vim.api.nvim_win_set_cursor(0, { target, 0 }) end
+  end
+
+  map("n", "]p", function() jump_entry(1) end, "next plan entry")
+  map("n", "[p", function() jump_entry(-1) end, "previous plan entry")
 
   local function in_compose_area()
     local compose = document.find_compose_line(buf)
@@ -103,67 +152,7 @@ function M.setup_document_keymaps(buf)
     require("neowork.stream")._auto_scroll[buf] = true
   end, "go to end")
 
-  map("n", "<C-c>", function()
-    require("neowork.bridge").interrupt(buf)
-  end, "interrupt")
-
-  map("n", "s", function()
-    require("neowork.bridge").permission_action(buf, "select")
-  end, "permission select")
-
-  map("n", "ya", function()
-    require("neowork.bridge").permission_action(buf, "allow")
-  end, "permission allow")
-
-  map("n", "yn", function()
-    require("neowork.bridge").permission_action(buf, "deny")
-  end, "permission deny")
-
-  map("n", "yA", function()
-    require("neowork.bridge").permission_action(buf, "always")
-  end, "permission always")
-
-  map("n", "gp", function()
-    require("neowork.plan").toggle(buf)
-  end, "toggle plan")
-
-  map("n", "gt", function()
-    require("neowork.transcript").open(buf)
-  end, "show transcript (doc)")
-
-  map("n", "gT", function()
-    require("neowork.transcript").open_full(buf)
-  end, "show full transcript (events)")
-
-  map("n", "<leader>nt", function()
-    require("neowork.transcript").open(buf, { split = "vsplit" })
-  end, "show transcript (vsplit)")
-
-  map("n", "<leader>nT", function()
-    require("neowork.transcript").open_full(buf, { split = "vsplit" })
-  end, "show full transcript (vsplit)")
-
-  map("n", "gi", function()
-    vim.ui.input({ prompt = "Quick message: " }, function(text)
-      if text and text ~= "" then
-        local document = require("neowork.document")
-        document.insert_turn(buf, "You", text)
-        require("neowork.bridge").send(buf, text)
-      end
-    end)
-  end, "quick input")
-
-  map("n", "gS", function()
-    local current = require("neowork.summary").get(buf)
-    vim.ui.input({ prompt = "Summary: ", default = current }, function(text)
-      if text == nil then return end
-      require("neowork.summary").set(buf, text)
-    end)
-  end, "edit summary")
-
-  map("n", "gc", function()
-    require("neowork.document").compact(buf)
-  end, "compact")
+  map("n", "<C-c>", function() vim.cmd("NwInterrupt") end, "interrupt")
 
   vim.keymap.set("n", "r", function()
     local row = vim.api.nvim_win_get_cursor(0)[1]
@@ -175,128 +164,43 @@ function M.setup_document_keymaps(buf)
     end
   end, { buffer = buf, silent = true, nowait = true, desc = "neowork: fork on role line / replace char" })
 
-  map("n", "gn", function()
-    local document = require("neowork.document")
-    local root = document.read_frontmatter_field(buf, "root") or vim.fn.getcwd()
-    vim.ui.input({ prompt = "New session name: " }, function(name)
-      local filepath = require("neowork.util").new_session(root, name)
-      if filepath then document.open(filepath, { split = "edit" }) end
-    end)
-  end, "new session")
-
-  local function cycle_mode()
-    local bridge = require("neowork.bridge")
-    local modes = (bridge._modes or {})[buf]
-    if not modes or not modes.available or #modes.available == 0 then
-      vim.notify("neowork: agent has not reported modes yet", vim.log.levels.WARN)
-      return
+  map("n", "<Tab>", function()
+    if vim.fn.foldclosed(".") ~= -1 then
+      vim.cmd("normal! zo")
+    elseif vim.fn.foldlevel(".") > 0 then
+      vim.cmd("silent! normal! zc")
+    else
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Tab>", true, false, true), "n", false)
     end
-    if #modes.available == 1 then
-      local only = modes.available[1]
-      vim.notify("neowork: only one mode available (" .. (only.name or only.id) .. ")", vim.log.levels.INFO)
-      return
-    end
-    bridge.set_mode(buf)
-  end
-
-  map("n", "<S-Tab>", cycle_mode, "cycle mode")
-  map("n", "gm",      cycle_mode, "cycle mode")
-
-  map("n", "gM", function()
-    local bridge = require("neowork.bridge")
-    local modes = (bridge._modes or {})[buf]
-    if not modes or not modes.available or #modes.available == 0 then
-      vim.notify("neowork: no modes reported", vim.log.levels.WARN)
-      return
-    end
-    local labels = {}
-    for _, m in ipairs(modes.available) do labels[#labels + 1] = m.name or m.id end
-    vim.ui.select(labels, { prompt = "Mode:" }, function(_, idx)
-      if not idx then return end
-      if bridge.set_mode_id then
-        bridge.set_mode_id(buf, modes.available[idx].id)
-      end
-    end)
-  end, "pick mode")
-
-  map("n", "gP", function()
-    require("neowork.bridge").switch_provider(buf)
-  end, "switch provider")
+  end, "toggle fold")
+  map("n", "<S-Tab>", function() vim.cmd("NwMode") end, "cycle mode")
+  map("n", "gM", function() vim.cmd("NwModel") end, "pick model")
+  map("n", "gP", function() vim.cmd("NwProvider") end, "pick provider")
 
   map("n", "q", function()
     vim.api.nvim_win_close(0, false)
   end, "close")
 
-  map("n", "?", function()
-    M._show_doc_help()
-  end, "help")
+  map("n", "?", function() vim.cmd("NwHelp") end, "help")
 
   map("i", "<C-CR>", do_send_from_insert, "send from insert")
   map("i", "<S-CR>", do_send_from_insert, "send from insert")
   map("i", "<C-s>", do_send_from_insert, "send from insert")
-end
 
-function M._show_doc_help()
-  local lines = {
-    "Neowork Prompt Document",
-    "",
-    "<CR>     Send (normal mode)",
-    "<C-s>    Send (insert mode)",
-    "<S-CR>   Send (insert mode, terminal-dependent)",
-    "<C-CR>   Send (insert mode, GUI only)",
-    "]]       Next turn",
-    "[[       Previous turn",
-    "G        Go to end + auto-scroll",
-    "<C-c>    Interrupt",
-    "",
-    "s        Permission: pick",
-    "ya       Permission: allow",
-    "yn       Permission: deny",
-    "yA       Permission: always",
-    "",
-    "gi       Quick input",
-    "gc       Compact old turns",
-    "/clear   Clear session to pristine state (append 'purge' to delete transcript)",
-    "gn       New session",
-    "gt       Show transcript",
-    "gp       Toggle plan",
-    "gS       Edit summary",
-    "gP       Switch provider",
-    "gm       Cycle mode",
-    "gM       Pick mode",
-    "<S-Tab>  Cycle mode (terminal permitting)",
-    "q        Close",
-    "?        This help",
-  }
-  local helpbuf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(helpbuf, 0, -1, false, lines)
-  vim.bo[helpbuf].modifiable = false
-  vim.bo[helpbuf].bufhidden = "wipe"
-  local width = 36
-  local height = #lines
-  local win = vim.api.nvim_open_win(helpbuf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    row = math.floor((vim.o.lines - height) / 2),
-    col = math.floor((vim.o.columns - width) / 2),
-    style = "minimal",
-    border = "rounded",
-    title = " Help ",
-    title_pos = "center",
-  })
-  for _, key in ipairs({ "q", "<Esc>" }) do
-    vim.keymap.set("n", key, function()
-      if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
-    end, { buffer = helpbuf })
+  local function perm(action, fallback)
+    return function()
+      local bridge = require("neowork.bridge")
+      if bridge.has_pending_permission and bridge.has_pending_permission(buf) then
+        bridge.permission_action(buf, action)
+      else
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(fallback, true, false, true), "n", false)
+      end
+    end
   end
-  vim.api.nvim_create_autocmd("BufLeave", {
-    buffer = helpbuf,
-    once = true,
-    callback = function()
-      if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
-    end,
-  })
+  map("n", "s",  perm("select", "s"),  "permission select")
+  map("n", "ya", perm("allow",  "ya"), "permission allow")
+  map("n", "yn", perm("deny",   "yn"), "permission deny")
+  map("n", "yA", perm("always", "yA"), "permission always")
 end
 
 return M

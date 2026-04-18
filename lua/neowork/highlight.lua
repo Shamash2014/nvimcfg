@@ -1,6 +1,7 @@
 local M = {}
 
 M.ns = vim.api.nvim_create_namespace("neowork")
+M.ns_roles = vim.api.nvim_create_namespace("neowork_roles")
 
 local function hl_fg(name, fallback)
   local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
@@ -102,6 +103,18 @@ function M.setup()
   vim.api.nvim_set_hl(0, "NeoworkIdxColCtxWarn",   { fg = input,   default = true })
   vim.api.nvim_set_hl(0, "NeoworkIdxColCtxErr",    { fg = error,   default = true })
   vim.api.nvim_set_hl(0, "NeoworkIdxColCost",      { fg = cost,    default = true })
+
+  vim.api.nvim_set_hl(0, "NeoworkIdxStatusRun",  { fg = running,  bold = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkIdxStatusWait", { fg = input,    bold = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkIdxStatusPerm", { fg = error,    bold = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkIdxStatusRvw",  { fg = review_fg, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkIdxStatusRdy",  { fg = ready_fg, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkIdxStatusEnd",  { fg = muted,    default = true })
+  vim.api.nvim_set_hl(0, "NeoworkIdxActionKind", { fg = info,     default = true })
+  vim.api.nvim_set_hl(0, "NeoworkIdxRequiredPerm", { fg = error,  bold = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkIdxRequiredRun",  { fg = running, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkIdxRule",         { fg = muted,   default = true })
+  vim.api.nvim_set_hl(0, "NeoworkIdxCount",        { fg = muted,   italic = true, default = true })
 end
 
 local ROLE_LINE_HL = {
@@ -143,39 +156,42 @@ function M.apply(buf, start_row, end_row)
 
   local clear_end = end_row == total and -1 or end_row
   vim.api.nvim_buf_clear_namespace(buf, M.ns, scan_start, clear_end)
+  vim.api.nvim_buf_clear_namespace(buf, M.ns_roles, 0, -1)
 
-  local lines = vim.api.nvim_buf_get_lines(buf, scan_start, end_row, false)
+  local all_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 
   local fm_end
-  if scan_start == 0 and lines[1] == "---" then
-    for i = 2, #lines do
-      if lines[i] == "---" then fm_end = i break end
+  if all_lines[1] == "---" then
+    for i = 2, #all_lines do
+      if all_lines[i] == "---" then fm_end = i break end
     end
   end
   if fm_end then
-    vim.api.nvim_buf_set_extmark(buf, M.ns, 0, 0, {
+    vim.api.nvim_buf_set_extmark(buf, M.ns_roles, 0, 0, {
       end_row = fm_end - 1,
-      end_col = #(lines[fm_end] or ""),
+      end_col = #(all_lines[fm_end] or ""),
       line_hl_group = "NeoworkFrontmatterLine",
       priority = 50,
     })
-    for i = 1, fm_end do
-      vim.api.nvim_buf_set_extmark(buf, M.ns, i - 1, 0, {
-        end_col = #(lines[i] or ""),
-        hl_group = lines[i] == "---" and "NeoworkSeparator" or "NeoworkMeta",
-        priority = 60,
-      })
+    if scan_start == 0 then
+      for i = 1, fm_end do
+        vim.api.nvim_buf_set_extmark(buf, M.ns, i - 1, 0, {
+          end_col = #(all_lines[i] or ""),
+          hl_group = all_lines[i] == "---" and "NeoworkSeparator" or "NeoworkMeta",
+          priority = 60,
+        })
+      end
     end
   end
 
-  local content_start = (fm_end or 0) + 1
+  local n = #all_lines
+  local content_start_abs = fm_end or 0
   local current_role, current_role_row
   local function close_range(last_row)
     if not current_role or not current_role_row then return end
     if ROLE_LINE_HL[current_role] and last_row >= current_role_row then
-      local end_line_idx = last_row - scan_start + 1
-      local end_line = lines[end_line_idx] or ""
-      vim.api.nvim_buf_set_extmark(buf, M.ns, current_role_row, 0, {
+      local end_line = all_lines[last_row + 1] or ""
+      vim.api.nvim_buf_set_extmark(buf, M.ns_roles, current_role_row, 0, {
         end_row = last_row,
         end_col = #end_line,
         end_right_gravity = true,
@@ -186,35 +202,45 @@ function M.apply(buf, start_row, end_row)
     current_role, current_role_row = nil, nil
   end
 
-  for i = content_start, #lines do
-    local line = lines[i]
-    local absolute_row = scan_start + i - 1
+  for i = content_start_abs + 1, n do
+    local line = all_lines[i]
+    local absolute_row = i - 1
     local role = role_of(line)
     if role then
       close_range(absolute_row - 1)
       current_role = role
       current_role_row = absolute_row
-      vim.api.nvim_buf_set_extmark(buf, M.ns, absolute_row, 0, {
-        end_col = #line,
-        hl_group = ROLE_TEXT_HL[role],
-        priority = 100,
-      })
-    elseif line and line:match("^#### %[%*%]") then
-      vim.api.nvim_buf_set_extmark(buf, M.ns, absolute_row, 0, {
-        end_col = #line,
-        hl_group = "NeoworkTool",
-        priority = 100,
-      })
-    elseif line and line:match("^>") then
-      vim.api.nvim_buf_set_extmark(buf, M.ns, absolute_row, 0, {
-        end_col = #line,
-        hl_group = "NeoworkThinking",
-        priority = 100,
-      })
     end
   end
+  close_range(n - 1)
 
-  close_range(end_row - 1)
+  local scan_lines = vim.api.nvim_buf_get_lines(buf, scan_start, end_row, false)
+  for i = 1, #scan_lines do
+    local line = scan_lines[i]
+    local absolute_row = scan_start + i - 1
+    if absolute_row >= content_start_abs then
+      local role = role_of(line)
+      if role then
+        vim.api.nvim_buf_set_extmark(buf, M.ns, absolute_row, 0, {
+          end_col = #line,
+          hl_group = ROLE_TEXT_HL[role],
+          priority = 100,
+        })
+      elseif line and line:match("^#### %[%*%]") then
+        vim.api.nvim_buf_set_extmark(buf, M.ns, absolute_row, 0, {
+          end_col = #line,
+          hl_group = "NeoworkTool",
+          priority = 100,
+        })
+      elseif line and line:match("^>") then
+        vim.api.nvim_buf_set_extmark(buf, M.ns, absolute_row, 0, {
+          end_col = #line,
+          hl_group = "NeoworkThinking",
+          priority = 100,
+        })
+      end
+    end
+  end
 end
 
 return M
