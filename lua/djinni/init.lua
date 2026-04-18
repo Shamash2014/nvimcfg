@@ -1,12 +1,6 @@
 local M = {}
 
 local defaults = {
-  panel = {
-    width = 40,
-  },
-  chat = {
-    dir = ".chat",
-  },
   acp = {
     provider = "claude-code",
     command = "claude-agent-acp",
@@ -28,91 +22,63 @@ function M.setup(opts)
     end,
   })
 
-  vim.api.nvim_create_user_command("Nowork", function()
-    require("djinni.nowork.panel").toggle()
-  end, {})
+  vim.api.nvim_create_user_command("NeoworkTask", function()
+    require("djinni.code").create_task()
+  end, { desc = "Create a new neowork task" })
 
-  vim.api.nvim_create_user_command("NoworkNext", function()
-    require("djinni.nowork.panel").next_task()
-  end, {})
-
-  vim.api.nvim_create_user_command("NoworkPrev", function()
-    require("djinni.nowork.panel").prev_task()
-  end, {})
-
-  vim.api.nvim_create_user_command("NoworkTask", function()
-    require("djinni.nowork.task").toggle()
-  end, {})
-
-  vim.api.nvim_create_user_command("NoworkPick", function()
+  vim.api.nvim_create_user_command("NeoworkPick", function()
     require("djinni.integrations.snacks").pick_task()
-  end, {})
+  end, { desc = "Browse neowork tasks" })
 
-  vim.api.nvim_create_user_command("NoworkSessions", function()
+  vim.api.nvim_create_user_command("NeoworkSessions", function()
     require("djinni.integrations.snacks").pick_sessions()
-  end, {})
+  end, { desc = "Browse neowork sessions" })
 
-  vim.api.nvim_create_user_command("NoworkTranscript", function(cmd)
-    require("djinni.nowork.transcript").open(vim.api.nvim_get_current_buf(), { quickfix = cmd.bang })
-  end, { bang = true, desc = "Open current chat transcript in loclist" })
+  vim.api.nvim_create_user_command("NeoworkConsole", function()
+    require("djinni.code").create_task()
+  end, { desc = "Create a new neowork task" })
 
-
-  vim.api.nvim_create_user_command("NoworkConsole", function()
-    require("djinni.nowork.panel").toggle()
-  end, {})
-
-  vim.api.nvim_create_user_command("NoworkSplit", function()
-    local chat = require("djinni.nowork.chat")
+  vim.api.nvim_create_user_command("NeoworkSplit", function()
+    local document = require("neowork.document")
     for _, win in ipairs(vim.api.nvim_list_wins()) do
       local wb = vim.api.nvim_win_get_buf(win)
-      if vim.bo[wb].filetype == "nowork-chat" then
+      if vim.b[wb].neowork_chat then
         vim.cmd("vsplit")
         vim.api.nvim_set_current_buf(wb)
         return
       end
     end
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_loaded(b) and vim.bo[b].filetype == "nowork-chat" then
+      if vim.api.nvim_buf_is_loaded(b) and vim.b[b].neowork_chat then
         vim.cmd("vsplit")
         vim.api.nvim_set_current_buf(b)
         return
       end
     end
-    local root = require("core.utils").get_project_root() or vim.fn.getcwd()
-    chat.create(root, { split = true })
-  end, {})
+    local filepath = require("neowork.util").new_session(
+      require("core.utils").get_project_root() or vim.fn.getcwd(),
+      "session " .. os.date("!%Y%m%dT%H%M%S")
+    )
+    if filepath then document.open(filepath, { split = "vsplit" }) end
+  end, { desc = "Open neowork in a vertical split" })
 
 
   vim.keymap.set("n", "<C-q>", function()
-    require("djinni.nowork.panel").toggle()
-  end, { desc = "Toggle Nowork panel" })
+    require("djinni.code").create_task()
+  end, { desc = "New neowork task" })
 
 
   vim.keymap.set("n", "]c", function()
-    require("djinni.nowork.panel").next_task()
-  end, { desc = "Next task" })
+    require("djinni.integrations.snacks").pick_task()
+  end, { desc = "Browse neowork tasks" })
 
   vim.keymap.set("n", "[c", function()
-    require("djinni.nowork.panel").prev_task()
-  end, { desc = "Previous task" })
+    require("djinni.integrations.snacks").pick_sessions()
+  end, { desc = "Browse neowork sessions" })
 
   vim.keymap.set("n", "<C-6>", function()
-    require("djinni.nowork.panel").switch_last_session()
+    require("djinni.integrations.snacks").pick_sessions()
   end, { desc = "Switch last session" })
-
-  -- Hive: multi-agent commands
-  local hive = require("djinni.nowork.hive")
-
-  vim.api.nvim_create_user_command("H", function(cmd)
-    hive.command(cmd.args, cmd.bang)
-  end, { nargs = "*", bang = true, desc = "Hive: tell active agent" })
-
-  for c = 97, 122 do -- a-z
-    local letter = string.char(c)
-    vim.api.nvim_create_user_command("H" .. letter, function()
-      hive.switch(letter)
-    end, { desc = "Hive: switch to agent " .. letter })
-  end
 
   if require("djinni.integrations.worktrunk").available() then
     local snacks = require("djinni.integrations.snacks")
@@ -138,11 +104,10 @@ function M.setup(opts)
     require("djinni.integrations.worktrunk").start_statusline(30000)
   end
 
-  local chat = require("djinni.nowork.chat")
+  local keymaps = require("neowork.keymaps")
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype == "nowork-chat" then
-      chat.attach(buf)
-      chat._ensure_session(buf)
+    if vim.api.nvim_buf_is_loaded(buf) and vim.b[buf].neowork_chat then
+      keymaps.setup_document_keymaps(buf)
     end
   end
 end

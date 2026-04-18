@@ -196,6 +196,21 @@ register_session = function(session_id, entry)
   end)
 end
 
+function M.attach_client_session(session_id, client, provider_name, project_root, result, opts)
+  if not session_id or session_id == "" or not client then return end
+  local entry = {
+    client = client,
+    provider_name = provider_name,
+    project_root = project_root,
+  }
+  apply_session_result(entry, session_id, result or vim.empty_dict(), opts or {})
+end
+
+function M.detach_client_session(session_id)
+  if not session_id or session_id == "" then return end
+  M.sessions_by_id[session_id] = nil
+end
+
 function M.get_client(session_id)
   local entry = M.sessions_by_id[session_id]
   if entry then return entry.client end
@@ -206,7 +221,7 @@ function M.create_task_session(project_root, callback, opts)
   opts = opts or {}
   local config = get_config()
   local provider_name = opts.provider or config.provider
-  local log = require("djinni.nowork.log")
+  local log = require("djinni.log")
 
   local client = spawn_client(project_root, provider_name, opts)
 
@@ -262,7 +277,7 @@ function M.load_task_session(project_root, session_id, callback, opts)
   opts = opts or {}
   local config = get_config()
   local provider_name = opts.provider or config.provider
-  local log = require("djinni.nowork.log")
+  local log = require("djinni.log")
 
   local client = spawn_client(project_root, provider_name, opts)
 
@@ -301,7 +316,7 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
   opts = opts or {}
   local config = get_config()
   local provider_name = opts.provider or config.provider
-  local log = require("djinni.nowork.log")
+  local log = require("djinni.log")
 
   local client = spawn_client(project_root, provider_name, opts)
 
@@ -383,7 +398,7 @@ function M.list_task_sessions(project_root, callback, opts)
   opts = opts or {}
   local config = get_config()
   local provider_name = opts.provider or config.provider
-  local log = require("djinni.nowork.log")
+  local log = require("djinni.log")
   local client = spawn_client(project_root, provider_name)
 
   client:when_ready(function(ready_err)
@@ -456,7 +471,7 @@ function M.set_model(_, session_id, model_id, _provider_name)
 end
 
 function M.send_message(_, session_id, content, callback, images, _provider_name)
-  local log = require("djinni.nowork.log")
+  local log = require("djinni.log")
   local entry = M.sessions_by_id[session_id]
   if not entry then
     log.warn("send_message: no entry for sid=" .. tostring(session_id))
@@ -497,21 +512,22 @@ function M.set_mode(_, session_id, mode_id, _provider_name, callback)
     if callback then callback({ message = "Session not found" }, nil) end
     return
   end
-  if entry.provider_name == "claude-code" then
-    entry.client:request("session/prompt", {
+  entry.client:when_ready(function(ready_err)
+    if ready_err then
+      if callback then callback(ready_err, nil) end
+      return
+    end
+
+    entry.client:notify("session/set_mode", {
       sessionId = session_id,
-      prompt = { { type = "text", text = "/mode " .. mode_id } },
-    }, function(err, result)
-      if callback then callback(err, result) end
-    end, { timeout = 15000 })
-    return
-  end
-  entry.client:request("session/set_mode", {
-    sessionId = session_id,
-    modeId = mode_id,
-  }, function(err, result)
-    if callback then callback(err, result) end
-  end, { timeout = 15000 })
+      modeId = mode_id,
+    })
+    if callback then
+      vim.schedule(function()
+        callback(nil, vim.empty_dict())
+      end)
+    end
+  end)
 end
 
 function M.interrupt(_, session_id, _provider_name)

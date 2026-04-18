@@ -39,6 +39,14 @@ local function truncate(s, w)
   return s:sub(1, w - 1) .. "…"
 end
 
+local function worktree_context()
+  local ok, wt = pcall(require, "djinni.integrations.worktrunk")
+  if not ok or type(wt.statusline) ~= "function" then return nil end
+  local value = wt.statusline()
+  if type(value) ~= "string" or value == "" then return nil end
+  return value
+end
+
 function M.chips(buf)
   buf = buf or vim.api.nvim_get_current_buf()
   if not vim.api.nvim_buf_is_valid(buf) then return "" end
@@ -49,15 +57,17 @@ function M.chips(buf)
 
   local sid = document.read_frontmatter_field(buf, "session") or ""
   local provider = document.read_frontmatter_field(buf, "provider") or "?"
-  local status = document.read_frontmatter_field(buf, "status") or "?"
+  local status = bridge.get_status and select(1, bridge.get_status(buf)) or document.read_frontmatter_field(buf, "status") or "?"
   local tokens = document.read_frontmatter_field(buf, "tokens") or ""
   local cost = document.read_frontmatter_field(buf, "cost") or ""
   local elapsed = document.read_frontmatter_field(buf, "elapsed") or ""
   local ok, mode = pcall(bridge.get_mode, buf)
   local mode_label = (ok and mode and (mode.name or mode.id)) or "?"
   local sid_short = sid ~= "" and sid:sub(1, 8) or "—"
+  local wt = worktree_context()
 
   local chips = { "● " .. sid_short, provider, mode_label, status }
+  if wt then chips[#chips + 1] = wt end
   if tokens ~= "" then chips[#chips + 1] = tokens end
   if cost ~= "" and cost ~= "0.00" and cost ~= "0.0000" then chips[#chips + 1] = "$" .. cost end
   if elapsed ~= "" then chips[#chips + 1] = elapsed end
@@ -106,10 +116,11 @@ function M.pills(buf)
   local bridge = require("neowork.bridge")
 
   local turns = document.count_turns(buf) or 0
-  local status = document.read_frontmatter_field(buf, "status") or "idle"
+  local status = bridge.get_status and select(1, bridge.get_status(buf)) or document.read_frontmatter_field(buf, "status") or "idle"
   local sid = document.read_frontmatter_field(buf, "session") or ""
   local ok_mode, mode = pcall(bridge.get_mode, buf)
   local mode_label = (ok_mode and mode and (mode.name or mode.id)) or nil
+  local wt = worktree_context()
 
   if sid ~= "" and M._tool_count[sid] == nil then
     local ok, store = pcall(require, "neowork.store")
@@ -143,6 +154,7 @@ function M.pills(buf)
   local pill = function(s) return "%#NeoworkPill# " .. s .. " %*" end
   local parts = {}
   if mode_label then parts[#parts + 1] = pill(mode_label) end
+  if wt then parts[#parts + 1] = pill(wt) end
   if streaming then
     local chars = bridge._spinner_chars or { "·" }
     local idx = ((bridge._spinner_frame or 0) % #chars) + 1
@@ -162,7 +174,24 @@ function M.pills(buf)
   if cost > 0 then
     parts[#parts + 1] = pill(string.format("$%.2f", cost))
   end
-  local right = (streaming or status == "running") and "%#NeoworkStatus#● streaming%*" or "%#NeoworkBtn#[gt transcript]%*"
+  local right
+  if status == "awaiting" then
+    right = "%#NeoworkStatus#! permission%*"
+  elseif status == "tool" then
+    right = "%#NeoworkStatus#● tool%*"
+  elseif status == "submitting" then
+    right = "%#NeoworkStatus#● submitting%*"
+  elseif status == "streaming" or streaming or status == "running" then
+    right = "%#NeoworkStatus#● streaming%*"
+  elseif status == "connecting" then
+    right = "%#NeoworkStatus#● connecting%*"
+  elseif status == "interrupted" then
+    right = "%#NeoworkStatus#● interrupted%*"
+  elseif status == "error" then
+    right = "%#NeoworkStatus#● error%*"
+  else
+    right = "%#NeoworkBtn#[gt transcript]%*"
+  end
   return table.concat(parts, " ") .. "%=" .. right
 end
 
@@ -188,27 +217,27 @@ function M.render_inline(buf)
   local width = math.max(40, vim.o.columns - 10)
   local virt_lines = {}
 
-  virt_lines[#virt_lines + 1] = { { "", "Normal" } }
+  virt_lines[#virt_lines + 1] = { { "", "NeoworkWindow" } }
   if summary ~= "" then
     virt_lines[#virt_lines + 1] = {
-      { "  ▎ SUMMARY  ", "Title" },
-      { truncate(summary, width - 14), "@markup.strong" },
+      { "  ▎ SUMMARY  ", "NeoworkSummaryLabel" },
+      { truncate(summary, width - 14), "NeoworkSummaryText" },
     }
   else
-    virt_lines[#virt_lines + 1] = { { "  ▎ (no summary)", "NonText" } }
+    virt_lines[#virt_lines + 1] = { { "  ▎ (no summary)", "NeoworkSummaryEmpty" } }
   end
 
   local ok_plan, plan = pcall(require, "neowork.plan")
   if ok_plan then
     local entries = plan._entries and plan._entries[buf]
     if entries and #entries > 0 then
-      virt_lines[#virt_lines + 1] = { { "", "Normal" } }
-      virt_lines[#virt_lines + 1] = { { "  ▎ PLAN  ", "Title" }, { (plan.status(buf) or ""), "NeoworkMeta" } }
+      virt_lines[#virt_lines + 1] = { { "", "NeoworkWindow" } }
+      virt_lines[#virt_lines + 1] = { { "  ▎ PLAN  ", "NeoworkSummaryLabel" }, { (plan.status(buf) or ""), "NeoworkMeta" } }
       virt_lines[#virt_lines + 1] = { { "  [gp] toggle plan", "NeoworkMeta" } }
     end
   end
 
-  virt_lines[#virt_lines + 1] = { { "", "Normal" } }
+  virt_lines[#virt_lines + 1] = { { "", "NeoworkWindow" } }
 
   pcall(vim.api.nvim_buf_set_extmark, buf, inline_ns, row, 0, {
     virt_lines = virt_lines,

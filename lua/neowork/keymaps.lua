@@ -20,6 +20,12 @@ function M.setup_document_keymaps(buf)
   end
 
   local local_slash = {
+    clear = function(args)
+      document.clear_compose(buf)
+      document.clear(buf, {
+        purge_transcript = args and args:match("purge") ~= nil,
+      })
+    end,
     fork = function() document.fork_at_cursor(buf) end,
     new = function(args)
       local root = document.read_frontmatter_field(buf, "root") or vim.fn.getcwd()
@@ -48,7 +54,6 @@ function M.setup_document_keymaps(buf)
     local lname = name and name:lower() or nil
 
     if lname and not first_nl and local_slash[lname] then
-      document.clear_compose(buf)
       local_slash[lname](args ~= "" and args or nil)
       return
     end
@@ -56,15 +61,6 @@ function M.setup_document_keymaps(buf)
     document.clear_compose(buf)
     document.insert_turn(buf, "You", text)
     require("neowork.bridge").send(buf, text)
-
-    if lname == "clear" and not first_nl then
-      vim.schedule(function()
-        document.clear(buf, {
-          purge_transcript = args and args:match("purge") ~= nil,
-          start_session = false,
-        })
-      end)
-    end
   end
 
   local function do_send_from_insert()

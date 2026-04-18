@@ -25,17 +25,8 @@ return {
       nerd_font_variant = "mono",
     },
     sources = {
-      default = { "lsp", "snippets", "path", "buffer", "djinni" },
-      per_filetype = {
-        ["nowork-chat"] = { "djinni" },
-      },
+      default = { "lsp", "snippets", "path", "buffer" },
       providers = {
-        djinni = {
-          name = "Djinni",
-          enabled = true,
-          module = "djinni.nowork.blink_source",
-          score_offset = 90,
-        },
         lsp = {
           name = "LSP",
           enabled = true,

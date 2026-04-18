@@ -1159,21 +1159,21 @@ function M.pick_tasks_and_commands()
     local items = {}
 
     table.insert(items, {
-      text = "Nowork Panel",
-      desc = "Toggle nowork task panel",
-      is_nowork_panel = true,
-    })
-
-    table.insert(items, {
-      text = "New Nowork Task",
-      desc = "Create a new nowork task",
+      text = "New Neowork Task",
+      desc = "Create a new neowork task",
       is_nowork_new = true,
     })
 
     table.insert(items, {
-      text = "Browse Nowork Tasks",
-      desc = "Pick and open a nowork task",
+      text = "Browse Neowork Tasks",
+      desc = "Pick and open a neowork task",
       is_nowork_browse = true,
+    })
+
+    table.insert(items, {
+      text = "Neowork Sessions",
+      desc = "Pick an open neowork session",
+      is_nowork_sessions = true,
     })
 
     table.insert(items, {
@@ -1225,43 +1225,17 @@ function M.pick_tasks_and_commands()
       picker:close()
       if not item then return end
       if item.is_separator then return end
-      if item.is_nowork_panel then
+      if item.is_nowork_new then
         vim.schedule(function()
-          require("djinni.nowork.panel").toggle()
-        end)
-      elseif item.is_nowork_new then
-        vim.schedule(function()
-          require("djinni.nowork.panel").create_task()
+          require("djinni.code").create_task()
         end)
       elseif item.is_nowork_browse then
         vim.schedule(function()
-          local panel = require("djinni.nowork.panel")
-          panel._scan_tasks()
-          local groups = panel._get_grouped_tasks()
-          local browse_items = {}
-          for _, group in ipairs(groups) do
-            if #group.tasks > 0 then
-              table.insert(browse_items, { text = group.name, is_header = true })
-              for _, task in ipairs(group.tasks) do
-                local fname = vim.fn.fnamemodify(task.file_path, ":t"):gsub("%.md$", "")
-                table.insert(browse_items, { text = fname, file = task.file_path })
-              end
-            end
-          end
-          Snacks.picker({
-            title = "Nowork Tasks",
-            items = browse_items,
-            layout = { preset = "vscode", preview = false },
-            format = function(bi, _)
-              if bi.is_header then return { { bi.text, "Title" } } end
-              return { { bi.text, "Normal" } }
-            end,
-            confirm = function(bp, bi)
-              bp:close()
-              if not bi or bi.is_header then return end
-              require("djinni.nowork.chat").open(bi.file)
-            end,
-          })
+          require("djinni.integrations.snacks").pick_task()
+        end)
+      elseif item.is_nowork_sessions then
+        vim.schedule(function()
+          require("djinni.integrations.snacks").pick_sessions()
         end)
       elseif item.is_task then
         if item.task.cmd == "custom" then

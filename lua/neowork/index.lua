@@ -65,6 +65,12 @@ end
 
 local function normalize_status(raw)
   if raw == "idle" then return "ready" end
+  if raw == "connecting" then return "running" end
+  if raw == "submitting" then return "running" end
+  if raw == "streaming" then return "running" end
+  if raw == "tool" then return "running" end
+  if raw == "interrupted" then return "review" end
+  if raw == "error" then return "review" end
   if raw == "archived" then return "done" end
   if STATUS_ORDER[raw] then return raw end
   return "done"
@@ -85,6 +91,10 @@ local function resolve_runtime_status(s)
     if buf > 0 and vim.api.nvim_buf_is_valid(buf) then
       local bridge = get_bridge_mod()
       if bridge then
+        if bridge.get_status_bucket then
+          local status, meta = bridge.get_status_bucket(buf)
+          return status, meta
+        end
         if bridge.has_pending_permission and bridge.has_pending_permission(buf) then
           local perm = bridge.get_pending_permission and bridge.get_pending_permission(buf) or {}
           return "awaiting", { kind = "perm", title = perm.title, tool_kind = perm.tool_kind, tool_desc = perm.tool_desc }
@@ -260,7 +270,19 @@ function M._render(buf, sessions, total_cost)
     hl_marks[#hl_marks + 1] = { row, col_s, col_e, group }
   end
 
-  local panel_w = math.max(60, vim.o.columns - 4)
+  local function window_width_for(b)
+    local wins = vim.fn.win_findbuf(b)
+    for _, win in ipairs(wins) do
+      if vim.api.nvim_win_is_valid(win) then
+        local w = vim.api.nvim_win_get_width(win)
+        local info = vim.fn.getwininfo(win)[1] or {}
+        local tw = tonumber(info.textoff) or 0
+        return math.max(20, w - tw)
+      end
+    end
+    return vim.o.columns
+  end
+  local panel_w = math.max(60, window_width_for(buf) - 4)
   local open_ranges = {}
 
   local function render_session(s, indent)
@@ -689,8 +711,14 @@ local function do_new_session(buf, name, split)
   split = split or "vsplit"
   pick_project(M._roots[buf], function(target)
     local function create(session_name)
-      local filepath = require("neowork.util").new_session(target, session_name)
-      if filepath then require("neowork.document").open(filepath, { split = split }) end
+      vim.schedule(function()
+        local filepath = require("neowork.util").new_session(target, session_name)
+        if filepath then
+          require("neowork.document").open(filepath, { split = split })
+        else
+          vim.notify("neowork: failed to create session file", vim.log.levels.ERROR)
+        end
+      end)
     end
     if name and name ~= "" then
       create(name)
@@ -998,6 +1026,32 @@ function M._setup_autocmds(buf)
         M._last_refresh[buf] = nil
         M._last_data[buf] = nil
         M.refresh(buf)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = group,
+    callback = function()
+      if vim.api.nvim_buf_is_valid(buf) and #vim.fn.win_findbuf(buf) > 0 then
+        vim.schedule(function() M._rerender_cached(buf) end)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("WinResized", {
+    group = group,
+    callback = function()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      local resized = vim.v.event and vim.v.event.windows or {}
+      local bufwins = vim.fn.win_findbuf(buf)
+      local hit = false
+      for _, rwin in ipairs(resized) do
+        for _, bwin in ipairs(bufwins) do
+          if rwin == bwin then hit = true; break end
+        end
+        if hit then break end
+      end
+      if hit then
+        vim.schedule(function() M._rerender_cached(buf) end)
       end
     end,
   })

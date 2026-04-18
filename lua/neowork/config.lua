@@ -8,6 +8,7 @@ M._defaults = {
   auto_compact = true,
   auto_save = true,
   max_tool_output_lines = 20,
+  schedule_poll_ms = 30000,
   provider = "claude-code",
   model = "",
   index = {

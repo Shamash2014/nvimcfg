@@ -1,7 +1,7 @@
 local M = {}
 M.__index = M
 
-local log = require("djinni.nowork.log")
+local log = require("djinni.log")
 
 local STDERR_IGNORE = {
   "consuming background task",

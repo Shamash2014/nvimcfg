@@ -9,7 +9,24 @@ end
 
 local function tool_start(line)
   if not line then return false end
-  return line:match("^#### %[%*%] ") ~= nil
+  return line:match("^#### %[[^%]]+%] ") ~= nil
+end
+
+local function parse_detail_header(line)
+  if type(line) ~= "string" then return nil end
+  local tag, rest = line:match("^#### %[([^%]]+)%] (.+)$")
+  if not tag then return nil end
+  local title, meta = rest, nil
+  local sep = rest:find(" -- ", 1, true)
+  if sep then
+    title = rest:sub(1, sep - 1)
+    meta = rest:sub(sep + 4)
+  end
+  return {
+    tag = tag,
+    title = title,
+    meta = meta,
+  }
 end
 
 local function build(buf)
@@ -88,6 +105,15 @@ function M.foldtext()
   local lines = vim.api.nvim_buf_get_lines(buf, fs - 1, fs, false)
   local header = lines[1] or ""
   local count = fe - fs
+  local detail = parse_detail_header(header)
+  if detail then
+    local prefix = "▸ " .. detail.tag
+    local body = detail.title or ""
+    if detail.meta and detail.meta ~= "" then
+      body = body .. "  ·  " .. detail.meta
+    end
+    return prefix .. "  " .. body .. "  (" .. count .. " lines)"
+  end
   return header .. "  … " .. count .. " lines"
 end
 

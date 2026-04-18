@@ -1,8 +1,12 @@
 local M = {}
+M._did_setup = M._did_setup or false
 
 function M.setup(opts)
+  if M._did_setup then return end
+  M._did_setup = true
   require("neowork.config").setup(opts)
   require("neowork.highlight").setup()
+  require("neowork.scheduler").setup()
   M._setup_commands()
   M._setup_autocmds()
 end
@@ -149,6 +153,7 @@ function M._setup_autocmds()
   vim.api.nvim_create_autocmd({ "VimLeavePre", "ExitPre" }, {
     group = group,
     callback = function()
+      pcall(require("neowork.scheduler").stop)
       local bridge = package.loaded["neowork.bridge"]
       if not bridge then return end
       for buf, _ in pairs(bridge._sessions or {}) do

@@ -7,7 +7,7 @@ M._max = 100
 function M.add(level, msg)
   local ts = os.date("%H:%M:%S")
   local prefix = ({ [1] = "ERR", [2] = "WRN", [3] = "INF", [4] = "DBG" })[level] or "   "
-  table.insert(M._entries, ts .. " " .. prefix .. " " .. msg:gsub("\n", " "))
+  table.insert(M._entries, ts .. " " .. prefix .. " " .. tostring(msg):gsub("\n", " "))
   if #M._entries > M._max then
     table.remove(M._entries, 1)
   end
@@ -21,7 +21,7 @@ function M.dbg(msg) M.add(4, msg) end
 function M.show()
   local lines = {}
   for i = #M._entries, 1, -1 do
-    table.insert(lines, M._entries[i])
+    lines[#lines + 1] = M._entries[i]
   end
   if #lines == 0 then
     lines = { "  (no events)" }

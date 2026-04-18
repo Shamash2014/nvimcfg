@@ -30,7 +30,7 @@ local function setup_auto_root()
 
       -- Skip Neogit buffers and other git-related special buffers
       -- to prevent unwanted directory changes during git operations
-      if ft:match("^neogit") or ft:match("^git") or ft:match("^fugitive") or ft:match("^Neogit") or ft == "nowork-chat" then
+      if ft:match("^neogit") or ft:match("^git") or ft:match("^fugitive") or ft:match("^Neogit") or vim.b.neowork_chat then
         return
       end
 

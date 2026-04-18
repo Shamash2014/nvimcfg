@@ -59,7 +59,7 @@ end
 
 local function open_chat_in_vsplit(file_path, source_win)
   if not file_path or file_path == "" then return end
-  local chat = require("djinni.nowork.chat")
+  local document = require("neowork.document")
   local existing = vim.fn.bufnr(file_path)
   if existing ~= -1 and vim.api.nvim_buf_is_loaded(existing) then
     open_buf_in_vsplit(existing, source_win)
@@ -68,40 +68,126 @@ local function open_chat_in_vsplit(file_path, source_win)
   local win = normal_win(source_win)
   if win then vim.api.nvim_set_current_win(win) end
   vim.cmd("rightbelow vsplit")
-  chat.open(file_path)
+  document.open(file_path, { split = "edit" })
+end
+
+local function collect_sessions()
+  local bridge = require("neowork.bridge")
+  local document = require("neowork.document")
+  local status_order = {
+    running = 1,
+    awaiting = 2,
+    review = 3,
+    ready = 4,
+    done = 5,
+  }
+  local result = {}
+  local seen = {}
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if not vim.api.nvim_buf_is_valid(buf) or not vim.api.nvim_buf_is_loaded(buf) or not vim.b[buf].neowork_chat then
+      goto continue
+    end
+    local name_full = vim.api.nvim_buf_get_name(buf)
+    if name_full == "" then goto continue end
+
+    local sid = bridge.get_session_id(buf) or ""
+    if sid ~= "" and seen[sid] then goto continue end
+    if sid ~= "" then seen[sid] = true end
+
+    local short = vim.fn.fnamemodify(name_full, ":t:r")
+    if short == "" then short = "[buf " .. buf .. "]" end
+
+    local title = document.read_frontmatter_field(buf, "summary")
+    if not title or title == "" then title = short end
+    local root = document.read_frontmatter_field(buf, "root")
+    local project = root and vim.fn.fnamemodify(root, ":t") or name_full:match("([^/]+)/[^/]+/[^/]+$") or ""
+    local usage = bridge._usage[buf]
+
+    local status = "ready"
+    if bridge.is_streaming(buf) then
+      status = "running"
+    elseif bridge.has_pending_permission(buf) then
+      status = "awaiting"
+    elseif sid ~= "" then
+      status = "review"
+    end
+
+    local cost = ""
+    if usage and usage.cost and usage.cost > 0 then
+      cost = string.format("$%.2f", usage.cost)
+    end
+
+    local context = ""
+    if usage and (usage.context_size or 0) > 0 then
+      context = tostring(math.floor((usage.context_used or 0) / usage.context_size * 100)) .. "%"
+    end
+
+    table.insert(result, {
+      buf = buf,
+      title = title,
+      project = project,
+      status = status,
+      cost = cost,
+      context = context,
+    })
+    ::continue::
+  end
+
+  table.sort(result, function(a, b)
+    local oa = status_order[a.status] or 9
+    local ob = status_order[b.status] or 9
+    if oa ~= ob then return oa < ob end
+    if a.project ~= b.project then return a.project < b.project end
+    return a.title < b.title
+  end)
+
+  return result
 end
 
 function M.pick_task(opts)
   opts = opts or {}
   local projects = require("djinni.integrations.projects")
-  local index = require("djinni.store.index")
-
-  local all = index.get_all()
+  local store = require("neowork.store")
+  local seen = {}
   local items = {}
-  for file_path, entry in pairs(all) do
-    table.insert(items, {
-      text = entry.title or vim.fn.fnamemodify(file_path, ":t:r"),
-      project = entry.project or "",
-      status = entry.status or "unknown",
-      file_path = file_path,
-    })
+
+  local roots = {}
+  local cwd = vim.fn.getcwd()
+  roots[#roots + 1] = cwd
+  for _, root in ipairs(projects.get() or {}) do
+    if root ~= cwd then roots[#roots + 1] = root end
   end
 
-  if opts.context then
-    vim.ui.input({ prompt = "Task: " }, function(prompt)
-      if not prompt or prompt == "" then return end
-      local root = vim.fn.getcwd()
-      require("djinni.nowork.chat").create(root, {
-        prompt = prompt,
-        context_file = opts.context,
-      })
-    end)
+  for _, root in ipairs(roots) do
+    for _, entry in ipairs(store.scan_sessions(root)) do
+      local file_path = entry._filepath
+      if file_path and not seen[file_path] then
+        seen[file_path] = true
+        items[#items + 1] = {
+          text = entry.summary ~= "" and entry.summary or entry._slug or vim.fn.fnamemodify(file_path, ":t:r"),
+          project = entry.project or vim.fn.fnamemodify(root, ":t"),
+          status = entry.status or "unknown",
+          file_path = file_path,
+        }
+      end
+    end
+  end
+
+  table.sort(items, function(a, b)
+    if a.project ~= b.project then return a.project < b.project end
+    return a.text < b.text
+  end)
+
+  if #items == 0 then
+    M.notify("No neowork tasks found", vim.log.levels.INFO)
     return
   end
 
   local status_icons = {
     running = "~",
     done = "+",
+    review = ">",
+    awaiting = "!",
     error = "x",
     pending = "o",
     unknown = "?",
@@ -109,7 +195,7 @@ function M.pick_task(opts)
 
   local source_win = normal_win(vim.api.nvim_get_current_win())
   ui.picker({
-    title = "Nowork Tasks",
+    title = "Neowork Tasks",
     items = items,
     format = function(item)
       local icon = status_icons[item.status] or "?"
@@ -131,10 +217,9 @@ function M.pick_task(opts)
 end
 
 function M.pick_sessions()
-  local panel = require("djinni.nowork.panel")
   local items = {}
 
-  local sessions = panel._collect_sessions()
+  local sessions = collect_sessions()
   for _, s in ipairs(sessions) do
     table.insert(items, {
       text = s.title .. " " .. s.project,
@@ -172,8 +257,14 @@ function M.pick_sessions()
     format = function(item)
       if item.session then
         local s = item.session
-        local icon = s.status == "running" and "●" or s.status == "input" and "⚠" or "◆"
-        local hl = s.status == "running" and "DiagnosticOk" or s.status == "input" and "DiagnosticWarn" or "Comment"
+        local icon = s.status == "running" and "●"
+          or s.status == "awaiting" and "!"
+          or s.status == "review" and "◐"
+          or "◆"
+        local hl = s.status == "running" and "DiagnosticOk"
+          or s.status == "awaiting" and "DiagnosticWarn"
+          or s.status == "review" and "DiagnosticInfo"
+          or "Comment"
         local parts = {{ icon .. " ", hl }, { s.title }}
         if s.project ~= "" then table.insert(parts, { "  (" .. s.project .. ")", "Comment" }) end
         if s.cost ~= "" then table.insert(parts, { "  " .. s.cost, "String" }) end
@@ -189,7 +280,7 @@ function M.pick_sessions()
           pcall(function()
             open_buf_in_vsplit(item.buf, source_win)
             if item.kind == "chat" then
-              local root = require("djinni.nowork.chat").get_project_root(item.buf)
+              local root = require("neowork.document").read_frontmatter_field(item.buf, "root")
               if root and root ~= "" then
                 vim.cmd("lcd " .. vim.fn.fnameescape(root))
               end

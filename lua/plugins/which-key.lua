@@ -10,7 +10,7 @@ return {
       { "<leader>g", group = "Git" },
       { "<leader>d", group = "Debug" },
       { "<leader>gx", group = "Conflict" },
-      { "<leader>o", group = "Nowork" },
+      { "<leader>o", group = "Neowork" },
       { "<leader>ow", group = "Worktrunk" },
       { "<leader>r", group = "run/tasks" },
       { "<leader>t", group = "Tab" },

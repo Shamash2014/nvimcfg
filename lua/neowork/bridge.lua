@@ -9,6 +9,7 @@ local const = require("neowork.const")
 
 local get_document = util.lazy("neowork.document")
 local get_stream = util.lazy("neowork.stream")
+local Session = require("djinni.acp.session")
 
 local function notify_index()
   local ok, index = pcall(require, "neowork.index")
@@ -30,9 +31,52 @@ M._turn_started_at = {}
 M._turn_elapsed_ms = {}
 M._usage = {}
 M._diff_stats = {}
+M._runtime_status = {}
+M._runtime_meta = {}
+M._status_before_awaiting = {}
 M._spinner_chars = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 M._spinner_frame = 0
 M._redraw_timer = nil
+
+local function redraw_status()
+  vim.schedule(function()
+    pcall(vim.cmd.redrawstatus)
+  end)
+end
+
+local function persisted_status_for(status, opts)
+  opts = opts or {}
+  if opts.persisted ~= nil then return opts.persisted end
+  if status == const.session_status.connecting then return const.session_status.ready end
+  if status == const.session_status.submitting then return const.session_status.running end
+  if status == const.session_status.streaming then return const.session_status.running end
+  if status == const.session_status.tool then return const.session_status.running end
+  return status
+end
+
+local function set_runtime_status(buf, status, opts)
+  opts = opts or {}
+  M._runtime_status[buf] = status
+  M._runtime_meta[buf] = opts.meta
+
+  if opts.persist ~= false and vim.api.nvim_buf_is_valid(buf) and vim.b[buf].neowork_chat then
+    local persisted = persisted_status_for(status, opts)
+    if persisted and persisted ~= "" then
+      get_document().set_frontmatter_field(buf, "status", persisted)
+    end
+  end
+
+  notify_index()
+  redraw_status()
+end
+
+local function clear_runtime_status(buf)
+  M._runtime_status[buf] = nil
+  M._runtime_meta[buf] = nil
+  M._status_before_awaiting[buf] = nil
+  notify_index()
+  redraw_status()
+end
 
 local function _redraw_tick()
   if M._redraw_timer then return end
@@ -110,12 +154,22 @@ function M._ensure_client(buf, callback)
 
   local client = Client.new(provider.command, provider.args or {}, root)
   M._clients[buf] = client
+  set_runtime_status(buf, const.session_status.connecting, { persist = false })
 
   client:when_ready(function(ready_err)
     if ready_err then
       M._clients[buf] = nil
+      set_runtime_status(buf, const.session_status.error, {
+        persisted = const.session_status.review,
+        meta = { message = ready_err.message or tostring(ready_err) },
+      })
       callback(ready_err)
       return
+    end
+    if M._sessions[buf] then
+      set_runtime_status(buf, const.session_status.ready)
+    else
+      set_runtime_status(buf, const.session_status.connecting, { persist = false })
     end
     callback(nil, client)
   end)
@@ -170,6 +224,7 @@ function M.create_session(buf, callback)
       M._sessions[buf] = sid
       M._bufs[sid] = buf
       M._stream_gen[buf] = 0
+      Session.attach_client_session(sid, client, provider_name, root, result)
 
       if result.modes then
         M._modes[buf] = {
@@ -178,7 +233,8 @@ function M.create_session(buf, callback)
         }
       end
 
-      doc.set_frontmatter_fields(buf, { session = sid, status = const.session_status.idle })
+      doc.set_frontmatter_fields(buf, { session = sid, status = const.session_status.ready })
+      set_runtime_status(buf, const.session_status.ready)
 
       M._subscribe(buf, sid, client)
       store.ensure_dirs(root)
@@ -211,6 +267,7 @@ function M.resume_session(buf, session_id, callback)
     local function fall_back_to_new()
       local old_sid = M._sessions[buf]
       if old_sid then M._bufs[old_sid] = nil end
+      if old_sid then Session.detach_client_session(old_sid) end
       M._sessions[buf] = nil
       get_document().set_frontmatter_field(buf, "session", "")
       M._sub_handles[buf] = nil
@@ -250,7 +307,9 @@ function M.resume_session(buf, session_id, callback)
           current_id = result.modes.currentModeId,
         }
       end
-      doc.set_frontmatter_field(buf, "status", const.session_status.idle)
+      Session.attach_client_session(session_id, client, provider_name, root, result)
+      doc.set_frontmatter_field(buf, "status", const.session_status.ready)
+      set_runtime_status(buf, const.session_status.ready)
       store.ensure_dirs(root)
       if callback then callback(nil, session_id) end
     end, { timeout = 90000 })
@@ -268,6 +327,7 @@ function M._retry_with_new_session(buf, text)
 
   local old_sid = M._sessions[buf]
   if old_sid then M._bufs[old_sid] = nil end
+  if old_sid then Session.detach_client_session(old_sid) end
   M._sessions[buf] = nil
   M._inflight[buf] = nil
   M._streaming[buf] = false
@@ -285,7 +345,7 @@ end
 function M._subscribe(buf, session_id, client)
   local existing = M._sub_handles[buf]
   if existing then
-    existing.client:unsubscribe(session_id, existing.handle)
+    existing.client:unsubscribe(existing.session_id, existing.handle)
   end
 
   local handle = {
@@ -296,9 +356,11 @@ function M._subscribe(buf, session_id, client)
         M._modes[buf] = M._modes[buf] or {}
         M._modes[buf].available = su.availableModes
         if su.currentModeId then M._modes[buf].current_id = su.currentModeId end
+        redraw_status()
       elseif su.sessionUpdate == const.event.current_mode_update and su.modeId then
         M._modes[buf] = M._modes[buf] or { available = {} }
         M._modes[buf].current_id = su.modeId
+        redraw_status()
       end
       local gen = M._stream_gen[buf]
       vim.schedule(function()
@@ -339,7 +401,9 @@ function M._do_send(buf, session_id, text)
 
   local doc = get_document()
   local root = doc.read_frontmatter_field(buf, "root") or vim.fn.getcwd()
-  doc.set_frontmatter_field(buf, "status", const.session_status.running)
+  set_runtime_status(buf, const.session_status.submitting, {
+    persisted = const.session_status.running,
+  })
 
   store.append_event(session_id, root, { type = "user", content = text })
   notify_index()
@@ -372,7 +436,7 @@ function M._do_send(buf, session_id, text)
 
       if not vim.api.nvim_buf_is_valid(buf) then return end
 
-      local fields = { status = const.session_status.review }
+      local fields = {}
 
       if result and result.tokenUsage then
         local usage = result.tokenUsage
@@ -396,6 +460,15 @@ function M._do_send(buf, session_id, text)
         fields.elapsed = elapsed_ms .. "ms"
       end
 
+      if err then
+        local msg = tostring(err.message or err)
+        if msg:match("Session not found") or (err.code and err.code == -32603) then
+          set_runtime_status(buf, const.session_status.connecting, { persist = false })
+          M._retry_with_new_session(buf, text)
+          return
+        end
+      end
+
       doc.set_frontmatter_fields(buf, fields)
 
       store.append_event(session_id, root, {
@@ -405,10 +478,18 @@ function M._do_send(buf, session_id, text)
       })
 
       if err then
-        local msg = tostring(err.message or err)
-        if msg:match("Session not found") or (err.code and err.code == -32603) then
-          M._retry_with_new_session(buf, text)
-          return
+        set_runtime_status(buf, const.session_status.error, {
+          persisted = const.session_status.review,
+          meta = { message = tostring(err.message or err) },
+        })
+      else
+        local stop_reason = result and result.stopReason or nil
+        if stop_reason == "cancelled" then
+          set_runtime_status(buf, const.session_status.interrupted, {
+            persisted = const.session_status.ready,
+          })
+        else
+          set_runtime_status(buf, const.session_status.ready)
         end
       end
 
@@ -446,6 +527,7 @@ function M.interrupt(buf)
   local sid = M._sessions[buf]
   local client = M._clients[buf]
   if sid and client and client:is_alive() then
+    set_runtime_status(buf, const.session_status.interrupted, { persist = false })
     client:notify("session/cancel", { sessionId = sid })
     notify_index()
   end
@@ -469,6 +551,13 @@ local function remove_permission_ui(buf, perm)
 end
 
 function M._handle_permission(buf, params, respond)
+  M._status_before_awaiting[buf] = M._runtime_status[buf] or const.session_status.submitting
+  set_runtime_status(buf, const.session_status.awaiting, {
+    meta = {
+      title = params.toolCall and params.toolCall.title,
+      kind = params.toolCall and params.toolCall.kind,
+    },
+  })
   local options = {}
   for _, opt in ipairs(params.options or {}) do
     options[#options + 1] = {
@@ -530,6 +619,11 @@ function M.permission_action(buf, action)
       if not idx then return end
       M._pending_permission[buf] = nil
       remove_permission_ui(buf, perm)
+      local next_status = M._status_before_awaiting[buf] or const.session_status.submitting
+      M._status_before_awaiting[buf] = nil
+      set_runtime_status(buf, next_status, {
+        persisted = next_status == const.session_status.awaiting and const.session_status.running or nil,
+      })
       pcall(perm.respond, { outcome = { outcome = "selected", optionId = perm.options[idx].id } })
       notify_index()
     end)
@@ -553,6 +647,11 @@ function M.permission_action(buf, action)
 
   M._pending_permission[buf] = nil
   remove_permission_ui(buf, perm)
+  local next_status = M._status_before_awaiting[buf] or const.session_status.submitting
+  M._status_before_awaiting[buf] = nil
+  set_runtime_status(buf, next_status, {
+    persisted = next_status == const.session_status.awaiting and const.session_status.running or nil,
+  })
   pcall(perm.respond, { outcome = { outcome = "selected", optionId = option_id } })
   notify_index()
 end
@@ -577,6 +676,31 @@ end
 
 function M.is_streaming(buf)
   return M._streaming[buf] == true
+end
+
+function M.get_status(buf)
+  local status = M._runtime_status[buf]
+  if status and status ~= "" then
+    return status, M._runtime_meta[buf]
+  end
+  local ok, document = pcall(require, "neowork.document")
+  if ok and vim.api.nvim_buf_is_valid(buf) then
+    return document.read_frontmatter_field(buf, "status") or const.session_status.idle, nil
+  end
+  return const.session_status.idle, nil
+end
+
+function M.get_status_bucket(buf)
+  local status, meta = M.get_status(buf)
+  if status == const.session_status.awaiting then return const.session_status.awaiting, meta end
+  if status == const.session_status.connecting then return const.session_status.running, meta end
+  if status == const.session_status.submitting then return const.session_status.running, meta end
+  if status == const.session_status.streaming then return const.session_status.running, meta end
+  if status == const.session_status.tool then return const.session_status.running, meta end
+  if status == const.session_status.interrupted then return const.session_status.review, meta end
+  if status == const.session_status.error then return const.session_status.review, meta end
+  if status == const.session_status.idle then return const.session_status.ready, meta end
+  return status, meta
 end
 
 function M.get_session_id(buf)
@@ -629,6 +753,7 @@ function M.set_mode_id(buf, mode_id)
       end
       m.current_id = target.id
       doc.set_frontmatter_field(buf, "mode", target.id)
+      redraw_status()
       vim.notify("neowork: mode " .. (target.name or target.id), vim.log.levels.INFO)
     end)
   end)
@@ -705,7 +830,10 @@ function M.switch_provider(buf)
         client:shutdown(true)
       end)
     end
-    if old_sid then M._bufs[old_sid] = nil end
+    if old_sid then
+      M._bufs[old_sid] = nil
+      Session.detach_client_session(old_sid)
+    end
     M._sessions[buf] = nil
     M._clients[buf] = nil
     M._sub_handles[buf] = nil
@@ -725,28 +853,45 @@ function M.switch_provider(buf)
   end)
 end
 
-function M.detach(buf)
+function M.detach(buf, opts)
+  opts = opts or {}
   local sid = M._sessions[buf]
+  local current_sid = opts.session_id or sid
   local sub = M._sub_handles[buf]
 
-  if sub and sid then
+  local perm = M._pending_permission[buf]
+  if perm then
+    remove_permission_ui(buf, perm)
+    M._pending_permission[buf] = nil
+  end
+
+  if sub and sub.session_id and sub.session_id ~= "" then
+    current_sid = sub.session_id
+  end
+
+  if sub and current_sid then
     pcall(function()
-      sub.client:unsubscribe(sid, sub.handle)
+      sub.client:unsubscribe(current_sid, sub.handle)
     end)
   end
 
   local client = M._clients[buf]
   if client then
     pcall(function()
-      if sid then
-        client:notify("session/cancel", { sessionId = sid })
+      if current_sid and current_sid ~= "" then
+        client:notify("session/cancel", { sessionId = current_sid })
       end
       client:shutdown(true)
     end)
   end
 
-  if sid then
+  if current_sid and current_sid ~= "" then
+    M._bufs[current_sid] = nil
+    Session.detach_client_session(current_sid)
+  end
+  if sid and sid ~= "" and sid ~= current_sid then
     M._bufs[sid] = nil
+    Session.detach_client_session(sid)
   end
 
   M._sessions[buf] = nil
@@ -756,6 +901,12 @@ function M.detach(buf)
   M._sub_handles[buf] = nil
   M._modes[buf] = nil
   M._inflight[buf] = nil
+  M._turn_started_at[buf] = nil
+  M._turn_elapsed_ms[buf] = nil
+  M._usage[buf] = nil
+  M._diff_stats[buf] = nil
+  M._last_user_row[buf] = nil
+  clear_runtime_status(buf)
 end
 
 return M

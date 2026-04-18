@@ -124,8 +124,8 @@ function M.register_autocmds(buf)
     group = group,
     buffer = buf,
     callback = function()
-      local ok, chat = pcall(require, "djinni.nowork.chat")
-      if ok and chat and chat._streaming and chat._streaming[buf] then
+      local ok, bridge = pcall(require, "neowork.bridge")
+      if ok and bridge and bridge.is_streaming and bridge.is_streaming(buf) then
         return
       end
       if debounce_timers[buf] then

@@ -3,6 +3,11 @@ local M = {}
 M.ns = vim.api.nvim_create_namespace("neowork")
 M.ns_roles = vim.api.nvim_create_namespace("neowork_roles")
 
+local function detail_tag(line)
+  if type(line) ~= "string" then return nil end
+  return line:match("^#### %[([^%]]+)%]")
+end
+
 local function hl_fg(name, fallback)
   local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
   if ok and hl and hl.fg then return string.format("#%06x", hl.fg) end
@@ -26,29 +31,47 @@ function M.setup()
   local normal = hl_fg("Normal", "#d0d0d0")
   local cost = hl_fg("String", running)
   local tokens = hl_fg("Number", "#ff9e64")
-  local bg = hl_bg("NormalFloat", hl_bg("Pmenu", hl_bg("Normal", nil)))
+  local base_bg = hl_bg("Normal", "#101418")
+  local bg = hl_bg("NormalFloat", hl_bg("Pmenu", base_bg))
   local cursor_bg = hl_bg("Visual", hl_bg("CursorLine", nil))
   local error = hl_fg("DiagnosticError", "#f7768e")
+  local subtle_bg = hl_bg("CursorLine", bg)
+  local panel_bg = hl_bg("Pmenu", bg)
+  local role_you_bg = subtle_bg or bg
+  local role_djinni_bg = panel_bg or bg
+  local role_system_bg = bg
+  local card_bg = panel_bg or bg
+  local card_tool_bg = hl_bg("DiffText", card_bg)
+  local card_edit_bg = hl_bg("DiffChange", card_bg)
+  local card_session_bg = hl_bg("StatusLine", card_bg)
+  local section_bg = subtle_bg or card_bg
 
   vim.api.nvim_set_hl(0, "NeoworkCompose", { fg = input, bold = true, default = true })
   vim.api.nvim_set_hl(0, "NeoworkYou", { fg = title, bold = true, default = true })
   vim.api.nvim_set_hl(0, "NeoworkDjinni", { fg = running, bold = true, default = true })
   vim.api.nvim_set_hl(0, "NeoworkSystem", { fg = muted, italic = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkWindow", { fg = normal, bg = bg, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkCursorLine", { bg = subtle_bg, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkFolded", { fg = muted, bg = bg, default = true })
 
-  local line_bg_you = hl_bg("CursorLine", bg)
-  local line_bg_djinni = hl_bg("Visual", bg)
-  vim.api.nvim_set_hl(0, "NeoworkYouLine", { bg = line_bg_you, default = true })
-  vim.api.nvim_set_hl(0, "NeoworkDjinniLine", { bg = line_bg_djinni, default = true })
-  vim.api.nvim_set_hl(0, "NeoworkSystemLine", { default = true })
+  vim.api.nvim_set_hl(0, "NeoworkYouLine", { bg = role_you_bg, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkDjinniLine", { bg = role_djinni_bg, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkSystemLine", { bg = role_system_bg, default = true })
   vim.api.nvim_set_hl(0, "NeoworkFrontmatterLine", { bg = bg, default = true })
   vim.api.nvim_set_hl(0, "NeoworkSeparator", { fg = muted, default = true })
   vim.api.nvim_set_hl(0, "NeoworkTool", { fg = input, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkCardTool", { fg = input, bg = card_tool_bg, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkCardEdit", { fg = title, bg = card_edit_bg, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkCardSession", { fg = info, bg = card_session_bg, bold = true, default = true })
   vim.api.nvim_set_hl(0, "NeoworkToolDone", { fg = muted, default = true })
   vim.api.nvim_set_hl(0, "NeoworkPlan", { fg = section, default = true })
   vim.api.nvim_set_hl(0, "NeoworkPlanDone", { fg = running, default = true })
   vim.api.nvim_set_hl(0, "NeoworkPlanPending", { fg = muted, default = true })
   vim.api.nvim_set_hl(0, "NeoworkThinking", { fg = muted, italic = true, default = true })
-  vim.api.nvim_set_hl(0, "NeoworkMeta", { fg = muted, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkMeta", { fg = muted, bg = section_bg, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkSummaryLabel", { fg = title, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkSummaryText", { fg = normal, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkSummaryEmpty", { fg = muted, italic = true, default = true })
   vim.api.nvim_set_hl(0, "NeoworkStatus", { fg = info, default = true })
   vim.api.nvim_set_hl(0, "NeoworkCost", { fg = cost, default = true })
   vim.api.nvim_set_hl(0, "NeoworkTokens", { fg = tokens, default = true })
@@ -65,7 +88,7 @@ function M.setup()
   vim.api.nvim_set_hl(0, "NeoworkDiffRemovedBold", { fg = diff_del_fg, bg = diff_del_bg, bold = true, default = true })
   vim.api.nvim_set_hl(0, "NeoworkDiffHunk", { fg = diff_change_fg, default = true })
   vim.api.nvim_set_hl(0, "NeoworkDiffFile", { fg = muted, italic = true, default = true })
-  vim.api.nvim_set_hl(0, "NeoworkToolBody", { fg = muted, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkToolBody", { fg = muted, bg = card_bg, default = true })
 
   local pill_bg = hl_bg("Pmenu", hl_bg("StatusLine", bg))
   vim.api.nvim_set_hl(0, "NeoworkPill", { fg = normal, bg = pill_bg, default = true })
@@ -226,10 +249,25 @@ function M.apply(buf, start_row, end_row)
           hl_group = ROLE_TEXT_HL[role],
           priority = 100,
         })
-      elseif line and line:match("^#### %[%*%]") then
+      elseif line and line:match("^#### %[[^%]]+%]") then
+        local tag = detail_tag(line)
+        local hl_group = "NeoworkTool"
+        if tag == "tool" then
+          hl_group = "NeoworkCardTool"
+        elseif tag == "edit" then
+          hl_group = "NeoworkCardEdit"
+        elseif tag == "session" then
+          hl_group = "NeoworkCardSession"
+        end
         vim.api.nvim_buf_set_extmark(buf, M.ns, absolute_row, 0, {
           end_col = #line,
-          hl_group = "NeoworkTool",
+          hl_group = hl_group,
+          priority = 100,
+        })
+      elseif line and line:match("^##### ") then
+        vim.api.nvim_buf_set_extmark(buf, M.ns, absolute_row, 0, {
+          end_col = #line,
+          hl_group = "NeoworkMeta",
           priority = 100,
         })
       elseif line and line:match("^>") then

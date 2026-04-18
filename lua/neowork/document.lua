@@ -46,6 +46,17 @@ function M.open(filepath, opts)
   local split = opts.split or "edit"
   vim.cmd(split .. " " .. vim.fn.fnameescape(filepath))
   local buf = vim.api.nvim_get_current_buf()
+
+  local first = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
+  if first ~= "---" and vim.fn.filereadable(filepath) == 1 then
+    vim.cmd("silent! edit!")
+    buf = vim.api.nvim_get_current_buf()
+    first = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
+  end
+  if first ~= "---" then
+    vim.notify("neowork: session file has no frontmatter: " .. filepath, vim.log.levels.WARN)
+  end
+
   M.attach(buf)
   require("neowork.keymaps").setup_document_keymaps(buf)
   M.goto_compose(buf)
@@ -68,13 +79,13 @@ function M.attach(buf)
   if M._attached[buf] then return end
   M._attached[buf] = true
 
+  vim.b[buf].neowork_chat = true
   vim.bo[buf].filetype = "markdown"
   vim.bo[buf].buftype = ""
   vim.bo[buf].modifiable = true
   vim.bo[buf].swapfile = false
   vim.bo[buf].fileencoding = "utf-8"
   vim.bo[buf].textwidth = 120
-  vim.b[buf].neowork_chat = true
   for _, win in ipairs(vim.fn.win_findbuf(buf)) do
     if vim.api.nvim_win_is_valid(win) then
       vim.wo[win].conceallevel = 2
@@ -103,10 +114,11 @@ function M.attach(buf)
     local dir = vim.fn.fnamemodify(filepath, ":h")
     if vim.fn.fnamemodify(dir, ":t") == ".neowork" then
       root = vim.fn.fnamemodify(dir, ":h")
-    else
+  else
       root = vim.fn.getcwd()
     end
   end
+  require("neowork.scheduler").register_root(root)
 
   local win = vim.fn.bufwinid(buf)
   if win ~= -1 then
@@ -118,6 +130,9 @@ function M.attach(buf)
     vim.wo[win].statusline = "%{%v:lua.require'neowork.summary'.statusline()%}"
     vim.wo[win].conceallevel = 2
     vim.wo[win].concealcursor = "nc"
+    vim.wo[win].cursorline = true
+    vim.wo[win].colorcolumn = ""
+    vim.wo[win].winhighlight = "Normal:NeoworkWindow,NormalNC:NeoworkWindow,EndOfBuffer:NeoworkWindow,CursorLine:NeoworkCursorLine,Folded:NeoworkFolded"
   end
 
   M._fm_end_cache[buf] = nil
@@ -167,20 +182,7 @@ function M.attach(buf)
       end)
     end
   end
-  local existing = M.read_frontmatter_field(buf, "session")
-  if existing and existing ~= "" then
-    bridge.resume_session(buf, existing, cb)
-    pcall(function()
-      local events = store.read_transcript(existing, root)
-      local last_plan
-      for _, ev in ipairs(events) do
-        if ev.type == "plan" and ev.entries then last_plan = ev.entries end
-      end
-      if last_plan then require("neowork.plan").on_plan_event(buf, last_plan) end
-    end)
-  else
-    bridge.create_session(buf, cb)
-  end
+  bridge.create_session(buf, cb)
 end
 
 function M.get_fm_end(buf)
@@ -378,7 +380,9 @@ function M.clear(buf, opts)
   local root = M.read_frontmatter_field(buf, "root") or vim.fn.getcwd()
 
   local ok_bridge, bridge = pcall(require, "neowork.bridge")
-  if ok_bridge then pcall(bridge.detach, buf) end
+  if ok_bridge then
+    pcall(bridge.detach, buf, { session_id = sid })
+  end
 
   local ok_stream, stream = pcall(require, "neowork.stream")
   if ok_stream then pcall(stream.reset, buf) end
@@ -403,7 +407,7 @@ function M.clear(buf, opts)
 
   M.set_frontmatter_fields(buf, {
     session = "",
-    status = const.session_status.idle,
+    status = const.session_status.ready,
     tokens = "0",
     cost = "0.00",
   })

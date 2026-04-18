@@ -32,9 +32,15 @@ M.plan_status = {
 
 M.session_status = {
   idle = "idle",
+  connecting = "connecting",
   running = "running",
   ready = "ready",
   awaiting = "awaiting",
+  submitting = "submitting",
+  streaming = "streaming",
+  tool = "tool",
+  interrupted = "interrupted",
+  error = "error",
   review = "review",
 }
 

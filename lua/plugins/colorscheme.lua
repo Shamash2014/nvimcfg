@@ -351,7 +351,7 @@ local function apply()
   hl("RenderMarkdownLink",       { fg = p.md_link, underline = true })
   hl("RenderMarkdownQuote",      { fg = p.comment, italic = true })
 
-  -- Djinni (chat buffers / nowork panel)
+  -- Djinni / Neowork
   hl("DjinniYou",    { fg = p.white, bold = true })
   hl("DjinniAI",     { fg = p.bright, bold = true })
   hl("DjinniSystem", { fg = p.muted, bold = true })
