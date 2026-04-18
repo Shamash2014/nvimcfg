@@ -25,7 +25,7 @@ end
 
 function M.create(root, opts)
   opts = opts or {}
-  local slug = opts.slug or ("session-" .. os.date("!%Y%m%dT%H%M%S"))
+  local slug = opts.slug or util.unique_slug(root, "session-" .. os.date("!%Y%m%dT%H%M%S"))
   local meta = {
     project = opts.project or vim.fn.fnamemodify(root, ":t"),
     root = root,
@@ -119,6 +119,7 @@ function M.attach(buf)
     end
   end
   require("neowork.scheduler").register_root(root)
+  pcall(function() require("neowork.bridge").seed_mode_from_frontmatter(buf) end)
 
   local win = vim.fn.bufwinid(buf)
   if win ~= -1 then
@@ -173,6 +174,8 @@ function M.attach(buf)
       end))
     end,
   })
+
+  pcall(M.set_frontmatter_field, buf, "session", "")
 
   local bridge = require("neowork.bridge")
   local cb = function(err)

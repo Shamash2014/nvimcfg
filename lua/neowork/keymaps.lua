@@ -29,13 +29,14 @@ function M.setup_document_keymaps(buf)
     fork = function() document.fork_at_cursor(buf) end,
     new = function(args)
       local root = document.read_frontmatter_field(buf, "root") or vim.fn.getcwd()
-      local function go(name)
-        local fp = require("neowork.util").new_session(root, name)
+      require("neowork.util").new_session_interactive(root, {
+        name = args,
+        prompt = "New session name: ",
+      }, function(fp)
         if fp then document.open(fp, { split = "edit" }) end
-      end
-      if args and args ~= "" then go(args)
-      else vim.ui.input({ prompt = "New session name: " }, function(n) if n and n ~= "" then go(n) end end) end
+      end)
     end,
+    restart = function() require("neowork.bridge").restart(buf) end,
     help = function() require("neowork.commands").open_help() end,
     ["?"] = function() require("neowork.commands").open_help() end,
   }
@@ -172,6 +173,7 @@ function M.setup_document_keymaps(buf)
   map("n", "<S-Tab>", function() vim.cmd("NwMode") end, "cycle mode")
   map("n", "gM", function() vim.cmd("NwModel") end, "pick model")
   map("n", "gP", function() vim.cmd("NwProvider") end, "pick provider")
+  map("n", "gR", function() vim.cmd("NwRestart") end, "restart session")
 
   map("n", "q", function()
     vim.api.nvim_win_close(0, false)

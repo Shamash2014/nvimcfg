@@ -2,8 +2,37 @@ local M = {}
 
 local const = require("neowork.const")
 
+local function pick_provider(provider_name, callback)
+  if provider_name and provider_name ~= "" then
+    callback(provider_name)
+    return
+  end
+
+  local Provider = require("djinni.acp.provider")
+  local names = Provider.list()
+  if #names <= 1 then
+    callback(names[1] or nil)
+    return
+  end
+
+  vim.ui.select(names, { prompt = "Provider:" }, function(choice)
+    callback(choice)
+  end)
+end
+
 function M.slug(name)
   return (name:gsub("%s+", "-"):gsub("[^%w%-_]", ""):lower())
+end
+
+function M.unique_slug(root, base)
+  local dir = root .. "/.neowork"
+  local candidate = base
+  local i = 1
+  while vim.fn.filereadable(dir .. "/" .. candidate .. ".md") == 1 do
+    candidate = base .. "-" .. string.format("%02d", i)
+    i = i + 1
+  end
+  return candidate
 end
 
 function M.is_role_line(line)
@@ -47,14 +76,44 @@ function M.jump_to_marker(buf, dir)
   end
 end
 
-function M.new_session(root, name)
+function M.new_session(root, name, opts)
+  opts = opts or {}
   if not name or name == "" then return nil end
-  local slug = M.slug(name)
+  local slug = M.unique_slug(root, M.slug(name))
   local filepath = require("neowork.store").write_session_file(root, slug, {
     project = vim.fn.fnamemodify(root, ":t"),
     root = root,
+    provider = opts.provider,
   })
   return filepath
+end
+
+function M.new_session_interactive(root, opts, callback)
+  opts = opts or {}
+  local function create(name)
+    if not name or name == "" then
+      if callback then callback(nil) end
+      return
+    end
+    pick_provider(opts.provider, function(provider)
+      if not provider then
+        if callback then callback(nil) end
+        return
+      end
+      local filepath = M.new_session(root, name, { provider = provider })
+      if callback then callback(filepath, provider, name) end
+    end)
+  end
+
+  local name = vim.trim(opts.name or "")
+  if name ~= "" then
+    create(name)
+    return
+  end
+
+  vim.ui.input({ prompt = opts.prompt or "Session name: " }, function(input)
+    create(vim.trim(input or ""))
+  end)
 end
 
 return M

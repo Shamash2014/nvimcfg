@@ -707,26 +707,29 @@ local function session_buf(s)
   return nil
 end
 
+local function teardown_session(s)
+  local sb = session_buf(s)
+  if not sb then return end
+  local bridge = require_bridge()
+  if bridge and bridge.detach then pcall(bridge.detach, sb) end
+  pcall(vim.api.nvim_buf_delete, sb, { force = true })
+end
+
 local function do_new_session(buf, name, split)
   split = split or "vsplit"
   pick_project(M._roots[buf], function(target)
-    local function create(session_name)
-      vim.schedule(function()
-        local filepath = require("neowork.util").new_session(target, session_name)
+    vim.schedule(function()
+      require("neowork.util").new_session_interactive(target, {
+        name = name,
+        prompt = "Session name (" .. vim.fn.fnamemodify(target, ":t") .. "): ",
+      }, function(filepath)
         if filepath then
           require("neowork.document").open(filepath, { split = split })
         else
           vim.notify("neowork: failed to create session file", vim.log.levels.ERROR)
         end
       end)
-    end
-    if name and name ~= "" then
-      create(name)
-    else
-      vim.ui.input({ prompt = "Session name (" .. vim.fn.fnamemodify(target, ":t") .. "): " }, function(n)
-        if n and n ~= "" then create(n) end
-      end)
-    end
+    end)
   end)
 end
 
@@ -746,6 +749,7 @@ local function do_delete(buf, force)
   if not force then
     if vim.fn.confirm("Delete " .. s._slug .. "?", "&Yes\n&No", 2) ~= 1 then return end
   end
+  teardown_session(s)
   require("neowork.store").delete_session(s._project_root or s.root, s._slug)
   M._last_refresh[buf] = nil; M.refresh(buf)
 end
@@ -954,6 +958,7 @@ function M._setup_buffer(buf)
     if targets and #targets > 0 then
       if not a.bang and vim.fn.confirm("Delete " .. #targets .. " sessions?", "&Yes\n&No", 2) ~= 1 then return end
       for _, s in ipairs(targets) do
+        teardown_session(s)
         require("neowork.store").delete_session(s._project_root or s.root, s._slug)
       end
       M._last_refresh[buf] = nil; M.refresh(buf)

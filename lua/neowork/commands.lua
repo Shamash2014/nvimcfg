@@ -57,6 +57,7 @@ M.open_help = function()
     ":NwModel              Pick model (vim.ui.select)           [gM]",
     ":NwProvider           Switch provider                      [gP]",
     ":NwNew [name]         New session",
+    ":NwRestart           Kill client process and start fresh session  [gR, /restart]",
     ":NwInterrupt          Interrupt current turn",
     ":NwFork               Fork conversation at cursor",
     ":NwCompact            Compact old turns",
@@ -110,6 +111,20 @@ function M.setup(buf)
 
   cmd("NwSend", function(a) send(buf, a.args) end, { nargs = "*" })
 
+  cmd("NwSendFresh", function(a)
+    local document = require("neowork.document")
+    local bridge = require("neowork.bridge")
+    local text = a.args and vim.trim(a.args) or ""
+    if text == "" then
+      document.ensure_composer(buf)
+      text = document.get_compose_text(buf)
+    end
+    document.insert_turn(buf, "You", text)
+    bridge.send_fresh(buf, text)
+  end, { nargs = "*" })
+
+  cmd("NwRestart", function() require("neowork.bridge").restart(buf) end, {})
+
   cmd("NwClear", function(a)
     require("neowork.document").clear(buf, { purge_transcript = a.bang })
     vim.notify("neowork: cleared" .. (a.bang and " (+transcript)" or ""), vim.log.levels.INFO)
@@ -141,18 +156,12 @@ function M.setup(buf)
   cmd("NwNew", function(a)
     local document = require("neowork.document")
     local root = document.read_frontmatter_field(buf, "root") or vim.fn.getcwd()
-    local name = vim.trim(a.args or "")
-    local function open_with(n)
-      local filepath = require("neowork.util").new_session(root, n)
+    require("neowork.util").new_session_interactive(root, {
+      name = a.args,
+      prompt = "New session name: ",
+    }, function(filepath)
       if filepath then document.open(filepath, { split = "edit" }) end
-    end
-    if name ~= "" then
-      open_with(name)
-    else
-      vim.ui.input({ prompt = "New session name: " }, function(n)
-        if n and n ~= "" then open_with(n) end
-      end)
-    end
+    end)
   end, { nargs = "?" })
 
   cmd("NwInterrupt", function() require("neowork.bridge").interrupt(buf) end, {})

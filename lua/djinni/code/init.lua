@@ -37,23 +37,27 @@ local function open_or_create_session(project_root, opts)
   local document = require("neowork.document")
   local bridge = require("neowork.bridge")
 
-  local filepath = util.new_session(project_root, default_session_name(opts.prompt, opts.title))
-  if not filepath then
-    vim.notify("Failed to create neowork session", vim.log.levels.ERROR)
-    return nil
-  end
+  util.new_session_interactive(project_root, {
+    name = default_session_name(opts.prompt, opts.title),
+    provider = opts.provider,
+  }, function(filepath)
+    if not filepath then
+      vim.notify("Failed to create neowork session", vim.log.levels.ERROR)
+      return nil
+    end
 
-  local split = opts.split == false and "edit" or "vsplit"
-  local buf = document.open(filepath, { split = split })
+    local split = opts.split == false and "edit" or "vsplit"
+    local buf = document.open(filepath, { split = split })
 
-  if opts.no_send then
-    set_compose_text(buf, opts.prompt or "")
-  elseif opts.prompt and opts.prompt ~= "" then
-    document.insert_turn(buf, "You", opts.prompt)
-    bridge.send(buf, opts.prompt)
-  end
+    if opts.no_send then
+      set_compose_text(buf, opts.prompt or "")
+    elseif opts.prompt and opts.prompt ~= "" then
+      document.insert_turn(buf, "You", opts.prompt)
+      bridge.send(buf, opts.prompt)
+    end
 
-  return buf, filepath
+    return buf, filepath
+  end)
 end
 
 local function find_neowork_buf()
@@ -105,21 +109,13 @@ end
 function M.create_with_selection()
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
 
-  local name = vim.api.nvim_buf_get_name(0)
-  local rel_path = vim.fn.fnamemodify(name, ":.")
-  local project_root = utils.get_project_root() or vim.fn.getcwd()
-
-  local start_line = vim.fn.line("'<")
-  local end_line = vim.fn.line("'>")
-
-  vim.ui.input({ prompt = "Task: " }, function(prompt)
-    if not prompt or prompt == "" then return end
-    open_or_create_session(project_root, {
-      prompt = "Use `" .. rel_path .. ":" .. start_line .. "-" .. end_line .. "` as context.\n\n" .. prompt,
-      split = true,
-      title = vim.fn.fnamemodify(rel_path, ":t:r"),
-    })
-  end)
+  local s = vim.fn.line("'<")
+  local e = vim.fn.line("'>")
+  if s == 0 or e == 0 then
+    vim.notify("No visual selection", vim.log.levels.WARN)
+    return
+  end
+  M._create_task_with_name(s, e)
 end
 
 function M._create_task(s, e)

@@ -18,6 +18,47 @@ local function notify_index()
   end
 end
 
+local function classify_error(msg, code)
+  msg = tostring(msg or "")
+  local lower = msg:lower()
+  if lower:match("unauthor") or lower:match("authenticat") or lower:match("invalid api key")
+    or lower:match("not logged in") or lower:match("login required") or code == 401 then
+    return { kind = "auth", label = "Authentication required", message = msg }
+  end
+  if lower:match("rate limit") or lower:match("429") or lower:match("too many requests") then
+    return { kind = "rate_limit", label = "Rate limit", message = msg }
+  end
+  if lower:match("quota") or lower:match("usage limit") or lower:match("5%-hour")
+    or lower:match("5 hour limit") or lower:match("insufficient credit") or lower:match("billing") then
+    return { kind = "quota", label = "Usage limit reached", message = msg }
+  end
+  if lower:match("context.*exceed") or lower:match("maximum context") or lower:match("too many tokens")
+    or lower:match("token limit") or lower:match("context window") then
+    return { kind = "context_limit", label = "Context limit", message = msg }
+  end
+  if lower:match("session not found") or code == -32603 then
+    return { kind = "session", label = "Session expired", message = msg }
+  end
+  return { kind = "error", label = "Error", message = msg }
+end
+
+local function report_error(buf, err, client)
+  local raw = err and (err.message or tostring(err)) or "unknown error"
+  local hint = client and client.get_error_hint and client:get_error_hint() or nil
+  local classified = classify_error(raw, err and err.code)
+  if hint and classified.kind == "error" then
+    classified = classify_error(hint)
+  end
+  local full = classified.label .. ": " .. (classified.message or raw)
+  if hint and not full:find(hint, 1, true) then
+    full = full .. " | " .. hint
+  end
+  if classified.kind == "auth" or classified.kind == "rate_limit" or classified.kind == "quota" or classified.kind == "context_limit" then
+    vim.notify("neowork: " .. full, vim.log.levels.ERROR)
+  end
+  return classified, full
+end
+
 M._sessions = {}
 M._bufs = {}
 M._clients = {}
@@ -159,9 +200,10 @@ function M._ensure_client(buf, callback)
   client:when_ready(function(ready_err)
     if ready_err then
       M._clients[buf] = nil
+      local classified, full = report_error(buf, ready_err, client)
       set_runtime_status(buf, const.session_status.error, {
         persisted = const.session_status.review,
-        meta = { message = ready_err.message or tostring(ready_err) },
+        meta = { message = full, kind = classified.kind },
       })
       callback(ready_err)
       return
@@ -176,17 +218,13 @@ function M._ensure_client(buf, callback)
 end
 
 function M.create_session(buf, callback)
-  if M._sessions[buf] then
-    local sid = M._sessions[buf]
-    if callback then
-      vim.schedule(function() callback(nil, sid) end)
-    end
-    return
-  end
-
   if M._inflight[buf] then
     if callback then table.insert(M._inflight[buf], callback) end
     return
+  end
+
+  if M._sessions[buf] then
+    M.reset_session(buf)
   end
 
   M._inflight[buf] = callback and { callback } or {}
@@ -318,6 +356,31 @@ end
 
 M._last_user_row = M._last_user_row or {}
 
+function M.reset_session(buf)
+  local old_sid = M._sessions[buf]
+  if old_sid then
+    M._bufs[old_sid] = nil
+    Session.detach_client_session(old_sid)
+  end
+  M._sessions[buf] = nil
+  M._inflight[buf] = nil
+  M._streaming[buf] = false
+  M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
+end
+
+function M.restart(buf)
+  M.detach(buf)
+  M.create_session(buf, function(err)
+    vim.schedule(function()
+      if err then
+        vim.notify("neowork: restart failed: " .. tostring(err.message or err), vim.log.levels.ERROR)
+        return
+      end
+      vim.notify("neowork: session restarted", vim.log.levels.INFO)
+    end)
+  end)
+end
+
 function M._retry_with_new_session(buf, text)
   local doc = get_document()
   local you_row = M._last_user_row[buf]
@@ -325,13 +388,7 @@ function M._retry_with_new_session(buf, text)
     pcall(doc.truncate_after_user_row, buf, you_row)
   end
 
-  local old_sid = M._sessions[buf]
-  if old_sid then M._bufs[old_sid] = nil end
-  if old_sid then Session.detach_client_session(old_sid) end
-  M._sessions[buf] = nil
-  M._inflight[buf] = nil
-  M._streaming[buf] = false
-  M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
+  M.reset_session(buf)
 
   M.create_session(buf, function(err, new_sid)
     if err then
@@ -389,6 +446,11 @@ function M.send(buf, text)
     return
   end
   M._do_send(buf, sid, text)
+end
+
+function M.send_fresh(buf, text)
+  M.reset_session(buf)
+  M.send(buf, text)
 end
 
 function M._do_send(buf, session_id, text)
@@ -478,9 +540,10 @@ function M._do_send(buf, session_id, text)
       })
 
       if err then
+        local classified, full = report_error(buf, err, M._clients[buf])
         set_runtime_status(buf, const.session_status.error, {
           persisted = const.session_status.review,
-          meta = { message = tostring(err.message or err) },
+          meta = { message = full, kind = classified.kind },
         })
       else
         local stop_reason = result and result.stopReason or nil
@@ -718,6 +781,17 @@ function M.get_mode(buf)
     if mode.id == m.current_id then return mode end
   end
   return { id = m.current_id, name = m.current_id }
+end
+
+function M.seed_mode_from_frontmatter(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  local fm_mode = get_document().read_frontmatter_field(buf, "mode")
+  if not fm_mode or fm_mode == "" then return end
+  M._modes[buf] = M._modes[buf] or { available = {} }
+  if not M._modes[buf].current_id then
+    M._modes[buf].current_id = fm_mode
+    redraw_status()
+  end
 end
 
 function M.set_mode_id(buf, mode_id)

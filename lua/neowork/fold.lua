@@ -71,6 +71,9 @@ local function build(buf)
           for k = start_l + 1, end_l do
             levels[k] = "2"
           end
+          if levels[end_l + 1] == "=" then
+            levels[end_l + 1] = "1"
+          end
         end
         i = j
       else

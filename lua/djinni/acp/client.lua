@@ -62,6 +62,14 @@ function M:_spawn()
           end
           if line:match("EMFILE") or line:match("too many open files") then
             self._stderr_hint = "Claude settings watcher hit EMFILE while creating the session"
+          elseif line:match("[Rr]ate limit") or line:match("429") then
+            self._stderr_hint = "Provider rate limit: " .. line
+          elseif line:match("[Qq]uota") or line:match("usage limit") or line:match("5%-hour limit") or line:match("5 hour limit") then
+            self._stderr_hint = "Provider usage limit reached: " .. line
+          elseif line:match("[Uu]nauthorized") or line:match("[Aa]uthentication") or line:match("401") or line:match("[Ii]nvalid API key") or line:match("[Nn]ot logged in") then
+            self._stderr_hint = "Authentication issue: " .. line
+          elseif line:match("[Cc]ontext.*exceed") or line:match("[Tt]oo many tokens") or line:match("maximum context") then
+            self._stderr_hint = "Context limit reached: " .. line
           end
           local ignore = false
           for _, pat in ipairs(STDERR_IGNORE) do
@@ -147,7 +155,9 @@ function M:_initialize()
       end
       self:_authenticate(function(auth_err)
         if auth_err then
-          log.warn("authenticate failed (non-blocking): " .. (auth_err.message or tostring(auth_err)))
+          local msg = auth_err.message or tostring(auth_err)
+          log.warn("authenticate failed (non-blocking): " .. msg)
+          self._stderr_hint = "Authentication failed: " .. msg
         end
         self:_mark_ready()
       end)
@@ -385,7 +395,10 @@ function M:_drain_all()
 end
 
 function M:_route_message(msg)
-  if msg.id and self.pending_requests[msg.id] then
+  local is_response = msg.id ~= nil and msg.method == nil
+    and (msg.result ~= nil or msg.error ~= nil)
+
+  if is_response and self.pending_requests[msg.id] then
     local cb = self.pending_requests[msg.id]
     self.pending_requests[msg.id] = nil
     if msg.error then
@@ -393,6 +406,8 @@ function M:_route_message(msg)
     else
       cb(nil, msg.result)
     end
+  elseif is_response then
+    log.warn("response with no pending request, id=" .. tostring(msg.id))
   elseif msg.method and msg.id then
     local respond = function(result)
       if not self:is_alive() then error("client is not alive") end
