@@ -367,7 +367,7 @@ return {
   lazy = false,
   priority = 1000,
   config = function()
-    vim.o.background = "light"
+    vim.o.background = "dark"
     apply()
     vim.api.nvim_create_autocmd("ColorScheme", {
       callback = apply,

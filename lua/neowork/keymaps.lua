@@ -1,9 +1,20 @@
 local M = {}
 
 M._keymaps_set = M._keymaps_set or {}
+M._complete_fns = M._complete_fns or {}
+
+function M._complete(findstart, base)
+  local buf = vim.api.nvim_get_current_buf()
+  local fn = M._complete_fns[buf]
+  if type(fn) ~= "function" then
+    return findstart == 1 and -3 or {}
+  end
+  return fn(findstart, base)
+end
 
 function M.detach(buf)
   M._keymaps_set[buf] = nil
+  M._complete_fns[buf] = nil
 end
 
 
@@ -41,6 +52,59 @@ function M.setup_document_keymaps(buf)
     ["?"] = function() require("neowork.commands").open_help() end,
   }
 
+  local function agent_commands()
+    local ok, stream = pcall(require, "neowork.stream")
+    if not ok then return {} end
+    return stream.get_available_commands(buf) or {}
+  end
+
+  local function slash_completion(findstart, base)
+    if findstart == 1 then
+      local line = vim.api.nvim_get_current_line()
+      local col = vim.api.nvim_win_get_cursor(0)[2]
+      local prefix = line:sub(1, col)
+      local slash = prefix:find("/[%w%?%-_]*$")
+      if not slash then return -3 end
+      return slash - 1
+    end
+    local needle = base:gsub("^/", ""):lower()
+    local items = {}
+    local seen = {}
+    for name, _ in pairs(local_slash) do
+      if name:lower():find(needle, 1, true) then
+        items[#items + 1] = { word = "/" .. name, menu = "local", abbr = "/" .. name }
+        seen[name] = true
+      end
+    end
+    for _, c in ipairs(agent_commands()) do
+      if not seen[c.name] and c.name:lower():find(needle, 1, true) then
+        items[#items + 1] = {
+          word = "/" .. c.name,
+          abbr = "/" .. c.name,
+          menu = "agent",
+          info = c.description or "",
+        }
+      end
+    end
+    table.sort(items, function(a, b) return a.word < b.word end)
+    return items
+  end
+
+  M._complete_fns[buf] = slash_completion
+  _G.__neowork_slash_complete = function(findstart, base)
+    return M._complete(findstart, base)
+  end
+  vim.bo[buf].completefunc = "v:lua.__neowork_slash_complete"
+
+  vim.keymap.set("i", "/", function()
+    local line = vim.api.nvim_get_current_line()
+    local col = vim.api.nvim_win_get_cursor(0)[2]
+    if col == 0 or line:sub(1, col):match("^%s*$") then
+      return "/" .. vim.api.nvim_replace_termcodes("<C-x><C-u>", true, false, true)
+    end
+    return "/"
+  end, { buffer = buf, expr = true, desc = "neowork: slash completion" })
+
   local function do_send()
     document.ensure_composer(buf)
     local text = document.get_compose_text(buf)
@@ -59,8 +123,7 @@ function M.setup_document_keymaps(buf)
       return
     end
 
-    document.clear_compose(buf)
-    document.insert_turn(buf, "You", text)
+    document.commit_compose(buf)
     require("neowork.bridge").send(buf, text)
   end
 
@@ -69,7 +132,21 @@ function M.setup_document_keymaps(buf)
     vim.schedule(do_send)
   end
 
-  map("n", "<CR>", do_send, "send")
+  map("n", "<CR>", function()
+    local row = vim.api.nvim_win_get_cursor(0)[1]
+    local ok, tool_row = pcall(require, "neowork.tool_row")
+    if ok and tool_row.is_tool_row(buf, row - 1) then
+      tool_row.preview_at_cursor(buf)
+      return
+    end
+    do_send()
+  end, "send / preview tool")
+
+  map("n", "K", function()
+    local ok, tool_row = pcall(require, "neowork.tool_row")
+    if ok and tool_row.preview_at_cursor(buf) then return end
+    vim.api.nvim_feedkeys("K", "n", false)
+  end, "preview tool output")
 
   local util = require("neowork.util")
   map("n", "]]", function() util.jump_to_marker(buf, 1) end, "next turn")
@@ -118,30 +195,18 @@ function M.setup_document_keymaps(buf)
     return row >= compose
   end
 
-  local function smart_insert(cmd)
-    return function()
-      if in_compose_area() then
-        vim.cmd(cmd)
-      else
-        document.ensure_composer(buf)
-        document.goto_compose(buf)
-        vim.cmd(cmd == "startinsert!" and "startinsert!" or "startinsert")
-      end
-    end
-  end
-
-  map("n", "i", smart_insert("startinsert"), "insert")
-  map("n", "a", smart_insert("startinsert!"), "append")
   map("n", "o", function()
     if in_compose_area() then
       vim.cmd("normal! o")
       vim.cmd("startinsert")
     else
       document.ensure_composer(buf)
-      document.goto_compose(buf)
+      local last = vim.api.nvim_buf_line_count(buf)
+      vim.api.nvim_win_set_cursor(0, { last, 0 })
+      vim.cmd("normal! o")
       vim.cmd("startinsert")
     end
-  end, "open line")
+  end, "open line (join compose if outside)")
 
   map("n", "G", function()
     local last = vim.api.nvim_buf_line_count(buf)
@@ -149,12 +214,15 @@ function M.setup_document_keymaps(buf)
     require("neowork.stream")._auto_scroll[buf] = true
   end, "go to end")
 
-  map("n", "<C-c>", function() vim.cmd("NwInterrupt") end, "interrupt")
+  local function interrupt() require("neowork.bridge").interrupt(buf) end
+  map("n", "<C-c>", interrupt, "interrupt")
+  map("i", "<C-c>", function() vim.cmd("stopinsert"); interrupt() end, "interrupt")
 
   vim.keymap.set("n", "r", function()
+    local ast = require("neowork.ast")
     local row = vim.api.nvim_win_get_cursor(0)[1]
     local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
-    if line:match("^@You") or line:match("^@Djinni") then
+    if ast.role_of_line(line) == "You" or ast.role_of_line(line) == "Djinni" then
       document.fork_at_cursor(buf)
     else
       vim.api.nvim_feedkeys("r", "n", false)

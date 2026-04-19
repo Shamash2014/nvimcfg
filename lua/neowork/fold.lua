@@ -1,15 +1,16 @@
 local M = {}
 
 M._cache = {}
+M._autofolded = {}
+
+local ast = require("neowork.ast")
 
 local function role_start(line)
-  if not line then return false end
-  return line:match("^@You") or line:match("^@Djinni") or line:match("^@System")
+  return ast.role_of_line(line) ~= nil
 end
 
 local function tool_start(line)
-  if not line then return false end
-  return line:match("^#### %[[^%]]+%] ") ~= nil
+  return ast.tool_id_of_line(line) ~= nil
 end
 
 local function parse_detail_header(line)
@@ -62,7 +63,8 @@ local function build(buf)
       if tool_start(lines[i]) then
         local start_l = i
         local j = i + 1
-        while j <= total and not tool_start(lines[j]) and not role_start(lines[j]) do
+        while j <= total do
+          if not ast.is_blockquote(lines[j]) then break end
           j = j + 1
         end
         local end_l = j - 1
@@ -130,10 +132,31 @@ function M.attach_window(buf)
       vim.wo[win].foldlevel = 1
     end
   end
+
+  if not M._autofolded[buf] then
+    local document = require("neowork.document")
+    local config = require("neowork.config")
+    local cfg = config.get("folds") or {}
+    local fm_end = document.get_fm_end and document.get_fm_end(buf) or 0
+    if fm_end > 0 and cfg.frontmatter ~= false then
+      M._autofolded[buf] = true
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+          if vim.api.nvim_win_is_valid(win) then
+            pcall(vim.api.nvim_win_call, win, function()
+              vim.cmd("silent! 1foldclose")
+            end)
+          end
+        end
+      end)
+    end
+  end
 end
 
 function M.detach(buf)
   M._cache[buf] = nil
+  M._autofolded[buf] = nil
 end
 
 function M.invalidate(buf)

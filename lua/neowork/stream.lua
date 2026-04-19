@@ -21,6 +21,7 @@ M._summary_last = {}
 M._agent_text = {}
 M._turn_start_row = {}
 M._status_redraw_pending = {}
+M._available_commands = {}
 
 M.detach = function(buf) M.reset(buf) end
 
@@ -37,6 +38,12 @@ function M.reset(buf)
   M._agent_text[buf] = nil
   M._turn_start_row[buf] = nil
   M._status_redraw_pending[buf] = nil
+  M._available_commands[buf] = nil
+  pcall(function() require("neowork.tool_row").detach(buf) end)
+end
+
+function M.get_available_commands(buf)
+  return M._available_commands[buf] or {}
 end
 
 function M._stream_chunk_lines(tail, text)
@@ -84,6 +91,7 @@ function M._apply_chunk(buf, text)
 
   require("neowork.writequeue").flush(buf)
 
+  local ast = require("neowork.ast")
   local row = M._tail_row[buf]
   local tail = M._tail_text[buf]
 
@@ -94,20 +102,10 @@ function M._apply_chunk(buf, text)
     if current ~= tail then resync = true end
   end
   if resync then
-    local doc = get_document()
-    local inner = doc.find_djinni_tail(buf)
-    if inner then
-      row = inner
-      tail = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
-    else
-      local compose = doc.find_compose_line(buf)
-      if compose then
-        row = compose - 1
-        tail = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
-      else
-        row, tail = M._sync_tail(buf)
-      end
-    end
+    local insert_row = ast.insertion_row_for_streaming(buf)
+    if not insert_row then return end
+    row = insert_row
+    tail = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
     M._tail_row[buf] = row
     M._tail_text[buf] = tail
   end
@@ -144,9 +142,12 @@ function M._update_summary(buf)
 end
 
 local function normalize_summary(text)
-  local value = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  local value = tostring(text or ""):gsub("[\r\n\t]+", " "):gsub("%s+", " ")
+  value = vim.trim(value)
   if value == "" then return nil end
-  if #value > 80 then value = value:sub(1, 79) .. "…" end
+  if vim.fn.strchars(value) > 80 then
+    value = vim.fn.strcharpart(value, 0, 79) .. "…"
+  end
   return value
 end
 
@@ -201,14 +202,15 @@ local function collapse_detail_fold(buf, header_lnum)
   if not vim.api.nvim_buf_is_valid(buf) then return end
   local wins = vim.fn.win_findbuf(buf)
   if #wins == 0 then return end
+  local ast = require("neowork.ast")
   local parent_lnum
   for lnum = math.max(1, header_lnum - 1), 1, -1 do
     local line = vim.api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)[1] or ""
-    if line:match("^@Djinni") then
+    if ast.role_of_line(line) == "Djinni" then
       parent_lnum = lnum
       break
     end
-    if line:match("^@You") or line:match("^@System") then
+    if ast.role_of_line(line) == "You" or ast.role_of_line(line) == "System" then
       break
     end
   end
@@ -227,13 +229,8 @@ local function collapse_detail_fold(buf, header_lnum)
   end
 
   local ok_doc, doc = pcall(require, "neowork.document")
-  if ok_doc and doc then
-    if doc.compute_folds then
-      pcall(doc.compute_folds, buf)
-    end
-    if doc.schedule_refold then
-      pcall(doc.schedule_refold, buf)
-    end
+  if ok_doc and doc and doc.schedule_refold then
+    pcall(doc.schedule_refold, buf)
   end
 
   vim.schedule(function()
@@ -417,9 +414,9 @@ function M.on_event(buf, su, gen)
       set_runtime_status(buf, const.session_status.streaming, nil)
       M._pending[buf] = M._pending[buf] or {}
       M._pending[buf][#M._pending[buf] + 1] = text
-      M._summary_text[buf] = (M._summary_text[buf] or "") .. text
       M._agent_text[buf] = M._agent_text[buf] or {}
       M._agent_text[buf][#M._agent_text[buf] + 1] = text
+      M._summary_text[buf] = (M._summary_text[buf] or "") .. text
     end
 
   elseif t == const.event.agent_thought_chunk then
@@ -440,177 +437,24 @@ function M.on_event(buf, su, gen)
     local is_initial = t == const.event.tool_call
     local status = su.status
     local terminal = status == const.plan_status.completed or status == const.plan_status.failed or status == "error"
-
-    M._tool_diff_seen[buf] = M._tool_diff_seen[buf] or {}
-    local seen = M._tool_diff_seen[buf]
     local tcid = su.toolCallId or su.id
 
-    local body_lines = {}
-    local text_sections = {}
-
-    local max_body = config.get("max_tool_output_lines") or 20
-
-    local function push_capped(text)
-      local count = 0
-      local truncated = 0
-      local body = {}
-      for line in tostring(text):gmatch("([^\n]*)\n?") do
-        if line ~= "" then
-          if count < max_body then
-            body[#body + 1] = line
-            count = count + 1
-          else
-            truncated = truncated + 1
+    if tcid then
+      local ok, tool_row = pcall(require, "neowork.tool_row")
+      if ok then
+        pcall(tool_row.render, buf, tcid, su)
+        local state = tool_row._state[buf]
+        local entry = state and state.by_id and state.by_id[tcid]
+        if entry and (entry.diff_added or 0) + (entry.diff_deleted or 0) > 0 then
+          local seen_key = "_diff_recorded"
+          if not entry[seen_key] then
+            entry[seen_key] = true
+            pcall(function()
+              require("neowork.bridge")._record_diff(buf, entry.diff_added or 0, entry.diff_deleted or 0)
+            end)
           end
         end
       end
-      if #body == 0 and truncated == 0 then return end
-      local section = {}
-      for _, l in ipairs(body) do section[#section + 1] = l end
-      if truncated > 0 then
-        section[#section + 1] = "… (+" .. truncated .. " more)"
-      end
-      text_sections[#text_sections + 1] = section
-    end
-
-    local had_diff = false
-    local diff_files = 0
-    local diff_added = 0
-    local diff_deleted = 0
-    local function emit_diff(c)
-      had_diff = true
-      diff_files = diff_files + 1
-      local diff_body = {}
-      if c.path then diff_body[#diff_body + 1] = "--- " .. c.path end
-      local old_str = tostring(c.oldText or "")
-      local new_str = tostring(c.newText or "")
-      if old_str ~= "" and not old_str:match("\n$") then old_str = old_str .. "\n" end
-      if new_str ~= "" and not new_str:match("\n$") then new_str = new_str .. "\n" end
-
-      local added_n, deleted_n = 0, 0
-      local ok, hunks = pcall(vim.diff, old_str, new_str, { result_type = "indices" })
-      if not ok or type(hunks) ~= "table" or #hunks == 0 then
-        for line in old_str:gmatch("([^\n]*)\n?") do
-          if line ~= "" then diff_body[#diff_body + 1] = "- " .. line; deleted_n = deleted_n + 1 end
-        end
-        for line in new_str:gmatch("([^\n]*)\n?") do
-          if line ~= "" then diff_body[#diff_body + 1] = "+ " .. line; added_n = added_n + 1 end
-        end
-      else
-        local old_lines = {}
-        for l in old_str:gmatch("([^\n]*)\n") do old_lines[#old_lines + 1] = l end
-        local new_lines = {}
-        for l in new_str:gmatch("([^\n]*)\n") do new_lines[#new_lines + 1] = l end
-
-        for _, h in ipairs(hunks) do
-          local old_start, old_count, new_start, new_count = h[1], h[2], h[3], h[4]
-          diff_body[#diff_body + 1] = string.format("@@ -%d,%d +%d,%d @@", old_start, old_count, new_start, new_count)
-          for i = old_start, old_start + old_count - 1 do
-            diff_body[#diff_body + 1] = "- " .. (old_lines[i] or "")
-            deleted_n = deleted_n + 1
-          end
-          for i = new_start, new_start + new_count - 1 do
-            diff_body[#diff_body + 1] = "+ " .. (new_lines[i] or "")
-            added_n = added_n + 1
-          end
-        end
-      end
-
-      pcall(function()
-        require("neowork.bridge")._record_diff(buf, added_n, deleted_n)
-      end)
-      diff_added = diff_added + added_n
-      diff_deleted = diff_deleted + deleted_n
-
-      if #body_lines > 0 then body_lines[#body_lines + 1] = "" end
-      body_lines[#body_lines + 1] = "##### Changes"
-      append_fenced_block(body_lines, "diff", diff_body)
-    end
-
-    local function walk_content(entries)
-      if type(entries) ~= "table" then return end
-      if entries.type or entries.text then
-        entries = { entries }
-      end
-      for _, c in ipairs(entries) do
-        if type(c) == "table" then
-          if c.type == "diff" or c.oldText or c.newText then
-            if not (tcid and seen[tcid]) then
-              emit_diff(c)
-              if tcid then seen[tcid] = true end
-            end
-          elseif c.type == "content" and type(c.content) == "table" then
-            walk_content(c.content)
-          elseif c.type ~= "image" then
-            local text = (c.content and c.content.text) or c.text
-            if text and is_initial then push_capped(text) end
-          end
-        end
-      end
-    end
-
-    if type(su.content) == "table" then
-      if su.content.text and not su.content.type then
-        if is_initial then push_capped(su.content.text) end
-      else
-        walk_content(su.content)
-      end
-    end
-
-    local summary_lines = {}
-    if su.kind and su.kind ~= "" then
-      summary_lines[#summary_lines + 1] = "- kind: `" .. tostring(su.kind) .. "`"
-    end
-    if status and status ~= "" then
-      summary_lines[#summary_lines + 1] = "- status: `" .. tostring(status) .. "`"
-    end
-    if #summary_lines > 0 then
-      for _, line in ipairs(summary_lines) do
-        body_lines[#body_lines + 1] = line
-      end
-    end
-
-    for _, section in ipairs(text_sections) do
-      if #body_lines > 0 then body_lines[#body_lines + 1] = "" end
-      body_lines[#body_lines + 1] = "##### Output"
-      append_fenced_block(body_lines, "text", section)
-    end
-
-    if terminal then
-      if #body_lines > 0 then body_lines[#body_lines + 1] = "" end
-      body_lines[#body_lines + 1] = "- terminal result: `" .. tostring(status == const.plan_status.completed and "done" or status) .. "`"
-      body_lines[#body_lines + 1] = "*" .. (status == const.plan_status.completed and "done" or status) .. "*"
-    end
-
-    if is_initial and (#body_lines > 0 or terminal) then
-      local header_tag = had_diff and "edit" or "tool"
-      local title = su.title or su.kind or "tool"
-      local meta
-      if had_diff then
-        meta = string.format("%d files  +%d -%d", diff_files, diff_added, diff_deleted)
-      elseif status and status ~= "" then
-        meta = status
-      elseif su.kind and su.kind ~= "" then
-        meta = su.kind
-      end
-      local header_lnum = append_detail_block(buf, {
-        tag = header_tag,
-        title = title,
-        meta = meta,
-      }, body_lines)
-      if had_diff then
-        local ok, hl = pcall(require, "neowork.highlight")
-        if ok then
-          local total = vim.api.nvim_buf_line_count(buf)
-          pcall(hl.apply, buf, math.max((header_lnum or total) - 1, 0), total)
-        end
-      end
-    elseif terminal then
-      append_detail_block(buf, {
-        tag = had_diff and "edit" or "tool",
-        title = su.title or su.kind or "tool",
-        meta = status or su.kind,
-      }, body_lines)
     end
 
     if is_initial then
@@ -698,6 +542,7 @@ function M.on_event(buf, su, gen)
       }, body)
     elseif t == const.event.available_commands_update then
       local commands = su.availableCommands or su.commands or {}
+      M._available_commands[buf] = commands
       append_detail_block(buf, {
         tag = "session",
         title = "update",

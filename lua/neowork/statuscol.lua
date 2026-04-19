@@ -2,6 +2,8 @@ local M = {}
 
 M._cache = {}
 
+local ast = require("neowork.ast")
+
 local CHAR_TOP = "╭"
 local CHAR_MIDDLE = "│"
 local CHAR_BOTTOM = "╰"
@@ -14,11 +16,7 @@ local ROLE_HL = {
 }
 
 local function role_of(line)
-  if not line then return nil end
-  if line:match("^@You") then return "You" end
-  if line:match("^@Djinni") then return "Djinni" end
-  if line:match("^@System") then return "System" end
-  return nil
+  return ast.role_of_line(line)
 end
 
 local function build(buf)

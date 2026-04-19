@@ -1,5 +1,7 @@
 local M = {}
 
+local ast = require("neowork.ast")
+
 M.ns = vim.api.nvim_create_namespace("neowork")
 M.ns_roles = vim.api.nvim_create_namespace("neowork_roles")
 
@@ -90,6 +92,11 @@ function M.setup()
   vim.api.nvim_set_hl(0, "NeoworkDiffFile", { fg = muted, italic = true, default = true })
   vim.api.nvim_set_hl(0, "NeoworkToolBody", { fg = muted, bg = card_bg, default = true })
 
+  vim.api.nvim_set_hl(0, "NeoworkToolRow", { fg = muted, italic = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkToolRowPending", { fg = muted, italic = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkToolRowRunning", { fg = input, italic = true, default = true })
+  vim.api.nvim_set_hl(0, "NeoworkToolRowError", { fg = error, italic = true, default = true })
+
   local pill_bg = hl_bg("Pmenu", hl_bg("StatusLine", bg))
   vim.api.nvim_set_hl(0, "NeoworkPill", { fg = normal, bg = pill_bg, default = true })
   vim.api.nvim_set_hl(0, "NeoworkBtn", { fg = info, bg = pill_bg, bold = true, default = true })
@@ -152,11 +159,7 @@ local ROLE_TEXT_HL = {
 }
 
 local function role_of(line)
-  if not line then return nil end
-  if line:match("^@You") then return "You" end
-  if line:match("^@Djinni") then return "Djinni" end
-  if line:match("^@System") then return "System" end
-  return nil
+  return ast.role_of_line(line)
 end
 
 function M.apply(buf, start_row, end_row)

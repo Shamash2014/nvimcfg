@@ -119,6 +119,7 @@ function M.attach(buf)
     end
   end
   require("neowork.scheduler").register_root(root)
+  pcall(M.apply_frontmatter_overrides, buf)
   pcall(function() require("neowork.bridge").seed_mode_from_frontmatter(buf) end)
 
   local win = vim.fn.bufwinid(buf)
@@ -144,6 +145,7 @@ function M.attach(buf)
     end,
     on_detach = function(_, b)
       M._fm_end_cache[b] = nil
+      require("neowork.ast").invalidate(b)
     end,
   })
 
@@ -153,25 +155,28 @@ function M.attach(buf)
   hl.apply(buf)
   require("neowork.summary").render_inline(buf)
 
+  local hl_timer = vim.uv.new_timer()
+  M._hl_timer[buf] = hl_timer
+  local hl_fire = vim.schedule_wrap(function()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    local ok, ast_mod = pcall(require, "neowork.ast")
+    if ok then
+      local turn = ast_mod.active_djinni_turn(buf)
+      if turn then
+        pcall(hl.apply, buf, turn.start_line - 1, turn.end_line)
+        return
+      end
+    end
+    pcall(hl.apply, buf)
+  end)
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
     group = augroup,
     buffer = buf,
     callback = function()
-      local prev = M._hl_timer[buf]
-      if prev then
-        pcall(function() prev:stop() end)
-        pcall(function() prev:close() end)
-        M._hl_timer[buf] = nil
-      end
-      local t = vim.uv.new_timer()
-      M._hl_timer[buf] = t
-      t:start(80, 0, vim.schedule_wrap(function()
-        if M._hl_timer[buf] ~= t then return end
-        M._hl_timer[buf] = nil
-        pcall(function() t:stop() end)
-        pcall(function() t:close() end)
-        if vim.api.nvim_buf_is_valid(buf) then pcall(hl.apply, buf) end
-      end))
+      local t = M._hl_timer[buf]
+      if not t then return end
+      pcall(function() t:stop() end)
+      pcall(function() t:start(80, 0, hl_fire) end)
     end,
   })
 
@@ -192,30 +197,35 @@ function M.get_fm_end(buf)
   if M._fm_end_cache[buf] then
     return M._fm_end_cache[buf]
   end
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, 20, false)
-  local found_first = false
-  for i, line in ipairs(lines) do
-    if line == "---" then
-      if not found_first then
-        found_first = true
-      else
-        M._fm_end_cache[buf] = i
-        return i
-      end
-    end
+  local ast = require("neowork.ast")
+  local fm_end = ast.frontmatter_end(buf)
+  if fm_end and fm_end > 0 then
+    M._fm_end_cache[buf] = fm_end
+    return fm_end
   end
   return nil
 end
 
 function M.read_frontmatter_field(buf, key)
-  local fm_end = M.get_fm_end(buf)
-  if not fm_end then return nil end
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, fm_end, false)
-  for i = 2, #lines do
-    local k, v = lines[i]:match("^(%w[%w_-]*):%s*(.*)$")
-    if k == key then return v end
+  return require("neowork.ast").read_frontmatter_field(buf, key)
+end
+
+local FRONTMATTER_OVERRIDE_KEYS = { "provider", "model" }
+
+function M.apply_frontmatter_overrides(buf)
+  local ok_cfg, config = pcall(require, "neowork.config.init")
+  if not ok_cfg then return end
+  local ast = require("neowork.ast")
+  local fm = ast.frontmatter(buf)
+  if not next(fm) then return end
+  local writer = config.prepare_frontmatter(buf)
+  for _, key in ipairs(FRONTMATTER_OVERRIDE_KEYS) do
+    local v = fm[key]
+    if v ~= nil and v ~= "" then
+      pcall(function() writer[key] = v end)
+    end
   end
-  return nil
+  pcall(function() config.finalize(config.LAYERS.FRONTMATTER, nil, buf) end)
 end
 
 function M.set_frontmatter_field(buf, key, value)
@@ -227,7 +237,7 @@ function M.set_frontmatter_fields(buf, fields)
   if not fm_end then return end
   local lines = vim.api.nvim_buf_get_lines(buf, 0, fm_end, false)
   local pending = {}
-  for k, v in pairs(fields) do pending[k] = tostring(v) end
+  for k, v in pairs(fields) do pending[k] = (tostring(v)):gsub("[\r\n]+", " ") end
   local changed = false
   local summary_changed = false
 
@@ -268,16 +278,17 @@ function M.ensure_composer(buf)
   local lc = vim.api.nvim_buf_line_count(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, fm_end, lc, false)
 
+  local ast = require("neowork.ast")
   local last_you_idx
   for i = #lines, 1, -1 do
-    if lines[i]:match("^@You") then
+    if ast.role_of_line(lines[i]) == "You" then
       last_you_idx = i
       break
     end
   end
 
   if not last_you_idx then
-    vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "@You", "", "---" })
+    vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "# You", "", "---" })
     return
   end
 
@@ -334,17 +345,19 @@ function M.find_compose_line(buf)
   if c.compose ~= nil then
     return c.compose or nil
   end
-  local lc = vim.api.nvim_buf_line_count(buf)
-  local fm_end = M.get_fm_end(buf) or 0
-  for i = lc - 1, fm_end, -1 do
-    local line = vim.api.nvim_buf_get_lines(buf, i, i + 1, false)[1]
-    if line and line:match("^@You") then
-      c.compose = i + 1
-      return i + 1
-    end
+  local ast = require("neowork.ast")
+  local turn = ast.compose_turn(buf)
+  if turn then
+    c.compose = turn.start_line
+    return turn.start_line
   end
   c.compose = false
   return nil
+end
+
+function M.invalidate_compose_cache(buf)
+  local c = scan_cache(buf)
+  c.compose = nil
 end
 
 function M.get_compose_text(buf)
@@ -405,7 +418,7 @@ function M.clear(buf, opts)
   local fm_end = M.get_fm_end(buf)
   if fm_end then
     local lc = vim.api.nvim_buf_line_count(buf)
-    vim.api.nvim_buf_set_lines(buf, fm_end, lc, false, { "", "@You", "", "---" })
+    vim.api.nvim_buf_set_lines(buf, fm_end, lc, false, { "", "# You", "", "---" })
   end
 
   M.set_frontmatter_fields(buf, {
@@ -444,10 +457,11 @@ function M.fork_at_cursor(buf)
   local row = vim.api.nvim_win_get_cursor(0)[1]
   local lines = vim.api.nvim_buf_get_lines(buf, 0, row, false)
 
+  local ast = require("neowork.ast")
   local turn_start
   for i = #lines, 1, -1 do
     local l = lines[i]
-    if l:match("^@You") or l:match("^@Djinni") or l:match("^@System") then
+    if ast.role_of_line(l) ~= nil then
       turn_start = i
       break
     end
@@ -510,7 +524,7 @@ function M.fork_at_cursor(buf)
     if #body == 0 or out[#out] ~= "" then out[#out + 1] = "" end
     out[#out + 1] = "---"
     out[#out + 1] = ""
-    out[#out + 1] = "@You"
+    out[#out + 1] = "# You"
     out[#out + 1] = ""
     out[#out + 1] = "---"
 
@@ -527,46 +541,53 @@ function M.fork_at_cursor(buf)
   end
 end
 
+local function trim_trailing_blanks(buf, stop_row)
+  local row = stop_row
+  while row > 0 do
+    local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
+    if line ~= "" then break end
+    row = row - 1
+  end
+  return row
+end
+
 function M.insert_turn(buf, role, text)
   local compose = M.find_compose_line(buf)
   if not compose then return end
-  local new_lines = { "@" .. role }
-  for _, l in ipairs(vim.split(text, "\n", { plain = true })) do
-    new_lines[#new_lines + 1] = l
+  local body_end = trim_trailing_blanks(buf, compose - 1)
+  local lines = { "", "", "# " .. role }
+  if text and text ~= "" then
+    lines[#lines + 1] = ""
+    for _, l in ipairs(vim.split(text, "\n", { plain = true })) do
+      lines[#lines + 1] = l
+    end
   end
-  new_lines[#new_lines + 1] = ""
-  new_lines[#new_lines + 1] = "---"
-  new_lines[#new_lines + 1] = ""
-  vim.api.nvim_buf_set_lines(buf, compose - 1, compose - 1, false, new_lines)
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "---"
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = ""
+  vim.api.nvim_buf_set_lines(buf, body_end, compose - 1, false, lines)
   require("neowork.summary").render_inline(buf)
+end
+
+function M.commit_compose(buf)
+  local text = M.get_compose_text(buf)
+  local lc = vim.api.nvim_buf_line_count(buf)
+  local body_end = trim_trailing_blanks(buf, lc)
+  if body_end > 0 then
+    local last = vim.api.nvim_buf_get_lines(buf, body_end - 1, body_end, false)[1]
+    if last == "---" then
+      body_end = trim_trailing_blanks(buf, body_end - 1)
+    end
+  end
+  vim.api.nvim_buf_set_lines(buf, body_end, lc, false, { "", "", "---", "", "", "# You", "" })
+  require("neowork.summary").render_inline(buf)
+  return text
 end
 
 function M.insert_djinni_turn(buf)
   M.insert_turn(buf, "Djinni", "")
-  local compose = M.find_compose_line(buf)
-  if not compose then return nil end
-  local fm_end = M.get_fm_end(buf) or 0
-
-  local djinni_row
-  for i = compose - 2, fm_end, -1 do
-    local line = vim.api.nvim_buf_get_lines(buf, i, i + 1, false)[1]
-    if line == "@Djinni" then djinni_row = i; break end
-    if line and (line:match("^@You") or line:match("^@System")) then break end
-  end
-  if not djinni_row then return compose - 1 end
-
-  local dash_row
-  local lc = vim.api.nvim_buf_line_count(buf)
-  for i = djinni_row + 1, lc - 1 do
-    local line = vim.api.nvim_buf_get_lines(buf, i, i + 1, false)[1]
-    if line == "---" then dash_row = i; break end
-  end
-
-  if dash_row then
-    vim.api.nvim_buf_set_lines(buf, dash_row, dash_row + 1, false, { "___" })
-  end
-  vim.api.nvim_buf_set_lines(buf, djinni_row + 1, djinni_row + 1, false, { "___" })
-
   return M.find_djinni_tail(buf)
 end
 
@@ -574,6 +595,12 @@ function M.find_djinni_tail(buf)
   local c = scan_cache(buf)
   if c.tail ~= nil then
     return c.tail or nil
+  end
+  local ast = require("neowork.ast")
+  local insert_row = ast.insertion_row_for_streaming(buf)
+  if insert_row then
+    c.tail = insert_row
+    return insert_row
   end
   local compose = M.find_compose_line(buf)
   if not compose then
@@ -588,7 +615,8 @@ function M.find_djinni_tail(buf)
       closing_row = i
       break
     end
-    if line and (line:match("^@You") or line:match("^@System")) then
+    local ast = require("neowork.ast")
+    if line and (ast.role_of_line(line) == "You" or ast.role_of_line(line) == "System") then
       c.tail = false
       return nil
     end
@@ -602,21 +630,17 @@ function M.find_djinni_tail(buf)
 end
 
 function M.count_turns(buf)
-  local fm_end = M.get_fm_end(buf) or 0
-  local lines = vim.api.nvim_buf_get_lines(buf, fm_end, -1, false)
+  local ast = require("neowork.ast")
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local count = 0
-  for i, line in ipairs(lines) do
-    if line:match("^@You") then
-      local has_content = false
-      for j = i + 1, #lines do
-        local next_line = lines[j]
-        if next_line == "---" or next_line:match("^@%w+") then break end
-        if vim.trim(next_line) ~= "" then
-          has_content = true
+  for _, turn in ipairs(ast.turns(buf)) do
+    if turn.role == "You" and not turn.is_compose then
+      for i = turn.content_start, turn.end_line do
+        if lines[i] and vim.trim(lines[i]) ~= "" then
+          count = count + 1
           break
         end
       end
-      if has_content then count = count + 1 end
     end
   end
   return count
@@ -633,9 +657,10 @@ function M.compact(buf)
   for _ = 1, to_remove do
     local line_count = vim.api.nvim_buf_line_count(buf)
     local lines = vim.api.nvim_buf_get_lines(buf, fm_end, line_count, false)
+    local ast = require("neowork.ast")
     local first_you = nil
     for i, line in ipairs(lines) do
-      if line:match("^@You") then
+      if ast.role_of_line(line) == "You" then
         first_you = fm_end + i - 1
         break
       end
@@ -645,7 +670,7 @@ function M.compact(buf)
     local block_end = nil
     local abs_lines = vim.api.nvim_buf_get_lines(buf, first_you, line_count, false)
     for i, line in ipairs(abs_lines) do
-      if i > 1 and (line:match("^@You") or line:match("^@Djinni") or line:match("^@System") or line == "---") then
+      if i > 1 and (ast.role_of_line(line) ~= nil or line == "---") then
         block_end = first_you + i - 2
         break
       end
@@ -657,10 +682,10 @@ function M.compact(buf)
     local agent_start = nil
     local post_lines = vim.api.nvim_buf_get_lines(buf, block_end, line_count, false)
     for i, line in ipairs(post_lines) do
-      if line:match("^@Djinni") then
+      if ast.role_of_line(line) == "Djinni" then
         agent_start = block_end + i - 1
         break
-      elseif line:match("^@You") or line:match("^@System") then
+      elseif ast.role_of_line(line) == "You" or ast.role_of_line(line) == "System" then
         break
       end
     end
@@ -670,7 +695,7 @@ function M.compact(buf)
       local agent_post = vim.api.nvim_buf_get_lines(buf, agent_start, line_count, false)
       remove_end = nil
       for i, line in ipairs(agent_post) do
-        if i > 1 and (line:match("^@You") or line:match("^@Djinni") or line:match("^@System") or line == "---") then
+        if i > 1 and (ast.role_of_line(line) ~= nil or line == "---") then
           remove_end = agent_start + i - 2
           break
         end
@@ -716,6 +741,7 @@ function M.detach(buf)
   M._fm_end_cache[buf] = nil
   M._refold_pending[buf] = nil
   M._scan_cache[buf] = nil
+  pcall(function() require("neowork.ast").invalidate(buf) end)
   local t = M._hl_timer[buf]
   if t then
     pcall(function() t:stop() end)
@@ -736,18 +762,21 @@ function M.schedule_refold(buf)
 end
 
 function M.foldtext()
+  local ast = require("neowork.ast")
   local foldstart = vim.v.foldstart
   local foldend = vim.v.foldend
   local line = vim.fn.getline(foldstart)
   local count = foldend - foldstart + 1
   if line == "---" then
     return "─── frontmatter ───"
-  elseif line:match("^@You") then
-    return "▸ @You — " .. count .. " lines"
-  elseif line:match("^@Djinni") then
-    return "▸ @Djinni — " .. count .. " lines"
-  elseif line:match("^@System") then
-    return "▸ @System — " .. count .. " lines"
+  end
+  local role = ast.role_of_line(line)
+  if role == "You" then
+    return "▸ ## You — " .. count .. " lines"
+  elseif role == "Djinni" then
+    return "▸ ## Djinni — " .. count .. " lines"
+  elseif role == "System" then
+    return "▸ ## System — " .. count .. " lines"
   elseif line:match("^>") then
     return "▸ thinking..."
   elseif line:match("^%[%*%]") then

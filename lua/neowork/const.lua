@@ -1,9 +1,9 @@
 local M = {}
 
 M.role = {
-  user = "@You",
-  agent = "@Djinni",
-  system = "@System",
+  user = "# You",
+  agent = "# Djinni",
+  system = "# System",
   separator = "---",
 }
 

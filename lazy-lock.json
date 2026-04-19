@@ -9,6 +9,7 @@
   "deltaview.nvim": { "branch": "main", "commit": "808cd6fbe4c49b71f03979790725fb173aade357" },
   "diagflow.nvim": { "branch": "main", "commit": "b13321b517ff64bf42eeac2214085d3c76d83a0d" },
   "difftastic.nvim": { "branch": "main", "commit": "6041ef0244b3fecf3b7f07de9af8cfbf8dbc4945" },
+  "diffview.nvim": { "branch": "main", "commit": "7df789b5228b2ed81789eccb7f37c29d4f52b0b5" },
   "direnv.nvim": { "branch": "main", "commit": "0d2edd378dbdf2c653869772d761ad914219ba9d" },
   "friendly-snippets": { "branch": "main", "commit": "6cd7280adead7f586db6fccbd15d2cac7e2188b9" },
   "git-blame.nvim": { "branch": "main", "commit": "5c536e2d4134d064aa3f41575280bc8a2a0e03d7" },

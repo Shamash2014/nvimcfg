@@ -4,6 +4,9 @@ M._did_setup = M._did_setup or false
 function M.setup(opts)
   if M._did_setup then return end
   M._did_setup = true
+  local schema = require("neowork.config.schema")
+  local config_init = require("neowork.config.init")
+  config_init.init(schema)
   require("neowork.config").setup(opts)
   require("neowork.highlight").setup()
   require("neowork.scheduler").setup()

@@ -14,9 +14,6 @@ local STDERR_IGNORE = {
   "^%s",
 }
 
-local MAX_RECONNECT = 3
-local RECONNECT_DELAY = 2000
-
 function M.new(cmd, args, cwd)
   local self = setmetatable({}, M)
   self._cmd = cmd
@@ -95,15 +92,7 @@ function M:_spawn()
           cb({ code = -1, message = "process exited" }, nil)
         end)
       end
-      if not self._shutting_down and self._reconnect_count < MAX_RECONNECT then
-        self._reconnect_count = self._reconnect_count + 1
-        log.info("auto-reconnect attempt " .. self._reconnect_count .. "/" .. MAX_RECONNECT)
-        vim.defer_fn(function()
-          if self.state == "disconnected" and not self._shutting_down then
-            self:_spawn()
-          end
-        end, RECONNECT_DELAY)
-      end
+      log.warn("process exited; not auto-reconnecting (use :NwRestart to restart)")
     end,
     stdin = "pipe",
     stdout_buffered = false,

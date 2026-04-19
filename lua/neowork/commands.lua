@@ -6,16 +6,17 @@ local function send(buf, text)
   local document = require("neowork.document")
   local bridge = require("neowork.bridge")
   text = text and vim.trim(text) or ""
-  if text == "" then
+  if text ~= "" then
+    document.insert_turn(buf, "You", text)
+  else
     document.ensure_composer(buf)
-    text = document.get_compose_text(buf)
-    if not text or text == "" then
+    text = document.commit_compose(buf)
+    text = text and vim.trim(text) or ""
+    if text == "" then
       vim.notify("neowork: compose area is empty", vim.log.levels.WARN)
       return
     end
-    document.clear_compose(buf)
   end
-  document.insert_turn(buf, "You", text)
   bridge.send(buf, text)
 end
 

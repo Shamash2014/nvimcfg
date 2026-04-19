@@ -1,42 +1,31 @@
+local config = require("neowork.config.init")
+local schema = require("neowork.config.schema")
+
 local M = {}
 
-M._defaults = {
-  neowork_dir = ".neowork",
-  max_visible_turns = 2,
-  flush_interval_ms = 500,
-  auto_scroll = true,
-  auto_compact = true,
-  auto_save = true,
-  max_tool_output_lines = 200,
-  schedule_poll_ms = 30000,
-  provider = "claude-code",
-  model = "",
-  index = {
-    sort = "status",
-    project_scope = "current",
-  },
-  folds = {
-    frontmatter = true,
-    thinking = true,
-    tool_output = true,
-    plan = true,
-  },
-}
+local initialized = false
 
-M._opts = {}
+local function ensure_init()
+  if initialized then return end
+  config.init(schema)
+  initialized = true
+end
 
 function M.setup(opts)
-  M._opts = vim.tbl_deep_extend("force", {}, M._defaults, opts or {})
+  ensure_init()
+  local ok, errors = config.apply(config.LAYERS.SETUP, opts or {})
+  if not ok then
+    vim.notify("Neowork config setup failed: " .. table.concat(errors or {}, ", "), vim.log.levels.ERROR)
+  end
 end
 
 function M.get(key)
-  if not next(M._opts) then
-    M.setup()
-  end
+  ensure_init()
+  local proxy = config.get(0)
   if key then
-    return M._opts[key]
+    return proxy[key]
   end
-  return M._opts
+  return proxy
 end
 
 function M.get_neowork_dir(root)

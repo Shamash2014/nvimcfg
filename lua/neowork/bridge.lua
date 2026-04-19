@@ -10,6 +10,8 @@ local const = require("neowork.const")
 local get_document = util.lazy("neowork.document")
 local get_stream = util.lazy("neowork.stream")
 local Session = require("djinni.acp.session")
+local subscribers = require("neowork.session.subscribers")
+local session_store = require("neowork.session.store")
 
 local function notify_index()
   local ok, index = pcall(require, "neowork.index")
@@ -64,10 +66,10 @@ M._bufs = {}
 M._clients = {}
 M._streaming = {}
 M._stream_gen = {}
-M._sub_handles = {}
 M._modes = {}
 M._providers = {}
 M._inflight = {}
+M._last_session_id = {}
 M._turn_started_at = {}
 M._turn_elapsed_ms = {}
 M._usage = {}
@@ -277,6 +279,9 @@ function M.create_session(buf, callback)
       M._subscribe(buf, sid, client)
       store.ensure_dirs(root)
 
+      local kind = M._last_session_id[buf] and "restarted" or "started"
+      M._insert_session_system_block(buf, kind)
+
       finish(nil, sid)
     end, { timeout = 90000 })
   end)
@@ -308,7 +313,7 @@ function M.resume_session(buf, session_id, callback)
       if old_sid then Session.detach_client_session(old_sid) end
       M._sessions[buf] = nil
       get_document().set_frontmatter_field(buf, "session", "")
-      M._sub_handles[buf] = nil
+      subscribers.detach(buf)
       M.create_session(buf, callback)
     end
 
@@ -331,11 +336,7 @@ function M.resume_session(buf, session_id, callback)
     }
     client:request("session/load", req, function(req_err, result)
       if req_err then
-        local sub = M._sub_handles[buf]
-        if sub then
-          pcall(function() sub.client:unsubscribe(session_id, sub.handle) end)
-          M._sub_handles[buf] = nil
-        end
+        subscribers.detach(buf)
         fall_back_to_new()
         return
       end
@@ -400,12 +401,7 @@ function M._retry_with_new_session(buf, text)
 end
 
 function M._subscribe(buf, session_id, client)
-  local existing = M._sub_handles[buf]
-  if existing then
-    existing.client:unsubscribe(existing.session_id, existing.handle)
-  end
-
-  local handle = {
+  subscribers.attach(buf, session_id, client, {
     on_update = function(params)
       if not vim.api.nvim_buf_is_valid(buf) then return end
       local su = params.update or params
@@ -419,6 +415,8 @@ function M._subscribe(buf, session_id, client)
         M._modes[buf].current_id = su.modeId
         redraw_status()
       end
+      local max_output = config.get("max_tool_output_lines") or 50
+      pcall(session_store.apply_event, buf, su, { max_output = max_output })
       local gen = M._stream_gen[buf]
       vim.schedule(function()
         get_stream().on_event(buf, su, gen)
@@ -430,10 +428,7 @@ function M._subscribe(buf, session_id, client)
         M._handle_permission(buf, params, respond)
       end)
     end,
-  }
-
-  client:subscribe(session_id, handle)
-  M._sub_handles[buf] = { client = client, handle = handle, session_id = session_id }
+  })
 end
 
 function M.send(buf, text)
@@ -468,6 +463,7 @@ function M._do_send(buf, session_id, text)
   })
 
   store.append_event(session_id, root, { type = "user", content = text })
+  pcall(session_store.add_user_message, buf, text)
   notify_index()
 
   local summary_mod = require("neowork.summary")
@@ -525,9 +521,7 @@ function M._do_send(buf, session_id, text)
       if err then
         local msg = tostring(err.message or err)
         if msg:match("Session not found") or (err.code and err.code == -32603) then
-          set_runtime_status(buf, const.session_status.connecting, { persist = false })
-          M._retry_with_new_session(buf, text)
-          return
+          vim.notify("neowork: session lost — run :NwRestart to start a new one", vim.log.levels.WARN)
         end
       end
 
@@ -580,6 +574,7 @@ function M._do_send(buf, session_id, text)
             end
           end)
           pcall(doc.goto_compose, buf)
+          pcall(vim.cmd, "normal! zb")
         end)
       end
     end)
@@ -613,6 +608,42 @@ local function remove_permission_ui(buf, perm)
   pcall(vim.api.nvim_buf_set_lines, buf, start_row, end_row, false, {})
 end
 
+function M._insert_session_system_block(buf, kind)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local doc = get_document()
+  local compose = doc.find_compose_line(buf)
+  if not compose then return end
+
+  local sid = M._sessions[buf]
+  local short_sid = sid and sid:sub(1, 8) or "?"
+  local provider = doc.read_frontmatter_field(buf, "provider") or "?"
+  local model = doc.read_frontmatter_field(buf, "model") or "?"
+  local root = doc.read_frontmatter_field(buf, "root") or vim.fn.getcwd()
+  local root_display = vim.fn.fnamemodify(root, ":~")
+  local mode = M.get_mode(buf)
+  local mode_name = mode and (mode.name or mode.id) or "-"
+
+  local label = (kind == "restarted") and "Session restarted" or "Session started"
+  local header_line = label .. "  " .. short_sid
+  local meta_line = string.format("provider=%s  model=%s  mode=%s", provider, model, mode_name)
+  local root_line = "root=" .. root_display
+
+  local has_sep = false
+  if compose >= 3 then
+    local prev = vim.api.nvim_buf_get_lines(buf, compose - 3, compose - 2, false)[1] or ""
+    has_sep = prev:match("^[%-_%*][%-_%*][%-_%*]+%s*$") ~= nil
+  end
+
+  local lines = has_sep
+    and { const.role.system, "", header_line, meta_line, root_line, "" }
+    or { "---", "", const.role.system, "", header_line, meta_line, root_line, "" }
+
+  local start_row = compose - 1
+  pcall(vim.api.nvim_buf_set_lines, buf, start_row, start_row, false, lines)
+
+  M._last_session_id[buf] = sid
+end
+
 function M._handle_permission(buf, params, respond)
   M._status_before_awaiting[buf] = M._runtime_status[buf] or const.session_status.submitting
   set_runtime_status(buf, const.session_status.awaiting, {
@@ -631,25 +662,33 @@ function M._handle_permission(buf, params, respond)
   end
   local title = (params.toolCall and params.toolCall.title) or "Permission request"
   local doc = get_document()
+  doc.invalidate_compose_cache(buf)
   local compose = doc.find_compose_line(buf)
   local mark_id
-  local lines = {
-    "",
-    const.role.system,
-    "Permission:" .. title,
-    "  [s] pick  [ya] allow  [yn] deny  [yA] always",
-    "",
-  }
+  local insert_row
+  local probe_row
   if compose then
-    local start_row = compose - 1
-    vim.api.nvim_buf_set_lines(buf, start_row, start_row, false, lines)
-    mark_id = vim.api.nvim_buf_set_extmark(buf, M._permission_ns, start_row, 0, {
-      end_row = start_row + #lines,
-      end_col = 0,
-      right_gravity = false,
-      end_right_gravity = true,
-    })
+    insert_row = compose - 1
+    probe_row = compose - 3
+  else
+    insert_row = vim.api.nvim_buf_line_count(buf)
+    probe_row = insert_row - 2
   end
+  local has_sep = false
+  if probe_row and probe_row >= 0 then
+    local prev = vim.api.nvim_buf_get_lines(buf, probe_row, probe_row + 1, false)[1] or ""
+    has_sep = prev:match("^[%-_%*][%-_%*][%-_%*]+%s*$") ~= nil
+  end
+  local lines = has_sep
+    and { const.role.system, "", "Permission: " .. title, "  [s] pick  [ya] allow  [yn] deny  [yA] always", "" }
+    or { "---", "", const.role.system, "", "Permission: " .. title, "  [s] pick  [ya] allow  [yn] deny  [yA] always", "" }
+  vim.api.nvim_buf_set_lines(buf, insert_row, insert_row, false, lines)
+  mark_id = vim.api.nvim_buf_set_extmark(buf, M._permission_ns, insert_row, 0, {
+    end_row = insert_row + #lines,
+    end_col = 0,
+    right_gravity = false,
+    end_right_gravity = true,
+  })
   notify_index()
   M._pending_permission[buf] = {
     options = options,
@@ -892,11 +931,8 @@ function M.switch_provider(buf)
     if not choice then return end
 
     local doc = get_document()
-    local sub = M._sub_handles[buf]
     local old_sid = M._sessions[buf]
-    if sub and old_sid then
-      pcall(function() sub.client:unsubscribe(old_sid, sub.handle) end)
-    end
+    subscribers.detach(buf)
     local client = M._clients[buf]
     if client then
       pcall(function()
@@ -910,7 +946,6 @@ function M.switch_provider(buf)
     end
     M._sessions[buf] = nil
     M._clients[buf] = nil
-    M._sub_handles[buf] = nil
     M._modes[buf] = nil
     M._streaming[buf] = nil
     M._inflight[buf] = nil
@@ -931,7 +966,7 @@ function M.detach(buf, opts)
   opts = opts or {}
   local sid = M._sessions[buf]
   local current_sid = opts.session_id or sid
-  local sub = M._sub_handles[buf]
+  local sub = subscribers.get(buf)
 
   local perm = M._pending_permission[buf]
   if perm then
@@ -943,11 +978,8 @@ function M.detach(buf, opts)
     current_sid = sub.session_id
   end
 
-  if sub and current_sid then
-    pcall(function()
-      sub.client:unsubscribe(current_sid, sub.handle)
-    end)
-  end
+  subscribers.detach(buf)
+  session_store.detach(buf)
 
   local client = M._clients[buf]
   if client then
@@ -972,7 +1004,6 @@ function M.detach(buf, opts)
   M._clients[buf] = nil
   M._streaming[buf] = nil
   M._stream_gen[buf] = nil
-  M._sub_handles[buf] = nil
   M._modes[buf] = nil
   M._inflight[buf] = nil
   M._turn_started_at[buf] = nil
