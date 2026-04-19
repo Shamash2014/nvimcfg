@@ -158,6 +158,8 @@ function M.setup_document_keymaps(buf)
   map("n", "]]", function() util.jump_to_marker(buf, 1) end, "next turn")
   map("n", "[[", function() util.jump_to_marker(buf, -1) end, "previous turn")
 
+  map("n", "gL", function() require("neowork.transcript").open_full(buf, { debug = true }) end, "full session log + debug")
+
   local function plan_section()
     return require("neowork.plan")._section_lines[buf]
   end

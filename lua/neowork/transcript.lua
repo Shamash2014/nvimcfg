@@ -140,6 +140,101 @@ local function render_tool_content(content, cap)
   return out
 end
 
+local function safe_call(mod, fn, ...)
+  local ok, m = pcall(require, mod)
+  if not ok or not m or type(m[fn]) ~= "function" then return nil end
+  local ok2, result = pcall(m[fn], ...)
+  if ok2 then return result end
+  return nil
+end
+
+local function build_debug_block(buf, events)
+  local out = { "# Debug Info", "" }
+  local function kv(k, v)
+    out[#out + 1] = string.format("- %s: `%s`", k, tostring(v))
+  end
+
+  local document = require("neowork.document")
+  local sid = document.read_frontmatter_field(buf, "session") or ""
+  local provider = document.read_frontmatter_field(buf, "provider") or ""
+  local model = document.read_frontmatter_field(buf, "model") or ""
+  local root = document.read_frontmatter_field(buf, "root") or ""
+
+  out[#out + 1] = "## Session"
+  kv("session", sid)
+  kv("provider", provider)
+  kv("model", model)
+  kv("root", root)
+  kv("buf", buf)
+  kv("changedtick", vim.api.nvim_buf_get_changedtick(buf))
+  kv("line_count", vim.api.nvim_buf_line_count(buf))
+  kv("events_stored", events and #events or 0)
+  out[#out + 1] = ""
+
+  out[#out + 1] = "## Runtime"
+  kv("bridge.is_streaming", safe_call("neowork.bridge", "is_streaming", buf))
+  kv("bridge.status", safe_call("neowork.bridge", "get_status", buf))
+  kv("bridge.mode", safe_call("neowork.bridge", "get_mode", buf))
+  kv("bridge.queue_depth", safe_call("neowork.bridge", "queue_depth", buf))
+  kv("bridge.has_pending_permission", safe_call("neowork.bridge", "has_pending_permission", buf))
+  local pending = safe_call("neowork.bridge", "get_pending_permission", buf)
+  if pending then
+    kv("pending_permission.title", pending.title or pending.toolName)
+  end
+  out[#out + 1] = ""
+
+  out[#out + 1] = "## Stream"
+  local ok_stream, stream = pcall(require, "neowork.stream")
+  if ok_stream then
+    kv("is_streaming", stream.is_streaming(buf))
+    kv("compose_row", stream.compose_row(buf))
+    local turn = stream.active_djinni_turn(buf)
+    if turn then
+      kv("active_djinni.start_line", turn.start_line)
+      kv("active_djinni.content_start", turn.content_start)
+      kv("active_djinni.end_line", turn.end_line)
+      kv("active_djinni.is_open", turn.is_open)
+    else
+      kv("active_djinni", "nil")
+    end
+    local ns = stream._ns
+    local tail_id = stream._tail_mark and stream._tail_mark[buf]
+    if tail_id and ns then
+      local pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, tail_id, {})
+      kv("tail_row", pos and pos[1] and (pos[1] + 1) or "nil")
+    end
+    kv("tail_text", stream._tail_text and stream._tail_text[buf])
+    kv("pending_chunks", stream._pending and stream._pending[buf] and #stream._pending[buf] or 0)
+    kv("gen", stream._gen and stream._gen[buf])
+  end
+  out[#out + 1] = ""
+
+  out[#out + 1] = "## Turns"
+  local ok_ast, ast = pcall(require, "neowork.ast")
+  if ok_ast then
+    local turns = ast.turns(buf) or {}
+    kv("count", #turns)
+    for i, t in ipairs(turns) do
+      out[#out + 1] = string.format(
+        "- [%d] %s rows=%d-%d is_compose=%s is_open=%s",
+        i, t.role, t.start_line, t.end_line, tostring(t.is_compose), tostring(t.is_open)
+      )
+    end
+    local ok_inv, reason = ast.check_invariant(buf)
+    kv("invariant_ok", ok_inv)
+    if not ok_inv then kv("invariant_reason", reason) end
+  end
+  out[#out + 1] = ""
+
+  out[#out + 1] = "## Flags"
+  kv("g.neowork_debug", vim.g.neowork_debug)
+  kv("b.neowork_chat", vim.b[buf].neowork_chat)
+  out[#out + 1] = ""
+  out[#out + 1] = "---"
+  out[#out + 1] = ""
+  return out
+end
+
 local function render_events(events)
   local ok_cfg, config = pcall(require, "neowork.config")
   local cap = ok_cfg and (config.get and config.get("max_tool_output_lines") or 20) or 20
@@ -255,6 +350,13 @@ function M.open_full(buf, opts)
 
   local events = store.read_transcript(sid, root)
   local lines = render_events(events)
+  if opts.debug then
+    local debug_lines = build_debug_block(buf, events)
+    local merged = {}
+    for _, l in ipairs(debug_lines) do merged[#merged + 1] = l end
+    for _, l in ipairs(lines) do merged[#merged + 1] = l end
+    lines = merged
+  end
 
   local scratch = vim.api.nvim_create_buf(false, true)
   vim.bo[scratch].buftype = "nofile"
@@ -301,6 +403,13 @@ function M.open_full(buf, opts)
   local function reload()
     local fresh = store.read_transcript(sid, root)
     local fresh_lines = render_events(fresh)
+    if opts.debug then
+      local debug_lines = build_debug_block(buf, fresh)
+      local merged = {}
+      for _, l in ipairs(debug_lines) do merged[#merged + 1] = l end
+      for _, l in ipairs(fresh_lines) do merged[#merged + 1] = l end
+      fresh_lines = merged
+    end
     vim.bo[scratch].modifiable = true
     vim.api.nvim_buf_set_lines(scratch, 0, -1, false, fresh_lines)
     vim.bo[scratch].modifiable = false
