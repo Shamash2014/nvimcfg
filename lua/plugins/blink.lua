@@ -32,8 +32,7 @@ return {
           module = "neowork.blink_source",
           score_offset = 120,
           enabled = function()
-            local name = vim.api.nvim_buf_get_name(0)
-            return name:sub(-5) == ".chat"
+            return vim.b.neowork_chat == true
           end,
         },
         lsp = {

@@ -2,8 +2,9 @@ local M = {}
 M.__index = M
 
 local function is_chat_buffer(bufnr)
-  local name = vim.api.nvim_buf_get_name(bufnr or 0)
-  return name:sub(-5) == ".chat"
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  if not vim.api.nvim_buf_is_valid(bufnr) then return false end
+  return vim.b[bufnr].neowork_chat == true
 end
 
 function M.new()
