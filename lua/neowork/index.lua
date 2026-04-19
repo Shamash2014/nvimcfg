@@ -798,8 +798,12 @@ local function do_add_project(buf, path)
 end
 
 local function do_remove_project(buf)
-  local s = session_at_cursor(buf); if not s then return end
-  local root = s._project_root; if not root then return end
+  local root = project_at_cursor(buf)
+  if not root then
+    local s = session_at_cursor(buf)
+    root = s and s._project_root or nil
+  end
+  if not root then return end
   if vim.fn.confirm("Remove project " .. root .. "?", "&Yes\n&No", 2) ~= 1 then return end
   local ok, projects = pcall(require, "djinni.integrations.projects")
   if ok then projects.remove(root) end

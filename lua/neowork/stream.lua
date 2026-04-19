@@ -4,6 +4,8 @@ local config = require("neowork.config")
 local store = require("neowork.store")
 local util = require("neowork.util")
 local const = require("neowork.const")
+local ast = require("neowork.ast")
+local writequeue = require("neowork.writequeue")
 
 local get_document = util.lazy("neowork.document")
 local get_bridge = util.lazy("neowork.bridge")
@@ -32,30 +34,34 @@ M._compose_mark = {}
 M._active_djinni_mark = {}
 M._ns = vim.api.nvim_create_namespace("neowork_stream_compose")
 
-local function set_tail_mark(buf, row_1based)
-  local id = M._tail_mark[buf]
-  local opts = { right_gravity = true }
+local function set_mark(tbl, buf, row_1based, right_gravity)
+  local id = tbl[buf]
+  local opts = { right_gravity = right_gravity }
   if id then opts.id = id end
   local target = math.max(0, (row_1based or 1) - 1)
   local ok, new_id = pcall(vim.api.nvim_buf_set_extmark, buf, M._ns, target, 0, opts)
-  if ok then M._tail_mark[buf] = new_id end
+  if ok then tbl[buf] = new_id end
 end
 
-local function tail_row_1based(buf)
-  local id = M._tail_mark[buf]
+local function mark_row_1based(tbl, buf)
+  local id = tbl[buf]
   if not id then return nil end
   local pos = vim.api.nvim_buf_get_extmark_by_id(buf, M._ns, id, {})
   if not pos or not pos[1] then return nil end
   return pos[1] + 1
 end
 
-local function clear_tail_mark(buf)
-  local id = M._tail_mark[buf]
+local function clear_mark(tbl, buf)
+  local id = tbl[buf]
   if id then
     pcall(vim.api.nvim_buf_del_extmark, buf, M._ns, id)
   end
-  M._tail_mark[buf] = nil
+  tbl[buf] = nil
 end
+
+local function set_tail_mark(buf, row_1based) set_mark(M._tail_mark, buf, row_1based, true) end
+local function tail_row_1based(buf) return mark_row_1based(M._tail_mark, buf) end
+local function clear_tail_mark(buf) clear_mark(M._tail_mark, buf) end
 
 function M._invalidate_tail(buf)
   clear_tail_mark(buf)
@@ -63,58 +69,20 @@ function M._invalidate_tail(buf)
 end
 
 local function set_compose_mark(buf)
-  local doc = get_document()
-  local compose = doc.find_compose_line(buf)
+  local compose = get_document().find_compose_line(buf)
   if not compose then
     M._compose_mark[buf] = nil
     return
   end
-  local id = M._compose_mark[buf]
-  local opts = { right_gravity = false }
-  if id then opts.id = id end
-  M._compose_mark[buf] = vim.api.nvim_buf_set_extmark(buf, M._ns, compose - 1, 0, opts)
+  set_mark(M._compose_mark, buf, compose, false)
 end
 
-local function compose_row_1based(buf)
-  local id = M._compose_mark[buf]
-  if not id then return nil end
-  local pos = vim.api.nvim_buf_get_extmark_by_id(buf, M._ns, id, {})
-  if not pos or not pos[1] then return nil end
-  return pos[1] + 1
-end
+local function compose_row_1based(buf) return mark_row_1based(M._compose_mark, buf) end
+local function clear_compose_mark(buf) clear_mark(M._compose_mark, buf) end
 
-local function clear_compose_mark(buf)
-  local id = M._compose_mark[buf]
-  if id then
-    pcall(vim.api.nvim_buf_del_extmark, buf, M._ns, id)
-  end
-  M._compose_mark[buf] = nil
-end
-
-local function set_active_djinni_mark(buf, header_row_1based)
-  local id = M._active_djinni_mark[buf]
-  local opts = { right_gravity = false }
-  if id then opts.id = id end
-  local target = math.max(0, (header_row_1based or 1) - 1)
-  local ok, new_id = pcall(vim.api.nvim_buf_set_extmark, buf, M._ns, target, 0, opts)
-  if ok then M._active_djinni_mark[buf] = new_id end
-end
-
-local function active_djinni_header_row(buf)
-  local id = M._active_djinni_mark[buf]
-  if not id then return nil end
-  local pos = vim.api.nvim_buf_get_extmark_by_id(buf, M._ns, id, {})
-  if not pos or not pos[1] then return nil end
-  return pos[1] + 1
-end
-
-local function clear_active_djinni_mark(buf)
-  local id = M._active_djinni_mark[buf]
-  if id then
-    pcall(vim.api.nvim_buf_del_extmark, buf, M._ns, id)
-  end
-  M._active_djinni_mark[buf] = nil
-end
+local function set_active_djinni_mark(buf, header_row_1based) set_mark(M._active_djinni_mark, buf, header_row_1based, false) end
+local function active_djinni_header_row(buf) return mark_row_1based(M._active_djinni_mark, buf) end
+local function clear_active_djinni_mark(buf) clear_mark(M._active_djinni_mark, buf) end
 
 ---Returns the active Djinni turn (the one marked at stream.start) or nil.
 ---@param buf integer
@@ -122,7 +90,6 @@ end
 function M.active_djinni_turn(buf)
   local row = active_djinni_header_row(buf)
   if not row then return nil end
-  local ast = require("neowork.ast")
   local turn = ast.turn_at_line(buf, row)
   if turn and turn.role == "Djinni" then return turn end
   return nil
@@ -210,28 +177,32 @@ end
 function M._apply_chunk(buf, text)
   if not vim.api.nvim_buf_is_valid(buf) then return end
 
-  require("neowork.writequeue").flush(buf)
+  writequeue.flush(buf)
 
-  local ast = require("neowork.ast")
-  local turn = M.active_djinni_turn(buf)
-  if not turn then return end
+  local djinni_header = active_djinni_header_row(buf)
+  if not djinni_header then return end
+  local compose_row = compose_row_1based(buf)
+  local content_start = djinni_header + 1
+  local content_end_exclusive = compose_row or (vim.api.nvim_buf_line_count(buf) + 1)
 
   local row = tail_row_1based(buf)
   local tail = M._tail_text[buf]
 
-  local function row_in_turn(r)
-    return r and r >= turn.content_start and r <= turn.end_line + 1
+  local function row_valid(r)
+    return r and r >= content_start and r < content_end_exclusive
   end
 
-  local resync = not row_in_turn(row)
+  local resync = not row_valid(row)
   if not resync and row and tail then
     local current = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
     if current ~= tail then resync = true end
   end
 
   if resync then
+    local turn = M.active_djinni_turn(buf)
+    if not turn then return end
     local insert_row = ast.append_row_for_turn(buf, turn)
-    if not insert_row or not row_in_turn(insert_row) then return end
+    if not insert_row or not row_valid(insert_row) then return end
     row = insert_row
     tail = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
     set_tail_mark(buf, row)
@@ -245,14 +216,11 @@ function M._apply_chunk(buf, text)
   if #lines > 0 then new_tail = lines[#lines] end
 
   local new_tail_row = row + #lines - 1
-  if not row_in_turn(new_tail_row) then return end
-
-  local compose_row = compose_row_1based(buf)
-  if compose_row and new_tail_row >= compose_row then return end
+  if not row_valid(new_tail_row) then return end
 
   local start_row = row - 1
   local end_row = row
-  require("neowork.writequeue").enqueue(buf, function()
+  writequeue.enqueue(buf, function()
     vim.api.nvim_buf_set_lines(buf, start_row, end_row, false, lines)
     set_tail_mark(buf, new_tail_row)
     ast.assert_invariant(buf, "stream._apply_chunk")
@@ -355,7 +323,6 @@ local function collapse_detail_fold(buf, header_lnum)
   if not vim.api.nvim_buf_is_valid(buf) then return end
   local wins = vim.fn.win_findbuf(buf)
   if #wins == 0 then return end
-  local ast = require("neowork.ast")
   local parent_lnum
   for lnum = math.max(1, header_lnum - 1), 1, -1 do
     local line = vim.api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)[1] or ""
@@ -541,7 +508,7 @@ function M.stop(buf, gen)
   end
   M._agent_text[buf] = nil
 
-  require("neowork.writequeue").flush(buf)
+  writequeue.flush(buf)
 
   M._active_bufs[buf] = nil
   M._pending[buf] = nil

@@ -2,6 +2,11 @@ local M = {}
 
 local const = require("neowork.const")
 local writequeue = require("neowork.writequeue")
+local ast = require("neowork.ast")
+local util = require("neowork.util")
+local get_stream = util.lazy("neowork.stream")
+local get_document = util.lazy("neowork.document")
+local get_config = util.lazy("neowork.config")
 
 M.ns = vim.api.nvim_create_namespace("neowork.tool_row")
 
@@ -304,7 +309,6 @@ end
 local EXECUTE_KINDS = { execute = true, bash = true, shell = true, run = true }
 
 local function tool_block_in_djinni(buf, tool_id)
-  local ast = require("neowork.ast")
   local s, e = ast.find_tool_block(buf, tool_id)
   if not s then return nil end
   local turn = ast.turn_at_line(buf, s)
@@ -320,8 +324,7 @@ local function schedule_close_tool_folds(buf)
 end
 
 local function ensure_open_djinni_row(buf)
-  local ast = require("neowork.ast")
-  local stream = require("neowork.stream")
+  local stream = get_stream()
   local turn = stream.active_djinni_turn(buf)
   if turn then
     local row = ast.append_row_for_turn(buf, turn)
@@ -329,7 +332,7 @@ local function ensure_open_djinni_row(buf)
   end
   local cur = ast.insertion_row_for_streaming(buf)
   if cur then return cur end
-  require("neowork.document").insert_djinni_turn(buf)
+  get_document().insert_djinni_turn(buf)
   turn = stream.active_djinni_turn(buf)
   if turn then return ast.append_row_for_turn(buf, turn) end
   return ast.insertion_row_for_streaming(buf)
@@ -337,9 +340,8 @@ end
 
 function M.render(buf, tool_id, payload)
   if not vim.api.nvim_buf_is_valid(buf) or not tool_id then return end
-  local config = require("neowork.config")
-  local ast = require("neowork.ast")
-  local stream = require("neowork.stream")
+  local config = get_config()
+  local stream = get_stream()
   local max_output = config.get("max_tool_output_lines") or 50
 
   local state = get_state(buf)
