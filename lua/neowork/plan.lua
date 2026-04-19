@@ -75,9 +75,11 @@ function M.render_section(buf)
 
   if cached then
     local first = vim.api.nvim_buf_get_lines(buf, cached.start, cached.start + 1, false)[1]
-    if first == "### Plan" and cached["end"] <= vim.api.nvim_buf_line_count(buf) then
+    local lc = vim.api.nvim_buf_line_count(buf)
+    if first == "### Plan" and cached["end"] <= lc and cached["end"] < compose then
       vim.api.nvim_buf_set_lines(buf, cached.start, cached["end"], false, new_lines)
       M._section_lines[buf] = { start = cached.start, ["end"] = cached.start + #new_lines }
+      require("neowork.ast").assert_invariant(buf, "plan.render_section")
       return
     end
   end
@@ -85,6 +87,7 @@ function M.render_section(buf)
   local insert_row = compose - 1
   vim.api.nvim_buf_set_lines(buf, insert_row, insert_row, false, new_lines)
   M._section_lines[buf] = { start = insert_row, ["end"] = insert_row + #new_lines }
+  require("neowork.ast").assert_invariant(buf, "plan.render_section")
 end
 
 local function build_items(buf, entries)

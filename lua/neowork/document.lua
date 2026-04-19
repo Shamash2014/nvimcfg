@@ -69,8 +69,13 @@ function M.goto_compose(buf)
   local target = compose + 1
   local lc = vim.api.nvim_buf_line_count(buf)
   if target > lc then
-    vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "" })
-    target = lc + 1
+    local ok_stream, stream = pcall(require, "neowork.stream")
+    if not (ok_stream and stream.is_streaming and stream.is_streaming(buf)) then
+      vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "" })
+      target = lc + 1
+    else
+      target = lc
+    end
   end
   pcall(vim.api.nvim_win_set_cursor, 0, { target, 0 })
 end
@@ -289,6 +294,8 @@ end
 
 function M.ensure_composer(buf)
   if not vim.api.nvim_buf_is_valid(buf) then return end
+  local ok_stream, stream = pcall(require, "neowork.stream")
+  if ok_stream and stream.is_streaming and stream.is_streaming(buf) then return end
   local ast = require("neowork.ast")
   local turns = ast.turns(buf) or {}
   local lc = vim.api.nvim_buf_line_count(buf)
