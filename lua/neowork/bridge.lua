@@ -70,6 +70,8 @@ M._modes = {}
 M._providers = {}
 M._inflight = {}
 M._last_session_id = {}
+M._send_queue = {}
+M._pending_context = {}
 M._turn_started_at = {}
 M._turn_elapsed_ms = {}
 M._usage = {}
@@ -99,6 +101,9 @@ end
 
 local function set_runtime_status(buf, status, opts)
   opts = opts or {}
+  if M._runtime_status[buf] == status and M._runtime_meta[buf] == opts.meta then
+    return
+  end
   M._runtime_status[buf] = status
   M._runtime_meta[buf] = opts.meta
 
@@ -273,6 +278,14 @@ function M.create_session(buf, callback)
         }
       end
 
+      local seed_cmds = result.availableCommands or result.commands
+      if type(seed_cmds) == "table" and #seed_cmds > 0 then
+        local ok_s, stream = pcall(require, "neowork.stream")
+        if ok_s and stream then
+          stream._available_commands[buf] = seed_cmds
+        end
+      end
+
       doc.set_frontmatter_fields(buf, { session = sid, status = const.session_status.ready })
       set_runtime_status(buf, const.session_status.ready)
 
@@ -369,17 +382,67 @@ function M.reset_session(buf)
   M._stream_gen[buf] = (M._stream_gen[buf] or 0) + 1
 end
 
+local MAX_CONTEXT_CHARS = 20000
+
+local function build_context_from_buffer(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return nil end
+  local ok_ast, ast = pcall(require, "neowork.ast")
+  if not ok_ast then return nil end
+  local turns = ast.turns(buf) or {}
+  if #turns == 0 then return nil end
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local parts = {}
+  for _, t in ipairs(turns) do
+    if not t.is_compose then
+      parts[#parts + 1] = "# " .. t.role
+      for i = t.content_start, t.end_line do
+        parts[#parts + 1] = lines[i] or ""
+      end
+      parts[#parts + 1] = ""
+    end
+  end
+  local body = vim.trim(table.concat(parts, "\n"))
+  if body == "" then return nil end
+  if #body > MAX_CONTEXT_CHARS then
+    body = "…[truncated]…\n" .. body:sub(-MAX_CONTEXT_CHARS)
+  end
+  return "<previous_conversation>\n" .. body .. "\n</previous_conversation>"
+end
+
 function M.restart(buf)
+  local doc = get_document()
+  local fm_sid = doc.read_frontmatter_field(buf, "session") or ""
+  local context
+  if fm_sid == "" then
+    context = build_context_from_buffer(buf)
+  end
   M.detach(buf)
-  M.create_session(buf, function(err)
+  if context then
+    M._pending_context[buf] = context
+  end
+  local function done(err)
     vim.schedule(function()
       if err then
         vim.notify("neowork: restart failed: " .. tostring(err.message or err), vim.log.levels.ERROR)
         return
       end
-      vim.notify("neowork: session restarted", vim.log.levels.INFO)
+      local label
+      if fm_sid ~= "" then
+        label = "session resumed " .. fm_sid:sub(1, 8)
+      elseif context then
+        label = "session restarted (with context)"
+      else
+        label = "session restarted"
+      end
+      vim.notify("neowork: " .. label, vim.log.levels.INFO)
     end)
-  end)
+  end
+  if fm_sid ~= "" then
+    M.resume_session(buf, fm_sid, done)
+  else
+    M.create_session(buf, done)
+  end
 end
 
 function M._retry_with_new_session(buf, text)
@@ -414,6 +477,12 @@ function M._subscribe(buf, session_id, client)
         M._modes[buf] = M._modes[buf] or { available = {} }
         M._modes[buf].current_id = su.modeId
         redraw_status()
+      elseif su.sessionUpdate == const.event.available_commands_update then
+        local ok_s, stream = pcall(require, "neowork.stream")
+        if ok_s and stream then
+          stream._available_commands[buf] = su.availableCommands or su.commands or {}
+        end
+        redraw_status()
       end
       local max_output = config.get("max_tool_output_lines") or 50
       pcall(session_store.apply_event, buf, su, { max_output = max_output })
@@ -432,6 +501,17 @@ function M._subscribe(buf, session_id, client)
 end
 
 function M.send(buf, text)
+  if M._streaming[buf] then
+    M._send_queue[buf] = M._send_queue[buf] or {}
+    table.insert(M._send_queue[buf], text)
+    notify_index()
+    redraw_status()
+    vim.notify(
+      string.format("neowork: queued (%d waiting) — Djinni is busy", #M._send_queue[buf]),
+      vim.log.levels.INFO
+    )
+    return
+  end
   local sid = M._sessions[buf]
   if not sid then
     M.create_session(buf, function(err, new_sid)
@@ -441,6 +521,24 @@ function M.send(buf, text)
     return
   end
   M._do_send(buf, sid, text)
+end
+
+function M.queue_depth(buf)
+  local q = M._send_queue[buf]
+  return q and #q or 0
+end
+
+local function drain_send_queue(buf)
+  local q = M._send_queue[buf]
+  if not q or #q == 0 then return end
+  local text = table.remove(q, 1)
+  if #q == 0 then M._send_queue[buf] = nil end
+  vim.schedule(function()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    local doc = get_document()
+    pcall(doc.insert_turn, buf, "You", text)
+    M.send(buf, text)
+  end)
 end
 
 function M.send_fresh(buf, text)
@@ -483,9 +581,16 @@ function M._do_send(buf, session_id, text)
 
   get_stream().start(buf, gen)
 
+  local prompt_text = text
+  local ctx = M._pending_context[buf]
+  if ctx and ctx ~= "" then
+    prompt_text = ctx .. "\n\n" .. text
+    M._pending_context[buf] = nil
+  end
+
   client:request("session/prompt", {
     sessionId = session_id,
-    prompt = { { type = "text", text = text } },
+    prompt = { { type = "text", text = prompt_text } },
   }, function(err, result)
     vim.schedule(function()
       M._streaming[buf] = false
@@ -577,6 +682,8 @@ function M._do_send(buf, session_id, text)
           pcall(vim.cmd, "normal! zb")
         end)
       end
+
+      drain_send_queue(buf)
     end)
   end)
 end
@@ -588,6 +695,9 @@ function M.interrupt(buf)
     set_runtime_status(buf, const.session_status.interrupted, { persist = false })
     client:notify("session/cancel", { sessionId = sid })
     notify_index()
+    vim.notify("neowork: interrupted — session/cancel sent", vim.log.levels.INFO)
+  else
+    vim.notify("neowork: nothing to interrupt", vim.log.levels.WARN)
   end
 end
 

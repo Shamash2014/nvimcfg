@@ -1124,7 +1124,8 @@ function M.refresh_all()
     if buf and vim.api.nvim_buf_is_valid(buf) then
       M._last_refresh[buf] = nil
       M._last_data[buf] = nil
-      vim.schedule(function() M.refresh(buf) end)
+      local scheduled_buf = buf
+      vim.schedule(function() M.refresh(scheduled_buf) end)
     end
   end
 end

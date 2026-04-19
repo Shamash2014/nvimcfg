@@ -57,3 +57,12 @@ Agent sends this as a REQUEST to the client.
 ### Error Patterns
 - "Session not found" (code -32603): Session expired or ACP restarted. Clear session, retry via new session/new.
 - 0-token response: Session in broken state. Invalidate and recreate.
+
+### Background terminal limitation
+Our `clientCapabilities` in `client.lua:125` is empty — we do NOT advertise `terminal`.
+Consequence: when the agent is asked to run a bash with `run_in_background=true`,
+claude-agent-acp falls back to synchronous execution (the turn blocks until the command exits).
+There is no separate terminal-lifecycle message stream; all output arrives via the normal
+`tool_call_update` with the `execute` kind once the command finishes.
+To support true backgrounded terminals we would need to implement the `terminal/create`,
+`terminal/output`, `terminal/wait`, `terminal/kill` handlers and advertise the capability.

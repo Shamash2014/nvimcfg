@@ -180,7 +180,12 @@ function M.attach(buf)
     end,
   })
 
-  pcall(M.set_frontmatter_field, buf, "session", "")
+  local fm_sid = M.read_frontmatter_field(buf, "session") or ""
+  if fm_sid == "" then
+    pcall(M.set_frontmatter_field, buf, "session", "")
+  end
+
+  M.ensure_composer(buf)
 
   local bridge = require("neowork.bridge")
   local cb = function(err)
@@ -188,9 +193,19 @@ function M.attach(buf)
       vim.schedule(function()
         vim.notify("neowork: session attach failed — " .. tostring(err.message or err), vim.log.levels.ERROR)
       end)
+      return
     end
+    vim.schedule(function()
+      if vim.api.nvim_buf_is_valid(buf) then
+        M.ensure_composer(buf)
+      end
+    end)
   end
-  bridge.create_session(buf, cb)
+  if fm_sid ~= "" then
+    bridge.resume_session(buf, fm_sid, cb)
+  else
+    bridge.create_session(buf, cb)
+  end
 end
 
 function M.get_fm_end(buf)

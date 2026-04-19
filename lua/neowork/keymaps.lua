@@ -71,19 +71,22 @@ function M.setup_document_keymaps(buf)
     local items = {}
     local seen = {}
     for name, _ in pairs(local_slash) do
-      if name:lower():find(needle, 1, true) then
+      local lname = name:lower()
+      if lname:find(needle, 1, true) then
         items[#items + 1] = { word = "/" .. name, menu = "local", abbr = "/" .. name }
-        seen[name] = true
+        seen[lname] = true
       end
     end
     for _, c in ipairs(agent_commands()) do
-      if not seen[c.name] and c.name:lower():find(needle, 1, true) then
+      local lname = (c.name or ""):lower()
+      if lname ~= "" and not seen[lname] and lname:find(needle, 1, true) then
         items[#items + 1] = {
           word = "/" .. c.name,
           abbr = "/" .. c.name,
           menu = "agent",
           info = c.description or "",
         }
+        seen[lname] = true
       end
     end
     table.sort(items, function(a, b) return a.word < b.word end)
@@ -125,6 +128,9 @@ function M.setup_document_keymaps(buf)
 
     document.commit_compose(buf)
     require("neowork.bridge").send(buf, text)
+    if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].modified then
+      vim.api.nvim_buf_call(buf, function() pcall(vim.cmd, "silent! write") end)
+    end
   end
 
   local function do_send_from_insert()
@@ -188,11 +194,34 @@ function M.setup_document_keymaps(buf)
   map("n", "]p", function() jump_entry(1) end, "next plan entry")
   map("n", "[p", function() jump_entry(-1) end, "previous plan entry")
 
-  local function in_compose_area()
+  local function compose_bounds()
+    document.ensure_composer(buf)
     local compose = document.find_compose_line(buf)
-    if not compose then return false end
+    if not compose then return nil, nil end
+    local lc = vim.api.nvim_buf_line_count(buf)
+    for i = compose, lc do
+      local line = vim.api.nvim_buf_get_lines(buf, i - 1, i, false)[1]
+      if line == "---" then
+        return compose, i
+      end
+    end
+    return compose, lc + 1
+  end
+
+  local function in_compose_area()
+    local compose, term_row = compose_bounds()
+    if not compose or not term_row then return false end
     local row = vim.api.nvim_win_get_cursor(0)[1]
-    return row >= compose
+    return row >= compose and row < term_row
+  end
+
+  local function focus_compose()
+    local compose, term_row = compose_bounds()
+    if not compose or not term_row then return end
+    local target = math.max(compose, term_row - 1)
+    local line = vim.api.nvim_buf_get_lines(buf, target - 1, target, false)[1] or ""
+    vim.api.nvim_win_set_cursor(0, { target, #line })
+    vim.cmd("startinsert!")
   end
 
   map("n", "o", function()
@@ -200,13 +229,11 @@ function M.setup_document_keymaps(buf)
       vim.cmd("normal! o")
       vim.cmd("startinsert")
     else
-      document.ensure_composer(buf)
-      local last = vim.api.nvim_buf_line_count(buf)
-      vim.api.nvim_win_set_cursor(0, { last, 0 })
-      vim.cmd("normal! o")
-      vim.cmd("startinsert")
+      focus_compose()
     end
   end, "open line (join compose if outside)")
+
+  map("n", "<C-i>", focus_compose, "focus compose")
 
   map("n", "G", function()
     local last = vim.api.nvim_buf_line_count(buf)
@@ -218,18 +245,35 @@ function M.setup_document_keymaps(buf)
   map("n", "<C-c>", interrupt, "interrupt")
   map("i", "<C-c>", function() vim.cmd("stopinsert"); interrupt() end, "interrupt")
 
-  vim.keymap.set("n", "r", function()
+  local function on_role_line()
     local ast = require("neowork.ast")
     local row = vim.api.nvim_win_get_cursor(0)[1]
     local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
-    if ast.role_of_line(line) == "You" or ast.role_of_line(line) == "Djinni" then
-      document.fork_at_cursor(buf)
+    local role = ast.role_of_line(line)
+    return role == "You" or role == "Djinni"
+  end
+
+  vim.keymap.set("n", "r", function()
+    if on_role_line() then
+      require("neowork.bridge").restart(buf)
     else
       vim.api.nvim_feedkeys("r", "n", false)
     end
-  end, { buffer = buf, silent = true, nowait = true, desc = "neowork: fork on role line / replace char" })
+  end, { buffer = buf, silent = true, nowait = true, desc = "neowork: restart on role line / replace char" })
+
+  vim.keymap.set("n", "f", function()
+    if on_role_line() then
+      document.fork_at_cursor(buf)
+    else
+      vim.api.nvim_feedkeys("f", "n", false)
+    end
+  end, { buffer = buf, silent = true, nowait = true, desc = "neowork: fork on role line / find char" })
 
   map("n", "<Tab>", function()
+    if not in_compose_area() then
+      focus_compose()
+      return
+    end
     if vim.fn.foldclosed(".") ~= -1 then
       vim.cmd("normal! zo")
     elseif vim.fn.foldlevel(".") > 0 then

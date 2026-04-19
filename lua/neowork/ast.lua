@@ -25,6 +25,8 @@ local ROLE_HEADING = "^#%s(%w+)%s*$"
 local ROLE_VALID = { You = true, Djinni = true, System = true }
 local FM_DELIM = "^%-%-%-%s*$"
 local FM_KEY = "^(%w[%w_-]*):%s*(.*)$"
+local SUMMARY_HEADING = "^#%s*Summary%s*$"
+local TOP_HEADING = "^#%s*[^#%s].*$"
 local TOOL_HEADER = "^#### %[([^%]]+)%] "
 local BLOCKQUOTE = "^>"
 local THEMATIC = "^[%-_%*][%-_%*][%-_%*]+%s*$"
@@ -158,6 +160,41 @@ end
 ---@return string|nil
 function M.read_frontmatter_field(buf, key)
   return snapshot(buf).fm[key]
+end
+
+---@param buf integer
+---@return { heading_line: integer, content_start: integer, content_end: integer, next_heading_line: integer|nil }|nil
+function M.summary_section(buf)
+  local s = snapshot(buf)
+  local heading_line
+  for i = s.fm_end + 1, #s.lines do
+    if s.lines[i]:match(SUMMARY_HEADING) then
+      heading_line = i
+      break
+    end
+  end
+  if not heading_line then return nil end
+
+  local next_heading_line
+  for i = heading_line + 1, #s.lines do
+    if s.lines[i]:match(TOP_HEADING) then
+      next_heading_line = i
+      break
+    end
+  end
+
+  local content_start = heading_line + 1
+  local content_end = (next_heading_line or (#s.lines + 1)) - 1
+  while content_end >= content_start and s.lines[content_end] == "" do
+    content_end = content_end - 1
+  end
+
+  return {
+    heading_line = heading_line,
+    content_start = content_start,
+    content_end = content_end,
+    next_heading_line = next_heading_line,
+  }
 end
 
 ---@param buf integer

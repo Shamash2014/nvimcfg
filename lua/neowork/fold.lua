@@ -2,6 +2,7 @@ local M = {}
 
 M._cache = {}
 M._autofolded = {}
+M._auto_closed = {}
 
 local ast = require("neowork.ast")
 
@@ -123,10 +124,11 @@ function M.foldtext()
 end
 
 function M.attach_window(buf)
+  local desired_expr = "v:lua.require'neowork.fold'.expr(v:lnum)"
   for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-    if vim.api.nvim_win_is_valid(win) then
+    if vim.api.nvim_win_is_valid(win) and vim.wo[win].foldexpr ~= desired_expr then
       vim.wo[win].foldmethod = "expr"
-      vim.wo[win].foldexpr = "v:lua.require'neowork.fold'.expr(v:lnum)"
+      vim.wo[win].foldexpr = desired_expr
       vim.wo[win].foldtext = "v:lua.require'neowork.fold'.foldtext()"
       vim.wo[win].foldenable = true
       vim.wo[win].foldlevel = 1
@@ -154,9 +156,55 @@ function M.attach_window(buf)
   end
 end
 
+local function safe_foldclose(winid, start_lnum, end_lnum)
+  local level = vim.api.nvim_win_call(winid, function()
+    return vim.fn.foldlevel(start_lnum)
+  end)
+  if not level or level < 2 then return false end
+  local closed = vim.api.nvim_win_call(winid, function()
+    return vim.fn.foldclosed(start_lnum)
+  end)
+  if closed ~= -1 then return true end
+  vim.fn.win_execute(winid, string.format("silent! %d,%d foldclose", start_lnum, end_lnum))
+  local verified = vim.api.nvim_win_call(winid, function()
+    return vim.fn.foldclosed(start_lnum)
+  end)
+  return verified ~= -1
+end
+
+function M.close_tool_folds(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local winid
+  for _, w in ipairs(vim.fn.win_findbuf(buf)) do
+    if vim.api.nvim_win_is_valid(w) then winid = w; break end
+  end
+  if not winid then return end
+
+  local turn = ast.active_djinni_turn(buf)
+  if not turn then return end
+
+  local items = ast.tool_items(buf, turn)
+  if #items == 0 then return end
+
+  M._auto_closed[buf] = M._auto_closed[buf] or {}
+  local closed = M._auto_closed[buf]
+
+  for _, item in ipairs(items) do
+    if not closed[item.tool_id] then
+      local s, e = ast.find_tool_block(buf, item.tool_id)
+      if s and e and e > s then
+        if safe_foldclose(winid, s, e) then
+          closed[item.tool_id] = true
+        end
+      end
+    end
+  end
+end
+
 function M.detach(buf)
   M._cache[buf] = nil
   M._autofolded[buf] = nil
+  M._auto_closed[buf] = nil
 end
 
 function M.invalidate(buf)

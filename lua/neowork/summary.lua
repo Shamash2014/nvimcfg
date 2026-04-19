@@ -14,6 +14,12 @@ function M.set(buf, text)
   M.render_inline(buf)
 end
 
+function M.preview(buf, text)
+  local value = text or ""
+  M._text[buf] = value
+  M.render_inline(buf)
+end
+
 function M.get(buf)
   if M._text[buf] ~= nil then return M._text[buf] end
   local ok, document = pcall(require, "neowork.document")
@@ -159,6 +165,10 @@ function M.pills(buf)
     local chars = bridge._spinner_chars or { "·" }
     local idx = ((bridge._spinner_frame or 0) % #chars) + 1
     parts[#parts + 1] = "%#NeoworkStatus#" .. chars[idx] .. "%*"
+  end
+  local queue_depth = (bridge.queue_depth and bridge.queue_depth(buf)) or 0
+  if queue_depth > 0 then
+    parts[#parts + 1] = "%#NeoworkStatus# ⏳ " .. queue_depth .. " queued %*"
   end
   parts[#parts + 1] = pill(turns .. " turns")
   parts[#parts + 1] = pill(tool_calls .. " tools")

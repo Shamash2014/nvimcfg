@@ -8,6 +8,12 @@ local const = require("neowork.const")
 local get_document = util.lazy("neowork.document")
 local get_bridge = util.lazy("neowork.bridge")
 
+local FILE_MUTATING_KINDS = { edit = true, create = true, write = true, delete = true, move = true }
+
+local function is_buf_focused(buf)
+  return vim.api.nvim_get_current_buf() == buf
+end
+
 M._tail_row = {}
 M._tail_text = {}
 M._pending = {}
@@ -137,7 +143,14 @@ function M._update_summary(buf)
 
   if M._summary_last[buf] == last then return end
 
-  pcall(require("neowork.summary").set, buf, last)
+  local ok, summary = pcall(require, "neowork.summary")
+  if ok and summary then
+    if type(summary.preview) == "function" then
+      pcall(summary.preview, buf, last)
+    else
+      pcall(summary.set, buf, last)
+    end
+  end
   M._summary_last[buf] = last
 end
 
@@ -156,7 +169,14 @@ local function set_summary_fallback(buf, text)
   if M._summary_text[buf] and M._summary_text[buf] ~= "" then return end
   local value = normalize_summary(text)
   if not value or M._summary_last[buf] == value then return end
-  pcall(require("neowork.summary").set, buf, value)
+  local ok, summary = pcall(require, "neowork.summary")
+  if ok and summary then
+    if type(summary.preview) == "function" then
+      pcall(summary.preview, buf, value)
+    else
+      pcall(summary.set, buf, value)
+    end
+  end
   M._summary_last[buf] = value
 end
 
@@ -252,6 +272,9 @@ end
 local function set_runtime_status(buf, status, meta)
   local ok, bridge = pcall(get_bridge)
   if not ok or not bridge then return end
+  if bridge._runtime_status[buf] == status and bridge._runtime_meta[buf] == meta then
+    return
+  end
   bridge._runtime_status[buf] = status
   bridge._runtime_meta[buf] = meta
   request_status_redraw(buf)
@@ -363,6 +386,11 @@ function M.stop(buf, gen)
   M._flush_now(buf)
   M._update_summary(buf)
 
+  local summary_text = M._summary_last[buf]
+  if summary_text and summary_text ~= "" then
+    pcall(require("neowork.summary").set, buf, summary_text)
+  end
+
   local chunks = M._agent_text[buf]
   if chunks and #chunks > 0 then
     local full = table.concat(chunks)
@@ -395,6 +423,7 @@ function M.stop(buf, gen)
   vim.schedule(function()
     if not vim.api.nvim_buf_is_valid(buf) then return end
     get_document().compute_folds(buf)
+    pcall(require("neowork.fold").close_tool_folds, buf)
     local ok, hl = pcall(require, "neowork.highlight")
     if ok then
       local total = vim.api.nvim_buf_line_count(buf)
@@ -484,6 +513,15 @@ function M.on_event(buf, su, gen)
         locations = su.locations,
         terminal = true,
       })
+    end
+
+    if terminal and FILE_MUTATING_KINDS[su.kind or ""] then
+      vim.schedule(function() pcall(vim.cmd, "silent! checktime") end)
+    end
+
+    if terminal and not is_buf_focused(buf) then
+      local label = (su.title or su.kind or "tool") .. " (" .. (su.status or "done") .. ")"
+      vim.notify("neowork: " .. label, vim.log.levels.INFO)
     end
 
     if terminal or is_initial then
