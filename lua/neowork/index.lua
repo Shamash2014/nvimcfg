@@ -285,6 +285,12 @@ function M._render(buf, sessions, total_cost)
   local panel_w = math.max(60, window_width_for(buf) - 4)
   local open_ranges = {}
 
+  local function short_model(name)
+    if not name or name == "" then return nil end
+    local m = name:gsub("^claude%-", ""):gsub("^gpt%-", "")
+    return m
+  end
+
   local function render_session(s, indent)
     indent = indent or "  "
     local slug = s._slug or "unnamed"
@@ -308,6 +314,9 @@ function M._render(buf, sessions, total_cost)
       required_hl = "NeoworkIdxRequiredRun"
     else
       local bits = {}
+      local model = short_model(s.model)
+      if model then bits[#bits + 1] = model end
+      if s.tokens and s.tokens ~= "" and s.tokens ~= "0" then bits[#bits + 1] = s.tokens end
       local age = time_ago(s.created)
       if age ~= "" then bits[#bits + 1] = age end
       if s.context_pct and s.context_pct > 0 then bits[#bits + 1] = s.context_pct .. "%" end
@@ -447,6 +456,16 @@ function M._render(buf, sessions, total_cost)
             add_detail(prefix .. (e.content or e.title or ""), 0, { { #"  ", #"  " + #mark, mark_hl } })
           end
         end
+      end
+
+      if s.status and s.status ~= "" then
+        add_detail("STAGE " .. s.status, 5)
+      end
+      if s.model and s.model ~= "" then
+        add_detail("MODEL " .. s.model, 5)
+      end
+      if s.tokens and s.tokens ~= "" and s.tokens ~= "0" then
+        add_detail("TOKENS " .. s.tokens, 6)
       end
 
       if s._last_turn and s._last_turn ~= "" then

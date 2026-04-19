@@ -580,14 +580,6 @@ function M._do_send(buf, session_id, text)
   pcall(session_store.add_user_message, buf, text)
   notify_index()
 
-  local summary_mod = require("neowork.summary")
-  if summary_mod.get(buf) == "" then
-    local first_line = text:match("^[^\n]*") or text
-    local seed = first_line:gsub("^%s+", ""):gsub("%s+$", "")
-    if #seed > 80 then seed = seed:sub(1, 79) .. "…" end
-    if seed ~= "" then summary_mod.set(buf, seed) end
-  end
-
   if doc.find_last_role_row then
     M._last_user_row[buf] = doc.find_last_role_row(buf, "You")
   end

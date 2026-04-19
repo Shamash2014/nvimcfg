@@ -7,10 +7,6 @@ M._text = {}
 function M.set(buf, text)
   local value = text or ""
   M._text[buf] = value
-  local ok, document = pcall(require, "neowork.document")
-  if ok and vim.api.nvim_buf_is_valid(buf) then
-    document.set_frontmatter_field(buf, "summary", value)
-  end
   M.render_inline(buf)
 end
 
@@ -22,21 +18,12 @@ end
 
 function M.get(buf)
   if M._text[buf] ~= nil then return M._text[buf] end
-  local ok, document = pcall(require, "neowork.document")
-  if ok and vim.api.nvim_buf_is_valid(buf) then
-    local persisted = document.read_frontmatter_field(buf, "summary") or ""
-    M._text[buf] = persisted
-    return persisted
-  end
+  M._text[buf] = ""
   return ""
 end
 
 function M.clear(buf)
   M._text[buf] = ""
-  local ok, document = pcall(require, "neowork.document")
-  if ok and vim.api.nvim_buf_is_valid(buf) then
-    document.set_frontmatter_field(buf, "summary", "")
-  end
   M.render_inline(buf)
 end
 

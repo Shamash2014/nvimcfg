@@ -97,8 +97,11 @@ local function collect_sessions()
     local short = vim.fn.fnamemodify(name_full, ":t:r")
     if short == "" then short = "[buf " .. buf .. "]" end
 
-    local title = document.read_frontmatter_field(buf, "summary")
-    if not title or title == "" then title = short end
+    local title = require("neowork.summary").get(buf)
+    if title == "" and sid ~= "" then
+      title = require("neowork.store").get_last_agent_turn(sid, vim.b[buf].neowork_root or document.read_frontmatter_field(buf, "root") or vim.fn.getcwd()) or ""
+    end
+    if title == "" then title = short end
     local root = document.read_frontmatter_field(buf, "root")
     local project = root and vim.fn.fnamemodify(root, ":t") or name_full:match("([^/]+)/[^/]+/[^/]+$") or ""
     local usage = bridge._usage[buf]
@@ -164,7 +167,7 @@ function M.pick_task(opts)
       if file_path and not seen[file_path] then
         seen[file_path] = true
         items[#items + 1] = {
-          text = entry.summary ~= "" and entry.summary or entry._slug or vim.fn.fnamemodify(file_path, ":t:r"),
+          text = entry._slug or vim.fn.fnamemodify(file_path, ":t:r"),
           project = entry.project or vim.fn.fnamemodify(root, ":t"),
           status = entry.status or "unknown",
           file_path = file_path,

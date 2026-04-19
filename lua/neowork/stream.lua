@@ -255,47 +255,6 @@ function M._update_summary(buf)
   M._summary_last[buf] = last
 end
 
-local function normalize_summary(text)
-  local value = tostring(text or ""):gsub("[\r\n\t]+", " "):gsub("%s+", " ")
-  value = vim.trim(value)
-  if value == "" then return nil end
-  if vim.fn.strchars(value) > 80 then
-    value = vim.fn.strcharpart(value, 0, 79) .. "…"
-  end
-  return value
-end
-
-local function set_summary_fallback(buf, text)
-  if not vim.api.nvim_buf_is_valid(buf) then return end
-  if M._summary_text[buf] and M._summary_text[buf] ~= "" then return end
-  local value = normalize_summary(text)
-  if not value or M._summary_last[buf] == value then return end
-  local ok, summary = pcall(require, "neowork.summary")
-  if ok and summary then
-    if type(summary.preview) == "function" then
-      pcall(summary.preview, buf, value)
-    else
-      pcall(summary.set, buf, value)
-    end
-  end
-  M._summary_last[buf] = value
-end
-
-local function tool_summary(su)
-  return normalize_summary(su.title or su.kind or "tool")
-end
-
-local function plan_summary(entries)
-  entries = entries or {}
-  local pending = 0
-  for _, entry in ipairs(entries) do
-    if (entry.status or "") ~= const.plan_status.completed then
-      pending = pending + 1
-    end
-  end
-  return normalize_summary(string.format("plan · %d steps (%d pending)", #entries, pending))
-end
-
 function M._flush_now(buf)
   local chunks = M._pending[buf]
   if not chunks or #chunks == 0 then return end
@@ -629,16 +588,11 @@ function M.on_event(buf, su, gen)
       vim.notify("neowork: " .. label, vim.log.levels.INFO)
     end
 
-    if terminal or is_initial then
-      set_summary_fallback(buf, tool_summary(su))
-    end
-
   elseif t == const.event.plan then
     local ok, plan = pcall(require, "neowork.plan")
     if ok and su.entries then
       plan.on_plan_event(buf, su.entries)
     end
-    set_summary_fallback(buf, plan_summary(su.entries))
 
   elseif t == const.event.usage_update or t == const.event.result then
     local doc = get_document()

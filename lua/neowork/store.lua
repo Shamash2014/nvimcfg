@@ -235,7 +235,6 @@ function M.write_session_file(root, slug, meta)
     "created: " .. (meta.created or os.date("!%Y-%m-%dT%H:%M:%SZ")),
     "tokens: " .. (meta.tokens or "0"),
     "cost: " .. (meta.cost or "0.00"),
-    "summary: " .. (meta.summary or ""),
     "parent: " .. (meta.parent or ""),
     "schedule_enabled: " .. (meta.schedule_enabled or "false"),
     "schedule_interval: " .. (meta.schedule_interval or ""),

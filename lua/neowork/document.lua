@@ -675,6 +675,10 @@ function M.find_djinni_tail(buf)
 end
 
 function M.count_turns(buf)
+  local c = scan_cache(buf)
+  if c.turn_count ~= nil then
+    return c.turn_count
+  end
   local ast = require("neowork.ast")
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local count = 0
@@ -688,6 +692,7 @@ function M.count_turns(buf)
       end
     end
   end
+  c.turn_count = count
   return count
 end
 
