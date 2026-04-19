@@ -38,6 +38,8 @@ local function git_current_branch(callback)
   end)
 end
 
+M.git_current_branch = git_current_branch
+
 local function detect_backend(callback)
   run_cmd({ "git", "remote", "get-url", "origin" }, function(out, err, code)
     if code ~= 0 then
@@ -390,7 +392,9 @@ function M.setup()
     vim.notify("Active CI watchers:\n" .. table.concat(lines, "\n"), vim.log.levels.INFO, { title = TITLE })
   end, { desc = "List active CI watchers" })
 
-  vim.keymap.set("n", "<leader>gw", "<cmd>CIWatch<cr>", { desc = "Watch CI for current branch" })
+  vim.keymap.set("n", "<leader>gw", function()
+    require("core.ci_watch.picker").open({ use_current_branch = true, fallback_watch_current = true })
+  end, { desc = "CI watch: pick (current branch default)" })
   vim.keymap.set("n", "<leader>gW", "<cmd>CIWatchCancel<cr>", { desc = "Cancel CI watchers" })
   vim.keymap.set("n", "<leader>gp", "<cmd>CIPicker<cr>", { desc = "Pick from open PRs and recent runs" })
   vim.keymap.set("n", "<leader>gl", "<cmd>CILogs<cr>", { desc = "View latest failed CI logs" })

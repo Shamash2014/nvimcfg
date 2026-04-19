@@ -29,7 +29,7 @@ local function relative_time(iso)
   return string.format("%dd ago", math.floor(ago / 86400))
 end
 
-local function build_items(prs, runs)
+local function build_items(prs, runs, default_branch)
   local items = {}
   for _, p in ipairs(prs or {}) do
     items[#items + 1] = {
@@ -54,6 +54,18 @@ local function build_items(prs, runs)
       created_at = r.created_at,
       text = string.format("RUN %s %s %s %s %s", tostring(r.id or ""), r.status or "?", r.name or "", r.branch or "", r.event or ""),
     }
+  end
+  if default_branch and default_branch ~= "" then
+    local kind_rank = { pr = 0, run = 1 }
+    table.sort(items, function(a, b)
+      local a_match = a.branch == default_branch
+      local b_match = b.branch == default_branch
+      if a_match ~= b_match then return a_match end
+      if a_match and b_match then
+        return (kind_rank[a.kind] or 2) < (kind_rank[b.kind] or 2)
+      end
+      return false
+    end)
   end
   return items
 end
