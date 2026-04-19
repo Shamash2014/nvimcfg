@@ -273,7 +273,7 @@ function M.create_session(buf, callback)
       M._sessions[buf] = sid
       M._bufs[sid] = buf
       M._stream_gen[buf] = 0
-      Session.attach_client_session(sid, client, provider_name, root, result)
+      Session.attach_new_session(sid, client, provider_name, root, result)
 
       if result.modes then
         M._modes[buf] = {
@@ -304,12 +304,15 @@ function M.create_session(buf, callback)
   end)
 end
 
-local function supports_load_session(client)
+local function resolve_resume_method(client, provider_name)
   local caps = client and (client.server_capabilities or client.agent_capabilities)
-  if not caps then return false end
-  if caps.loadSession then return true end
-  local session_caps = caps.sessionCapabilities
-  return session_caps and session_caps.resume or false
+  local session_caps = caps and caps.sessionCapabilities or nil
+  if (caps and caps.loadSession) or (session_caps and session_caps.resume) then
+    return "session/load", true
+  end
+  local provider = Provider.get(provider_name)
+  local resume = provider and provider.resume or { method = "session/resume" }
+  return resume.method, resume.needs_cwd == true
 end
 
 function M.resume_session(buf, session_id, callback)
@@ -324,6 +327,10 @@ function M.resume_session(buf, session_id, callback)
       return
     end
 
+    local doc = get_document()
+    local provider_name = doc.read_frontmatter_field(buf, "provider") or config.get("provider")
+    local root = doc.read_frontmatter_field(buf, "root") or vim.fn.getcwd()
+
     local function fall_back_to_new()
       local old_sid = M._sessions[buf]
       if old_sid then M._bufs[old_sid] = nil end
@@ -334,24 +341,19 @@ function M.resume_session(buf, session_id, callback)
       M.create_session(buf, callback)
     end
 
-    if not supports_load_session(client) then
-      fall_back_to_new()
-      return
-    end
+    local method, needs_cwd = resolve_resume_method(client, provider_name)
 
     M._sessions[buf] = session_id
     M._bufs[session_id] = buf
     M._stream_gen[buf] = 0
     M._subscribe(buf, session_id, client)
 
-    local doc = get_document()
-    local root = doc.read_frontmatter_field(buf, "root") or vim.fn.getcwd()
-    local req = {
-      sessionId = session_id,
-      cwd = vim.fn.fnamemodify(root, ":p"):gsub("/+$", ""),
-      mcpServers = setmetatable({}, { __jsontype = "array" }),
-    }
-    client:request("session/load", req, function(req_err, result)
+    local req = { sessionId = session_id }
+    if needs_cwd then
+      req.cwd = vim.fn.fnamemodify(root, ":p"):gsub("/+$", "")
+      req.mcpServers = setmetatable({}, { __jsontype = "array" })
+    end
+    client:request(method, req, function(req_err, result)
       if req_err then
         subscribers.detach(buf)
         fall_back_to_new()

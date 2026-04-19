@@ -288,6 +288,7 @@ function M.setup_document_keymaps(buf)
   map("n", "gM", function() vim.cmd("NwModel") end, "pick model")
   map("n", "gP", function() vim.cmd("NwProvider") end, "pick provider")
   map("n", "gR", function() vim.cmd("NwRestart") end, "restart session")
+  map("n", "gA", function() require("djinni.automations").pick({ buf = buf }) end, "automations picker")
 
   map("n", "q", function()
     vim.api.nvim_win_close(0, false)

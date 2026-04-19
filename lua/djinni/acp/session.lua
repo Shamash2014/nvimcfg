@@ -170,6 +170,7 @@ local function apply_session_result(entry, session_id, result, opts)
   if not entry.model_config_option and result and (result.models or result.availableModels) then
     entry.available_models = result.models or result.availableModels
   end
+  entry.skills_injected = not (opts and opts.is_new)
   register_session(session_id, entry)
 
   if opts.model and opts.model ~= "" then
@@ -204,6 +205,11 @@ function M.attach_client_session(session_id, client, provider_name, project_root
     project_root = project_root,
   }
   apply_session_result(entry, session_id, result or vim.empty_dict(), opts or {})
+end
+
+function M.attach_new_session(session_id, client, provider_name, project_root, result, opts)
+  opts = vim.tbl_extend("force", opts or {}, { is_new = true })
+  M.attach_client_session(session_id, client, provider_name, project_root, result, opts)
 end
 
 function M.detach_client_session(session_id)
@@ -264,7 +270,8 @@ function M.create_task_session(project_root, callback, opts)
         provider_name = provider_name,
         project_root = project_root,
       }
-      apply_session_result(entry, session_id, result, opts)
+      local apply_opts = vim.tbl_extend("force", opts, { is_new = true })
+      apply_session_result(entry, session_id, result, apply_opts)
 
       if callback then
         callback(nil, session_id, result)
@@ -358,7 +365,8 @@ function M.create_or_resume_session(project_root, session_id, callback, opts)
           provider_name = provider_name,
           project_root = project_root,
         }
-        apply_session_result(entry, new_sid, result, opts)
+        local apply_opts = vim.tbl_extend("force", opts, { is_new = true })
+        apply_session_result(entry, new_sid, result, apply_opts)
 
         log.info("create_or_resume: new session OK sid=" .. new_sid)
         if callback then callback(nil, new_sid, result) end

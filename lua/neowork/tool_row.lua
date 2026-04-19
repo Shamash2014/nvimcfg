@@ -357,6 +357,8 @@ function M.render(buf, tool_id, payload)
   if existing_s then
     local turn = ast.turn_at_line(buf, existing_s)
     if turn and turn.role == "Djinni" then
+      local fold = require("neowork.fold")
+      local was_open = fold.is_tool_fold_open(buf, tool_id)
       writequeue.enqueue(buf, function()
         if not vim.api.nvim_buf_is_valid(buf) then return end
         local s, e = ast.find_tool_block(buf, tool_id)
@@ -370,6 +372,13 @@ function M.render(buf, tool_id, payload)
         state.by_lnum[s - 1] = tool_id
         ast.assert_invariant(buf, "tool_row.update")
       end)
+      if was_open then
+        fold.mark_user_opened(buf, tool_id)
+        vim.schedule(function()
+          if not vim.api.nvim_buf_is_valid(buf) then return end
+          fold.restore_tool_fold_open(buf, tool_id)
+        end)
+      end
       schedule_close_tool_folds(buf)
       return
     end

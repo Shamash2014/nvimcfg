@@ -3,6 +3,7 @@ local M = {}
 M._cache = {}
 M._autofolded = {}
 M._auto_closed = {}
+M._user_opened = {}
 
 local ast = require("neowork.ast")
 
@@ -159,6 +160,40 @@ function M.attach_window(buf)
   end
 end
 
+local function first_winid(buf)
+  for _, w in ipairs(vim.fn.win_findbuf(buf)) do
+    if vim.api.nvim_win_is_valid(w) then return w end
+  end
+  return nil
+end
+
+function M.is_tool_fold_open(buf, tool_id)
+  if not vim.api.nvim_buf_is_valid(buf) or not tool_id then return nil end
+  local winid = first_winid(buf)
+  if not winid then return nil end
+  local s = ast.find_tool_block(buf, tool_id)
+  if not s then return nil end
+  local closed = vim.api.nvim_win_call(winid, function()
+    return vim.fn.foldclosed(s)
+  end)
+  return closed == -1
+end
+
+function M.mark_user_opened(buf, tool_id)
+  if not tool_id then return end
+  M._user_opened[buf] = M._user_opened[buf] or {}
+  M._user_opened[buf][tool_id] = true
+end
+
+function M.restore_tool_fold_open(buf, tool_id)
+  if not vim.api.nvim_buf_is_valid(buf) or not tool_id then return end
+  local winid = first_winid(buf)
+  if not winid then return end
+  local s = ast.find_tool_block(buf, tool_id)
+  if not s then return end
+  vim.fn.win_execute(winid, string.format("silent! %dfoldopen", s))
+end
+
 local function safe_foldclose(winid, start_lnum, end_lnum)
   local level = vim.api.nvim_win_call(winid, function()
     return vim.fn.foldlevel(start_lnum)
@@ -190,14 +225,28 @@ function M.close_tool_folds(buf)
   if #items == 0 then return end
 
   M._auto_closed[buf] = M._auto_closed[buf] or {}
+  M._user_opened[buf] = M._user_opened[buf] or {}
   local closed = M._auto_closed[buf]
+  local user_opened = M._user_opened[buf]
 
   for _, item in ipairs(items) do
-    if not closed[item.tool_id] then
-      local s, e = ast.find_tool_block(buf, item.tool_id)
+    local tid = item.tool_id
+    if user_opened[tid] then
+    elseif closed[tid] then
+      local s = ast.find_tool_block(buf, tid)
+      if s then
+        local foldclosed = vim.api.nvim_win_call(winid, function()
+          return vim.fn.foldclosed(s)
+        end)
+        if foldclosed == -1 then
+          user_opened[tid] = true
+        end
+      end
+    else
+      local s, e = ast.find_tool_block(buf, tid)
       if s and e and e > s then
         if safe_foldclose(winid, s, e) then
-          closed[item.tool_id] = true
+          closed[tid] = true
         end
       end
     end
@@ -208,6 +257,7 @@ function M.detach(buf)
   M._cache[buf] = nil
   M._autofolded[buf] = nil
   M._auto_closed[buf] = nil
+  M._user_opened[buf] = nil
 end
 
 function M.invalidate(buf)
