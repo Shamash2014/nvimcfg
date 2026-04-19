@@ -338,6 +338,10 @@ function M.resume_session(buf, session_id, callback)
       M._sessions[buf] = nil
       get_document().set_frontmatter_field(buf, "session", "")
       subscribers.detach(buf)
+      if not M._pending_context[buf] then
+        local ctx = M._build_context_from_buffer(buf)
+        if ctx then M._pending_context[buf] = ctx end
+      end
       M.create_session(buf, callback)
     end
 
@@ -390,7 +394,7 @@ end
 
 local MAX_CONTEXT_CHARS = 20000
 
-local function build_context_from_buffer(buf)
+function M._build_context_from_buffer(buf)
   if not vim.api.nvim_buf_is_valid(buf) then return nil end
   local ok_ast, ast = pcall(require, "neowork.ast")
   if not ok_ast then return nil end
@@ -421,7 +425,7 @@ function M.restart(buf)
   local fm_sid = doc.read_frontmatter_field(buf, "session") or ""
   local context
   if fm_sid == "" then
-    context = build_context_from_buffer(buf)
+    context = M._build_context_from_buffer(buf)
   end
   M.detach(buf)
   if context then
@@ -520,10 +524,16 @@ function M.send(buf, text)
   end
   local sid = M._sessions[buf]
   if not sid then
-    M.create_session(buf, function(err, new_sid)
+    local fm_sid = get_document().read_frontmatter_field(buf, "session") or ""
+    local after = function(err, new_sid)
       if err then return end
       M._do_send(buf, new_sid, text)
-    end)
+    end
+    if fm_sid ~= "" then
+      M.resume_session(buf, fm_sid, after)
+    else
+      M.create_session(buf, after)
+    end
     return
   end
   M._do_send(buf, sid, text)

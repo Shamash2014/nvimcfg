@@ -1024,18 +1024,25 @@ end
 
 function M._setup_autocmds(buf)
   local group = vim.api.nvim_create_augroup("NeoworkIndex_" .. buf, { clear = true })
+  local function safe_refresh(invalidate)
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    if invalidate then
+      M._last_refresh[buf] = nil
+      M._last_data[buf] = nil
+    end
+    local ok, err = pcall(M.refresh, buf)
+    if not ok then
+      vim.notify_once("neowork.index refresh failed: " .. tostring(err), vim.log.levels.ERROR)
+    end
+  end
   vim.api.nvim_create_autocmd("BufEnter", {
     buffer = buf, group = group,
-    callback = function() M.refresh(buf) end,
+    callback = function() safe_refresh(false) end,
   })
   vim.api.nvim_create_autocmd({ "FocusGained", "VimResume" }, {
     group = group,
     callback = function()
-      if vim.api.nvim_buf_is_valid(buf) and #vim.fn.win_findbuf(buf) > 0 then
-        M._last_refresh[buf] = nil
-        M._last_data[buf] = nil
-        M.refresh(buf)
-      end
+      if #vim.fn.win_findbuf(buf) > 0 then safe_refresh(true) end
     end,
   })
   vim.api.nvim_create_autocmd("VimResized", {
@@ -1098,8 +1105,8 @@ local function sessions_signature(sessions, total_cost, expanded)
       tostring(s.context_pct or ""),
       tostring(s.summary or ""),
       tostring(s._last_turn or ""),
-      tostring(s._last_action and (s._last_action.kind .. "|" .. (s._last_action.summary or "")) or ""),
-      tostring(s._required and (s._required.kind .. "|" .. (s._required.tool_kind or "") .. "|" .. (s._required.title or "")) or ""),
+      tostring(s._last_action and ((s._last_action.kind or "") .. "|" .. (s._last_action.summary or "")) or ""),
+      tostring(s._required and ((s._required.kind or "") .. "|" .. (s._required.tool_kind or "") .. "|" .. (s._required.title or "")) or ""),
     }, "\t")
   end
   return table.concat(parts, "\n")

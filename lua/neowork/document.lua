@@ -100,19 +100,6 @@ function M.attach(buf)
   end
   pcall(require("neowork.fold").attach_window, buf)
   pcall(require("neowork.statuscol").attach_window, buf)
-  vim.api.nvim_create_autocmd("BufWinEnter", {
-    group = augroup,
-    buffer = buf,
-    callback = function()
-      pcall(require("neowork.fold").attach_window, buf)
-      pcall(require("neowork.statuscol").attach_window, buf)
-    end,
-  })
-  vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
-    group = augroup,
-    buffer = buf,
-    callback = function() M.detach(buf) end,
-  })
 
   local root = M.read_frontmatter_field(buf, "root")
   if not root or root == "" then
@@ -120,19 +107,23 @@ function M.attach(buf)
     local dir = vim.fn.fnamemodify(filepath, ":h")
     if vim.fn.fnamemodify(dir, ":t") == ".neowork" then
       root = vim.fn.fnamemodify(dir, ":h")
-  else
+    else
       root = vim.fn.getcwd()
     end
   end
+  vim.b[buf].neowork_root = root
   require("neowork.scheduler").register_root(root)
   pcall(M.apply_frontmatter_overrides, buf)
   pcall(function() require("neowork.bridge").seed_mode_from_frontmatter(buf) end)
 
-  local win = vim.fn.bufwinid(buf)
-  if win ~= -1 then
-    vim.api.nvim_win_call(win, function()
-      vim.cmd("lcd " .. vim.fn.fnameescape(root))
-    end)
+  local function apply_window_settings(win)
+    if not win or win == -1 or not vim.api.nvim_win_is_valid(win) then return end
+    local r = vim.b[buf].neowork_root
+    if r and r ~= "" then
+      pcall(vim.api.nvim_win_call, win, function()
+        vim.cmd("lcd " .. vim.fn.fnameescape(r))
+      end)
+    end
     vim.wo[win].foldminlines = 0
     vim.wo[win].winbar = ""
     vim.wo[win].statusline = "%{%v:lua.require'neowork.summary'.statusline()%}"
@@ -142,6 +133,23 @@ function M.attach(buf)
     vim.wo[win].colorcolumn = ""
     vim.wo[win].winhighlight = "Normal:NeoworkWindow,NormalNC:NeoworkWindow,EndOfBuffer:NeoworkWindow,CursorLine:NeoworkCursorLine,Folded:NeoworkFolded"
   end
+
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = augroup,
+    buffer = buf,
+    callback = function(args)
+      pcall(require("neowork.fold").attach_window, buf)
+      pcall(require("neowork.statuscol").attach_window, buf)
+      apply_window_settings(vim.fn.bufwinid(args.buf))
+    end,
+  })
+  vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
+    group = augroup,
+    buffer = buf,
+    callback = function() M.detach(buf) end,
+  })
+
+  apply_window_settings(vim.fn.bufwinid(buf))
 
   M._fm_end_cache[buf] = nil
 

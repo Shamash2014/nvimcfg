@@ -173,6 +173,7 @@ require("lazy").setup("plugins", {
 
 -- Core modules
 require("core.utils").setup_auto_root()
+require("core.ci_watch").setup()
 
 -- LSP keymaps (only active when LSP is attached)
 vim.api.nvim_create_autocmd("LspAttach", {
