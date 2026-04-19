@@ -1,5 +1,19 @@
 local M = {}
 
+M.GLYPH = {
+  success = { "✓", "DiagnosticOk" },
+  failure = { "✗", "DiagnosticError" },
+  running = { "●", "DiagnosticWarn" },
+  pending = { "●", "DiagnosticWarn" },
+  cancelled = { "○", "Comment" },
+  skipped = { "○", "Comment" },
+  unknown = { "○", "Comment" },
+}
+
+function M.glyph(status)
+  return M.GLYPH[status] or M.GLYPH.unknown
+end
+
 local function run_cmd(cmd, cb)
   local stdout_data, stderr_data = {}, {}
   local ok, job = pcall(vim.fn.jobstart, cmd, {
@@ -196,6 +210,119 @@ function M.fetch_run_log(run_id, opts, callback)
       return
     end
     callback(out, nil)
+  end)
+end
+
+local function parse_iso(iso)
+  if not iso or iso == "" then return nil end
+  local y, mo, d, h, mi, s = iso:match("(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
+  if not y then return nil end
+  return os.time({ year = tonumber(y), month = tonumber(mo), day = tonumber(d), hour = tonumber(h), min = tonumber(mi), sec = tonumber(s), isdst = false })
+end
+
+local function duration_s(started, completed)
+  local a, b = parse_iso(started), parse_iso(completed)
+  if not a or not b then return nil end
+  local d = b - a
+  if d < 0 then return nil end
+  return d
+end
+
+function M.fetch_run_details(run_id, callback)
+  local fields = "jobs,name,displayTitle,status,conclusion,databaseId,headBranch,event,url,startedAt,updatedAt"
+  run_cmd({ "gh", "run", "view", tostring(run_id), "--json", fields }, function(out, err, code)
+    if code ~= 0 then
+      callback(nil, ("gh run view failed: %s"):format((err ~= "" and err or out):sub(1, 400)))
+      return
+    end
+    local data = decode_json(out)
+    if type(data) ~= "table" then
+      callback(nil, "failed to parse gh run view output")
+      return
+    end
+    local jobs = {}
+    for _, j in ipairs(data.jobs or {}) do
+      local steps = {}
+      for _, st in ipairs(j.steps or {}) do
+        steps[#steps + 1] = {
+          number = st.number,
+          name = st.name or "step",
+          status = normalize(st.status, st.conclusion),
+          conclusion = st.conclusion,
+          started_at = st.startedAt,
+          completed_at = st.completedAt,
+          duration_s = duration_s(st.startedAt, st.completedAt),
+        }
+      end
+      jobs[#jobs + 1] = {
+        id = j.databaseId,
+        name = j.name or "job",
+        status = normalize(j.status, j.conclusion),
+        conclusion = j.conclusion,
+        started_at = j.startedAt,
+        completed_at = j.completedAt,
+        duration_s = duration_s(j.startedAt, j.completedAt),
+        url = j.url or "",
+        steps = steps,
+      }
+    end
+    callback({
+      id = data.databaseId or run_id,
+      name = data.name or "",
+      title = data.displayTitle or "",
+      status = normalize(data.status, data.conclusion),
+      conclusion = data.conclusion,
+      branch = data.headBranch or "",
+      event = data.event or "",
+      url = data.url or "",
+      started_at = data.startedAt,
+      updated_at = data.updatedAt,
+      duration_s = duration_s(data.startedAt, data.updatedAt),
+      jobs = jobs,
+    }, nil)
+  end)
+end
+
+function M.fetch_job_log(run_id, job_id, callback)
+  run_cmd({ "gh", "run", "view", tostring(run_id), "--log", "--job", tostring(job_id) }, function(out, err, code)
+    if code ~= 0 then
+      callback(nil, ("gh run view --job failed: %s"):format((err ~= "" and err or out):sub(1, 400)))
+      return
+    end
+    callback(out, nil)
+  end)
+end
+
+function M.fetch_pr_checks_detailed(pr_number, pr_url, callback)
+  run_cmd({ "gh", "pr", "view", tostring(pr_number), "--json", "statusCheckRollup,url,number" }, function(out, err, code)
+    if code ~= 0 then
+      callback(nil, ("gh pr view failed: %s"):format((err ~= "" and err or out):sub(1, 200)))
+      return
+    end
+    local data = decode_json(out)
+    if type(data) ~= "table" then
+      callback(nil, "failed to parse gh pr view output")
+      return
+    end
+    local items = {}
+    for _, entry in ipairs(data.statusCheckRollup or {}) do
+      local details_url = entry.detailsUrl or entry.targetUrl or ""
+      local run_id, job_id = details_url:match("/actions/runs/(%d+)/job/(%d+)")
+      if not run_id then
+        run_id = details_url:match("/actions/runs/(%d+)")
+      end
+      items[#items + 1] = {
+        name = entry.name or entry.context or "check",
+        workflow_name = entry.workflowName or "",
+        status = normalize(entry.status or entry.state, entry.conclusion),
+        conclusion = entry.conclusion,
+        details_url = details_url,
+        url = details_url ~= "" and details_url or pr_url,
+        run_id = run_id and tonumber(run_id) or nil,
+        job_id = job_id and tonumber(job_id) or nil,
+      }
+    end
+    callback(items, nil)
   end)
 end
 
