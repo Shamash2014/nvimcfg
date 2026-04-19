@@ -312,48 +312,27 @@ local function tool_block_in_djinni(buf, tool_id)
   return s, e
 end
 
-local function row_starts_tool(buf, row, tool_id)
-  if not row or row < 1 or not vim.api.nvim_buf_is_valid(buf) then return false end
-  local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
-  return line:find("#### [" .. tool_id .. "] ", 1, true) == 1
-end
-
-local function cached_tool_block(buf, entry, tool_id)
-  local row
-  if entry.extmark_id then
-    local pos = vim.api.nvim_buf_get_extmark_by_id(buf, M.ns, entry.extmark_id, {})
-    if pos and pos[1] then
-      row = pos[1] + 1
-    end
-  end
-  if not row_starts_tool(buf, row, tool_id) then
-    row = entry.row_start
-  end
-  if not row_starts_tool(buf, row, tool_id) then return nil end
-
-  local ast = require("neowork.ast")
-  local turn = ast.turn_at_line(buf, row)
-  if not turn or turn.role ~= "Djinni" then return nil end
-
-  local stop = row
-  local lines = vim.api.nvim_buf_get_lines(buf, row, turn.end_line, false)
-  for i, line in ipairs(lines) do
-    if line and line:match("^#### %[[^%]]+%] ") then break end
-    stop = row + i
-  end
-  while stop > row do
-    local line = vim.api.nvim_buf_get_lines(buf, stop - 1, stop, false)[1] or ""
-    if line ~= "" then break end
-    stop = stop - 1
-  end
-  return row, stop
-end
-
 local function schedule_close_tool_folds(buf)
   vim.schedule(function()
     if not vim.api.nvim_buf_is_valid(buf) then return end
     pcall(require("neowork.fold").close_tool_folds, buf)
   end)
+end
+
+local function ensure_open_djinni_row(buf)
+  local ast = require("neowork.ast")
+  local stream = require("neowork.stream")
+  local turn = stream.active_djinni_turn(buf)
+  if turn then
+    local row = ast.append_row_for_turn(buf, turn)
+    if row then return row end
+  end
+  local cur = ast.insertion_row_for_streaming(buf)
+  if cur then return cur end
+  require("neowork.document").insert_djinni_turn(buf)
+  turn = stream.active_djinni_turn(buf)
+  if turn then return ast.append_row_for_turn(buf, turn) end
+  return ast.insertion_row_for_streaming(buf)
 end
 
 function M.render(buf, tool_id, payload)
@@ -371,37 +350,51 @@ function M.render(buf, tool_id, payload)
   if entry.status == "running" and not EXECUTE_KINDS[entry.kind or ""] then return end
 
   local block = build_tool_block(tool_id, entry, max_output)
-  local cached_start, cached_end = cached_tool_block(buf, entry, tool_id)
 
-  if cached_start and cached_end then
+  local existing_s, existing_e = ast.find_tool_block(buf, tool_id)
+  if existing_s then
+    local turn = ast.turn_at_line(buf, existing_s)
+    if turn and turn.role == "Djinni" then
+      writequeue.enqueue(buf, function()
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        local s, e = ast.find_tool_block(buf, tool_id)
+        if not s then return end
+        local t = ast.turn_at_line(buf, s)
+        if not t or t.role ~= "Djinni" then return end
+        vim.api.nvim_buf_set_lines(buf, s - 1, e, false, block)
+        apply_line_hl(buf, entry, s - 1)
+        entry.row_start = s
+        entry.row_end = s + #block - 1
+        state.by_lnum[s - 1] = tool_id
+        ast.assert_invariant(buf, "tool_row.update")
+      end)
+      schedule_close_tool_folds(buf)
+      return
+    end
     writequeue.enqueue(buf, function()
       if not vim.api.nvim_buf_is_valid(buf) then return end
-      local s, e = cached_tool_block(buf, entry, tool_id)
+      local s, e = ast.find_tool_block(buf, tool_id)
       if not s then return end
-      vim.api.nvim_buf_set_lines(buf, s - 1, e, false, block)
-      apply_line_hl(buf, entry, s - 1)
-      entry.row_start = s
-      entry.row_end = s + #block - 1
-      state.by_lnum[s - 1] = tool_id
+      local t = ast.turn_at_line(buf, s)
+      if t and t.role == "Djinni" then return end
+      vim.api.nvim_buf_set_lines(buf, s - 1, e, false, {})
     end)
-    schedule_close_tool_folds(buf)
-    return
   end
 
   stream._flush_now(buf)
-  if not ast.insertion_row_for_streaming(buf) then return end
+  if not ensure_open_djinni_row(buf) then return end
 
   writequeue.enqueue(buf, function()
     if not vim.api.nvim_buf_is_valid(buf) then return end
-    local cur = ast.insertion_row_for_streaming(buf)
+    local cur = ensure_open_djinni_row(buf)
     if not cur then return end
     vim.api.nvim_buf_set_lines(buf, cur - 1, cur - 1, false, block)
     apply_line_hl(buf, entry, cur - 1)
     entry.row_start = cur
     entry.row_end = cur + #block - 1
     state.by_lnum[cur - 1] = tool_id
-    stream._tail_row[buf] = nil
-    stream._tail_text[buf] = nil
+    stream._invalidate_tail(buf)
+    ast.assert_invariant(buf, "tool_row.insert")
   end)
   schedule_close_tool_folds(buf)
 end

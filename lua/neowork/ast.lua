@@ -43,6 +43,16 @@ end
 local match_role = M.role_of_line
 
 ---@param line string
+---@return string
+function M.escape_role_line(line)
+  if not line or line:byte(1) ~= 35 then return line end
+  if M.role_of_line(line) ~= nil then
+    return "\\" .. line
+  end
+  return line
+end
+
+---@param line string
 ---@return string|nil tool_id
 function M.tool_id_of_line(line)
   if not line then return nil end
@@ -113,10 +123,18 @@ local function parse_turns(lines, fm_end)
   end
   if last_djinni then
     local dt = turns[last_djinni]
-    local after = turns[last_djinni + 1]
-    if dt.is_last or (after and after.is_compose) then
-      dt.is_open = true
+    local is_open = dt.is_last
+    if not is_open then
+      is_open = true
+      for j = last_djinni + 1, #turns do
+        local tj = turns[j]
+        if tj.role ~= "System" and not (tj.role == "You" and tj.is_compose) then
+          is_open = false
+          break
+        end
+      end
     end
+    dt.is_open = is_open
   end
   return turns
 end
@@ -208,7 +226,7 @@ end
 function M.active_djinni_turn(buf)
   local turns = snapshot(buf).turns
   for i = #turns, 1, -1 do
-    if turns[i].role == "Djinni" then
+    if turns[i].role == "Djinni" and turns[i].is_open then
       return turns[i]
     end
   end
@@ -228,15 +246,12 @@ function M.compose_turn(buf)
 end
 
 ---@param buf integer
----@return integer|nil  -- 1-based insertion row for the next streamed agent line
-function M.insertion_row_for_streaming(buf)
-  local s = snapshot(buf)
-  local turn
-  for i = #s.turns, 1, -1 do
-    if s.turns[i].role == "Djinni" then turn = s.turns[i]; break end
-  end
+---@param turn neowork.ast.Turn
+---@return integer|nil  -- 1-based insertion row at end of turn content
+function M.append_row_for_turn(buf, turn)
   if not turn then return nil end
-  local row = turn.end_line
+  local s = snapshot(buf)
+  local row = math.min(turn.end_line, #s.lines)
   while row >= turn.content_start do
     local line = s.lines[row]
     if line and line ~= "" and not line:match(THEMATIC) then break end
@@ -246,6 +261,18 @@ function M.insertion_row_for_streaming(buf)
   if insert > turn.end_line + 1 then insert = turn.end_line + 1 end
   if insert < turn.content_start then insert = turn.content_start end
   return insert
+end
+
+---@param buf integer
+---@return integer|nil  -- 1-based insertion row for the next streamed agent line
+function M.insertion_row_for_streaming(buf)
+  local s = snapshot(buf)
+  local turn
+  for i = #s.turns, 1, -1 do
+    if s.turns[i].role == "Djinni" and s.turns[i].is_open then turn = s.turns[i]; break end
+  end
+  if not turn then return nil end
+  return M.append_row_for_turn(buf, turn)
 end
 
 ---@param buf integer
@@ -267,8 +294,9 @@ function M.find_tool_block(buf, tool_id)
   local s = snapshot(buf)
   local needle = "#### [" .. tool_id .. "] "
   local start
-  for i, line in ipairs(s.lines) do
-    if line:find(needle, 1, true) then start = i; break end
+  for i = #s.lines, 1, -1 do
+    local line = s.lines[i]
+    if line and line:find(needle, 1, true) then start = i; break end
   end
   if not start then return nil, nil end
   local turn
@@ -315,6 +343,46 @@ function M.turn_at_line(buf, lnum)
     end
   end
   return nil
+end
+
+---@param buf integer
+---@return boolean ok, string|nil reason
+function M.check_invariant(buf)
+  local turns = snapshot(buf).turns
+  if #turns == 0 then return true, nil end
+  local last = turns[#turns]
+  if last.role ~= "You" or not last.is_compose then
+    return false, "last turn must be compose You, got " .. tostring(last.role)
+  end
+  local open_count = 0
+  local open_idx
+  for i, t in ipairs(turns) do
+    if t.role == "Djinni" and t.is_open then
+      open_count = open_count + 1
+      open_idx = i
+    end
+  end
+  if open_count > 1 then
+    return false, "more than one open Djinni"
+  end
+  if open_idx then
+    for j = open_idx + 1, #turns - 1 do
+      if turns[j].role ~= "System" then
+        return false, "open Djinni must be followed only by System turns and the compose You"
+      end
+    end
+  end
+  return true, nil
+end
+
+---@param buf integer
+---@param context string|nil
+function M.assert_invariant(buf, context)
+  if not vim.g.neowork_debug then return end
+  local ok, reason = M.check_invariant(buf)
+  if not ok then
+    vim.notify("neowork invariant: " .. (context or "?") .. " — " .. reason, vim.log.levels.WARN)
+  end
 end
 
 return M

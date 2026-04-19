@@ -44,4 +44,11 @@ M.session_status = {
   review = "review",
 }
 
+M.permission_kind = {
+  allow_once = "allow_once",
+  reject_once = "reject_once",
+  allow_always = "allow_always",
+  reject_always = "reject_always",
+}
+
 return M

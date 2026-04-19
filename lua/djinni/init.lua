@@ -62,6 +62,14 @@ function M.setup(opts)
     if filepath then document.open(filepath, { split = "vsplit" }) end
   end, { desc = "Open neowork in a vertical split" })
 
+  vim.api.nvim_create_user_command("NeoworkAutomation", function()
+    require("djinni.automations").pick({ buf = vim.api.nvim_get_current_buf() })
+  end, { desc = "Open ACP/task automation picker" })
+
+  vim.api.nvim_create_user_command("NeoworkCodeAction", function()
+    require("djinni.automations").pick({ buf = vim.api.nvim_get_current_buf() })
+  end, { desc = "Open ACP/task automation picker" })
+
 
   vim.keymap.set("n", "<C-q>", function()
     require("djinni.code").create_task()

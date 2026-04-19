@@ -289,29 +289,24 @@ end
 
 function M.ensure_composer(buf)
   if not vim.api.nvim_buf_is_valid(buf) then return end
-  local fm_end = M.get_fm_end(buf) or 0
-  local lc = vim.api.nvim_buf_line_count(buf)
-  local lines = vim.api.nvim_buf_get_lines(buf, fm_end, lc, false)
-
   local ast = require("neowork.ast")
-  local last_you_idx
-  for i = #lines, 1, -1 do
-    if ast.role_of_line(lines[i]) == "You" then
-      last_you_idx = i
-      break
-    end
+  local turns = ast.turns(buf) or {}
+  local lc = vim.api.nvim_buf_line_count(buf)
+
+  local last_you
+  for i = #turns, 1, -1 do
+    if turns[i].role == "You" then last_you = turns[i]; break end
   end
 
-  if not last_you_idx then
+  if not last_you then
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "", "# You", "", "---" })
     return
   end
 
-  local after = {}
-  for i = last_you_idx + 1, #lines do after[#after + 1] = lines[i] end
   local has_terminator = false
-  for _, l in ipairs(after) do
-    if l == "---" then has_terminator = true break end
+  for i = last_you.content_start, last_you.end_line do
+    local line = vim.api.nvim_buf_get_lines(buf, i - 1, i, false)[1]
+    if line == "---" then has_terminator = true; break end
   end
   if not has_terminator then
     vim.api.nvim_buf_set_lines(buf, lc, lc, false, { "---" })
@@ -373,6 +368,19 @@ end
 function M.invalidate_compose_cache(buf)
   local c = scan_cache(buf)
   c.compose = nil
+end
+
+---@param buf integer
+---@param start_row integer|nil 0-based inclusive, default 0
+---@param end_row integer|nil 0-based exclusive, default -1 (end)
+---@return string
+function M.buffer_to_string(buf, start_row, end_row)
+  local lines = vim.api.nvim_buf_get_lines(buf, start_row or 0, end_row or -1, false)
+  local text = table.concat(lines, "\n")
+  if #lines > 0 and vim.bo[buf].eol then
+    text = text .. "\n"
+  end
+  return text
 end
 
 function M.get_compose_text(buf)
@@ -570,11 +578,12 @@ function M.insert_turn(buf, role, text)
   local compose = M.find_compose_line(buf)
   if not compose then return end
   local body_end = trim_trailing_blanks(buf, compose - 1)
+  local ast = require("neowork.ast")
   local lines = { "", "", "# " .. role }
   if text and text ~= "" then
     lines[#lines + 1] = ""
     for _, l in ipairs(vim.split(text, "\n", { plain = true })) do
-      lines[#lines + 1] = l
+      lines[#lines + 1] = ast.escape_role_line(l)
     end
   end
   lines[#lines + 1] = ""
@@ -584,20 +593,26 @@ function M.insert_turn(buf, role, text)
   lines[#lines + 1] = ""
   vim.api.nvim_buf_set_lines(buf, body_end, compose - 1, false, lines)
   require("neowork.summary").render_inline(buf)
+  ast.assert_invariant(buf, "document.insert_turn(" .. role .. ")")
 end
 
 function M.commit_compose(buf)
   local text = M.get_compose_text(buf)
+  local ast = require("neowork.ast")
+  local compose = ast.compose_turn(buf)
   local lc = vim.api.nvim_buf_line_count(buf)
-  local body_end = trim_trailing_blanks(buf, lc)
-  if body_end > 0 then
-    local last = vim.api.nvim_buf_get_lines(buf, body_end - 1, body_end, false)[1]
-    if last == "---" then
-      body_end = trim_trailing_blanks(buf, body_end - 1)
-    end
+
+  local body_end = lc
+  local floor = compose and compose.start_line or 0
+  while body_end > floor do
+    local line = vim.api.nvim_buf_get_lines(buf, body_end - 1, body_end, false)[1] or ""
+    if line ~= "" and line ~= "---" then break end
+    body_end = body_end - 1
   end
+
   vim.api.nvim_buf_set_lines(buf, body_end, lc, false, { "", "", "---", "", "", "# You", "" })
   require("neowork.summary").render_inline(buf)
+  ast.assert_invariant(buf, "document.commit_compose")
   return text
 end
 

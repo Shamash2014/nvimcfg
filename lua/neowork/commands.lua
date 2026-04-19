@@ -51,6 +51,8 @@ M.open_help = function()
     "Neowork — Commands",
     "",
     ":NwSend [text]        Send (or <CR> in normal mode)",
+    ":NwAutomation         Open automation picker (ACP, schedule, tasks)",
+    ":NwCodeAction         Alias for :NwAutomation",
     ":NwClear[!]           Clear session (! also purges transcript)",
     ":NwSummary [text]     Set / clear session summary",
     ":NwPlan               Toggle plan view",
@@ -111,6 +113,14 @@ function M.setup(buf)
   end
 
   cmd("NwSend", function(a) send(buf, a.args) end, { nargs = "*" })
+
+  cmd("NwAutomation", function()
+    require("djinni.automations").pick({ buf = buf })
+  end, {})
+
+  cmd("NwCodeAction", function()
+    require("djinni.automations").pick({ buf = buf })
+  end, {})
 
   cmd("NwSendFresh", function(a)
     local document = require("neowork.document")
@@ -181,60 +191,19 @@ function M.setup(buf)
   end, { bang = true })
 
   cmd("NwSchedule", function()
-    local document = require("neowork.document")
-    local scheduler = require("neowork.scheduler")
-    local current_interval = document.read_frontmatter_field(buf, "schedule_interval") or ""
-    local current_command = document.read_frontmatter_field(buf, "schedule_command") or ""
-    vim.ui.input({ prompt = "Schedule interval (e.g. 30m, 1h, 1d): ", default = current_interval }, function(interval)
-      if not interval or vim.trim(interval) == "" then return end
-      vim.ui.input({ prompt = "Schedule Ex command: ", default = current_command }, function(command)
-        if not command or vim.trim(command) == "" then return end
-        local ok, err = scheduler.enable(buf, interval, command)
-        if ok then
-          vim.notify("neowork: schedule enabled", vim.log.levels.INFO)
-        else
-          vim.notify("neowork: " .. tostring(err), vim.log.levels.ERROR)
-        end
-      end)
-    end)
+    require("djinni.automations").configure_schedule(buf)
   end, {})
 
   cmd("NwScheduleToggle", function()
-    local document = require("neowork.document")
-    local scheduler = require("neowork.scheduler")
-    local enabled = document.read_frontmatter_field(buf, "schedule_enabled") == "true"
-    local ok, err
-    if enabled then
-      ok, err = scheduler.disable(buf)
-      if ok then
-        vim.notify("neowork: schedule disabled", vim.log.levels.INFO)
-      end
-    else
-      local interval = document.read_frontmatter_field(buf, "schedule_interval") or ""
-      local command = document.read_frontmatter_field(buf, "schedule_command") or ""
-      ok, err = scheduler.enable(buf, interval, command)
-      if ok then
-        vim.notify("neowork: schedule enabled", vim.log.levels.INFO)
-      end
-    end
-    if not ok then
-      vim.notify("neowork: " .. tostring(err), vim.log.levels.ERROR)
-    end
+    require("djinni.automations").toggle_schedule(buf)
   end, {})
 
   cmd("NwScheduleRun", function()
-    local scheduler = require("neowork.scheduler")
-    local ok, err = scheduler.run_now(buf)
-    if ok then
-      vim.notify("neowork: schedule ran", vim.log.levels.INFO)
-    else
-      vim.notify("neowork: " .. tostring(err), vim.log.levels.ERROR)
-    end
+    require("djinni.automations").run_schedule_now(buf)
   end, {})
 
   cmd("NwScheduleClear", function()
-    require("neowork.scheduler").clear(buf)
-    vim.notify("neowork: schedule cleared", vim.log.levels.INFO)
+    require("djinni.automations").clear_schedule(buf)
   end, {})
 
   cmd("NwPerm", function(a)

@@ -601,15 +601,27 @@ function M:shutdown(force)
   self._drain_timer = nil
   self._parse_queue = nil
   self._update_queue = {}
+  local pending = self.pending_requests or {}
+  self.pending_requests = {}
+  for _, cb in pairs(pending) do
+    vim.schedule(function()
+      cb({ code = -32002, message = "client shutdown" }, nil)
+    end)
+  end
+  local ready_cbs = self._ready_callbacks or {}
+  self._ready_callbacks = {}
+  for _, cb in ipairs(ready_cbs) do
+    vim.schedule(function()
+      cb({ message = "client shutdown" })
+    end)
+  end
   if not self:is_alive() then
     return
   end
   self:notify("exit")
-  self.pending_requests = {}
   self.event_handlers = {}
   self.subscribers = {}
   self.request_handlers = {}
-  self._ready_callbacks = {}
   self._buffer_parts = {}
   if force then
     if self.job_id then

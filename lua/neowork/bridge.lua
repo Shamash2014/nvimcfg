@@ -13,11 +13,17 @@ local Session = require("djinni.acp.session")
 local subscribers = require("neowork.session.subscribers")
 local session_store = require("neowork.session.store")
 
+local _notify_index_pending = false
 local function notify_index()
-  local ok, index = pcall(require, "neowork.index")
-  if ok and index and index.refresh_all then
-    vim.schedule(function() pcall(index.refresh_all) end)
-  end
+  if _notify_index_pending then return end
+  _notify_index_pending = true
+  vim.schedule(function()
+    _notify_index_pending = false
+    local ok, index = pcall(require, "neowork.index")
+    if ok and index and index.refresh_all then
+      pcall(index.refresh_all)
+    end
+  end)
 end
 
 local function classify_error(msg, code)
@@ -78,7 +84,6 @@ M._usage = {}
 M._diff_stats = {}
 M._runtime_status = {}
 M._runtime_meta = {}
-M._status_before_awaiting = {}
 M._spinner_chars = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 M._spinner_frame = 0
 M._redraw_timer = nil
@@ -121,7 +126,6 @@ end
 local function clear_runtime_status(buf)
   M._runtime_status[buf] = nil
   M._runtime_meta[buf] = nil
-  M._status_before_awaiting[buf] = nil
   notify_index()
   redraw_status()
 end
@@ -704,6 +708,83 @@ end
 M._pending_permission = {}
 M._permission_ns = vim.api.nvim_create_namespace("neowork_permission")
 
+local function one_line(s)
+  return (tostring(s or ""):gsub("[\r\n]+", " "))
+end
+
+local KIND_KEY = {
+  [const.permission_kind.allow_once] = "ya",
+  [const.permission_kind.reject_once] = "yn",
+  [const.permission_kind.allow_always] = "yA",
+  [const.permission_kind.reject_always] = "yN",
+}
+
+local function format_option_hints(options)
+  local parts = { "[s] pick" }
+  for _, opt in ipairs(options or {}) do
+    local key = KIND_KEY[opt.kind]
+    local label = one_line(opt.label or opt.kind or "option")
+    if key then
+      parts[#parts + 1] = "[" .. key .. "] " .. label
+    else
+      parts[#parts + 1] = label
+    end
+  end
+  return "  " .. table.concat(parts, "  ")
+end
+
+local function permission_lines(title, outcome, options)
+  local lines = {
+    const.role.system,
+    "",
+    "Permission: " .. one_line(title ~= nil and title ~= "" and title or "Permission request"),
+  }
+  if outcome and outcome ~= "" then
+    lines[#lines + 1] = "Status: " .. one_line(outcome)
+  else
+    lines[#lines + 1] = format_option_hints(options)
+  end
+  lines[#lines + 1] = ""
+  return lines
+end
+
+local function insert_permission_ui(buf, title, options)
+  if not vim.api.nvim_buf_is_valid(buf) then return nil end
+  local doc = get_document()
+  doc.invalidate_compose_cache(buf)
+  local compose = doc.find_compose_line(buf)
+  local insert_row
+  local probe_row
+  if compose then
+    insert_row = compose - 1
+    probe_row = compose - 3
+  else
+    insert_row = vim.api.nvim_buf_line_count(buf)
+    probe_row = insert_row - 2
+  end
+  local has_sep = false
+  if probe_row and probe_row >= 0 then
+    local prev = vim.api.nvim_buf_get_lines(buf, probe_row, probe_row + 1, false)[1] or ""
+    has_sep = prev:match("^[%-_%*][%-_%*][%-_%*]+%s*$") ~= nil
+  end
+  local block = permission_lines(title, nil, options)
+  local lines
+  if has_sep then
+    lines = block
+  else
+    lines = { "---", "" }
+    for _, l in ipairs(block) do lines[#lines + 1] = l end
+  end
+  vim.api.nvim_buf_set_lines(buf, insert_row, insert_row, false, lines)
+  local mark_id = vim.api.nvim_buf_set_extmark(buf, M._permission_ns, insert_row, 0, {
+    end_row = insert_row + #lines,
+    end_col = 0,
+    right_gravity = false,
+    end_right_gravity = true,
+  })
+  return mark_id, #lines, has_sep
+end
+
 local function remove_permission_ui(buf, perm)
   if not perm or not perm.mark_id then return end
   if not vim.api.nvim_buf_is_valid(buf) then return end
@@ -716,6 +797,31 @@ local function remove_permission_ui(buf, perm)
   if start_row >= lc then return end
   end_row = math.min(end_row, lc)
   pcall(vim.api.nvim_buf_set_lines, buf, start_row, end_row, false, {})
+end
+
+local function update_permission_ui(buf, perm, outcome)
+  if not perm or not perm.mark_id then return end
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local pos = vim.api.nvim_buf_get_extmark_by_id(buf, M._permission_ns, perm.mark_id, { details = true })
+  if not pos or not pos[1] then return end
+  local start_row = pos[1]
+  local details = pos[3] or {}
+  local end_row = details.end_row or (start_row + (perm.line_count or 0))
+  local lines = permission_lines(perm.title, outcome, perm.options)
+  if not perm.has_sep then
+    local prefixed = { "---", "" }
+    for _, l in ipairs(lines) do prefixed[#prefixed + 1] = l end
+    lines = prefixed
+  end
+  vim.api.nvim_buf_set_lines(buf, start_row, end_row, false, lines)
+  pcall(vim.api.nvim_buf_del_extmark, buf, M._permission_ns, perm.mark_id)
+  perm.mark_id = vim.api.nvim_buf_set_extmark(buf, M._permission_ns, start_row, 0, {
+    end_row = start_row + #lines,
+    end_col = 0,
+    right_gravity = false,
+    end_right_gravity = true,
+  })
+  perm.line_count = #lines
 end
 
 function M._insert_session_system_block(buf, kind)
@@ -754,14 +860,21 @@ function M._insert_session_system_block(buf, kind)
   M._last_session_id[buf] = sid
 end
 
+local function resume_permission(co, value)
+  if not co or coroutine.status(co) == "dead" then return end
+  local ok, err = coroutine.resume(co, value)
+  if not ok then
+    vim.notify("neowork: permission coroutine error: " .. tostring(err), vim.log.levels.ERROR)
+  end
+end
+
 function M._handle_permission(buf, params, respond)
-  M._status_before_awaiting[buf] = M._runtime_status[buf] or const.session_status.submitting
-  set_runtime_status(buf, const.session_status.awaiting, {
-    meta = {
-      title = params.toolCall and params.toolCall.title,
-      kind = params.toolCall and params.toolCall.kind,
-    },
-  })
+  local prev = M._pending_permission[buf]
+  if prev and prev.co then
+    M._pending_permission[buf] = nil
+    resume_permission(prev.co, { cancelled = true })
+  end
+
   local options = {}
   for _, opt in ipairs(params.options or {}) do
     options[#options + 1] = {
@@ -771,53 +884,76 @@ function M._handle_permission(buf, params, respond)
     }
   end
   local title = (params.toolCall and params.toolCall.title) or "Permission request"
-  local doc = get_document()
-  doc.invalidate_compose_cache(buf)
-  local compose = doc.find_compose_line(buf)
-  local mark_id
-  local insert_row
-  local probe_row
-  if compose then
-    insert_row = compose - 1
-    probe_row = compose - 3
-  else
-    insert_row = vim.api.nvim_buf_line_count(buf)
-    probe_row = insert_row - 2
-  end
-  local has_sep = false
-  if probe_row and probe_row >= 0 then
-    local prev = vim.api.nvim_buf_get_lines(buf, probe_row, probe_row + 1, false)[1] or ""
-    has_sep = prev:match("^[%-_%*][%-_%*][%-_%*]+%s*$") ~= nil
-  end
-  local lines = has_sep
-    and { const.role.system, "", "Permission: " .. title, "  [s] pick  [ya] allow  [yn] deny  [yA] always", "" }
-    or { "---", "", const.role.system, "", "Permission: " .. title, "  [s] pick  [ya] allow  [yn] deny  [yA] always", "" }
-  vim.api.nvim_buf_set_lines(buf, insert_row, insert_row, false, lines)
-  mark_id = vim.api.nvim_buf_set_extmark(buf, M._permission_ns, insert_row, 0, {
-    end_row = insert_row + #lines,
-    end_col = 0,
-    right_gravity = false,
-    end_right_gravity = true,
-  })
-  notify_index()
-  M._pending_permission[buf] = {
+  local tool_desc = params.toolCall and params.toolCall.title
+  local tool_kind = params.toolCall and params.toolCall.kind
+  local raw_input = params.toolCall and params.toolCall.rawInput
+  local content = params.toolCall and params.toolCall.content
+  local locations = params.toolCall and params.toolCall.locations
+  local previous_status = M._runtime_status[buf] or const.session_status.submitting
+
+  local perm
+  local co = coroutine.create(function()
+    local ok, err = pcall(function()
+      set_runtime_status(buf, const.session_status.awaiting, {
+        meta = { title = tool_desc, kind = tool_kind },
+      })
+      local mark_id, line_count, has_sep = insert_permission_ui(buf, title, options)
+      perm.mark_id = mark_id
+      perm.line_count = line_count
+      perm.has_sep = has_sep
+      M._pending_permission[buf] = perm
+      notify_index()
+    end)
+    if not ok then
+      vim.notify("neowork: permission setup failed: " .. tostring(err), vim.log.levels.ERROR)
+      pcall(respond, { outcome = { outcome = "cancelled" } })
+      return
+    end
+
+    local resolution = coroutine.yield() or { cancelled = true }
+
+    if M._pending_permission[buf] == perm then
+      M._pending_permission[buf] = nil
+    end
+
+    if resolution.cancelled then
+      update_permission_ui(buf, perm, "cancelled")
+    elseif resolution.option then
+      local label = resolution.status and (resolution.status .. ": " .. resolution.option.label)
+        or resolution.option.label
+      update_permission_ui(buf, perm, label)
+    end
+
+    set_runtime_status(buf, previous_status, {
+      persisted = previous_status == const.session_status.awaiting and const.session_status.running or nil,
+    })
+
+    if resolution.cancelled or not resolution.option then
+      pcall(respond, { outcome = { outcome = "cancelled" } })
+    else
+      pcall(respond, { outcome = { outcome = "selected", optionId = resolution.option.id } })
+    end
+
+    notify_index()
+  end)
+
+  perm = {
+    co = co,
     options = options,
-    respond = respond,
     title = title,
-    tool_desc = params.toolCall and params.toolCall.title,
-    tool_kind = params.toolCall and params.toolCall.kind,
-    raw_input = params.toolCall and params.toolCall.rawInput,
-    content = params.toolCall and params.toolCall.content,
-    locations = params.toolCall and params.toolCall.locations,
-    mark_id = mark_id,
-    line_count = #lines,
+    tool_desc = tool_desc,
+    tool_kind = tool_kind,
+    raw_input = raw_input,
+    content = content,
+    locations = locations,
   }
-  notify_index()
+
+  resume_permission(co)
 end
 
 function M.permission_action(buf, action)
   local perm = M._pending_permission[buf]
-  if not perm then
+  if not perm or not perm.co or coroutine.status(perm.co) == "dead" then
     vim.notify("No pending permission", vim.log.levels.WARN)
     return
   end
@@ -828,44 +964,42 @@ function M.permission_action(buf, action)
       labels[#labels + 1] = opt.label
     end
     vim.ui.select(labels, { prompt = perm.title }, function(_, idx)
-      if not idx then return end
-      M._pending_permission[buf] = nil
-      remove_permission_ui(buf, perm)
-      local next_status = M._status_before_awaiting[buf] or const.session_status.submitting
-      M._status_before_awaiting[buf] = nil
-      set_runtime_status(buf, next_status, {
-        persisted = next_status == const.session_status.awaiting and const.session_status.running or nil,
-      })
-      pcall(perm.respond, { outcome = { outcome = "selected", optionId = perm.options[idx].id } })
-      notify_index()
+      if not idx then
+        resume_permission(perm.co, { cancelled = true })
+      else
+        resume_permission(perm.co, {
+          option = perm.options[idx],
+          status = "approved",
+        })
+      end
     end)
     return
   end
 
-  local kind_map = { allow = "allow_once", deny = "reject_once", always = "allow_always" }
+  local kind_map = {
+    allow = const.permission_kind.allow_once,
+    deny = const.permission_kind.reject_once,
+    always = const.permission_kind.allow_always,
+  }
   local target_kind = kind_map[action]
-  local option_id
+  local option
   for _, opt in ipairs(perm.options) do
     if opt.kind == target_kind then
-      option_id = opt.id
+      option = opt
       break
     end
   end
 
-  if not option_id then
+  if not option then
     M.permission_action(buf, "select")
     return
   end
 
-  M._pending_permission[buf] = nil
-  remove_permission_ui(buf, perm)
-  local next_status = M._status_before_awaiting[buf] or const.session_status.submitting
-  M._status_before_awaiting[buf] = nil
-  set_runtime_status(buf, next_status, {
-    persisted = next_status == const.session_status.awaiting and const.session_status.running or nil,
-  })
-  pcall(perm.respond, { outcome = { outcome = "selected", optionId = option_id } })
-  notify_index()
+  local status_label = action == "allow" and "approved"
+    or action == "always" and "approved always"
+    or action == "deny" and "denied"
+    or action
+  resume_permission(perm.co, { option = option, status = status_label })
 end
 
 function M.has_pending_permission(buf)
@@ -1080,8 +1214,12 @@ function M.detach(buf, opts)
 
   local perm = M._pending_permission[buf]
   if perm then
-    remove_permission_ui(buf, perm)
     M._pending_permission[buf] = nil
+    if perm.co and coroutine.status(perm.co) ~= "dead" then
+      resume_permission(perm.co, { cancelled = true })
+    else
+      remove_permission_ui(buf, perm)
+    end
   end
 
   if sub and sub.session_id and sub.session_id ~= "" then
@@ -1110,17 +1248,27 @@ function M.detach(buf, opts)
     Session.detach_client_session(sid)
   end
 
+  local inflight = M._inflight[buf]
+  M._inflight[buf] = nil
+  if inflight then
+    for _, cb in ipairs(inflight) do
+      vim.schedule(function()
+        pcall(cb, { code = -32002, message = "client shutdown" })
+      end)
+    end
+  end
+
   M._sessions[buf] = nil
   M._clients[buf] = nil
   M._streaming[buf] = nil
   M._stream_gen[buf] = nil
   M._modes[buf] = nil
-  M._inflight[buf] = nil
   M._turn_started_at[buf] = nil
   M._turn_elapsed_ms[buf] = nil
   M._usage[buf] = nil
   M._diff_stats[buf] = nil
   M._last_user_row[buf] = nil
+  pcall(function() require("neowork.ast").invalidate(buf) end)
   clear_runtime_status(buf)
 end
 

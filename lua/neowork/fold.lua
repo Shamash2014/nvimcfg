@@ -141,17 +141,20 @@ function M.attach_window(buf)
     local cfg = config.get("folds") or {}
     local fm_end = document.get_fm_end and document.get_fm_end(buf) or 0
     if fm_end > 0 and cfg.frontmatter ~= false then
-      M._autofolded[buf] = true
-      vim.schedule(function()
-        if not vim.api.nvim_buf_is_valid(buf) then return end
-        for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-          if vim.api.nvim_win_is_valid(win) then
-            pcall(vim.api.nvim_win_call, win, function()
-              vim.cmd("silent! 1foldclose")
-            end)
+      local first_line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
+      if ast.role_of_line(first_line) == nil then
+        M._autofolded[buf] = true
+        vim.schedule(function()
+          if not vim.api.nvim_buf_is_valid(buf) then return end
+          for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+            if vim.api.nvim_win_is_valid(win) then
+              pcall(vim.api.nvim_win_call, win, function()
+                vim.cmd("silent! 1foldclose")
+              end)
+            end
           end
-        end
-      end)
+        end)
+      end
     end
   end
 end

@@ -1156,99 +1156,124 @@ function M.pick_tasks_and_commands()
   local snacks = require("snacks")
 
   M.get_tasks(function(available_tasks)
-    local items = {}
+    require("djinni.automations").collect({
+      buf = vim.api.nvim_get_current_buf(),
+      include_tasks = false,
+      include_history = false,
+      include_custom = false,
+    }, function(automation_items)
+      local items = {}
 
-    table.insert(items, {
-      text = "New Neowork Task",
-      desc = "Create a new neowork task",
-      is_nowork_new = true,
-    })
-
-    table.insert(items, {
-      text = "Browse Neowork Tasks",
-      desc = "Pick and open a neowork task",
-      is_nowork_browse = true,
-    })
-
-    table.insert(items, {
-      text = "Neowork Sessions",
-      desc = "Pick an open neowork session",
-      is_nowork_sessions = true,
-    })
-
-    table.insert(items, {
-      text = "Enter custom command...",
-      task = { cmd = "custom" },
-      is_task = true,
-    })
-
-    format_history_items(items)
-
-    for _, task in ipairs(available_tasks) do
-      local name = task.type == "npm" and task.name:gsub("^npm: ", "") or task.name
       table.insert(items, {
-        text = name,
-        desc = task.desc or "",
-        task = task,
+        text = "New Neowork Task",
+        desc = "Create a new neowork task",
+        is_nowork_new = true,
+      })
+
+      table.insert(items, {
+        text = "Browse Neowork Tasks",
+        desc = "Pick and open a neowork task",
+        is_nowork_browse = true,
+      })
+
+      table.insert(items, {
+        text = "Neowork Sessions",
+        desc = "Pick an open neowork session",
+        is_nowork_sessions = true,
+      })
+
+      table.insert(items, {
+        text = "Enter custom command...",
+        task = { cmd = "custom" },
         is_task = true,
       })
-    end
 
-    table.insert(items, {
-      text = "── Vim Commands ──",
-      is_separator = true,
-    })
+      format_history_items(items)
 
-    local commands = vim.fn.getcompletion("", "command")
-    for _, cmd in ipairs(commands) do
-      table.insert(items, {
-        text = cmd,
-        is_command = true,
-      })
-    end
-
-    snacks.picker.pick({
-    source = "select",
-    items = items,
-    prompt = "Run",
-    layout = { preset = "vscode" },
-    format = function(item)
-      if item.is_separator then
-        return { { item.text, "Comment" } }
-      elseif item.desc and item.desc ~= "" then
-        return { { item.text }, { " " .. item.desc, "Comment" } }
-      else
-        return { { item.text } }
+      for _, task in ipairs(available_tasks) do
+        local name = task.type == "npm" and task.name:gsub("^npm: ", "") or task.name
+        table.insert(items, {
+          text = name,
+          desc = task.desc or "",
+          task = task,
+          is_task = true,
+        })
       end
-    end,
-    confirm = function(picker, item)
-      picker:close()
-      if not item then return end
-      if item.is_separator then return end
-      if item.is_nowork_new then
-        vim.schedule(function()
-          require("djinni.code").create_task()
-        end)
-      elseif item.is_nowork_browse then
-        vim.schedule(function()
-          require("djinni.integrations.snacks").pick_task()
-        end)
-      elseif item.is_nowork_sessions then
-        vim.schedule(function()
-          require("djinni.integrations.snacks").pick_sessions()
-        end)
-      elseif item.is_task then
-        if item.task.cmd == "custom" then
-          M.run_custom_command()
-        else
-          M.run_task(item.task)
-          M.last_task = item.task
+
+      if automation_items and #automation_items > 0 then
+        table.insert(items, {
+          text = "── Automations ──",
+          is_separator = true,
+        })
+
+        for _, automation in ipairs(automation_items) do
+          table.insert(items, {
+            text = automation.label,
+            desc = automation.desc or "",
+            automation = automation,
+            is_automation = true,
+          })
         end
-      elseif item.is_command then
-        vim.cmd(item.text)
       end
-    end,
-    })
+
+      table.insert(items, {
+        text = "── Vim Commands ──",
+        is_separator = true,
+      })
+
+      local commands = vim.fn.getcompletion("", "command")
+      for _, cmd in ipairs(commands) do
+        table.insert(items, {
+          text = cmd,
+          is_command = true,
+        })
+      end
+
+      snacks.picker.pick({
+        source = "select",
+        items = items,
+        prompt = "Run",
+        layout = { preset = "vscode" },
+        format = function(item)
+          if item.is_separator then
+            return { { item.text, "Comment" } }
+          elseif item.desc and item.desc ~= "" then
+            return { { item.text }, { " " .. item.desc, "Comment" } }
+          else
+            return { { item.text } }
+          end
+        end,
+        confirm = function(picker, item)
+          picker:close()
+          if not item then return end
+          if item.is_separator then return end
+          if item.is_nowork_new then
+            vim.schedule(function()
+              require("djinni.code").create_task()
+            end)
+          elseif item.is_nowork_browse then
+            vim.schedule(function()
+              require("djinni.integrations.snacks").pick_task()
+            end)
+          elseif item.is_nowork_sessions then
+            vim.schedule(function()
+              require("djinni.integrations.snacks").pick_sessions()
+            end)
+          elseif item.is_task then
+            if item.task.cmd == "custom" then
+              M.run_custom_command()
+            else
+              M.run_task(item.task)
+              M.last_task = item.task
+            end
+          elseif item.is_automation then
+            require("djinni.automations").run(item.automation)
+          elseif item.is_command then
+            vim.cmd(item.text)
+          end
+        end,
+      })
+    end)
   end)
 end
 

@@ -63,39 +63,10 @@ function M.auto_fold_completed(buf)
     end
   end
 
-  local djinni_blocks = {}
-  local current_block = nil
-
-  for i, line in ipairs(lines) do
-    if line:match("^@Djinni") then
-      current_block = { start = i, all_checked = true, is_active = false }
-    elseif line:match("^@You") or line:match("^@System") or line:match("^%-%-%-$") then
-      if current_block then
-        current_block.finish = i - 1
-        table.insert(djinni_blocks, current_block)
-        current_block = nil
-      end
-    elseif current_block then
-      if line:match("%[ %]") then current_block.all_checked = false end
-      if line:match("● running") or line:match("●●●") then current_block.is_active = true end
-    end
-  end
-
-  if current_block then
-    current_block.finish = #lines
-    table.insert(djinni_blocks, current_block)
-  end
-
   vim.api.nvim_buf_call(buf, function()
     for _, s in ipairs(sections) do
       if s.has_done and not s.is_active and s.finish then
         M.fold_section(buf, s.start, s.finish)
-      end
-    end
-
-    for _, b in ipairs(djinni_blocks) do
-      if b.all_checked and not b.is_active and b.finish then
-        M.fold_section(buf, b.start, b.finish)
       end
     end
   end)
