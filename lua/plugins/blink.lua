@@ -25,8 +25,17 @@ return {
       nerd_font_variant = "mono",
     },
     sources = {
-      default = { "lsp", "snippets", "path", "buffer" },
+      default = { "neowork", "lsp", "snippets", "path", "buffer" },
       providers = {
+        neowork = {
+          name = "Neowork",
+          module = "neowork.blink_source",
+          score_offset = 120,
+          enabled = function()
+            local name = vim.api.nvim_buf_get_name(0)
+            return name:sub(-5) == ".chat"
+          end,
+        },
         lsp = {
           name = "LSP",
           enabled = true,

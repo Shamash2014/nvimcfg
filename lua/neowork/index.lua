@@ -726,6 +726,22 @@ local function session_buf(s)
   return nil
 end
 
+local function focus_existing_window(filepath)
+  if not filepath or filepath == "" then return false end
+  local b = vim.fn.bufnr(filepath)
+  if b <= 0 or not vim.api.nvim_buf_is_valid(b) then return false end
+  for _, tp in ipairs(vim.api.nvim_list_tabpages()) do
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tp)) do
+      if vim.api.nvim_win_get_buf(win) == b then
+        vim.api.nvim_set_current_tabpage(tp)
+        vim.api.nvim_set_current_win(win)
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function teardown_session(s)
   local sb = session_buf(s)
   if not sb then return end
@@ -882,13 +898,17 @@ function M._setup_buffer(buf)
       if row then
         vim.api.nvim_win_set_cursor(0, { row, 0 })
         local s = session_at_cursor(buf)
-        if s then require("neowork.document").open(s._filepath, { split = "vsplit" }) end
+        if s and not focus_existing_window(s._filepath) then
+          require("neowork.document").open(s._filepath, { split = "vsplit" })
+        end
       end
       return
     end
     local s = session_at_cursor(buf)
     if s then
-      require("neowork.document").open(s._filepath, { split = "vsplit" })
+      if not focus_existing_window(s._filepath) then
+        require("neowork.document").open(s._filepath, { split = "vsplit" })
+      end
       return
     end
     local e = entry_at_cursor(buf)

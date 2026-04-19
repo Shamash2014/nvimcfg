@@ -81,4 +81,10 @@ function M.invalidate(buf)
   end
 end
 
+local augroup = vim.api.nvim_create_augroup("NeoworkFileSources", { clear = true })
+vim.api.nvim_create_autocmd({ "BufWritePost", "BufDelete", "DirChanged" }, {
+  group = augroup,
+  callback = function() M.invalidate() end,
+})
+
 return M
