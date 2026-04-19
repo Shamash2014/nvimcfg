@@ -128,6 +128,20 @@ function M.active_djinni_turn(buf)
   return nil
 end
 
+---True iff an active-Djinni marker exists (between stream.start and stream.stop).
+---@param buf integer
+---@return boolean
+function M.is_streaming(buf)
+  return M._active_djinni_mark[buf] ~= nil
+end
+
+---Returns 1-based row of the compose `# You` header, or nil.
+---@param buf integer
+---@return integer|nil
+function M.compose_row(buf)
+  return compose_row_1based(buf)
+end
+
 M.detach = function(buf) M.reset(buf) end
 
 function M.reset(buf)

@@ -10,6 +10,15 @@ local function detail_tag(line)
   return line:match("^#### %[([^%]]+)%]")
 end
 
+local function inline_diff_hl(line)
+  if type(line) ~= "string" then return nil end
+  if line:match("^> %-%-%- ") then return "NeoworkDiffFile" end
+  if line:match("^> @@") then return "NeoworkDiffHunk" end
+  if line:match("^> %+") then return "NeoworkDiffAdded" end
+  if line:match("^> %-") then return "NeoworkDiffRemoved" end
+  return nil
+end
+
 local function hl_fg(name, fallback)
   local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
   if ok and hl and hl.fg then return string.format("#%06x", hl.fg) end
@@ -274,9 +283,10 @@ function M.apply(buf, start_row, end_row)
           priority = 100,
         })
       elseif line and line:match("^>") then
+        local hl_group = inline_diff_hl(line) or "NeoworkThinking"
         vim.api.nvim_buf_set_extmark(buf, M.ns, absolute_row, 0, {
           end_col = #line,
-          hl_group = "NeoworkThinking",
+          hl_group = hl_group,
           priority = 100,
         })
       end
