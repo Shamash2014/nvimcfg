@@ -1142,7 +1142,6 @@ local function sessions_signature(sessions, total_cost, expanded)
       tostring(s.tokens or ""),
       tostring(s.cost or ""),
       tostring(s.context_pct or ""),
-      tostring(s.summary or ""),
       tostring(s._last_turn or ""),
       tostring(s._last_action and ((s._last_action.kind or "") .. "|" .. (s._last_action.summary or "")) or ""),
       tostring(s._required and ((s._required.kind or "") .. "|" .. (s._required.tool_kind or "") .. "|" .. (s._required.title or "")) or ""),

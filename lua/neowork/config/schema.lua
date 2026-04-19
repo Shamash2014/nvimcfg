@@ -38,7 +38,6 @@ return s.object({
   cost = s.string(""),
   elapsed = s.string(""),
   tokens = s.string(""),
-  summary = s.string(""),
   mode = s.string(""),
   idle = s.string(""),
 })

@@ -551,7 +551,6 @@ function M.fork_at_cursor(buf)
       "created: " .. os.date("!%Y-%m-%dT%H:%M:%SZ"),
       "tokens: 0",
       "cost: 0.00",
-      "summary: fork of " .. orig_slug,
       "parent: " .. orig_slug,
       "---",
       "",

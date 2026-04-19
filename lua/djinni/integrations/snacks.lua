@@ -166,8 +166,12 @@ function M.pick_task(opts)
       local file_path = entry._filepath
       if file_path and not seen[file_path] then
         seen[file_path] = true
+        local text = entry._slug or vim.fn.fnamemodify(file_path, ":t:r")
+        if entry.session and entry.session ~= "" then
+          text = store.get_last_agent_turn(entry.session, root) or text
+        end
         items[#items + 1] = {
-          text = entry._slug or vim.fn.fnamemodify(file_path, ":t:r"),
+          text = text,
           project = entry.project or vim.fn.fnamemodify(root, ":t"),
           status = entry.status or "unknown",
           file_path = file_path,
