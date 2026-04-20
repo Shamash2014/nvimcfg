@@ -44,8 +44,9 @@ local function match_prefix(line, col, char, allow_embedded)
   return s, e, query
 end
 
-local function walk_files(root, out, prefix, depth)
-  if depth > 4 or #out >= 200 then return end
+local function walk_files(root, out, prefix, depth, cap)
+  cap = cap or 1000
+  if depth > 6 or #out >= cap then return end
   if vim.fn.isdirectory(root) == 0 then return end
   for _, name in ipairs(vim.fn.readdir(root) or {}) do
     if not name:match("^%.") then
@@ -55,10 +56,12 @@ local function walk_files(root, out, prefix, depth)
       if stat then
         if stat.type == "file" then
           out[#out + 1] = rel
-          if #out >= 200 then return end
+          if #out >= cap then return end
         elseif stat.type == "directory" then
-          if not name:match("^node_modules$") and not name:match("^target$") and not name:match("^build$") and not name:match("^dist$") then
-            walk_files(full, out, rel, depth + 1)
+          if not name:match("^node_modules$") and not name:match("^target$")
+             and not name:match("^build$") and not name:match("^dist$")
+             and not name:match("^%.git$") then
+            walk_files(full, out, rel, depth + 1, cap)
           end
         end
       end
@@ -66,23 +69,102 @@ local function walk_files(root, out, prefix, depth)
   end
 end
 
+local FILE_CACHE = {}
+local FILE_CACHE_TTL = 5
+
+local function is_git_repo(cwd)
+  local result = vim.system({ "git", "-C", cwd, "rev-parse", "--is-inside-work-tree" },
+    { text = true, timeout = 500 }):wait()
+  return result and result.code == 0 and (result.stdout or ""):match("true") ~= nil
+end
+
+local function git_ls_files(cwd)
+  local result = vim.system(
+    { "git", "-C", cwd, "ls-files", "-co", "--exclude-standard" },
+    { text = true, timeout = 2000 }
+  ):wait()
+  if not result or result.code ~= 0 then return nil end
+  local out = {}
+  for line in (result.stdout or ""):gmatch("[^\n]+") do
+    if line ~= "" then out[#out + 1] = line end
+    if #out >= 5000 then break end
+  end
+  return out
+end
+
+local function list_files(cwd)
+  local now = os.time()
+  local cached = FILE_CACHE[cwd]
+  if cached and (now - cached.at) < FILE_CACHE_TTL then
+    return cached.files
+  end
+  local files
+  if is_git_repo(cwd) then
+    files = git_ls_files(cwd)
+  end
+  if not files then
+    files = {}
+    walk_files(cwd, files, "", 0, 1000)
+  end
+  FILE_CACHE[cwd] = { at = now, files = files }
+  return files
+end
+
+local function load_skills(cwd)
+  local ok, skills = pcall(require("djinni.acp.skills").load, cwd)
+  if not ok or type(skills) ~= "table" then return {} end
+  return skills
+end
+
 local function complete_slash(droid, row, start_col, end_col)
   local cmds = droid and droid.state and droid.state.available_commands or {}
-  local kind = vim.lsp.protocol.CompletionItemKind.Function
+  local cmd_kind = vim.lsp.protocol.CompletionItemKind.Function
+  local skill_kind = vim.lsp.protocol.CompletionItemKind.Module
   local items = {}
-  for i, cmd in ipairs(cmds) do
+  local seen = {}
+  local i = 0
+  for _, cmd in ipairs(cmds) do
     local name = cmd.name or cmd.id or cmd.command or cmd.label
-    if name and name ~= "" then
+    if name and name ~= "" and not seen[name] then
+      seen[name] = true
+      i = i + 1
       local label = "/" .. name
       items[#items + 1] = {
         label = label,
         insertText = label,
         filterText = label,
         detail = cmd.description or cmd.detail,
-        kind = kind,
-        sortText = string.format("%05d", i),
+        kind = cmd_kind,
+        sortText = string.format("1-%05d", i),
         textEdit = {
           newText = label,
+          range = {
+            start = { line = row, character = start_col },
+            ["end"] = { line = row, character = end_col },
+          },
+        },
+      }
+    end
+  end
+  local cwd = (droid and droid.opts and droid.opts.cwd) or vim.b.nowork_cwd or vim.fn.getcwd()
+  local skills = load_skills(cwd)
+  local j = 0
+  for _, skill in ipairs(skills) do
+    local name = skill.name
+    if name and name ~= "" and not seen[name] then
+      seen[name] = true
+      j = j + 1
+      local label = "/" .. name
+      local insert = "Use the " .. name .. " skill."
+      items[#items + 1] = {
+        label = label,
+        insertText = insert,
+        filterText = label,
+        detail = (skill.description or "skill") .. " · djinni-skill",
+        kind = skill_kind,
+        sortText = string.format("2-%05d", j),
+        textEdit = {
+          newText = insert,
           range = {
             start = { line = row, character = start_col },
             ["end"] = { line = row, character = end_col },
@@ -96,16 +178,16 @@ end
 
 local function complete_at(droid, row, start_col, end_col)
   local cwd = (droid and droid.opts and droid.opts.cwd) or vim.b.nowork_cwd or vim.fn.getcwd()
-  local files = {}
-  walk_files(cwd, files, "", 0)
+  local files = list_files(cwd)
   local kind = vim.lsp.protocol.CompletionItemKind.File
   local items = {}
   for i, rel in ipairs(files) do
     local label = "@" .. rel
+    local basename = rel:match("([^/]+)$") or rel
     items[#items + 1] = {
       label = label,
       insertText = label,
-      filterText = label,
+      filterText = basename .. " " .. rel,
       kind = kind,
       sortText = string.format("%05d", i),
       textEdit = {

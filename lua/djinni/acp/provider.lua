@@ -36,6 +36,22 @@ M.providers = {
       { id = "cursor-small",       label = "cursor-small" },
     },
   },
+  ["gemini"] = {
+    command = "gemini-acp",
+    args = {},
+    models = {},
+    resume = { method = "session/load", needs_cwd = true },
+    static_models = {
+      { id = "gemini-2.5-pro",    label = "gemini-2.5-pro" },
+      { id = "gemini-2.0-flash",  label = "gemini-2.0-flash" },
+    },
+  },
+  ["aider"] = {
+    command = "aider-acp",
+    args = {},
+    models = {},
+    resume = { method = "session/load", needs_cwd = true },
+  },
 }
 
 local function merged_providers()
