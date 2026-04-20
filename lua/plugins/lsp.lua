@@ -5,10 +5,50 @@ return {
   event = "VeryLazy",
   config = function()
     local ui = require("djinni.integrations.snacks_ui")
+    local mise = require("core.mise")
     local ok_blink, blink = pcall(require, "blink.cmp")
     local capabilities = ok_blink and blink.get_lsp_capabilities() or {}
 
     local ok_cs, codesettings = pcall(require, "codesettings")
+
+    local function resolve_executable(candidates)
+      for _, candidate in ipairs(candidates) do
+        local path = vim.fn.exepath(candidate)
+        if path ~= "" then
+          return path
+        end
+      end
+    end
+
+    local function build_lsp_env(root_dir, extra)
+      local env = {
+        PATH = vim.env.PATH,
+        HOME = vim.env.HOME,
+        USER = vim.env.USER,
+        SHELL = vim.env.SHELL,
+        LANG = vim.env.LANG,
+        TERM = vim.env.TERM,
+        COLORTERM = vim.env.COLORTERM,
+      }
+
+      for _, var in ipairs({
+        "NVM_DIR", "PYENV_ROOT", "GOPATH", "GOROOT", "CARGO_HOME", "RUSTUP_HOME",
+        "ASDF_DIR", "VOLTA_HOME", "FNM_DIR", "BUN_INSTALL", "PNPM_HOME",
+        "MIX_HOME", "HEX_HOME", "MISE_HOME",
+      }) do
+        if vim.env[var] then
+          env[var] = vim.env[var]
+        end
+      end
+
+      env = vim.tbl_extend("force", env, mise.get_env(root_dir or vim.fn.getcwd()))
+
+      if extra then
+        env = vim.tbl_extend("force", env, extra)
+      end
+
+      return env
+    end
 
     local default_config = {
       capabilities = capabilities,
@@ -16,6 +56,7 @@ return {
         debounce_text_changes = 500,
       },
       before_init = function(_, config)
+        config.cmd_env = build_lsp_env(config.root_dir, config.cmd_env)
         if ok_cs then
           codesettings.with_local_settings(config.name, config)
         end
@@ -43,17 +84,96 @@ return {
       return true
     end
 
-    if vim.fn.executable("vtsls") == 1 then
-      vim.lsp.config("vtsls", {
-        filetypes = {
-          "javascript",
-          "javascriptreact",
-          "javascript.jsx",
-          "typescript",
-          "typescriptreact",
-          "typescript.tsx",
-          "vue"
+    local ts_filetypes = {
+      "javascript",
+      "javascriptreact",
+      "javascript.jsx",
+      "typescript",
+      "typescriptreact",
+      "typescript.tsx",
+      "vue",
+    }
+
+    local ts_root_markers = {
+      "tsconfig.json",
+      "jsconfig.json",
+      "package.json",
+      "deno.json",
+      "deno.jsonc",
+      ".git",
+    }
+
+    local ts_settings = {
+      typescript = {
+        globalPlugins = {
+          {
+            name = "@angular/language-service",
+            location = vim.fs.normalize("node_modules/@angular/language-service"),
+            enableForWorkspaceTypeScriptVersions = false,
+          },
         },
+        updateImportsOnFileMove = { enabled = "always" },
+        suggest = {
+          completeFunctionCalls = true,
+          autoImports = true,
+          includeCompletionsForModuleExports = true,
+        },
+        preferences = {
+          importModuleSpecifier = "relative",
+          includePackageJsonAutoImports = "on",
+        },
+        inlayHints = {
+          enumMemberValues = { enabled = true },
+          functionLikeReturnTypes = { enabled = true },
+          parameterNames = { enabled = "literals" },
+          parameterTypes = { enabled = true },
+          variableTypes = { enabled = false },
+          propertyDeclarationTypes = { enabled = true }
+        },
+        format = {
+          enable = true,
+          semicolons = "insert",
+          insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces = true,
+          insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false,
+        },
+        workspaceSymbols = {
+          scope = "allOpenProjects",
+        },
+      },
+      javascript = {
+        updateImportsOnFileMove = { enabled = "always" },
+        suggest = {
+          completeFunctionCalls = true,
+          autoImports = true,
+          includeCompletionsForModuleExports = true,
+        },
+        preferences = {
+          importModuleSpecifier = "relative",
+          includePackageJsonAutoImports = "on",
+        },
+        inlayHints = {
+          enumMemberValues = { enabled = true },
+          functionLikeReturnTypes = { enabled = true },
+          parameterNames = { enabled = "literals" },
+          parameterTypes = { enabled = true },
+          variableTypes = { enabled = false },
+          propertyDeclarationTypes = { enabled = true }
+        },
+        format = {
+          enable = true,
+          semicolons = "insert",
+          insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces = true,
+          insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false,
+        },
+      },
+    }
+
+    local vtsls_cmd = resolve_executable({ "vtsls" })
+    if vtsls_cmd then
+      vim.lsp.config("vtsls", {
+        cmd = { vtsls_cmd, "--stdio" },
+        filetypes = ts_filetypes,
+        root_markers = ts_root_markers,
         settings = {
           complete_function_calls = true,
           vtsls = {
@@ -66,71 +186,30 @@ return {
               },
             },
           },
-          typescript = {
-            globalPlugins = {
-              {
-                name = "@angular/language-service",
-                location = vim.fs.normalize("node_modules/@angular/language-service"),
-                enableForWorkspaceTypeScriptVersions = false,
-              },
-            },
-            updateImportsOnFileMove = { enabled = "always" },
-            suggest = {
-              completeFunctionCalls = true,
-              autoImports = true,
-              includeCompletionsForModuleExports = true,
-            },
-            preferences = {
-              importModuleSpecifier = "relative",
-              includePackageJsonAutoImports = "on",
-            },
-            inlayHints = {
-              enumMemberValues = { enabled = true },
-              functionLikeReturnTypes = { enabled = true },
-              parameterNames = { enabled = "literals" },
-              parameterTypes = { enabled = true },
-              variableTypes = { enabled = false },
-              propertyDeclarationTypes = { enabled = true }
-            },
-            format = {
-              enable = true,
-              semicolons = "insert",
-              insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces = true,
-              insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false,
-            },
-            workspaceSymbols = {
-              scope = "allOpenProjects",
-            },
-          },
-          javascript = {
-            updateImportsOnFileMove = { enabled = "always" },
-            suggest = {
-              completeFunctionCalls = true,
-              autoImports = true,
-              includeCompletionsForModuleExports = true,
-            },
-            preferences = {
-              importModuleSpecifier = "relative",
-              includePackageJsonAutoImports = "on",
-            },
-            inlayHints = {
-              enumMemberValues = { enabled = true },
-              functionLikeReturnTypes = { enabled = true },
-              parameterNames = { enabled = "literals" },
-              parameterTypes = { enabled = true },
-              variableTypes = { enabled = false },
-              propertyDeclarationTypes = { enabled = true }
-            },
-            format = {
-              enable = true,
-              semicolons = "insert",
-              insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces = true,
-              insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false,
-            },
-          },
+          typescript = ts_settings.typescript,
+          javascript = ts_settings.javascript,
         },
       })
       safe_enable("vtsls")
+    else
+      local ts_ls_cmd = resolve_executable({ "typescript-language-server" })
+      if ts_ls_cmd then
+        vim.lsp.config("ts_ls", {
+          cmd = { ts_ls_cmd, "--stdio" },
+          filetypes = ts_filetypes,
+          root_markers = ts_root_markers,
+          init_options = {
+            hostInfo = "neovim",
+            preferences = {
+              includeCompletionsForModuleExports = true,
+              includeCompletionsForImportStatements = true,
+              includeCompletionsWithInsertText = true,
+            },
+          },
+          settings = ts_settings,
+        })
+        safe_enable("ts_ls")
+      end
     end
 
     if vim.fn.executable("basedpyright") == 1 or vim.fn.executable("basedpyright-langserver") == 1 then
@@ -1209,7 +1288,21 @@ return {
       })
       safe_enable("expert")
     else
-      if vim.fn.executable("elixir-ls") == 1 then
+      local elixir_ls_cmd = resolve_executable({ "elixir-ls", "elixir_ls" })
+      if elixir_ls_cmd then
+        vim.lsp.config("elixirls", {
+          cmd = { elixir_ls_cmd },
+          filetypes = { "elixir", "eelixir", "heex", "surface" },
+          root_markers = { "mix.exs", ".git" },
+          single_file_support = true,
+          settings = {
+            elixirLS = {
+              dialyzerEnabled = true,
+              fetchDeps = false,
+              suggestSpecs = true,
+            },
+          },
+        })
         safe_enable("elixirls")
       end
     end

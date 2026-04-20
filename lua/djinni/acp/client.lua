@@ -573,10 +573,42 @@ function M:is_alive()
   return self.job_id ~= nil
 end
 
+local function collect_descendants(pid, acc, depth)
+  acc = acc or {}
+  depth = depth or 0
+  if depth > 6 then return acc end
+  local handle = io.popen("pgrep -P " .. tostring(pid) .. " 2>/dev/null")
+  if not handle then return acc end
+  for line in handle:lines() do
+    local cpid = tonumber(line)
+    if cpid and cpid > 0 then
+      acc[#acc + 1] = cpid
+      collect_descendants(cpid, acc, depth + 1)
+    end
+  end
+  handle:close()
+  return acc
+end
+
 function M:kill_tree()
   self._shutting_down = true
+  if self._drain_timer and not self._drain_timer:is_closing() then
+    self._drain_timer:stop()
+    self._drain_timer:close()
+  end
+  self._drain_timer = nil
+  if self._init_timer then
+    pcall(function() self._init_timer:stop() end)
+    pcall(function() self._init_timer:close() end)
+    self._init_timer = nil
+  end
   if not self.job_id then return end
   if self.pid then
+    local descendants = collect_descendants(self.pid)
+    for i = #descendants, 1, -1 do
+      pcall(vim.uv.kill, descendants[i], "sigkill")
+    end
+    pcall(vim.uv.kill, self.pid, "sigkill")
     pcall(vim.uv.kill, -self.pid, "sigkill")
   end
   pcall(vim.fn.jobstop, self.job_id)
@@ -599,6 +631,11 @@ function M:shutdown(force)
     self._drain_timer:close()
   end
   self._drain_timer = nil
+  if self._init_timer then
+    pcall(function() self._init_timer:stop() end)
+    pcall(function() self._init_timer:close() end)
+    self._init_timer = nil
+  end
   self._parse_queue = nil
   self._update_queue = {}
   local pending = self.pending_requests or {}
@@ -624,15 +661,12 @@ function M:shutdown(force)
   self.request_handlers = {}
   self._buffer_parts = {}
   if force then
-    if self.job_id then
-      vim.fn.jobstop(self.job_id)
-      self.job_id = nil
-    end
+    self:kill_tree()
+    return
   else
     vim.defer_fn(function()
       if self.job_id then
-        vim.fn.jobstop(self.job_id)
-        self.job_id = nil
+        self:kill_tree()
       end
     end, 500)
   end

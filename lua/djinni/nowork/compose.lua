@@ -1,0 +1,384 @@
+local M = {}
+
+local DEFAULT_SECTIONS = { "Summary", "Review", "Observation", "Tasks" }
+local FOOTER = " <C-CR> send · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
+
+local state_by_droid = {}
+
+local function droid_key(droid)
+  if not droid then return nil end
+  return droid.id or tostring(droid)
+end
+
+local function build_scaffold(sections, prefill, raw)
+  sections = sections or DEFAULT_SECTIONS
+  prefill = prefill or {}
+  local lines = {}
+  for i, s in ipairs(sections) do
+    lines[#lines + 1] = "## " .. s
+    local body = prefill[s:lower()]
+    if body and body ~= "" then
+      for _, l in ipairs(vim.split(body, "\n", { plain = true })) do
+        lines[#lines + 1] = l
+      end
+    else
+      lines[#lines + 1] = ""
+    end
+    if i < #sections then lines[#lines + 1] = "" end
+  end
+  if raw and raw ~= "" then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "## Raw"
+    lines[#lines + 1] = "```"
+    for _, l in ipairs(vim.split(raw, "\n", { plain = true })) do
+      lines[#lines + 1] = l
+    end
+    lines[#lines + 1] = "```"
+  end
+  return lines
+end
+
+local function available_commands(droid)
+  if not droid or not droid.state then return {} end
+  return droid.state.available_commands or {}
+end
+
+local function command_name(cmd)
+  return cmd.name or cmd.id or cmd.command or cmd.label
+end
+
+local function format_footer(droid)
+  local cmds = available_commands(droid)
+  if #cmds == 0 then
+    return FOOTER
+  end
+  local shown = {}
+  for i = 1, math.min(3, #cmds) do
+    local name = command_name(cmds[i])
+    if name and name ~= "" then
+      shown[#shown + 1] = "/" .. name
+    end
+  end
+  if #shown == 0 then
+    return FOOTER
+  end
+  local suffix = #cmds > #shown and (" +" .. (#cmds - #shown)) or ""
+  return " " .. table.concat(shown, " ") .. suffix .. " ·" .. FOOTER
+end
+
+local function open_window(buf, title, footer)
+  local width = math.min(100, math.floor(vim.o.columns * 0.8))
+  local height = math.min(20, math.floor(vim.o.lines * 0.5))
+  local row = math.floor((vim.o.lines - height) / 2) - 1
+  local col = math.floor((vim.o.columns - width) / 2)
+
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    row = row,
+    col = col,
+    width = width,
+    height = height,
+    style = "minimal",
+    border = "rounded",
+    title = title or " nowork compose ",
+    title_pos = "center",
+    footer = footer or FOOTER,
+    footer_pos = "left",
+  })
+  vim.wo[win].wrap = true
+  vim.wo[win].linebreak = true
+  vim.wo[win].breakindent = true
+  vim.wo[win].cursorline = false
+  return win
+end
+
+local function place_cursor_first_blank(buf, win, sections)
+  local name = sections and sections[1] or "Summary"
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  for i, l in ipairs(lines) do
+    if l == "## " .. name then
+      if lines[i + 1] == "" then
+        vim.api.nvim_win_set_cursor(win, { i + 1, 0 })
+      else
+        vim.api.nvim_win_set_cursor(win, { i, #l })
+      end
+      return
+    end
+  end
+end
+
+local function set_buffer_body(buf, lines, editable)
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = editable ~= false
+end
+
+local function refresh_window_footer(state)
+  if not state or not vim.api.nvim_win_is_valid(state.win) then return end
+  local cfg = vim.api.nvim_win_get_config(state.win)
+  cfg.footer = format_footer(state.droid)
+  cfg.footer_pos = "left"
+  pcall(vim.api.nvim_win_set_config, state.win, cfg)
+end
+
+local function autorun_title(droid)
+  if not droid or droid.mode ~= "autorun" then return nil end
+  local s = droid.state or {}
+  local order = s.topo_order or {}
+  if #order == 0 then return nil end
+  local done, total = 0, #order
+  for _, id in ipairs(order) do
+    local t = (s.tasks or {})[id]
+    if t and t.status == "done" then done = done + 1 end
+  end
+  local id = s.current_task_id
+  if id and s.tasks and s.tasks[id] then
+    local t = s.tasks[id]
+    local idx
+    for i, tid in ipairs(order) do
+      if tid == id then idx = i break end
+    end
+    local desc = (t.desc or ""):sub(1, 40)
+    return string.format(" autorun %d/%d · sprint %s — %s ", idx or done, total, id, desc)
+  end
+  if done == total then
+    return string.format(" autorun %d/%d · all sprints done ", done, total)
+  end
+  return string.format(" autorun %d/%d · no active sprint ", done, total)
+end
+
+function M.open(droid, opts)
+  opts = opts or {}
+  local alt_buf = opts.alt_buf or vim.fn.bufnr("#")
+  local sections = opts.sections or DEFAULT_SECTIONS
+  local persistent = opts.persistent == true
+  local key = droid_key(droid)
+
+  if persistent and key and state_by_droid[key] then
+    local s = state_by_droid[key]
+    if s.alive and vim.api.nvim_win_is_valid(s.win) then
+      vim.api.nvim_set_current_win(s.win)
+      vim.cmd("startinsert")
+      return
+    end
+    state_by_droid[key] = nil
+  end
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].swapfile = false
+  vim.bo[buf].filetype = "markdown"
+  vim.b[buf].nowork_compose = true
+  if droid and droid.id then
+    vim.b[buf].nowork_droid = droid.id
+    if droid.opts and droid.opts.cwd then
+      vim.b[buf].nowork_cwd = droid.opts.cwd
+    end
+  end
+
+  local title = opts.title or autorun_title(droid)
+  local win = open_window(buf, title, format_footer(droid))
+
+  local initial
+  if opts.initial then
+    initial = vim.split(opts.initial, "\n", { plain = true })
+  elseif opts.sections or persistent or opts.prefill then
+    initial = build_scaffold(sections, opts.prefill, opts.raw)
+  else
+    initial = { "" }
+  end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, initial)
+  place_cursor_first_blank(buf, win, sections)
+  vim.cmd("startinsert")
+
+  local state = {
+    buf = buf,
+    win = win,
+    alive = true,
+    persistent = persistent,
+    sections = sections,
+    alt_buf = alt_buf,
+    opts = opts,
+    droid = droid,
+    busy = false,
+  }
+  if persistent and key then
+    state_by_droid[key] = state
+    if droid and droid.state then
+      droid.state.composer_persistent = true
+    end
+  end
+
+  local function close()
+    if not state.alive then return end
+    state.alive = false
+    if vim.api.nvim_win_is_valid(state.win) then
+      vim.api.nvim_win_close(state.win, true)
+    end
+    if key and state_by_droid[key] == state then
+      state_by_droid[key] = nil
+    end
+    if persistent and droid and droid.state then
+      droid.state.composer_persistent = false
+    end
+    if opts.on_close then pcall(opts.on_close) end
+  end
+
+  local function reseed(prefill, raw)
+    if not vim.api.nvim_buf_is_valid(state.buf) then return end
+    set_buffer_body(state.buf, build_scaffold(state.sections, prefill, raw), true)
+    state.busy = false
+    refresh_window_footer(state)
+    place_cursor_first_blank(state.buf, state.win, state.sections)
+  end
+
+  state.reseed = reseed
+  state.close = close
+
+  local function mark_busy(label)
+    if not vim.api.nvim_buf_is_valid(state.buf) then return end
+    state.busy = true
+    set_buffer_body(state.buf, { "## " .. (label or "sending…"), "", "(waiting for agent reply)" }, false)
+  end
+
+  state.mark_busy = mark_busy
+
+  local function submit()
+    if state.busy then return end
+    local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
+    local text = table.concat(lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then
+      vim.notify("nowork: empty message", vim.log.levels.WARN)
+      return
+    end
+    if droid and text == "clear" then
+      text = "/clear"
+    end
+    local expanded = require("djinni.nowork.expand").expand(text, { alt_buf = state.alt_buf })
+
+    if persistent then
+      mark_busy("sending…")
+      vim.schedule(function()
+        if opts.on_submit then
+          opts.on_submit(expanded)
+        else
+          local droid_mod = require("djinni.nowork.droid")
+          droid_mod.send(droid, expanded)
+        end
+      end)
+    else
+      close()
+      vim.schedule(function()
+        if opts.on_submit then
+          opts.on_submit(expanded)
+        else
+          local droid_mod = require("djinni.nowork.droid")
+          droid_mod.send(droid, expanded)
+        end
+      end)
+    end
+  end
+
+  local function insert_token(token)
+    if state.busy then return end
+    local mode = vim.api.nvim_get_mode().mode
+    if mode == "i" then
+      vim.api.nvim_feedkeys(token, "n", false)
+    else
+      local pos = vim.api.nvim_win_get_cursor(0)
+      local line = vim.api.nvim_buf_get_lines(state.buf, pos[1] - 1, pos[1], false)[1] or ""
+      local new_line = line:sub(1, pos[2]) .. token .. line:sub(pos[2] + 1)
+      vim.bo[state.buf].modifiable = true
+      vim.api.nvim_buf_set_lines(state.buf, pos[1] - 1, pos[1], false, { new_line })
+      vim.api.nvim_win_set_cursor(0, { pos[1], pos[2] + #token })
+    end
+  end
+
+  local function new_empty()
+    reseed(nil, nil)
+  end
+
+  local km = { buffer = buf, nowait = true }
+  vim.keymap.set({ "n", "i" }, "<C-CR>", submit, km)
+  vim.keymap.set({ "n", "i" }, "<C-c>", close, km)
+  vim.keymap.set({ "n", "i" }, "<C-q>", function() insert_token("#{qflist}") end, km)
+  vim.keymap.set({ "n", "i" }, "<C-b>", function() insert_token("#{buffer}") end, km)
+  vim.keymap.set({ "n", "i" }, "<C-d>", function() insert_token("#{diff}") end, km)
+  vim.keymap.set({ "n", "i" }, "<C-n>", new_empty, km)
+  vim.keymap.set("n", "q", close, km)
+  vim.keymap.set("n", "<Esc>", close, km)
+  vim.keymap.set("n", "?", function()
+    local entries = {
+      { key = "<C-CR>", desc = "send" },
+      { key = "clear", desc = "send /clear to attached droid" },
+      { key = "<C-q>", desc = "insert #{qflist}" },
+      { key = "<C-b>", desc = "insert #{buffer}" },
+      { key = "<C-d>", desc = "insert #{diff}" },
+      { key = "<C-n>", desc = "new empty sections" },
+      { key = "<C-c>", desc = "close" },
+      { key = "q / <Esc>", desc = "close (normal mode)" },
+      { key = "?",     desc = "this help" },
+    }
+    for _, cmd in ipairs(available_commands(droid)) do
+      local name = command_name(cmd)
+      if name and name ~= "" then
+        entries[#entries + 1] = {
+          key = "/" .. name,
+          desc = cmd.description or "ACP slash command",
+        }
+      end
+    end
+    require("djinni.nowork.help").show("compose", entries)
+  end, km)
+
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      state.alive = false
+      if key and state_by_droid[key] == state then
+        state_by_droid[key] = nil
+      end
+      if persistent and droid and droid.state then
+        droid.state.composer_persistent = false
+      end
+    end,
+  })
+end
+
+function M.reopen(droid, prefill, raw)
+  local key = droid_key(droid)
+  if not key then return false end
+  local state = state_by_droid[key]
+  if not state or not state.alive or not vim.api.nvim_buf_is_valid(state.buf) then
+    return false
+  end
+  state.reseed(prefill, raw)
+  return true
+end
+
+function M.close(droid)
+  local key = droid_key(droid)
+  if not key then return end
+  local state = state_by_droid[key]
+  if state and state.close then state.close() end
+end
+
+function M.is_open(droid)
+  local key = droid_key(droid)
+  if not key then return false end
+  local state = state_by_droid[key]
+  return state ~= nil and state.alive == true
+end
+
+function M.toggle(droid, opts)
+  if M.is_open(droid) then
+    M.close(droid)
+    return false
+  end
+  M.open(droid, opts)
+  return true
+end
+
+return M

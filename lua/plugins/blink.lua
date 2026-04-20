@@ -25,8 +25,16 @@ return {
       nerd_font_variant = "mono",
     },
     sources = {
-      default = { "neowork", "lsp", "snippets", "path", "buffer" },
+      default = { "nowork", "neowork", "lsp", "snippets", "path", "buffer" },
       providers = {
+        nowork = {
+          name = "Nowork",
+          module = "djinni.nowork.blink_source",
+          score_offset = 130,
+          enabled = function()
+            return vim.b.nowork_compose == true
+          end,
+        },
         neowork = {
           name = "Neowork",
           module = "neowork.blink_source",
