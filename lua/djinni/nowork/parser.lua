@@ -221,8 +221,30 @@ function M.extract_log_slices(text)
   return out
 end
 
-local function split_record(line)
+local function normalize_record_line(line)
+  line = vim.trim(line or "")
+  line = line:gsub("^[-*]%s+", "")
+  line = line:gsub("^%d+[.)]%s+", "")
+  line = vim.trim(line)
+  local link_target, link_tail = line:match("^%[[^%]]+%]%(([^%)]+)%)%s*:?(.*)$")
+  if link_target then
+    link_target = vim.trim(link_target):gsub("^<", ""):gsub(">$", "")
+    return vim.trim(link_target .. (link_tail ~= "" and (": " .. link_tail) or ""))
+  end
+  local ticked, tick_tail = line:match("^`([^`]+)`%s*:?(.*)$")
+  if ticked then
+    return vim.trim(ticked .. (tick_tail ~= "" and (": " .. tick_tail) or ""))
+  end
+  return line
+end
+
+local function split_record(line, ctx)
+  line = normalize_record_line(line)
   local filepath, lnum_str, after = line:match("^(.-):(%d+):(.*)$")
+  if not filepath then
+    filepath, lnum_str = line:match("^(.-):(%d+)$")
+    after = ""
+  end
   if not filepath or filepath == "" or not lnum_str then return nil end
   local lnum = tonumber(lnum_str)
 
@@ -252,30 +274,32 @@ local function split_record(line)
     lnum = lnum,
     col = col or 1,
     text = text,
+    cwd = ctx and ctx.cwd,
   })
 end
 
-function M.parse_line(line)
-  return split_record(line)
+function M.parse_line(line, ref)
+  return split_record(line, { cwd = ref and ref.cwd })
 end
 
-local function parse_body(body)
+local function parse_body(body, ctx)
   local items = {}
   for _, line in ipairs(vim.split(body, "\n", { plain = true })) do
     if vim.trim(line) ~= "" then
-      local it = split_record(line)
+      local it = split_record(line, ctx)
       if it then table.insert(items, it) end
     end
   end
   return items
 end
 
-function M.parse(text)
+function M.parse(text, ref)
+  local ctx = { cwd = ref and ref.cwd }
   local block = M.extract_locations_block(text)
   if block == nil then
-    return parse_body(text)
+    return parse_body(text, ctx)
   end
-  return parse_body(block)
+  return parse_body(block, ctx)
 end
 
 local function one_line_preview(body, max)
@@ -292,6 +316,7 @@ local function one_line_preview(body, max)
 end
 
 function M.parse_with_sections(text, ref)
+  local ctx = { cwd = ref and ref.cwd }
   local out = {}
   if not text or text == "" then
     if ref and ref.filename then
@@ -316,7 +341,7 @@ function M.parse_with_sections(text, ref)
         local title = element_attr(node, text, "title")
         local body = element_body(node, text)
         local label = title and title ~= "" and ("[" .. tag .. ": " .. title .. "]") or ("[" .. tag .. "]")
-        local file_items = parse_body(body)
+        local file_items = parse_body(body, ctx)
         if #file_items > 0 then
           for _, fi in ipairs(file_items) do
             local note = fi.text or ""
@@ -338,7 +363,7 @@ function M.parse_with_sections(text, ref)
 
   local loc_block = M.extract_locations_block(text)
   if loc_block then
-    for _, it in ipairs(parse_body(loc_block)) do out[#out + 1] = it end
+    for _, it in ipairs(parse_body(loc_block, ctx)) do out[#out + 1] = it end
   else
     local byte = 0
     for line in (text .. "\n"):gmatch("([^\n]*)\n") do
@@ -347,7 +372,7 @@ function M.parse_with_sections(text, ref)
         if byte >= r[1] and byte < r[2] then inside = true; break end
       end
       if not inside then
-        local it = split_record(line)
+        local it = split_record(line, ctx)
         if it then out[#out + 1] = it end
       end
       byte = byte + #line + 1

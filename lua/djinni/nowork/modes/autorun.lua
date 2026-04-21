@@ -366,7 +366,7 @@ return {
       if action ~= "suspend" then
         local qfix_share = require("djinni.nowork.qfix_share")
         local qfix = require("djinni.nowork.qfix")
-        local items, title = qfix_share.extract_review(text)
+        local items, title = qfix_share.extract_review(text, { cwd = droid.opts and droid.opts.cwd })
         if #items > 0 then
           qfix.set(items, {
             mode = "append",
@@ -380,7 +380,7 @@ return {
       if action ~= "suspend" then
         local qfix_share = require("djinni.nowork.qfix_share")
         local qfix = require("djinni.nowork.qfix")
-        local items, title = qfix_share.extract_review(text)
+        local items, title = qfix_share.extract_review(text, { cwd = droid.opts and droid.opts.cwd })
         if #items > 0 then
           qfix.set(items, {
             mode = "append",

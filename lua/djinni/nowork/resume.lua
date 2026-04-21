@@ -143,7 +143,7 @@ local function build_routine_preamble(state, log_path)
     end
   end
   lines[#lines + 1] = ""
-  lines[#lines + 1] = "Acknowledge resumption briefly, then wait for the user's next instruction."
+  lines[#lines + 1] = "The next user message in this new session continues the conversation immediately. Do not spend a turn acknowledging the resume unless the user asks about it."
   return table.concat(lines, "\n")
 end
 

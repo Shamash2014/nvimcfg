@@ -81,14 +81,15 @@ function M.share_marked(droid)
   stage(droid, format_block(title, items))
 end
 
-local function extract_review(text)
+local function extract_review(text, ref)
   local items = {}
   local title = nil
+  local parse_ref = ref and { cwd = ref.cwd }
   for _, block in ipairs(parser.extract_review_blocks(text)) do
     if not title and block.title and block.title ~= "" then
       title = block.title
     end
-    for _, item in ipairs(parser.parse(block.body)) do
+    for _, item in ipairs(parser.parse(block.body, parse_ref)) do
       items[#items + 1] = item
     end
   end
@@ -114,8 +115,8 @@ function M.pull_from_droid(droid)
   local lines = vim.api.nvim_buf_get_lines(droid.log_buf.buf, 0, -1, false)
   local text = table.concat(lines, "\n")
   local log_ref = droid._log_path or ""
-  local items = parser.parse_with_sections(text, { filename = log_ref })
-  local review_items, review_title = extract_review(text)
+  local items = parser.parse_with_sections(text, { filename = log_ref, cwd = droid.opts and droid.opts.cwd })
+  local review_items, review_title = extract_review(text, { cwd = droid.opts and droid.opts.cwd })
   local seen = {}
   local merged = {}
   local function push(it)

@@ -18,6 +18,12 @@ M.providers = {
     models = {},
     resume = { method = "session/load", needs_cwd = true },
   },
+  ["hermes"] = {
+    command = "hermes",
+    args = { "acp" },
+    models = {},
+    resume = { method = "session/load", needs_cwd = true },
+  },
   ["cursor"] = {
     command = "agent",
     args = { "acp" },

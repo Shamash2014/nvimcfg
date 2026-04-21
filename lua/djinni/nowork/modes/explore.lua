@@ -17,8 +17,8 @@ return {
       require("djinni.nowork.ask").ask_and_resume(droid, vim.trim(payload or ""), options)
       return "suspend"
     end
-    local items = parser.parse(text)
-    local review_items, review_title = qfix_share.extract_review(text)
+    local items = parser.parse(text, { cwd = droid.opts and droid.opts.cwd })
+    local review_items, review_title = qfix_share.extract_review(text, { cwd = droid.opts and droid.opts.cwd })
     local seen = {}
     local merged = {}
     local function push(it)

@@ -298,7 +298,7 @@ function M.setup(opts)
     local qfix = require("djinni.nowork.qfix")
     local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     local text = table.concat(lines, "\n")
-    local items = parser.parse(text)
+    local items = parser.parse(text, { cwd = vim.fn.getcwd() })
     qfix.set(items, {
       mode = info.bang and "append" or "replace",
       open = true,
@@ -384,13 +384,21 @@ function M.setup(opts)
     })
   end, { desc = "nowork: logs (active + recent + archive)" })
 
+  local function open_overview(mode, label)
+    require("djinni.nowork.overview").open({ mode = mode, label = label })
+  end
+
   vim.keymap.set("n", "<leader>ao", function()
-    require("djinni.nowork.overview").open({ mode = "routine" })
-  end, { desc = "nowork: project overview (routines)" })
+    require("djinni.nowork.overview").open({ all_projects = true, label = "projects" })
+  end, { desc = "nowork: projects (all)" })
 
   vim.keymap.set("n", "<leader>aO", function()
-    require("djinni.nowork.overview").open({ mode = "autorun" })
+    open_overview("autorun", "autorun")
   end, { desc = "nowork: project overview (autoruns)" })
+
+  vim.keymap.set("n", "<leader>aD", function()
+    open_overview("autorun")
+  end, { desc = "nowork: dashboard (autoruns)" })
 
   vim.keymap.set("n", "<leader>ap", function()
     require("djinni.nowork.mailbox").open()
@@ -595,8 +603,9 @@ function M.setup(opts)
       { "<leader>aw", desc = "routine" },
       { "<leader>aa", desc = "autorun" },
       { "<leader>al", desc = "logs (active + recent + archive)" },
-      { "<leader>ao", desc = "overview — routines per project" },
+      { "<leader>ao", desc = "projects — all" },
       { "<leader>aO", desc = "overview — autoruns per project" },
+      { "<leader>aD", desc = "dashboard — autoruns per project" },
       { "<leader>ap", desc = "permissions mailbox" },
       { "<leader>ak", desc = "kill all routines" },
       { "<leader>ac", desc = "chat composer (routine persistent)" },

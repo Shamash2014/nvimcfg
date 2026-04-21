@@ -195,6 +195,10 @@ end
 local function send_to_qflist(buf, path, mode, l1, l2)
   local parser = require("djinni.nowork.parser")
   local qfix = require("djinni.nowork.qfix")
+  local cwd = vim.b[buf].nowork_cwd
+  if not cwd or cwd == "" then
+    cwd = path:match("^(.-)/%.nowork/logs/")
+  end
   local base_line = 0
   local lines
   if l1 and l2 then
@@ -203,7 +207,7 @@ local function send_to_qflist(buf, path, mode, l1, l2)
   else
     lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   end
-  local items = parser.parse_with_sections(table.concat(lines, "\n"), { filename = path })
+  local items = parser.parse_with_sections(table.concat(lines, "\n"), { filename = path, cwd = cwd })
   if base_line > 0 then
     for _, it in ipairs(items) do
       if it.filename == path then it.lnum = (it.lnum or 1) + base_line end
@@ -330,12 +334,16 @@ function M.bind_qflist_keys(buf, path)
   end, vim.tbl_extend("force", opts, { desc = "nowork: log keys help" }))
 end
 
-function M.open(path)
+function M.open(path, opts)
+  opts = opts or {}
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = "nowork"
+  if opts.cwd and opts.cwd ~= "" then
+    vim.b[buf].nowork_cwd = opts.cwd
+  end
   local fh = io.open(path, "r")
   if fh then
     local content = fh:read("*a") or ""
@@ -346,6 +354,9 @@ function M.open(path)
   vim.bo[buf].modifiable = false
   vim.cmd("below 15split")
   vim.api.nvim_win_set_buf(0, buf)
+  if opts.cwd and opts.cwd ~= "" then
+    vim.cmd("lcd " .. vim.fn.fnameescape(opts.cwd))
+  end
   pcall(vim.api.nvim_buf_set_name, buf, "nowork://archive/" .. vim.fn.fnamemodify(path, ":t"))
   M.bind_qflist_keys(buf, path)
 end

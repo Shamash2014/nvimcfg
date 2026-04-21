@@ -20,9 +20,15 @@ return {
     { "<leader>as", function() require("djinni.nowork").launch("explore") end, desc = "nowork: explore" },
     { "<leader>aw", function() require("djinni.nowork").launch("routine") end, desc = "nowork: routine" },
     { "<leader>aa", function() require("djinni.nowork").launch("autorun") end, desc = "nowork: autorun" },
+    { "<leader>ao", function()
+      require("djinni.nowork.overview").open({ all_projects = true, label = "projects" })
+    end, desc = "nowork: projects (all)" },
     { "<leader>al", function()
       require("djinni.nowork.picker").pick({ include_history = true, include_archive = true })
     end, desc = "nowork: logs (active + recent + archive)" },
+    { "<leader>ap", function()
+      require("djinni.nowork.mailbox").open()
+    end, desc = "nowork: permissions mailbox" },
     { "<leader>av", mode = "x", function()
       local l1, l2 = vim.fn.line("v"), vim.fn.line(".")
       if l1 > l2 then l1, l2 = l2, l1 end

@@ -10,11 +10,23 @@ local counter = 0
 
 local function announce(droid)
   require("djinni.nowork.status_panel").update()
+  pcall(function()
+    require("djinni.nowork.overview").refresh_all()
+  end)
 end
 
 local function next_id()
   counter = counter + 1
   return "nowork" .. counter
+end
+
+local function apply_resume_preamble(droid, text)
+  local preamble = droid and droid._resume_preamble
+  if not preamble or preamble == "" then
+    return text
+  end
+  droid._resume_preamble = nil
+  return preamble .. "\n\nUser's next instruction:\n" .. text
 end
 
 function M.resolve(droid_or_id)
@@ -77,6 +89,7 @@ function M._turn(droid, text)
   droid.log_buf:append("agent:")
 
   local final_prompt
+  text = apply_resume_preamble(droid, text)
   if droid.policy.template_wrap then
     final_prompt = droid.policy.template_wrap(text, droid.state, droid.opts)
   else
@@ -396,7 +409,20 @@ function M.new(mode_name, initial_prompt, opts)
     end)
     if opts.preamble and opts.preamble ~= "" then
       lb:append("[resume] restoring from " .. (opts.restore and opts.restore.id or "?"))
-      M._turn(droid, opts.preamble)
+      if opts.defer_preamble then
+        droid._resume_preamble = opts.preamble
+        if droid._pending_initial then
+          local p = droid._pending_initial
+          droid._pending_initial = nil
+          M._turn(droid, p)
+        else
+          vim.schedule(function()
+            require("djinni.nowork.compose").open(droid, { alt_buf = vim.fn.bufnr("#") })
+          end)
+        end
+      else
+        M._turn(droid, opts.preamble)
+      end
     elseif initial_prompt and initial_prompt ~= "" then
       M._turn(droid, initial_prompt)
     elseif droid._pending_initial then
@@ -583,6 +609,9 @@ local function finalize(droid)
     table.remove(M.history)
   end
   M.active[droid.id] = nil
+  pcall(function()
+    require("djinni.nowork.overview").refresh_all()
+  end)
 end
 
 function M.cancel(droid_or_id)
@@ -656,6 +685,7 @@ function M.restart_from_archive(log_path)
   local opts = {
     restore = state,
     preamble = preamble,
+    defer_preamble = state.mode == "routine" and state.status ~= "running",
     cwd = state.opts and state.opts.cwd,
     provider = state.opts and state.opts.provider_name,
     allow_kinds = state.opts and state.opts.allow_kinds,

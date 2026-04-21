@@ -1537,25 +1537,42 @@ end
 
 -- Toggle terminal with unique instance
 function M.toggle_terminal()
-  if M.terminal_instance and M.terminal_instance.buf and vim.api.nvim_buf_is_valid(M.terminal_instance.buf) then
-    local wins = vim.fn.win_findbuf(M.terminal_instance.buf)
+  local instance = M.terminal_instance
+  if instance and instance.buf and vim.api.nvim_buf_is_valid(instance.buf) then
+    local wins = vim.fn.win_findbuf(instance.buf)
     if #wins > 0 then
-      M.terminal_instance:hide()
-    else
-      M.terminal_instance:show()
-      M.terminal_instance:focus()
+      local ok = pcall(vim.api.nvim_win_hide, wins[1])
+      if not ok then
+        vim.cmd("hide")
+      end
+      return
     end
-  else
-    M.terminal_instance = require("snacks").terminal(nil, {
-      win = {
-        position = "right",
-        width = 0.4,
-      },
-      env = build_terminal_env(),
-    })
-    M.terminal_instance:show()
-    M.terminal_instance:focus()
+
+    vim.cmd("botright vertical sbuffer " .. instance.buf)
+    vim.cmd("vertical resize " .. math.floor(vim.o.columns * 0.4))
+    vim.cmd("startinsert")
+    return
   end
+
+  vim.cmd("botright vertical new")
+  vim.cmd("vertical resize " .. math.floor(vim.o.columns * 0.4))
+
+  local buf = vim.api.nvim_get_current_buf()
+  vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
+  vim.api.nvim_set_option_value("buflisted", false, { buf = buf })
+
+  local job_id = vim.fn.termopen(vim.o.shell, {
+    env = build_terminal_env(),
+  })
+
+  if type(job_id) ~= "number" or job_id <= 0 then
+    vim.notify("Failed to start terminal", vim.log.levels.ERROR)
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    return
+  end
+
+  M.terminal_instance = { buf = buf, job_id = job_id }
+  vim.cmd("startinsert")
 end
 
 -- Set keymaps

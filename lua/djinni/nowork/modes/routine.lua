@@ -45,7 +45,7 @@ return {
       end
     end
 
-    local review_items, title = qfix_share.extract_review(text)
+    local review_items, title = qfix_share.extract_review(text, { cwd = droid.opts and droid.opts.cwd })
     if title and not bag.title then bag.title = title end
     for _, it in ipairs(review_items) do add(it) end
 
@@ -60,6 +60,7 @@ return {
               lnum = loc.line,
               col = loc.column,
               text = tc.title or "",
+              cwd = droid.opts and droid.opts.cwd,
             })
             if it then add(it) end
           end

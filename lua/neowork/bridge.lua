@@ -737,12 +737,67 @@ local function format_option_hints(options)
   return "  " .. table.concat(parts, "  ")
 end
 
-local function permission_lines(title, outcome, options)
+local function render_permission_command(raw_input)
+  if type(raw_input) == "string" and raw_input ~= "" then
+    return raw_input
+  end
+  if type(raw_input) ~= "table" then
+    return nil
+  end
+
+  local command = raw_input.command or raw_input.cmd
+  if type(command) == "string" and command ~= "" then
+    local desc = raw_input.description
+    if type(desc) == "string" and desc ~= "" then
+      return "$ " .. command .. "  — " .. desc
+    end
+    return "$ " .. command
+  end
+
+  if type(raw_input.file_path) == "string" and raw_input.file_path ~= "" then
+    if raw_input.old_string or raw_input.new_string or raw_input.patch then
+      return "✎ " .. raw_input.file_path
+    end
+    if raw_input.content ~= nil then
+      return "📝 " .. raw_input.file_path
+    end
+    return raw_input.file_path
+  end
+
+  if type(raw_input.path) == "string" and raw_input.path ~= "" then
+    if raw_input.old_string or raw_input.new_string or raw_input.patch then
+      return "✎ " .. raw_input.path
+    end
+    if raw_input.content ~= nil then
+      return "📝 " .. raw_input.path
+    end
+    return raw_input.path
+  end
+
+  if type(raw_input.url) == "string" and raw_input.url ~= "" then
+    return "↗ " .. raw_input.url
+  end
+  if type(raw_input.pattern) == "string" and raw_input.pattern ~= "" then
+    return "🔎 " .. raw_input.pattern
+  end
+  if type(raw_input.query) == "string" and raw_input.query ~= "" then
+    return "? " .. raw_input.query
+  end
+  if type(raw_input.description) == "string" and raw_input.description ~= "" then
+    return raw_input.description
+  end
+  return nil
+end
+
+local function permission_lines(title, command, outcome, options)
   local lines = {
     const.role.system,
     "",
     "Permission: " .. one_line(title ~= nil and title ~= "" and title or "Permission request"),
   }
+  if command and command ~= "" then
+    lines[#lines + 1] = "Command: " .. one_line(command)
+  end
   if outcome and outcome ~= "" then
     lines[#lines + 1] = "Status: " .. one_line(outcome)
   else
@@ -752,7 +807,7 @@ local function permission_lines(title, outcome, options)
   return lines
 end
 
-local function insert_permission_ui(buf, title, options)
+local function insert_permission_ui(buf, title, command, options)
   if not vim.api.nvim_buf_is_valid(buf) then return nil end
   local doc = get_document()
   doc.invalidate_compose_cache(buf)
@@ -771,7 +826,7 @@ local function insert_permission_ui(buf, title, options)
     local prev = vim.api.nvim_buf_get_lines(buf, probe_row, probe_row + 1, false)[1] or ""
     has_sep = prev:match("^[%-_%*][%-_%*][%-_%*]+%s*$") ~= nil
   end
-  local block = permission_lines(title, nil, options)
+  local block = permission_lines(title, command, nil, options)
   local lines
   if has_sep then
     lines = block
@@ -811,7 +866,7 @@ local function update_permission_ui(buf, perm, outcome)
   local start_row = pos[1]
   local details = pos[3] or {}
   local end_row = details.end_row or (start_row + (perm.line_count or 0))
-  local lines = permission_lines(perm.title, outcome, perm.options)
+  local lines = permission_lines(perm.title, perm.command, outcome, perm.options)
   if not perm.has_sep then
     local prefixed = { "---", "" }
     for _, l in ipairs(lines) do prefixed[#prefixed + 1] = l end
@@ -894,6 +949,7 @@ function M._handle_permission(buf, params, respond)
   local content = params.toolCall and params.toolCall.content
   local locations = params.toolCall and params.toolCall.locations
   local previous_status = M._runtime_status[buf] or const.session_status.submitting
+  local command = render_permission_command(raw_input)
 
   local perm
   local co = coroutine.create(function()
@@ -901,7 +957,7 @@ function M._handle_permission(buf, params, respond)
       set_runtime_status(buf, const.session_status.awaiting, {
         meta = { title = tool_desc, kind = tool_kind },
       })
-      local mark_id, line_count, has_sep = insert_permission_ui(buf, title, options)
+      local mark_id, line_count, has_sep = insert_permission_ui(buf, title, command, options)
       perm.mark_id = mark_id
       perm.line_count = line_count
       perm.has_sep = has_sep
@@ -947,6 +1003,7 @@ function M._handle_permission(buf, params, respond)
     title = title,
     tool_desc = tool_desc,
     tool_kind = tool_kind,
+    command = command,
     raw_input = raw_input,
     content = content,
     locations = locations,
