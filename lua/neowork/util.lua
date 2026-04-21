@@ -1,5 +1,6 @@
 local M = {}
 
+local ui = require("djinni.integrations.snacks_ui")
 local const = require("neowork.const")
 
 local function pick_provider(provider_name, callback)
@@ -15,7 +16,7 @@ local function pick_provider(provider_name, callback)
     return
   end
 
-  vim.ui.select(names, { prompt = "Provider:" }, function(choice)
+  ui.select(names, { prompt = "Provider:" }, function(choice)
     callback(choice)
   end)
 end

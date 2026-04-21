@@ -70,6 +70,31 @@ local function short_root(path)
   return vim.fn.fnamemodify(path, ":t")
 end
 
+local function normalize_path(path)
+  if not path or path == "" then return nil end
+  return vim.fn.fnamemodify(path, ":p"):gsub("/$", "")
+end
+
+local function git_main_root(root)
+  root = normalize_path(root)
+  if not root then return nil end
+  local dotgit = root .. "/.git"
+  local stat = vim.uv.fs_stat(dotgit)
+  if not stat or stat.type ~= "file" then return root end
+  local f = io.open(dotgit, "r")
+  if not f then return root end
+  local line = f:read("*l") or ""
+  f:close()
+  local gitdir = line:match("^gitdir:%s*(.-)%s*$")
+  if not gitdir or gitdir == "" then return root end
+  if not gitdir:match("^/") then
+    gitdir = vim.fn.fnamemodify(root .. "/" .. gitdir, ":p"):gsub("/$", "")
+  end
+  local main_git = gitdir:match("^(.-/%.git)/worktrees/[^/]+$")
+  if not main_git then return root end
+  return normalize_path(main_git:gsub("/%.git$", ""))
+end
+
 local function project_label(path)
   if not path or path == "" then return "?" end
   return short_root(path) .. "  " .. path
@@ -77,11 +102,17 @@ end
 
 local function open_project_root(root, opts)
   if not root or root == "" then return end
+  root = vim.uv.fs_realpath(root) or vim.fn.fnamemodify(root, ":p"):gsub("/$", "")
   opts = opts or {}
   if opts.split == "vsplit" then
     vim.cmd("botright vsplit")
   end
   vim.cmd("lcd " .. vim.fn.fnameescape(root))
+  local ok, oil = pcall(require, "oil")
+  if ok and oil and oil.open then
+    oil.open(root)
+    return
+  end
   vim.cmd("edit " .. vim.fn.fnameescape(root))
 end
 
@@ -174,6 +205,8 @@ end
 
 local function collect(opts)
   local roots = opts.all_projects and known_roots() or { opts.cwd or vim.fn.getcwd() }
+  local by_main = {}
+  local project_order = {}
   local projects = {}
   local active = {}
   local archived = {}
@@ -181,9 +214,52 @@ local function collect(opts)
   local total_disk = 0
   local total_resumable = 0
 
+  local function ensure_project(main)
+    main = normalize_path(main)
+    if not by_main[main] then
+      by_main[main] = {
+        root = main,
+        name = short_root(main),
+        active = {},
+        archived = {},
+        active_by_status = {},
+        resumable = 0,
+        disk = 0,
+        primary = nil,
+        worktrees = {},
+      }
+      project_order[#project_order + 1] = by_main[main]
+    end
+    return by_main[main]
+  end
+
+  local function merge_stats(project, stats)
+    for _, d in ipairs(stats.active) do
+      project.active[#project.active + 1] = d
+    end
+    for _, a in ipairs(stats.archived) do
+      project.archived[#project.archived + 1] = a
+    end
+    for status, count in pairs(stats.active_by_status) do
+      project.active_by_status[status] = (project.active_by_status[status] or 0) + count
+    end
+    project.resumable = project.resumable + (stats.resumable or 0)
+    project.disk = project.disk + (stats.disk or 0)
+  end
+
   for _, root in ipairs(roots) do
+    root = normalize_path(root)
     local stats = collect_stats(root, opts.mode)
-    projects[#projects + 1] = stats
+    local main = git_main_root(root) or root
+    local project = ensure_project(main)
+    if root == main then
+      project.primary = stats
+    else
+      stats.name = short_root(root)
+      stats.main_root = main
+      project.worktrees[#project.worktrees + 1] = stats
+    end
+    merge_stats(project, stats)
     total_disk = total_disk + (stats.disk or 0)
     total_resumable = total_resumable + (stats.resumable or 0)
     for _, d in ipairs(stats.active) do
@@ -195,6 +271,24 @@ local function collect(opts)
     for status, count in pairs(stats.active_by_status) do
       active_by_status[status] = (active_by_status[status] or 0) + count
     end
+  end
+
+  for _, project in ipairs(project_order) do
+    if not project.primary then
+      project.primary = {
+        root = project.root,
+        name = project.name,
+        active = {},
+        archived = {},
+        active_by_status = {},
+        resumable = 0,
+        disk = 0,
+      }
+    end
+    table.sort(project.worktrees, function(a, b)
+      return (a.name or "") < (b.name or "")
+    end)
+    projects[#projects + 1] = project
   end
 
   table.sort(projects, function(a, b)
@@ -273,6 +367,15 @@ local function archive_line(a)
   prompt = prompt:gsub("\n", " ")
   if #prompt > 56 then prompt = prompt:sub(1, 55) .. "…" end
   return string.format("%s %s %s  %-10s %-10s %s", badge, a.date or "?", hh, root, a.mode or "?", prompt)
+end
+
+local function project_has_rows(project)
+  if #(project.primary.active or {}) > 0 or #(project.primary.archived or {}) > 0 then return true end
+  if #(project.worktrees or {}) > 0 then return true end
+  for _, worktree in ipairs(project.worktrees or {}) do
+    if #(worktree.active or {}) > 0 or #(worktree.archived or {}) > 0 then return true end
+  end
+  return false
 end
 
 local function entry_root(entry)
@@ -593,21 +696,43 @@ local function render(buf, state)
     add(root_line, { type = "project_root", root = project.root })
     hl(#lines - 1, 4, 8, "NeoworkIdxSection")
     hl(#lines - 1, 9, #root_line, "NeoworkIdxMuted")
-    if #project.active == 0 and #project.archived == 0 then
+    local function add_project_rows(prefix, active_rows, archive_rows)
+      for _, d in ipairs(active_rows or {}) do
+        add(prefix .. droid_line(d), { type = "droid", droid = d })
+      end
+      local limit = math.min(#(archive_rows or {}), 8)
+      for i = 1, limit do
+        local a = archive_rows[i]
+        add(prefix .. archive_line(a), { type = "archive", archive = a })
+      end
+      if #(archive_rows or {}) > limit then
+        local more = string.format("%s... %d more archived", prefix, #archive_rows - limit)
+        add(more)
+        hl(#lines - 1, #prefix, #more, "NeoworkIdxMuted")
+      end
+    end
+    if not project_has_rows(project) then
       add("    (empty)")
     else
-      for _, d in ipairs(project.active) do
-        add("    " .. droid_line(d), { type = "droid", droid = d })
-      end
-      local limit = math.min(#project.archived, 8)
-      for i = 1, limit do
-        local a = project.archived[i]
-        add("    " .. archive_line(a), { type = "archive", archive = a })
-      end
-      if #project.archived > limit then
-        local more = string.format("    … %d more archived", #project.archived - limit)
-        add(more)
-        hl(#lines - 1, 4, #more, "NeoworkIdxMuted")
+      add_project_rows("    ", project.primary.active, project.primary.archived)
+      for idx, worktree in ipairs(project.worktrees or {}) do
+        local last = idx == #project.worktrees
+        local branch = last and "`-- " or "|-- "
+        local child_prefix = last and "    " or "|   "
+        local header_prefix = "    " .. branch
+        local header = string.format("%s%s (%d live, %d archived, %d resumable, %s)  %s",
+          header_prefix,
+          worktree.name,
+          #worktree.active,
+          #worktree.archived,
+          worktree.resumable or 0,
+          humanize_bytes(worktree.disk),
+          worktree.root)
+        add(header, { type = "project_root", root = worktree.root })
+        hl(#lines - 1, 4, 8, "NeoworkIdxRule")
+        hl(#lines - 1, 8, 8 + #worktree.name, "NeoworkIdxProject")
+        hl(#lines - 1, 8 + #worktree.name + 1, #header, "NeoworkIdxCount")
+        add_project_rows("    " .. child_prefix, worktree.active, worktree.archived)
       end
     end
     close_range()
@@ -661,7 +786,7 @@ local function choose_project(default_root, callback)
   for _, root in ipairs(roots) do
     labels[#labels + 1] = project_label(root)
   end
-  vim.ui.select(labels, { prompt = "nowork project" }, function(_, idx)
+  require("djinni.integrations.snacks_ui").select(labels, { prompt = "nowork project" }, function(_, idx)
     callback(idx and roots[idx] or nil)
   end)
 end

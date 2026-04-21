@@ -571,6 +571,9 @@ end
 local function finalize(droid)
   if droid._finalized then return end
   droid._finalized = true
+  pcall(function()
+    require("djinni.nowork.compose").close(droid)
+  end)
   render_autorun_task_qf(droid, false)
   if droid._log_fh then
     pcall(function() droid._log_fh:close() end)

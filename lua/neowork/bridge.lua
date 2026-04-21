@@ -2,6 +2,7 @@ local M = {}
 
 local Client = require("djinni.acp.client")
 local Provider = require("djinni.acp.provider")
+local ui = require("djinni.integrations.snacks_ui")
 local config = require("neowork.config")
 local store = require("neowork.store")
 local util = require("neowork.util")
@@ -1020,19 +1021,18 @@ function M.permission_action(buf, action)
   end
 
   if action == "select" then
-    local labels = {}
-    for _, opt in ipairs(perm.options) do
-      labels[#labels + 1] = opt.label
-    end
-    vim.ui.select(labels, { prompt = perm.title }, function(_, idx)
-      if not idx then
-        resume_permission(perm.co, { cancelled = true })
-      else
-        resume_permission(perm.co, {
-          option = perm.options[idx],
-          status = "approved",
-        })
-      end
+    ui.select(perm.options, {
+      prompt = perm.title,
+      format_item = function(opt) return opt.label end,
+    }, function(choice)
+      if not choice then return end
+      resume_permission(perm.co, {
+        option = choice,
+        status = choice.kind == const.permission_kind.reject_once and "denied"
+          or choice.kind == const.permission_kind.reject_always and "denied always"
+          or choice.kind == const.permission_kind.allow_always and "approved always"
+          or "approved",
+      })
     end)
     return
   end
@@ -1211,7 +1211,7 @@ function M.switch_model(buf)
     vim.notify("neowork: no models reported by " .. provider_name, vim.log.levels.WARN)
     return
   end
-  vim.ui.select(items, {
+  ui.select(items, {
     prompt = "Model (" .. provider_name .. "):",
     format_item = function(it) return it.label end,
   }, function(choice)
@@ -1232,7 +1232,7 @@ function M.switch_provider(buf)
     vim.notify("neowork: no providers available", vim.log.levels.WARN)
     return
   end
-  vim.ui.select(names, { prompt = "Provider:" }, function(choice)
+  ui.select(names, { prompt = "Provider:" }, function(choice)
     if not choice then return end
 
     local doc = get_document()

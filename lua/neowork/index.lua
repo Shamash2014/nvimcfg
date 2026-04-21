@@ -708,7 +708,7 @@ local function pick_project(home, callback)
   for _, r in ipairs(roots) do
     labels[#labels + 1] = vim.fn.fnamemodify(r, ":t") .. "  " .. r
   end
-  vim.ui.select(labels, { prompt = "Project:" }, function(_, idx)
+  require("djinni.integrations.snacks_ui").select(labels, { prompt = "Project:" }, function(_, idx)
     if idx then callback(roots[idx]) end
   end)
 end
