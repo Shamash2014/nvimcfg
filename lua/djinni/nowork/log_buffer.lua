@@ -65,6 +65,7 @@ function M.new(opts)
     vim.bo[buf].modifiable = true
     local count = vim.api.nvim_buf_line_count(buf)
     vim.api.nvim_buf_set_lines(buf, count, count, false, lines)
+    vim.bo[buf].modified = false
     vim.bo[buf].modifiable = false
     for i, line in ipairs(lines) do
       highlight_line(buf, count + i - 1, line)
@@ -106,6 +107,7 @@ function M.new(opts)
   local function clear(self)
     vim.bo[buf].modifiable = true
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
+    vim.bo[buf].modified = false
     vim.bo[buf].modifiable = false
   end
 

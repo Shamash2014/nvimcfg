@@ -21,7 +21,7 @@ return {
     { "<leader>aw", function() require("djinni.nowork").launch("routine") end, desc = "nowork: routine" },
     { "<leader>aa", function() require("djinni.nowork").launch("autorun") end, desc = "nowork: autorun" },
     { "<leader>ao", function()
-      require("djinni.nowork.overview").open({ all_projects = true, label = "projects" })
+      require("djinni.nowork.overview").open({ all_projects = true, label = "projects", project_visit_split = "vsplit" })
     end, desc = "nowork: projects (all)" },
     { "<leader>al", function()
       require("djinni.nowork.picker").pick({ include_history = true, include_archive = true })

@@ -389,7 +389,7 @@ function M.setup(opts)
   end
 
   vim.keymap.set("n", "<leader>ao", function()
-    require("djinni.nowork.overview").open({ all_projects = true, label = "projects" })
+    require("djinni.nowork.overview").open({ all_projects = true, label = "projects", project_visit_split = "vsplit" })
   end, { desc = "nowork: projects (all)" })
 
   vim.keymap.set("n", "<leader>aO", function()

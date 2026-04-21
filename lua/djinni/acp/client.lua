@@ -14,6 +14,19 @@ local STDERR_IGNORE = {
   "^%s",
 }
 
+local function close_timer(timer)
+  if not timer then return end
+  local closing = false
+  if timer.is_closing then
+    local ok, result = pcall(function() return timer:is_closing() end)
+    closing = ok and result or false
+  end
+  if not closing then
+    pcall(function() timer:stop() end)
+    pcall(function() timer:close() end)
+  end
+end
+
 function M.new(cmd, args, cwd)
   local self = setmetatable({}, M)
   self._cmd = cmd
@@ -33,6 +46,7 @@ function M.new(cmd, args, cwd)
   self._shutting_down = false
   self._stderr_recent = {}
   self._stderr_hint = nil
+  self._request_timers = {}
 
   self:_spawn()
   return self
@@ -84,6 +98,7 @@ function M:_spawn()
       self.job_id = nil
       self.state = "disconnected"
       self._ready = false
+      self:_close_all_timers()
       self:_flush_ready_error("process exited with code " .. tostring(code))
       local pending = self.pending_requests
       self.pending_requests = {}
@@ -102,10 +117,12 @@ function M:_spawn()
     self.pid = vim.fn.jobpid(self.job_id)
     self.state = "connected"
     log.info("job started, id=" .. tostring(self.job_id))
-    vim.defer_fn(function()
+    self._startup_timer = vim.defer_fn(function()
+      self._startup_timer = nil
       self:_initialize()
     end, 50)
     self._init_timer = vim.defer_fn(function()
+      self._init_timer = nil
       if not self._ready then
         self:_flush_ready_error("initialize timeout (10s)")
       end
@@ -139,7 +156,7 @@ function M:_initialize()
     end
     if self.auth_methods and #self.auth_methods > 0 then
       if self._init_timer then
-        self._init_timer:stop()
+        close_timer(self._init_timer)
         self._init_timer = nil
       end
       self:_authenticate(function(auth_err)
@@ -390,6 +407,7 @@ function M:_route_message(msg)
   if is_response and self.pending_requests[msg.id] then
     local cb = self.pending_requests[msg.id]
     self.pending_requests[msg.id] = nil
+    self:_close_request_timer(msg.id)
     if msg.error then
       cb(msg.error, nil)
     else
@@ -469,13 +487,18 @@ function M:request(method, params, callback, opts)
 
     local timeout_ms = opts and opts.timeout
     if timeout_ms then
-      vim.defer_fn(function()
+      local timer
+      timer = vim.defer_fn(function()
+        if self._request_timers then
+          self._request_timers[id] = nil
+        end
         local cb = self.pending_requests[id]
         if cb then
           self.pending_requests[id] = nil
           cb({ code = -1, message = "request timeout (" .. (timeout_ms / 1000) .. "s)" }, nil)
         end
       end, timeout_ms)
+      self._request_timers[id] = timer
     end
   end
 
@@ -573,6 +596,28 @@ function M:is_alive()
   return self.job_id ~= nil
 end
 
+function M:_close_request_timer(id)
+  local timers = self._request_timers
+  if not timers then return end
+  local timer = timers[id]
+  timers[id] = nil
+  close_timer(timer)
+end
+
+function M:_close_all_timers()
+  close_timer(self._drain_timer)
+  self._drain_timer = nil
+  self._drain_interval_ms = nil
+  close_timer(self._startup_timer)
+  self._startup_timer = nil
+  close_timer(self._init_timer)
+  self._init_timer = nil
+  for id, timer in pairs(self._request_timers or {}) do
+    self._request_timers[id] = nil
+    close_timer(timer)
+  end
+end
+
 local function collect_descendants(pid, acc, depth)
   acc = acc or {}
   depth = depth or 0
@@ -592,16 +637,7 @@ end
 
 function M:kill_tree()
   self._shutting_down = true
-  if self._drain_timer and not self._drain_timer:is_closing() then
-    self._drain_timer:stop()
-    self._drain_timer:close()
-  end
-  self._drain_timer = nil
-  if self._init_timer then
-    pcall(function() self._init_timer:stop() end)
-    pcall(function() self._init_timer:close() end)
-    self._init_timer = nil
-  end
+  self:_close_all_timers()
   if not self.job_id then return end
   if self.pid then
     local descendants = collect_descendants(self.pid)
@@ -626,16 +662,7 @@ end
 
 function M:shutdown(force)
   self._shutting_down = true
-  if self._drain_timer and not self._drain_timer:is_closing() then
-    self._drain_timer:stop()
-    self._drain_timer:close()
-  end
-  self._drain_timer = nil
-  if self._init_timer then
-    pcall(function() self._init_timer:stop() end)
-    pcall(function() self._init_timer:close() end)
-    self._init_timer = nil
-  end
+  self:_close_all_timers()
   self._parse_queue = nil
   self._update_queue = {}
   local pending = self.pending_requests or {}

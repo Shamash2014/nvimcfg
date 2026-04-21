@@ -75,8 +75,12 @@ local function project_label(path)
   return short_root(path) .. "  " .. path
 end
 
-local function open_project_root(root)
+local function open_project_root(root, opts)
   if not root or root == "" then return end
+  opts = opts or {}
+  if opts.split == "vsplit" then
+    vim.cmd("botright vsplit")
+  end
   vim.cmd("lcd " .. vim.fn.fnameescape(root))
   vim.cmd("edit " .. vim.fn.fnameescape(root))
 end
@@ -664,6 +668,8 @@ end
 
 local function open_item(buf, entry)
   if not entry then return end
+  local state = M._state[buf] or {}
+  local opts = state.opts or {}
   if entry.type == "droid" then
     local d = entry.droid
     if d and d.log_buf and d.log_buf.show then d.log_buf:show() end
@@ -674,11 +680,11 @@ local function open_item(buf, entry)
     return
   end
   if entry.type == "project_root" then
-    open_project_root(entry.root)
+    open_project_root(entry.root, { split = opts.project_visit_split })
     return
   end
   if entry.type == "project" then
-    open_project_root(entry.root)
+    open_project_root(entry.root, { split = opts.project_visit_split })
     return
   end
   if entry.type == "section" then
@@ -706,8 +712,10 @@ local function click_open(buf)
     pcall(vim.api.nvim_win_set_cursor, 0, { pos.line, math.max((pos.column or 1) - 1, 0) })
   end
   local entry = entry_at_cursor(buf)
+  local state = M._state[buf] or {}
+  local opts = state.opts or {}
   if entry and (entry.type == "project" or entry.type == "project_root") then
-    open_project_root(entry.root)
+    open_project_root(entry.root, { split = opts.project_visit_split })
     return
   end
   open_item(buf, entry)
@@ -722,8 +730,10 @@ local function click_project_root(buf)
     pcall(vim.api.nvim_win_set_cursor, 0, { pos.line, math.max((pos.column or 1) - 1, 0) })
   end
   local entry = entry_at_cursor(buf)
+  local state = M._state[buf] or {}
+  local opts = state.opts or {}
   if entry and (entry.type == "project" or entry.type == "project_root") then
-    open_project_root(entry.root)
+    open_project_root(entry.root, { split = opts.project_visit_split })
   end
 end
 
