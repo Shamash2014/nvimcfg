@@ -43,9 +43,25 @@ local function stage(droid, block)
   droid_mod.stage_append(droid, block)
 end
 
-function M.share_full(droid)
+local function current_items()
   local info = vim.fn.getqflist({ title = 0, items = 0 })
-  local items = info.items or {}
+  return info, info.items or {}
+end
+
+local function pick_range(items, l1, l2)
+  local picked = {}
+  for i = l1, l2 do
+    if items[i] then picked[#picked + 1] = items[i] end
+  end
+  return picked
+end
+
+local function route(block)
+  require("djinni.nowork.capture").route(block)
+end
+
+function M.share_full(droid)
+  local info, items = current_items()
   if #items == 0 then
     vim.notify("nowork: quickfix list is empty", vim.log.levels.WARN)
     return
@@ -54,19 +70,34 @@ function M.share_full(droid)
   stage(droid, block)
 end
 
-function M.share_range(droid, l1, l2)
-  local info = vim.fn.getqflist({ title = 0, items = 0 })
-  local items = info.items or {}
-  local picked = {}
-  for i = l1, l2 do
-    if items[i] then picked[#picked + 1] = items[i] end
+function M.compose_full()
+  local info, items = current_items()
+  if #items == 0 then
+    vim.notify("nowork: quickfix list is empty", vim.log.levels.WARN)
+    return
   end
+  route(format_block(info.title, items))
+end
+
+function M.share_range(droid, l1, l2)
+  local info, items = current_items()
+  local picked = pick_range(items, l1, l2)
   if #picked == 0 then
     vim.notify("nowork: no quickfix entries in range", vim.log.levels.WARN)
     return
   end
   local block = format_block(info.title, picked)
   stage(droid, block)
+end
+
+function M.compose_range(l1, l2)
+  local info, items = current_items()
+  local picked = pick_range(items, l1, l2)
+  if #picked == 0 then
+    vim.notify("nowork: no quickfix entries in range", vim.log.levels.WARN)
+    return
+  end
+  route(format_block(info.title, picked))
 end
 
 function M.share_marked(droid)
@@ -79,6 +110,18 @@ function M.share_marked(droid)
   local info = vim.fn.getqflist({ title = 0 })
   local title = (info.title or "quickfix") .. " (marked)"
   stage(droid, format_block(title, items))
+end
+
+function M.compose_marked()
+  local marks = require("djinni.nowork.qf_marks")
+  local items = marks.marked_items()
+  if #items == 0 then
+    vim.notify("nowork: no marked quickfix entries", vim.log.levels.WARN)
+    return
+  end
+  local info = vim.fn.getqflist({ title = 0 })
+  local title = (info.title or "quickfix") .. " (marked)"
+  route(format_block(title, items))
 end
 
 local function extract_review(text, ref)

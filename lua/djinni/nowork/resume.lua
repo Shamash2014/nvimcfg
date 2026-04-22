@@ -124,7 +124,7 @@ local function tail_turns_from_log(log_path, n)
   return out
 end
 
-local function build_routine_preamble(state, log_path)
+local function build_routine_preamble(state, log_path, extra)
   local original = state.initial_prompt or "(no original prompt recorded)"
   local lines = {
     "You are resuming a previously-interrupted routine session. Previous chat history is below for context — do not re-run tool calls already performed, just continue the conversation.",
@@ -144,15 +144,19 @@ local function build_routine_preamble(state, log_path)
   end
   lines[#lines + 1] = ""
   lines[#lines + 1] = "The next user message in this new session continues the conversation immediately. Do not spend a turn acknowledging the resume unless the user asks about it."
+  if extra and extra.carried_refs and #extra.carried_refs > 0 then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "The user's first instruction below re-references files (`@path/...`). Open those files fresh before replying — don't assume prior-session state."
+  end
   return table.concat(lines, "\n")
 end
 
-function M.build_preamble(state, log_path)
+function M.build_preamble(state, log_path, extra)
   if not state then return nil end
   if state.mode == "autorun" then
     return build_autorun_preamble(state)
   elseif state.mode == "routine" then
-    return build_routine_preamble(state, log_path)
+    return build_routine_preamble(state, log_path, extra)
   end
   return "Resuming prior session. Original prompt:\n> " .. (state.initial_prompt or "(none)")
 end

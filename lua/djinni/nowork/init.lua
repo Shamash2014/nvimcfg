@@ -3,6 +3,7 @@ local M = {}
 M.defaults = {
   provider = "claude",
   log_buffer = { split = "below", height = 15, hidden_default = true },
+  compose = { floating = true, split = "below", height = 20, border = "rounded" },
   explore = { absolute_paths = true, copen_on_first_hit = true },
   routine = {
     skills = {},

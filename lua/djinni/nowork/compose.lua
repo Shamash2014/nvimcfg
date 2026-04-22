@@ -4,6 +4,7 @@ local DEFAULT_SECTIONS = { "Summary", "Review", "Observation", "Tasks" }
 local FOOTER = " <C-CR> send · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
 
 local state_by_droid = {}
+local autorun_title
 
 local function droid_key(droid)
   if not droid then return nil end
@@ -66,30 +67,59 @@ local function format_footer(droid)
   return " " .. table.concat(shown, " ") .. suffix .. " ·" .. FOOTER
 end
 
-local function open_window(buf, title, footer)
-  local width = math.min(100, math.floor(vim.o.columns * 0.8))
-  local height = math.min(20, math.floor(vim.o.lines * 0.5))
-  local row = math.floor((vim.o.lines - height) / 2) - 1
-  local col = math.floor((vim.o.columns - width) / 2)
+local function resolve_window_opts(opts)
+  local settings = {}
+  local ok, nowork = pcall(require, "djinni.nowork")
+  if ok and nowork and nowork.config and nowork.config.compose then
+    settings = nowork.config.compose
+  end
+  return vim.tbl_deep_extend("force", {
+    floating = true,
+    width = math.min(100, math.floor(vim.o.columns * 0.8)),
+    height = math.min(20, math.floor(vim.o.lines * 0.5)),
+    split = "below",
+  }, settings, opts or {})
+end
 
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    row = row,
-    col = col,
-    width = width,
-    height = height,
-    style = "minimal",
-    border = "rounded",
-    title = title or " nowork compose ",
-    title_pos = "center",
-    footer = footer or FOOTER,
-    footer_pos = "left",
-  })
+local function apply_window_local_opts(win)
   vim.wo[win].wrap = true
   vim.wo[win].linebreak = true
   vim.wo[win].breakindent = true
   vim.wo[win].cursorline = false
-  return win
+end
+
+local function open_window(buf, title, footer, opts)
+  opts = resolve_window_opts(opts)
+  local win
+  if opts.floating == false then
+    local cmd_map = {
+      below = string.format("below %dsplit", opts.height),
+      above = string.format("above %dsplit", opts.height),
+      right = string.format("vertical rightbelow %dsplit", opts.width),
+      left = string.format("vertical leftabove %dsplit", opts.width),
+    }
+    vim.cmd(cmd_map[opts.split] or cmd_map.below)
+    win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(win, buf)
+  else
+    local row = math.floor((vim.o.lines - opts.height) / 2) - 1
+    local col = math.floor((vim.o.columns - opts.width) / 2)
+    win = vim.api.nvim_open_win(buf, true, {
+      relative = "editor",
+      row = row,
+      col = col,
+      width = opts.width,
+      height = opts.height,
+      style = "minimal",
+      border = opts.border or "rounded",
+      title = title or " nowork compose ",
+      title_pos = "center",
+      footer = footer or FOOTER,
+      footer_pos = "left",
+    })
+  end
+  apply_window_local_opts(win)
+  return win, opts
 end
 
 local function place_cursor_first_blank(buf, win, sections)
@@ -113,15 +143,17 @@ local function set_buffer_body(buf, lines, editable)
   vim.bo[buf].modifiable = editable ~= false
 end
 
-local function refresh_window_footer(state)
-  if not state or not vim.api.nvim_win_is_valid(state.win) then return end
+local function refresh_window_chrome(state)
+  if not state or not vim.api.nvim_win_is_valid(state.win) or state.window_opts.floating == false then return end
   local cfg = vim.api.nvim_win_get_config(state.win)
+  cfg.title = state.opts.title or autorun_title(state.droid) or " nowork compose "
+  cfg.title_pos = "center"
   cfg.footer = format_footer(state.droid)
   cfg.footer_pos = "left"
   pcall(vim.api.nvim_win_set_config, state.win, cfg)
 end
 
-local function autorun_title(droid)
+autorun_title = function(droid)
   if not droid or droid.mode ~= "autorun" then return nil end
   local s = droid.state or {}
   local order = s.topo_order or {}
@@ -178,7 +210,7 @@ function M.open(droid, opts)
   end
 
   local title = opts.title or autorun_title(droid)
-  local win = open_window(buf, title, format_footer(droid))
+  local win, window_opts = open_window(buf, title, format_footer(droid), opts.window or opts.compose)
 
   local initial
   if opts.initial then
@@ -200,6 +232,7 @@ function M.open(droid, opts)
     sections = sections,
     alt_buf = alt_buf,
     opts = opts,
+    window_opts = window_opts,
     droid = droid,
     busy = false,
   }
@@ -229,7 +262,7 @@ function M.open(droid, opts)
     if not vim.api.nvim_buf_is_valid(state.buf) then return end
     set_buffer_body(state.buf, build_scaffold(state.sections, prefill, raw), true)
     state.busy = false
-    refresh_window_footer(state)
+    refresh_window_chrome(state)
     place_cursor_first_blank(state.buf, state.win, state.sections)
   end
 
@@ -299,9 +332,33 @@ function M.open(droid, opts)
     reseed(nil, nil)
   end
 
+  local function switch_mode()
+    if not droid then
+      vim.notify("nowork: compose is not attached to a droid", vim.log.levels.WARN)
+      return
+    end
+    if state.busy or droid.status == "running" then
+      vim.notify("nowork: cannot switch mode while running", vim.log.levels.WARN)
+      return
+    end
+    Snacks.picker.select({ "routine", "autorun", "explore" }, { prompt = "switch mode" }, function(mode_name)
+      if not mode_name or mode_name == droid.mode then return end
+      local ok, policy = pcall(require, "djinni.nowork.modes." .. mode_name)
+      if not ok then return end
+      droid.mode = mode_name
+      droid.policy = policy
+      if droid.log_buf and droid.log_buf.append then
+        droid.log_buf:append("[mode → " .. mode_name .. "]")
+      end
+      require("djinni.nowork.status_panel").update()
+      refresh_window_chrome(state)
+    end)
+  end
+
   local km = { buffer = buf, nowait = true }
   vim.keymap.set({ "n", "i" }, "<C-CR>", submit, km)
   vim.keymap.set({ "n", "i" }, "<C-c>", close, km)
+  vim.keymap.set({ "n", "i" }, "<C-s>", switch_mode, km)
   vim.keymap.set({ "n", "i" }, "<C-q>", function() insert_token("#{qflist}") end, km)
   vim.keymap.set({ "n", "i" }, "<C-b>", function() insert_token("#{buffer}") end, km)
   vim.keymap.set({ "n", "i" }, "<C-d>", function() insert_token("#{diff}") end, km)
@@ -312,6 +369,7 @@ function M.open(droid, opts)
     local entries = {
       { key = "<C-CR>", desc = "send" },
       { key = "clear", desc = "send /clear to attached droid" },
+      { key = "<C-s>", desc = "switch attached droid mode" },
       { key = "<C-q>", desc = "insert #{qflist}" },
       { key = "<C-b>", desc = "insert #{buffer}" },
       { key = "<C-d>", desc = "insert #{diff}" },

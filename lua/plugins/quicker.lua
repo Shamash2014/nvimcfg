@@ -81,6 +81,24 @@ return {
           end)
         end, { buffer = buf, desc = "qf: filter (drop matches)" })
 
+        vim.keymap.set("n", "<localleader>ac", function()
+          local share = require("djinni.nowork.qfix_share")
+          local marks = require("djinni.nowork.qf_marks")
+          if marks.has_marks() then
+            share.compose_marked()
+          else
+            share.compose_full()
+          end
+        end, { buffer = buf, desc = "qf: compose to nowork" })
+
+        vim.keymap.set("x", "<localleader>ac", function()
+          local l1 = vim.fn.line("v")
+          local l2 = vim.fn.line(".")
+          if l1 > l2 then l1, l2 = l2, l1 end
+          vim.cmd("normal! \27")
+          require("djinni.nowork.qfix_share").compose_range(l1, l2)
+        end, { buffer = buf, desc = "qf: compose qf range to nowork" })
+
         vim.keymap.set("n", "<localleader>qq", function()
           local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
           if info and info.loclist == 1 then

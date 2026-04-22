@@ -53,6 +53,10 @@ function M._dispatch(droid, action)
     vim.schedule(function() M.done(droid) end)
   elseif action == "await_user" then
     droid.status = "idle"
+    if droid.state and droid.state.close_session_on_idle and droid.session_id then
+      session.close_task_session(nil, droid.session_id)
+      droid.state.close_session_on_idle = nil
+    end
     local q = droid.state.queue
     if q and #q > 0 then
       local next_text = table.remove(q, 1)
@@ -77,7 +81,30 @@ function M._resume(droid, action)
   end)
 end
 
+local function attach_reconnect_handler(droid)
+  if not droid or not droid.session_id then return end
+  pcall(session.on_reconnect, droid.session_id, function()
+    droid.log_buf:append("[session reconnected]")
+    pcall(require("djinni.nowork.mailbox").drain_droid, droid, "cancelled")
+  end)
+end
+
 function M._turn(droid, text)
+  if droid.session_id and session.get_client and not session.get_client(droid.session_id) then
+    local cwd = droid.opts and droid.opts.cwd or vim.fn.getcwd()
+    session.create_or_resume_session(cwd, droid.session_id, function(err, session_id)
+      if err then
+        droid.log_buf:append("[error] session unavailable: " .. tostring(err.message or err))
+        droid.status = "blocked"
+        announce(droid)
+        return
+      end
+      droid.session_id = session_id or droid.session_id
+      attach_reconnect_handler(droid)
+      M._turn(droid, text)
+    end, { provider = droid.provider_name })
+    return
+  end
   droid.state.turn_n = (droid.state.turn_n or 0) + 1
   local ts = os.date("%H:%M:%S")
   droid.log_buf:append("")
@@ -403,10 +430,7 @@ function M.new(mode_name, initial_prompt, opts)
       return
     end
     droid.session_id = session_id
-    pcall(session.on_reconnect, session_id, function()
-      droid.log_buf:append("[session reconnected]")
-      pcall(require("djinni.nowork.mailbox").drain_droid, droid, "cancelled")
-    end)
+    attach_reconnect_handler(droid)
     if opts.preamble and opts.preamble ~= "" then
       lb:append("[resume] restoring from " .. (opts.restore and opts.restore.id or "?"))
       if opts.defer_preamble then
@@ -636,6 +660,7 @@ function M.done(droid_or_id)
   local droid = M.resolve(droid_or_id)
   if not droid then return end
   pcall(require("djinni.nowork.mailbox").drain_droid, droid, "cancelled")
+  local show_diff = false
   if droid.mode == "autorun" then
     local order = droid.state and droid.state.topo_order or {}
     local has_open = false
@@ -655,6 +680,14 @@ function M.done(droid_or_id)
       if choice == 1 then return end
       if choice == 3 then return end
     end
+  elseif droid.mode == "routine" then
+    local choice = vim.fn.confirm(
+      "nowork: routine done — review diff before closing?",
+      "&Done\nDone + &diff\n&Cancel",
+      1
+    )
+    if choice == 3 then return end
+    show_diff = choice == 2
   end
   local bag = droid.state and droid.state.touched
   if bag and bag.items and #bag.items > 0 then
@@ -665,6 +698,9 @@ function M.done(droid_or_id)
     session.close_task_session(nil, droid.session_id)
   end
   finalize(droid)
+  if show_diff then
+    require("djinni.nowork.routine_review").open(droid, { readonly = true })
+  end
   require("djinni.nowork.status_panel").update()
 end
 
@@ -674,6 +710,28 @@ function M.checkpoint(droid_or_id)
   pcall(function()
     require("djinni.nowork.archive").write_state(droid)
   end)
+end
+
+local function infer_archive_meta(log_path)
+  local meta = {
+    mode = "routine",
+    initial_prompt = "",
+    cwd = log_path and log_path:match("^(.-)/%.nowork/") or nil,
+  }
+  local fh = log_path and io.open(log_path, "r") or nil
+  if not fh then
+    return meta
+  end
+  for _ = 1, 12 do
+    local line = fh:read("*l")
+    if not line then break end
+    local mode = line:match("^# mode:%s*(.+)$")
+    if mode and mode ~= "" then meta.mode = vim.trim(mode) end
+    local initial = line:match("^# initial_prompt:%s*(.*)$")
+    if initial then meta.initial_prompt = initial end
+  end
+  fh:close()
+  return meta
 end
 
 function M.restart_from_archive(log_path)
@@ -709,6 +767,80 @@ function M.restart_from_archive(log_path)
         persistent = true,
         sections = { "Summary", "Review", "Observation", "Tasks" },
         title = " routine chat — <C-CR> send · <C-n> new · <C-c> close ",
+        on_submit = function(text) M.send(droid, text) end,
+      })
+    end)
+  end
+  return id
+end
+
+local function extract_refs(text, cwd)
+  if not text or text == "" then return {} end
+  local seen, out = {}, {}
+  for tok in text:gmatch("%S+") do
+    if tok:sub(1, 1) == "@" and #tok > 1 then
+      local path = tok:sub(2):gsub("[,%.%):%]]+$", "")
+      if path ~= "" and not seen[path] then
+        local abs = path
+        if cwd and not path:match("^/") then
+          abs = cwd .. "/" .. path
+        end
+        local ok, stat = pcall(vim.loop.fs_stat, abs)
+        if ok and stat then
+          seen[path] = true
+          out[#out + 1] = "@" .. path
+        end
+      end
+    end
+  end
+  return out
+end
+
+function M.fork_from_archive(log_path)
+  local archive = require("djinni.nowork.archive")
+  local resume = require("djinni.nowork.resume")
+  local state = archive.read_state(log_path)
+  local meta = infer_archive_meta(log_path)
+  local source = state or {
+    mode = meta.mode,
+    initial_prompt = meta.initial_prompt,
+    opts = { cwd = meta.cwd },
+  }
+  local ref_cwd = (source.opts and source.opts.cwd) or meta.cwd
+  local carried_refs = extract_refs(source.initial_prompt or meta.initial_prompt or "", ref_cwd)
+  local preamble = resume.build_preamble(source, log_path, { carried_refs = carried_refs })
+  local opts = {
+    preamble = preamble,
+    defer_preamble = source.mode == "routine",
+    cwd = source.opts and source.opts.cwd or meta.cwd,
+    provider = source.opts and source.opts.provider_name,
+    allow_kinds = source.opts and source.opts.allow_kinds,
+    turns_per_task_cap = source.opts and source.opts.turns_per_task_cap,
+    sprint_retry_cap = source.opts and source.opts.sprint_retry_cap,
+    grade_threshold = source.opts and source.opts.grade_threshold,
+    test_cmd = source.opts and source.opts.test_cmd,
+    skills = source.opts and source.opts.skills,
+  }
+  local mode = source.mode or "routine"
+  local initial_prompt = source.initial_prompt or meta.initial_prompt or ""
+  local id = M.new(mode, initial_prompt, opts)
+  local droid = M.active[id]
+  if droid and droid.log_buf then
+    droid.log_buf:append("[fork] from " .. log_path)
+  end
+  if droid and mode == "routine" then
+    vim.schedule(function()
+      local prefill
+      if #carried_refs > 0 then
+        prefill = {
+          summary = "Files carried over from the prior session — re-check these:\n" .. table.concat(carried_refs, "\n"),
+        }
+      end
+      require("djinni.nowork.compose").open(droid, {
+        persistent = true,
+        sections = { "Summary", "Review", "Observation", "Tasks" },
+        title = " routine chat — <C-CR> send · <C-n> new · <C-c> close ",
+        prefill = prefill,
         on_submit = function(text) M.send(droid, text) end,
       })
     end)

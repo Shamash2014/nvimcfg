@@ -25,6 +25,13 @@ local function fs_exists(path)
   return ok and stat ~= nil
 end
 
+local function archive_root(path)
+  if not path or path == "" then return nil end
+  local root = path:match("^(.-)/%.nowork/")
+  if not root or root == "" then return nil end
+  return vim.uv.fs_realpath(root) or vim.fn.fnamemodify(root, ":p"):gsub("/$", "")
+end
+
 local function as_object(tbl)
   if tbl == nil then return vim.empty_dict() end
   if type(tbl) ~= "table" then return vim.empty_dict() end
@@ -336,13 +343,19 @@ end
 
 function M.open(path, opts)
   opts = opts or {}
+  local cwd = opts.cwd
+  if not cwd or cwd == "" then
+    cwd = archive_root(path)
+  else
+    cwd = vim.uv.fs_realpath(cwd) or vim.fn.fnamemodify(cwd, ":p"):gsub("/$", "")
+  end
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = "nowork"
-  if opts.cwd and opts.cwd ~= "" then
-    vim.b[buf].nowork_cwd = opts.cwd
+  if cwd and cwd ~= "" then
+    vim.b[buf].nowork_cwd = cwd
   end
   local fh = io.open(path, "r")
   if fh then
@@ -354,8 +367,8 @@ function M.open(path, opts)
   vim.bo[buf].modifiable = false
   vim.cmd("below 15split")
   vim.api.nvim_win_set_buf(0, buf)
-  if opts.cwd and opts.cwd ~= "" then
-    vim.cmd("lcd " .. vim.fn.fnameescape(opts.cwd))
+  if cwd and cwd ~= "" then
+    vim.cmd("lcd " .. vim.fn.fnameescape(cwd))
   end
   pcall(vim.api.nvim_buf_set_name, buf, "nowork://archive/" .. vim.fn.fnamemodify(path, ":t"))
   M.bind_qflist_keys(buf, path)

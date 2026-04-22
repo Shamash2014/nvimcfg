@@ -15,7 +15,8 @@ local function touched_lines(droid)
   return out
 end
 
-function M.open(droid)
+function M.open(droid, opts)
+  opts = opts or {}
   local cwd = droid.opts and droid.opts.cwd or vim.fn.getcwd()
   local diff = vim.fn.system("git -C " .. vim.fn.shellescape(cwd) .. " diff --stat") or ""
   if diff == "" then diff = "(no diff)" end
@@ -23,30 +24,41 @@ function M.open(droid)
   for _, l in ipairs(touched_lines(droid)) do lines[#lines + 1] = l end
 
   local droid_mod = require("djinni.nowork.droid")
+  local title = " routine review — <C-s> continue · <C-r> correction · <C-c> close "
+  local footer = " <C-s> looks good, continue · <C-r> compose correction · <C-c> close "
+  local on_submit = function()
+    droid_mod.stage_append(droid, "User reviewed changes; continue.")
+    return true
+  end
+  local extra_keys = {
+    ["<C-r>"] = function(close)
+      close()
+      require("djinni.nowork.compose").open(droid, {
+        title = " routine chat — <C-CR> send · <C-n> new · <C-c> close ",
+        alt_buf = vim.fn.bufnr("#"),
+        persistent = true,
+        sections = { "Summary", "Review", "Observation", "Tasks" },
+        on_submit = function(note)
+          if note and note ~= "" then droid_mod.send(droid, note) end
+        end,
+      })
+    end,
+  }
+  if opts.readonly then
+    title = " routine diff — <C-c> close "
+    footer = " <C-c> close "
+    on_submit = function() return true end
+    extra_keys = {}
+  end
+
   require("djinni.nowork.plan_buffer").open({
-    title = " routine review — <C-s> continue · <C-r> correction · <C-c> close ",
-    footer = " <C-s> looks good, continue · <C-r> compose correction · <C-c> close ",
+    title = title,
+    footer = footer,
     content = table.concat(lines, "\n"),
     filetype = "diff",
     readonly = true,
-    on_submit = function()
-      droid_mod.stage_append(droid, "User reviewed changes; continue.")
-      return true
-    end,
-    extra_keys = {
-      ["<C-r>"] = function(close)
-        close()
-        require("djinni.nowork.compose").open(droid, {
-          title = " routine chat — <C-CR> send · <C-n> new · <C-c> close ",
-          alt_buf = vim.fn.bufnr("#"),
-          persistent = true,
-          sections = { "Summary", "Review", "Observation", "Tasks" },
-          on_submit = function(note)
-            if note and note ~= "" then droid_mod.send(droid, note) end
-          end,
-        })
-      end,
-    },
+    on_submit = on_submit,
+    extra_keys = extra_keys,
   })
 end
 

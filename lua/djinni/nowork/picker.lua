@@ -244,18 +244,31 @@ local function build_action_items(d)
   return items
 end
 
-function M.run_action(d)
-  local actions = build_action_items(d)
-  local labels = vim.tbl_map(function(a) return a.text end, actions)
-  Snacks.picker.select(labels, { prompt = d.id .. " ▸ " }, function(chosen)
-    if not chosen then return end
-    for _, a in ipairs(actions) do
-      if a.text == chosen then a.fn() return end
+local function open_numbered_actions(title, actions)
+  local lines = {}
+  local extra = {}
+  for i, action in ipairs(actions) do
+    if i > 9 then break end
+    lines[#lines + 1] = ("  [%d] %s"):format(i, action.text)
+    extra[tostring(i)] = function(close)
+      close()
+      action.fn()
     end
-  end)
+  end
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "# Press 1–9 to pick, <C-c>/q to cancel."
+  require("djinni.nowork.plan_buffer").open({
+    title = " " .. title .. " ",
+    footer = " 1-9 pick · <C-c>/q cancel ",
+    content = table.concat(lines, "\n"),
+    filetype = "markdown",
+    readonly = true,
+    on_submit = function() return true end,
+    extra_keys = extra,
+  })
 end
 
-function M.run_archive_action(path, has_state)
+local function build_archive_actions(path, has_state)
   local archive = require("djinni.nowork.archive")
   local sidecar = archive.state_path(path)
   if has_state == nil then
@@ -268,6 +281,10 @@ function M.run_archive_action(path, has_state)
       fn = function() droid_mod.restart_from_archive(path) end,
     }
   end
+  actions[#actions + 1] = {
+    text = "fork (new droid from this worklog)",
+    fn = function() droid_mod.fork_from_archive(path) end,
+  }
   actions[#actions + 1] = {
     text = "open log (read-only)",
     fn = function() archive.open(path) end,
@@ -297,14 +314,54 @@ function M.run_archive_action(path, has_state)
       end)
     end,
   }
-  local labels = vim.tbl_map(function(a) return a.text end, actions)
-  local prompt = "archive: " .. vim.fn.fnamemodify(path, ":t") .. " ▸ "
-  Snacks.picker.select(labels, { prompt = prompt }, function(chosen)
-    if not chosen then return end
-    for _, a in ipairs(actions) do
-      if a.text == chosen then a.fn() return end
+  return actions
+end
+
+local function build_history_action_items(history_entry)
+  local archive = require("djinni.nowork.archive")
+  local actions = {}
+  local function add(label, fn) actions[#actions + 1] = { text = label, fn = fn } end
+
+  local archive_path = history_entry and history_entry.archive_path or nil
+  local sidecar = archive_path and archive.state_path(archive_path) or nil
+  local has_state = sidecar and vim.loop.fs_stat(sidecar) ~= nil
+  local log_buf = history_entry and history_entry.log_buf or nil
+  local log_buf_valid = log_buf and log_buf.buf and vim.api.nvim_buf_is_valid(log_buf.buf)
+
+  if archive_path then
+    local archive_actions = build_archive_actions(archive_path, has_state)
+    for _, action in ipairs(archive_actions) do
+      actions[#actions + 1] = action
     end
-  end)
+    return actions
+  end
+  if log_buf and log_buf.show and log_buf_valid then
+    add("show log", function()
+      log_buf:show()
+    end)
+  else
+    add("show missing log warning", function()
+      vim.notify("nowork: log buffer gone and no archive for " .. (history_entry.id or "?"), vim.log.levels.WARN)
+    end)
+  end
+
+  return actions
+end
+
+function M.run_action(d)
+  local actions = build_action_items(d)
+  open_numbered_actions(d.id .. " ▸", actions)
+end
+
+function M.run_history_action(history_entry)
+  local id = history_entry and history_entry.id or "history"
+  local actions = build_history_action_items(history_entry or {})
+  open_numbered_actions(id .. " ▸", actions)
+end
+
+function M.run_archive_action(path, has_state)
+  local actions = build_archive_actions(path, has_state)
+  open_numbered_actions("archive: " .. vim.fn.fnamemodify(path, ":t") .. " ▸", actions)
 end
 
 function M.count(opts)
@@ -348,13 +405,7 @@ function M.pick(opts)
         picker:close()
         local h = item.history_entry
         vim.schedule(function()
-          if h.log_buf and h.log_buf.buf and vim.api.nvim_buf_is_valid(h.log_buf.buf) then
-            h.log_buf:show()
-          elseif h.archive_path then
-            require("djinni.nowork.archive").open(h.archive_path)
-          else
-            vim.notify("nowork: log buffer gone and no archive for " .. h.id, vim.log.levels.WARN)
-          end
+          M.run_history_action(h)
         end)
         return
       end

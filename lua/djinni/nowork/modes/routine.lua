@@ -87,6 +87,7 @@ return {
     local markers = require("djinni.nowork.markers")
     local question, ask_options = markers.extract_ask_user(text)
     if question then
+      droid.state.close_session_on_idle = true
       require("djinni.nowork.ask").ask_and_send(droid, question, ask_options)
     elseif droid.state.composer_persistent then
       local compose = require("djinni.nowork.compose")
