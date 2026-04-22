@@ -22,19 +22,19 @@ end
 
 function M.explore_tail()
   return [[
-<Output>
+<Locations>
 /path/to/project/src/foo.js:24:8,3,Some notes here about some stuff, it can contain commas
 /path/to/project/src/foo.js:71:12,7,more notes, everything is great!
 /path/to/project/src/bar.js:13:2,1,more notes again, this time specfically about bar and why bar is so important
 /path/to/project/src/baz.js:1:1,52,Notes about why baz is very important to the results
-</Output>
+</Locations>
 <Rule>Text locations are in the format of: /path/to/file.ext:lnum:cnum,X,NOTES
 lnum = starting line number 1 based
 cnum = starting column number 1 based
 X = how many lines should be highlighted
 NOTES = A text description of why this highlight is important
 
-See <Output> for example
+See <Locations> for example
 </Rule>
 <Rule>NOTES cannot have new lines</Rule>
 <Rule>You must adhere to the output format</Rule>
@@ -42,7 +42,7 @@ See <Output> for example
 <Rule>Each location is separated by new lines</Rule>
 <Rule>Each path is specified in absolute pathing</Rule>
 <Rule>You can provide notes you think are relevant per location</Rule>
-<Rule>You must provide output without any commentary, just text locations</Rule>
+<Rule>You must provide output as a single <Locations> block without commentary around it</Rule>
 <Example>
 You have found 3 locations in files foo.js, bar.js, and baz.js.
 There are 2 locations in foo.js, 1 in bar.js and baz.js.

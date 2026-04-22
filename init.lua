@@ -87,9 +87,9 @@ vim.diagnostic.config({
   virtual_text = {
     prefix = "●",
     spacing = 4,
+    source = true,
     underline = true,
   },
-  source = "if_many",
   severity_sort = true,
   float = {
     border = "rounded",

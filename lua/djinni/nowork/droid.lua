@@ -761,16 +761,6 @@ function M.restart_from_archive(log_path)
   if droid and droid.log_buf then
     droid.log_buf:append("[resume] from " .. log_path)
   end
-  if droid and state.mode == "routine" then
-    vim.schedule(function()
-      require("djinni.nowork.compose").open(droid, {
-        persistent = true,
-        sections = { "Summary", "Review", "Observation", "Tasks" },
-        title = " routine chat — <C-CR> send · <C-n> new · <C-c> close ",
-        on_submit = function(text) M.send(droid, text) end,
-      })
-    end)
-  end
   return id
 end
 

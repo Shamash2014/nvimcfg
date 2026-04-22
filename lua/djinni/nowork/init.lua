@@ -119,6 +119,39 @@ function M.auto(prompt, opts)
   end)
 end
 
+function M.projects()
+  local roots = {}
+  local seen = {}
+
+  local function add(root)
+    root = root and vim.fn.fnamemodify(root, ":p"):gsub("/$", "") or nil
+    if not root or root == "" or seen[root] then return end
+    seen[root] = true
+    roots[#roots + 1] = root
+  end
+
+  add(vim.fn.getcwd())
+  local ok_projects, projects = pcall(require, "djinni.integrations.projects")
+  if ok_projects and projects and projects.get then
+    for _, root in ipairs(projects.get() or {}) do
+      add(root)
+    end
+  end
+  table.sort(roots)
+
+  local labels = {}
+  for _, root in ipairs(roots) do
+    labels[#labels + 1] = vim.fn.fnamemodify(root, ":t") .. "  " .. root
+  end
+
+  require("djinni.integrations.snacks_ui").select(labels, { prompt = "nowork project" }, function(_, idx)
+    local root = idx and roots[idx] or nil
+    if not root then return end
+    vim.cmd("lcd " .. vim.fn.fnameescape(root))
+    require("djinni.nowork.overview").open({ cwd = root, label = "projects", project_visit_split = "vsplit" })
+  end)
+end
+
 local MODE_LABELS = { explore = "explore", routine = "routine", autorun = "autorun" }
 
 function M.launch(mode_name)
@@ -389,9 +422,7 @@ function M.setup(opts)
     require("djinni.nowork.overview").open({ mode = mode, label = label })
   end
 
-  vim.keymap.set("n", "<leader>ao", function()
-    require("djinni.nowork.overview").open({ all_projects = true, label = "projects", project_visit_split = "vsplit" })
-  end, { desc = "nowork: projects (all)" })
+  vim.keymap.set("n", "<leader>ao", M.projects, { desc = "nowork: projects" })
 
   vim.keymap.set("n", "<leader>aO", function()
     open_overview("autorun", "autorun")
@@ -604,7 +635,7 @@ function M.setup(opts)
       { "<leader>aw", desc = "routine" },
       { "<leader>aa", desc = "autorun" },
       { "<leader>al", desc = "logs (active + recent + archive)" },
-      { "<leader>ao", desc = "projects — all" },
+      { "<leader>ao", desc = "projects" },
       { "<leader>aO", desc = "overview — autoruns per project" },
       { "<leader>aD", desc = "dashboard — autoruns per project" },
       { "<leader>ap", desc = "permissions mailbox" },

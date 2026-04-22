@@ -207,11 +207,14 @@ local function complete_hash(droid, row, start_col, end_col)
   local order = state.topo_order or {}
   local tasks = state.tasks or {}
   local kind = vim.lsp.protocol.CompletionItemKind.Reference
+  local skill_kind = vim.lsp.protocol.CompletionItemKind.Module
   local items = {}
+  local seen = {}
   for i, id in ipairs(order) do
     local t = tasks[id]
     if t then
       local label = "#" .. id
+      seen[label] = true
       items[#items + 1] = {
         label = label,
         insertText = label,
@@ -219,6 +222,30 @@ local function complete_hash(droid, row, start_col, end_col)
         detail = t.desc,
         kind = kind,
         sortText = string.format("%05d", i),
+        textEdit = {
+          newText = label,
+          range = {
+            start = { line = row, character = start_col },
+            ["end"] = { line = row, character = end_col },
+          },
+        },
+      }
+    end
+  end
+
+  local cwd = (droid and droid.opts and droid.opts.cwd) or vim.b.nowork_cwd or vim.fn.getcwd()
+  for i, skill in ipairs(load_skills(cwd)) do
+    local name = skill.name
+    local label = name and ("#" .. name) or nil
+    if label and label ~= "#" and not seen[label] then
+      seen[label] = true
+      items[#items + 1] = {
+        label = label,
+        insertText = label,
+        filterText = label .. " " .. (skill.description or ""),
+        detail = (skill.description or "skill") .. " · djinni-skill",
+        kind = skill_kind,
+        sortText = string.format("1-%05d", i),
         textEdit = {
           newText = label,
           range = {
