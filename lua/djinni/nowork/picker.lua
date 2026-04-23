@@ -194,6 +194,13 @@ local function build_action_items(d)
     end)
   end
 
+  local pending = d.state and d.state.pending_prompt
+  if pending and pending.show then
+    add("answer question", function()
+      pending.show()
+    end)
+  end
+
   add("show log", function()
     if d.log_buf and d.log_buf.show then d.log_buf:show() end
   end)

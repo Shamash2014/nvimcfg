@@ -71,9 +71,11 @@ local function serialize_state(droid)
     opts = {
       cwd = opts.cwd,
       provider_name = droid.provider_name,
+      model_name = droid.model_name,
       allow_kinds = opts.allow_kinds or {},
       turns_per_task_cap = opts.turns_per_task_cap,
       sprint_retry_cap = opts.sprint_retry_cap,
+      model = opts.model,
       grade_threshold = opts.grade_threshold,
       test_cmd = opts.test_cmd,
       skills = opts.skills or {},

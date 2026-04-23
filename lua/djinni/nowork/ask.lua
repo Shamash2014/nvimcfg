@@ -91,8 +91,16 @@ function M.ask(droid, question, on_answer, opts)
   if droid and droid.state then
     droid.state.pending_prompt = { kind = "question", title = question, show = show }
     require("djinni.nowork.status_panel").update()
+    vim.notify(
+      string.format("nowork: %s awaiting answer — %s", droid.id or "question", trunc),
+      vim.log.levels.INFO
+    )
+  else
+    vim.notify(
+      string.format("nowork: awaiting answer — %s", trunc),
+      vim.log.levels.INFO
+    )
   end
-  show()
 end
 
 function M.ask_and_resume(droid, question, options)

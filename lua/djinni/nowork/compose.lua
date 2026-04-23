@@ -1,7 +1,7 @@
 local M = {}
 
 local DEFAULT_SECTIONS = { "Summary", "Review", "Observation", "Tasks" }
-local FOOTER = " <C-CR> send · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
+local FOOTER = " <C-CR> send · <S-Tab> switch mode · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
 
 local state_by_droid = {}
 local autorun_title
@@ -337,10 +337,6 @@ function M.open(droid, opts)
       vim.notify("nowork: compose is not attached to a droid", vim.log.levels.WARN)
       return
     end
-    if state.busy or droid.status == "running" then
-      vim.notify("nowork: cannot switch mode while running", vim.log.levels.WARN)
-      return
-    end
     Snacks.picker.select({ "routine", "autorun", "explore" }, { prompt = "switch mode" }, function(mode_name)
       if not mode_name or mode_name == droid.mode then return end
       local ok, policy = pcall(require, "djinni.nowork.modes." .. mode_name)
@@ -357,6 +353,7 @@ function M.open(droid, opts)
 
   local km = { buffer = buf, nowait = true }
   vim.keymap.set({ "n", "i" }, "<C-CR>", submit, km)
+  vim.keymap.set({ "n", "i" }, "<S-Tab>", switch_mode, km)
   vim.keymap.set({ "n", "i" }, "<C-c>", close, km)
   vim.keymap.set({ "n", "i" }, "<C-s>", switch_mode, km)
   vim.keymap.set({ "n", "i" }, "<C-q>", function() insert_token("#{qflist}") end, km)
@@ -368,6 +365,7 @@ function M.open(droid, opts)
   vim.keymap.set("n", "?", function()
     local entries = {
       { key = "<C-CR>", desc = "send" },
+      { key = "<S-Tab>", desc = "switch attached droid mode" },
       { key = "clear", desc = "send /clear to attached droid" },
       { key = "<C-s>", desc = "switch attached droid mode" },
       { key = "<C-q>", desc = "insert #{qflist}" },

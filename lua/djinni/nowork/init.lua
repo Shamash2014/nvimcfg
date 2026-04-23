@@ -569,6 +569,10 @@ function M.setup(opts)
     require("djinni.nowork.mailbox").open()
   end, { nargs = 0 })
 
+  vim.api.nvim_create_user_command("NoworkSummarizeWorklogs", function()
+    require("djinni.nowork.worklog_summary").summarize_all({ cwd = vim.fn.getcwd() })
+  end, { nargs = 0 })
+
   vim.api.nvim_create_autocmd("FileType", {
     group = vim.api.nvim_create_augroup("NoworkQfMarks", { clear = true }),
     pattern = "qf",

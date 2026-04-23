@@ -102,7 +102,7 @@ function M._turn(droid, text)
       droid.session_id = session_id or droid.session_id
       attach_reconnect_handler(droid)
       M._turn(droid, text)
-    end, { provider = droid.provider_name })
+    end, { provider = droid.provider_name, model = droid.model_name })
     return
   end
   droid.state.turn_n = (droid.state.turn_n or 0) + 1
@@ -277,6 +277,7 @@ function M.new(mode_name, initial_prompt, opts)
     session_id = nil,
     initial_prompt = initial_prompt,
     provider_name = opts.provider or "claude",
+    model_name = opts.model,
     log_buf = nil,
     _log_fh = nil,
     _log_path = nil,
@@ -306,6 +307,7 @@ function M.new(mode_name, initial_prompt, opts)
         or opts.test_cmd
         or "make test",
       skills = (opts.routine and opts.routine.skills) or opts.skills or {},
+      model = opts.model,
     },
     status = "idle",
     cancelled = false,
@@ -330,7 +332,9 @@ function M.new(mode_name, initial_prompt, opts)
       droid.opts.sprint_retry_cap = ro.sprint_retry_cap or droid.opts.sprint_retry_cap
       droid.opts.grade_threshold = ro.grade_threshold or droid.opts.grade_threshold
       droid.opts.test_cmd = ro.test_cmd or droid.opts.test_cmd
+      droid.opts.model = ro.model or droid.opts.model
       if ro.provider_name then droid.provider_name = ro.provider_name end
+      if ro.model_name then droid.model_name = ro.model_name end
     end
     droid._resume_origin = r.id
   end
@@ -347,6 +351,9 @@ function M.new(mode_name, initial_prompt, opts)
       droid._log_fh:write("# nowork session ", id, "\n")
       droid._log_fh:write("# mode: ", mode_name, "\n")
       droid._log_fh:write("# started_at: ", os.date("%Y-%m-%dT%H:%M:%S", droid.started_at), "\n")
+      if droid.model_name and droid.model_name ~= "" then
+        droid._log_fh:write("# model: ", droid.model_name, "\n")
+      end
       droid._log_fh:write("# initial_prompt: ", initial, "\n")
       droid._log_fh:write("\n")
       droid._log_fh:flush()
@@ -458,7 +465,7 @@ function M.new(mode_name, initial_prompt, opts)
         require("djinni.nowork.compose").open(droid, { alt_buf = vim.fn.bufnr("#") })
       end)
     end
-  end, { provider = droid.provider_name })
+  end, { provider = droid.provider_name, model = droid.model_name })
 
   return id
 end

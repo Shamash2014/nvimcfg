@@ -350,6 +350,12 @@ local function droid_line(d)
   local phase = d.mode == "autorun" and d.state and d.state.phase and (":" .. d.state.phase) or ""
   local status = d.status or "idle"
   local prompt = (d.initial_prompt or ""):gsub("\n", " ")
+  local pending = d.state and d.state.pending_prompt
+  if pending and pending.title and pending.title ~= "" then
+    local title = pending.title:gsub("\n", " ")
+    if #title > 32 then title = title:sub(1, 31) .. "…" end
+    prompt = "? " .. title .. (prompt ~= "" and (" · " .. prompt) or "")
+  end
   if #prompt > 56 then prompt = prompt:sub(1, 55) .. "…" end
   local age = format_elapsed(os.time() - (d.started_at or os.time()))
   return string.format("%s %s %-16s %-10s %-8s %s", STATUS_SIGIL[status] or "·", root, (d.id or "?") .. " " .. mode .. phase, status, age, prompt)
