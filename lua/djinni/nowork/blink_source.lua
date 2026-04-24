@@ -116,6 +116,14 @@ local function load_skills(cwd)
   return skills
 end
 
+local function normalize_command_name(cmd)
+  local raw = cmd and (cmd.name or cmd.id or cmd.command or cmd.label) or nil
+  if type(raw) ~= "string" then return nil end
+  local name = vim.trim(raw):gsub("^/+", "")
+  if name == "" then return nil end
+  return name
+end
+
 local function complete_slash(droid, row, start_col, end_col)
   local cmds = droid and droid.state and droid.state.available_commands or {}
   local cmd_kind = vim.lsp.protocol.CompletionItemKind.Function
@@ -124,7 +132,7 @@ local function complete_slash(droid, row, start_col, end_col)
   local seen = {}
   local i = 0
   for _, cmd in ipairs(cmds) do
-    local name = cmd.name or cmd.id or cmd.command or cmd.label
+    local name = normalize_command_name(cmd)
     if name and name ~= "" and not seen[name] then
       seen[name] = true
       i = i + 1

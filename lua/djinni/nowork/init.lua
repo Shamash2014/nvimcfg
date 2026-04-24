@@ -322,6 +322,16 @@ function M.setup(opts)
     end
   end, { nargs = 0 })
 
+  vim.api.nvim_create_user_command("NoworkModel", function()
+    local picker = require("djinni.nowork.picker")
+    local target = resolve_target()
+    if target then
+      require("djinni.nowork.model_picker").pick(target)
+    else
+      picker.pick({ on_droid = function(d) require("djinni.nowork.model_picker").pick(d) end })
+    end
+  end, { nargs = 0 })
+
   vim.api.nvim_create_user_command("NoworkPicker", function()
     local picker = require("djinni.nowork.picker")
     picker.pick()
@@ -475,15 +485,9 @@ function M.setup(opts)
       mode_filter = { "routine", "autorun" },
       on_droid = function(d)
         if d.mode == "routine" then
-          compose.toggle(d, {
+          compose.toggle(d, compose.routine_chat_config(d, {
             alt_buf = alt_buf,
-            title = " routine chat — <C-CR> send · <C-n> new · <C-c> close ",
-            persistent = true,
-            sections = { "Summary", "Review", "Observation", "Tasks" },
-            on_submit = function(text)
-              require("djinni.nowork.droid").send(d, text)
-            end,
-          })
+          }))
         else
           compose.open(d, { alt_buf = alt_buf })
         end

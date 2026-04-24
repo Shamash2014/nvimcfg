@@ -1,3 +1,5 @@
+local lifecycle = require("djinni.nowork.state")
+
 local M = {}
 
 M._autocmd_registered = false
@@ -122,11 +124,11 @@ local function format_tag(d)
     return "explore"
   elseif mode == "routine" then
     local bits = { "routine" }
-    local staged = d.state and d.state.staged_input
+    local staged = lifecycle.staged_input(d)
     if staged and staged ~= "" then
       bits[#bits + 1] = "+in"
     end
-    local q = d.state and d.state.queue
+    local q = lifecycle.queue(d)
     if q and #q > 0 then
       bits[#bits + 1] = "q:" .. #q
     end
@@ -147,7 +149,7 @@ local function build_lines()
   local droid_mod = require("djinni.nowork.droid")
   local entries = {}
   for _, d in pairs(droid_mod.active) do
-    local finished = d.status == "done" or d.status == "cancelled" or d.status == "blocked"
+    local finished = lifecycle.is_finished(d)
     if not finished then
       entries[#entries + 1] = d
     end

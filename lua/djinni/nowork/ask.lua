@@ -1,3 +1,5 @@
+local lifecycle = require("djinni.nowork.state")
+
 local M = {}
 
 local function build_context_initial(question, options)
@@ -51,7 +53,7 @@ function M.ask(droid, question, on_answer, opts)
     if resolved then return end
     if not answer or answer == "" then return end
     resolved = true
-    if droid and droid.state then droid.state.pending_prompt = nil end
+    lifecycle.set_pending_prompt(droid, nil)
     on_answer(answer)
   end
 
@@ -89,7 +91,7 @@ function M.ask(droid, question, on_answer, opts)
   end
 
   if droid and droid.state then
-    droid.state.pending_prompt = { kind = "question", title = question, show = show }
+    lifecycle.set_pending_prompt(droid, { kind = "question", title = question, show = show })
     require("djinni.nowork.status_panel").update()
     vim.notify(
       string.format("nowork: %s awaiting answer — %s", droid.id or "question", trunc),
@@ -107,11 +109,12 @@ function M.ask_and_resume(droid, question, options)
   local droid_mod = require("djinni.nowork.droid")
   M.ask(droid, question, function(answer)
     if answer then
-      droid.state.next_prompt = answer
+      lifecycle.set_next_prompt(droid, answer)
       droid_mod._resume(droid, "next")
     else
       droid.log_buf:append("[ask] cancelled")
-      droid.status = "cancelled"
+      lifecycle.set_droid_status(droid, lifecycle.droid.cancelled)
+      lifecycle.set_discussion_phase(droid, lifecycle.discussion.closed)
       droid_mod._resume(droid, "done")
     end
   end, { options = options })

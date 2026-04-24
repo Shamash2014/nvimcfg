@@ -33,15 +33,7 @@ function M.open(droid, opts)
   local extra_keys = {
     ["<C-r>"] = function(close)
       close()
-      require("djinni.nowork.compose").open(droid, {
-        title = " routine chat — <C-CR> send · <C-n> new · <C-c> close ",
-        alt_buf = vim.fn.bufnr("#"),
-        persistent = true,
-        sections = { "Summary", "Review", "Observation", "Tasks" },
-        on_submit = function(note)
-          if note and note ~= "" then droid_mod.send(droid, note) end
-        end,
-      })
+      require("djinni.nowork.compose").open_routine_chat(droid)
     end,
   }
   if opts.readonly then

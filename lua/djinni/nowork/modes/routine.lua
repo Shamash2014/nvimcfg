@@ -1,3 +1,5 @@
+local lifecycle = require("djinni.nowork.state")
+
 local function render_slices(text, log_buf)
   local slices = require("djinni.nowork.parser").extract_log_slices(text)
   for _, s in ipairs(slices) do
@@ -87,9 +89,9 @@ return {
     local markers = require("djinni.nowork.markers")
     local question, ask_options = markers.extract_ask_user(text)
     if question then
-      droid.state.close_session_on_idle = true
+      lifecycle.request_close_session_on_idle(droid)
       require("djinni.nowork.ask").ask_and_send(droid, question, ask_options)
-    elseif droid.state.composer_persistent then
+    elseif lifecycle.is_composer_persistent(droid) then
       local compose = require("djinni.nowork.compose")
       local parser = require("djinni.nowork.parser")
       local sections = parser.extract_sections(text)

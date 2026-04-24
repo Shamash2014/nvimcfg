@@ -1,6 +1,9 @@
+local lifecycle = require("djinni.nowork.state")
+
 local M = {}
 
 local DEFAULT_SECTIONS = { "Summary", "Review", "Observation", "Tasks" }
+local ROUTINE_CHAT_TITLE = " routine chat — <C-CR> send · <C-n> new · <C-c> close "
 local FOOTER = " <C-CR> send · <S-Tab> switch mode · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
 
 local state_by_droid = {}
@@ -45,7 +48,11 @@ local function available_commands(droid)
 end
 
 local function command_name(cmd)
-  return cmd.name or cmd.id or cmd.command or cmd.label
+  local raw = cmd and (cmd.name or cmd.id or cmd.command or cmd.label) or nil
+  if type(raw) ~= "string" then return nil end
+  local name = vim.trim(raw):gsub("^/+", "")
+  if name == "" then return nil end
+  return name
 end
 
 local function format_footer(droid)
@@ -179,6 +186,26 @@ autorun_title = function(droid)
   return string.format(" autorun %d/%d · no active sprint ", done, total)
 end
 
+function M.routine_chat_config(droid, opts)
+  opts = opts or {}
+  local config = vim.tbl_deep_extend("force", {
+    title = ROUTINE_CHAT_TITLE,
+    alt_buf = vim.fn.bufnr("#"),
+    persistent = true,
+    sections = DEFAULT_SECTIONS,
+  }, opts)
+  if droid and config.on_submit == nil then
+    config.on_submit = function(text)
+      require("djinni.nowork.droid").send(droid, text)
+    end
+  end
+  return config
+end
+
+function M.open_routine_chat(droid, opts)
+  return M.open(droid, M.routine_chat_config(droid, opts))
+end
+
 function M.open(droid, opts)
   opts = opts or {}
   local alt_buf = opts.alt_buf or vim.fn.bufnr("#")
@@ -238,9 +265,8 @@ function M.open(droid, opts)
   }
   if persistent and key then
     state_by_droid[key] = state
-    if droid and droid.state then
-      droid.state.composer_persistent = true
-    end
+    lifecycle.set_composer_persistent(droid, true)
+    lifecycle.set_discussion_phase(droid, lifecycle.discussion.composing)
   end
 
   local function close()
@@ -252,8 +278,9 @@ function M.open(droid, opts)
     if key and state_by_droid[key] == state then
       state_by_droid[key] = nil
     end
-    if persistent and droid and droid.state then
-      droid.state.composer_persistent = false
+    if persistent then
+      lifecycle.set_composer_persistent(droid, false)
+      lifecycle.set_discussion_phase(droid, lifecycle.discussion.closed)
     end
     if opts.on_close then pcall(opts.on_close) end
   end
@@ -262,6 +289,7 @@ function M.open(droid, opts)
     if not vim.api.nvim_buf_is_valid(state.buf) then return end
     set_buffer_body(state.buf, build_scaffold(state.sections, prefill, raw), true)
     state.busy = false
+    lifecycle.set_discussion_phase(droid, lifecycle.discussion.composing)
     refresh_window_chrome(state)
     place_cursor_first_blank(state.buf, state.win, state.sections)
   end
@@ -272,6 +300,7 @@ function M.open(droid, opts)
   local function mark_busy(label)
     if not vim.api.nvim_buf_is_valid(state.buf) then return end
     state.busy = true
+    lifecycle.set_discussion_phase(droid, lifecycle.discussion.sending)
     set_buffer_body(state.buf, { "## " .. (label or "sending…"), "", "(waiting for agent reply)" }, false)
   end
 
@@ -396,8 +425,9 @@ function M.open(droid, opts)
       if key and state_by_droid[key] == state then
         state_by_droid[key] = nil
       end
-      if persistent and droid and droid.state then
-        droid.state.composer_persistent = false
+      if persistent then
+        lifecycle.set_composer_persistent(droid, false)
+        lifecycle.set_discussion_phase(droid, lifecycle.discussion.closed)
       end
     end,
   })

@@ -2,6 +2,7 @@ local session = require("djinni.acp.session")
 local log_buffer = require("djinni.nowork.log_buffer")
 local turn = require("djinni.nowork.turn")
 local templates = require("djinni.nowork.templates")
+local lifecycle = require("djinni.nowork.state")
 
 local M = {}
 M.active = {}
@@ -20,8 +21,47 @@ local function next_id()
   return "nowork" .. counter
 end
 
+local function discussion(droid)
+  return lifecycle.ensure_discussion(droid)
+end
+
+local function set_status(droid, status)
+  lifecycle.set_droid_status(droid, status)
+end
+
+local function set_discussion_phase(droid, phase)
+  lifecycle.set_discussion_phase(droid, phase)
+end
+
+local function clear_interrupt_request(droid)
+  if droid then droid._interrupt_requested = nil end
+end
+
+local function mark_interrupt_request(droid)
+  if droid then droid._interrupt_requested = true end
+end
+
+local function interrupt_requested(droid)
+  return droid and droid._interrupt_requested == true
+end
+
+local function open_routine_chat(droid, opts)
+  local compose = require("djinni.nowork.compose")
+  if compose.open_routine_chat then
+    return compose.open_routine_chat(droid, opts)
+  end
+  return compose.open(droid, {
+    title = " routine chat — <C-CR> send · <C-n> new · <C-c> close ",
+    alt_buf = opts and opts.alt_buf or vim.fn.bufnr("#"),
+    persistent = true,
+    sections = { "Summary", "Review", "Observation", "Tasks" },
+    prefill = opts and opts.prefill or nil,
+    on_submit = function(text) M.send(droid, text) end,
+  })
+end
+
 local function apply_resume_preamble(droid, text)
-  local preamble = droid and droid._resume_preamble
+  local preamble = lifecycle.take_resume_preamble(droid) or droid._resume_preamble
   if not preamble or preamble == "" then
     return text
   end
@@ -47,27 +87,27 @@ end
 
 function M._dispatch(droid, action)
   if action == "done" then
-    if droid.status ~= "cancelled" and droid.status ~= "blocked" then
-      droid.status = "done"
+    if droid.status ~= lifecycle.droid.cancelled and droid.status ~= lifecycle.droid.blocked then
+      set_status(droid, lifecycle.droid.done)
     end
+    set_discussion_phase(droid, lifecycle.discussion.closed)
     vim.schedule(function() M.done(droid) end)
   elseif action == "await_user" then
-    droid.status = "idle"
-    if droid.state and droid.state.close_session_on_idle and droid.session_id then
+    set_status(droid, lifecycle.droid.idle)
+    set_discussion_phase(droid, lifecycle.discussion.awaiting_user)
+    if lifecycle.should_close_session_on_idle(droid) and droid.session_id then
       session.close_task_session(nil, droid.session_id)
-      droid.state.close_session_on_idle = nil
+      lifecycle.clear_close_session_on_idle(droid)
     end
-    local q = droid.state.queue
-    if q and #q > 0 then
-      local next_text = table.remove(q, 1)
+    local next_text = lifecycle.dequeue(droid)
+    if next_text then
       droid.log_buf:append("[dequeued] " .. next_text:sub(1, 80):gsub("\n", " "))
       vim.schedule(function()
         M._turn(droid, next_text)
       end)
     end
   elseif action == "next" then
-    local next_prompt = droid.state.next_prompt or "Continue."
-    droid.state.next_prompt = nil
+    local next_prompt = lifecycle.take_next_prompt(droid) or "Continue."
     vim.schedule(function()
       M._turn(droid, next_prompt)
     end)
@@ -89,17 +129,39 @@ local function attach_reconnect_handler(droid)
   end)
 end
 
+local function recover_persistent_compose(droid)
+  if not lifecycle.is_composer_persistent(droid) then
+    return false
+  end
+  local ok, reopened = pcall(function()
+    return require("djinni.nowork.compose").reopen(droid, nil, nil)
+  end)
+  if ok and reopened then
+    set_status(droid, lifecycle.droid.idle)
+    set_discussion_phase(droid, lifecycle.discussion.composing)
+    return true
+  end
+  return false
+end
+
+local function extract_available_commands(result)
+  if type(result) ~= "table" then return {} end
+  return result.availableCommands or result.available_commands or result.commands or {}
+end
+
 function M._turn(droid, text)
   if droid.session_id and session.get_client and not session.get_client(droid.session_id) then
     local cwd = droid.opts and droid.opts.cwd or vim.fn.getcwd()
-    session.create_or_resume_session(cwd, droid.session_id, function(err, session_id)
+    session.create_or_resume_session(cwd, droid.session_id, function(err, session_id, result)
       if err then
         droid.log_buf:append("[error] session unavailable: " .. tostring(err.message or err))
-        droid.status = "blocked"
+        set_status(droid, lifecycle.droid.blocked)
+        set_discussion_phase(droid, lifecycle.discussion.closed)
         announce(droid)
         return
       end
       droid.session_id = session_id or droid.session_id
+      droid.state.available_commands = extract_available_commands(result)
       attach_reconnect_handler(droid)
       M._turn(droid, text)
     end, { provider = droid.provider_name, model = droid.model_name })
@@ -123,7 +185,8 @@ function M._turn(droid, text)
     final_prompt = text
   end
 
-  droid.status = "running"
+  set_status(droid, lifecycle.droid.running)
+  set_discussion_phase(droid, lifecycle.discussion.sending)
   announce(droid)
 
   local tc_state = {}
@@ -238,14 +301,47 @@ function M._turn(droid, text)
 
   turn.run(droid.session_id, final_prompt, turn_opts, function(err, res)
     if err or droid.cancelled then
-      if droid.cancelled then
+      if interrupt_requested(droid) then
+        clear_interrupt_request(droid)
         droid.log_buf:append("[cancelled]")
-        droid.status = "cancelled"
+        set_status(droid, lifecycle.droid.idle)
+        if not recover_persistent_compose(droid) then
+          set_discussion_phase(droid, lifecycle.discussion.idle)
+        end
+      elseif droid.cancelled then
+        droid.log_buf:append("[cancelled]")
+        set_status(droid, lifecycle.droid.cancelled)
+        set_discussion_phase(droid, lifecycle.discussion.closed)
       else
         droid.log_buf:append("[error] " .. tostring(err.message or err))
-        droid.status = "blocked"
+        set_status(droid, lifecycle.droid.blocked)
       end
       pcall(require("djinni.nowork.mailbox").drain_droid, droid, "cancelled")
+      recover_persistent_compose(droid)
+      announce(droid)
+      return
+    end
+
+    if res.stop_reason == "cancelled" then
+      droid.log_buf:append("[cancelled]")
+      if interrupt_requested(droid) then
+        clear_interrupt_request(droid)
+        set_status(droid, lifecycle.droid.idle)
+        if not recover_persistent_compose(droid) then
+          set_discussion_phase(droid, lifecycle.discussion.idle)
+        end
+      else
+        set_status(droid, lifecycle.droid.cancelled)
+        set_discussion_phase(droid, lifecycle.discussion.closed)
+        recover_persistent_compose(droid)
+      end
+      announce(droid)
+      return
+    end
+    if res.stop_reason == "error" then
+      droid.log_buf:append("[error] turn failed")
+      set_status(droid, lifecycle.droid.blocked)
+      recover_persistent_compose(droid)
       announce(droid)
       return
     end
@@ -290,10 +386,13 @@ function M.new(mode_name, initial_prompt, opts)
       pending_retry = false,
       sticky_permissions = {},
       pending_permissions = {},
-      next_prompt = nil,
       eval_feedback = {},
       sprint_retries = {},
-      composer_persistent = false,
+      discussion = {
+        phase = lifecycle.discussion.idle,
+        queue = {},
+        composer = { persistent = false },
+      },
     },
     opts = {
       cwd = cwd,
@@ -309,9 +408,11 @@ function M.new(mode_name, initial_prompt, opts)
       skills = (opts.routine and opts.routine.skills) or opts.skills or {},
       model = opts.model,
     },
-    status = "idle",
+    status = lifecycle.droid.booting,
     cancelled = false,
   }
+
+  discussion(droid)
 
   if opts.restore and type(opts.restore) == "table" then
     local r = opts.restore
@@ -390,6 +491,7 @@ function M.new(mode_name, initial_prompt, opts)
   vim.keymap.set("n", "i", open_compose, { buffer = lb.buf, desc = "nowork: open compose" })
   vim.keymap.set("n", "a", open_compose, { buffer = lb.buf, desc = "nowork: open compose" })
   vim.keymap.set("n", "<CR>", open_compose, { buffer = lb.buf, desc = "nowork: open compose" })
+  vim.keymap.set("n", "<C-c>", function() M.cancel_request(droid) end, { buffer = lb.buf, desc = "nowork: cancel active request" })
   vim.keymap.set("n", "r", function() M.reopen_prompt(droid) end, { buffer = lb.buf, desc = "nowork: reopen pending prompt" })
   vim.keymap.set("n", ".", function()
     require("djinni.nowork.picker").run_action(droid)
@@ -397,6 +499,7 @@ function M.new(mode_name, initial_prompt, opts)
   vim.keymap.set("n", "?", function()
     require("djinni.nowork.help").show("droid log", {
       { key = "i / a / <CR>", desc = "open compose" },
+      { key = "<C-c>",        desc = "cancel active request" },
       { key = ".",            desc = "actions menu (cancel / done / switch mode / …)" },
       { key = "r",            desc = "reopen pending prompt (ask/question)" },
       { key = "]t / [t",      desc = "next / prev turn" },
@@ -429,23 +532,26 @@ function M.new(mode_name, initial_prompt, opts)
   vim.keymap.set("n", "]t", function() jump_turn("next") end, { buffer = lb.buf, desc = "nowork: next turn" })
   vim.keymap.set("n", "[t", function() jump_turn("prev") end, { buffer = lb.buf, desc = "nowork: prev turn" })
 
-  session.create_task_session(cwd, function(err, session_id)
+  session.create_task_session(cwd, function(err, session_id, result)
     if err then
       lb:append("[error] session create failed: " .. tostring(err.message or err))
-      droid.status = "blocked"
+      set_status(droid, lifecycle.droid.blocked)
+      set_discussion_phase(droid, lifecycle.discussion.closed)
       announce(droid)
       return
     end
     droid.session_id = session_id
+    droid.state.available_commands = extract_available_commands(result)
+    set_status(droid, lifecycle.droid.idle)
     attach_reconnect_handler(droid)
     if opts.preamble and opts.preamble ~= "" then
       lb:append("[resume] restoring from " .. (opts.restore and opts.restore.id or "?"))
       if opts.defer_preamble then
+        lifecycle.set_resume_preamble(droid, opts.preamble)
         droid._resume_preamble = opts.preamble
-        if droid._pending_initial then
-          local p = droid._pending_initial
-          droid._pending_initial = nil
-          M._turn(droid, p)
+        local pending_initial = lifecycle.take_pending_initial(droid)
+        if pending_initial then
+          M._turn(droid, pending_initial)
         else
           vim.schedule(function()
             require("djinni.nowork.compose").open(droid, { alt_buf = vim.fn.bufnr("#") })
@@ -456,24 +562,41 @@ function M.new(mode_name, initial_prompt, opts)
       end
     elseif initial_prompt and initial_prompt ~= "" then
       M._turn(droid, initial_prompt)
-    elseif droid._pending_initial then
-      local p = droid._pending_initial
-      droid._pending_initial = nil
-      M._turn(droid, p)
     else
-      vim.schedule(function()
-        require("djinni.nowork.compose").open(droid, { alt_buf = vim.fn.bufnr("#") })
-      end)
+      local pending_initial = lifecycle.take_pending_initial(droid)
+      if pending_initial then
+        M._turn(droid, pending_initial)
+      else
+        vim.schedule(function()
+          require("djinni.nowork.compose").open(droid, { alt_buf = vim.fn.bufnr("#") })
+        end)
+      end
     end
   end, { provider = droid.provider_name, model = droid.model_name })
 
   return id
 end
 
+function M.cancel_request(droid_or_id)
+  local droid = M.resolve(droid_or_id)
+  if not droid then return end
+  if droid.status ~= lifecycle.droid.running then
+    vim.notify("nowork: no active request on " .. droid.id, vim.log.levels.INFO)
+    return
+  end
+  if not droid.session_id then
+    vim.notify("nowork: no session to interrupt on " .. droid.id, vim.log.levels.WARN)
+    return
+  end
+  mark_interrupt_request(droid)
+  session.interrupt(nil, droid.session_id)
+  droid.log_buf:append("[cancel requested]")
+end
+
 function M.say(droid_or_id, text)
   local droid = M.resolve(droid_or_id)
   if not droid then return end
-  if droid.status == "running" then
+  if droid.status == lifecycle.droid.running then
     droid.log_buf:append("[warn] droid is running, ignoring say")
     return
   end
@@ -483,7 +606,7 @@ end
 function M.stage(droid_or_id, text)
   local droid = M.resolve(droid_or_id)
   if not droid or not text or text == "" then return end
-  droid.state.staged_input = text
+  lifecycle.set_staged_input(droid, text)
   droid.log_buf:append("[staged]")
   for _, line in ipairs(vim.split(text, "\n", { plain = true })) do
     droid.log_buf:append("  " .. line)
@@ -494,11 +617,11 @@ end
 function M.stage_append(droid_or_id, text)
   local droid = M.resolve(droid_or_id)
   if not droid or not text or text == "" then return end
-  local existing = droid.state.staged_input
+  local existing = lifecycle.staged_input(droid)
   if existing and existing ~= "" then
-    droid.state.staged_input = existing .. "\n\n" .. text
+    lifecycle.set_staged_input(droid, existing .. "\n\n" .. text)
   else
-    droid.state.staged_input = text
+    lifecycle.set_staged_input(droid, text)
   end
   droid.log_buf:append("[staged+]")
   for _, line in ipairs(vim.split(text, "\n", { plain = true })) do
@@ -510,33 +633,30 @@ end
 function M.submit_staged(droid_or_id)
   local droid = M.resolve(droid_or_id)
   if not droid then return end
-  local text = droid.state.staged_input
+  local text = lifecycle.take_staged_input(droid)
   if not text or text == "" then
     vim.notify("nowork: no staged input on " .. droid.id, vim.log.levels.WARN)
     return
   end
-  droid.state.staged_input = nil
   M.say(droid, text)
 end
 
 function M.clear_queue(droid_or_id)
   local droid = M.resolve(droid_or_id)
   if not droid then return end
-  local q = droid.state.queue
-  if not q or #q == 0 then
+  local count = lifecycle.clear_queue(droid)
+  if count == 0 then
     vim.notify("nowork: queue empty on " .. droid.id, vim.log.levels.INFO)
     return
   end
-  droid.log_buf:append("[queue cleared] " .. #q .. " items dropped")
-  droid.state.queue = {}
+  droid.log_buf:append("[queue cleared] " .. count .. " items dropped")
   require("djinni.nowork.status_panel").update()
 end
 
 function M.enqueue(droid_or_id, text)
   local droid = M.resolve(droid_or_id)
   if not droid or not text or text == "" then return end
-  droid.state.queue = droid.state.queue or {}
-  droid.state.queue[#droid.state.queue + 1] = text
+  lifecycle.enqueue(droid, text)
   droid.log_buf:append("[queued] " .. text:sub(1, 80):gsub("\n", " "))
   require("djinni.nowork.status_panel").update()
 end
@@ -550,11 +670,11 @@ function M.send(droid_or_id, text)
     if droid.session_id then
       M._turn(droid, text)
     else
-      droid._pending_initial = text
+      lifecycle.set_pending_initial(droid, text)
     end
     return
   end
-  if droid.status == "running" then
+  if droid.status == lifecycle.droid.running then
     M.enqueue(droid, text)
   else
     M.say(droid, text)
@@ -564,7 +684,7 @@ end
 function M.reopen_prompt(droid_or_id)
   local droid = M.resolve(droid_or_id)
   if not droid then return end
-  local pending = droid.state and droid.state.pending_prompt
+  local pending = lifecycle.pending_prompt(droid)
   if not pending or not pending.show then
     vim.notify("nowork: no pending prompt on " .. droid.id, vim.log.levels.WARN)
     return
@@ -657,7 +777,8 @@ function M.cancel(droid_or_id)
     session.interrupt(nil, droid.session_id)
   end
   droid.log_buf:append("[cancelled]")
-  droid.status = "cancelled"
+  set_status(droid, lifecycle.droid.cancelled)
+  set_discussion_phase(droid, lifecycle.discussion.closed)
   announce(droid)
   finalize(droid)
   require("djinni.nowork.status_panel").update()
@@ -753,7 +874,7 @@ function M.restart_from_archive(log_path)
   local opts = {
     restore = state,
     preamble = preamble,
-    defer_preamble = state.mode == "routine" and state.status ~= "running",
+    defer_preamble = state.mode == "routine" and state.status ~= lifecycle.droid.running,
     cwd = state.opts and state.opts.cwd,
     provider = state.opts and state.opts.provider_name,
     allow_kinds = state.opts and state.opts.allow_kinds,
@@ -833,12 +954,8 @@ function M.fork_from_archive(log_path)
           summary = "Files carried over from the prior session — re-check these:\n" .. table.concat(carried_refs, "\n"),
         }
       end
-      require("djinni.nowork.compose").open(droid, {
-        persistent = true,
-        sections = { "Summary", "Review", "Observation", "Tasks" },
-        title = " routine chat — <C-CR> send · <C-n> new · <C-c> close ",
+      open_routine_chat(droid, {
         prefill = prefill,
-        on_submit = function(text) M.send(droid, text) end,
       })
     end)
   end
