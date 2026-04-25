@@ -122,6 +122,20 @@ local function format_tag(d)
       return "explore " .. #qfix .. "loc"
     end
     return "explore"
+  elseif mode == "planner" then
+    local qfix = d.state and d.state.qfix_items
+    if qfix and #qfix > 0 then
+      return "planner " .. #qfix .. "loc"
+    end
+    local phase = d.state and d.state.phase
+    if phase == "plan" then
+      return "planner plan"
+    elseif phase == "generate" then
+      return "planner sprint " .. tostring(d.state.current_task_id or "?")
+    elseif phase == "evaluate" then
+      return "planner eval " .. tostring(d.state.current_task_id or "?")
+    end
+    return "planner"
   elseif mode == "routine" then
     local bits = { "routine" }
     local staged = lifecycle.staged_input(d)
@@ -165,6 +179,19 @@ local function build_lines()
     local elapsed = d.started_at and format_elapsed(now - d.started_at)
     local inner = elapsed and (status .. " " .. elapsed) or status
     local line = "[" .. d.id .. "] " .. tag .. " " .. inner
+    if d.acp_modes and d.acp_modes.current_id then
+      local label = d.acp_modes.current_id
+      for _, mode in ipairs(d.acp_modes.available or {}) do
+        if mode.id == d.acp_modes.current_id then
+          label = mode.name or mode.id
+          break
+        end
+      end
+      line = line .. " [acp:" .. label .. "]"
+    end
+    if d.model_name and d.model_name ~= "" then
+      line = line .. " [model:" .. d.model_name .. "]"
+    end
     local t = d.state and d.state.tokens
     if t then
       local bits = {}

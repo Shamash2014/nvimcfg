@@ -66,7 +66,7 @@ local function format_item(item)
       parts[#parts + 1] = seg
     end
   end
-  if d.mode == "explore" and d.state and d.state.qfix_items and #d.state.qfix_items > 0 then
+  if (d.mode == "explore" or d.mode == "planner") and d.state and d.state.qfix_items and #d.state.qfix_items > 0 then
     parts[#parts + 1] = { " [" .. #d.state.qfix_items .. " results]", "SnacksPickerLabel" }
   end
   local perms = d.state and d.state.pending_permissions
@@ -212,6 +212,9 @@ local function build_action_items(d)
     add("switch model", function()
       require("djinni.nowork.model_picker").pick(d)
     end)
+    add("switch ACP mode", function()
+      require("djinni.nowork.acp_mode").pick(d)
+    end)
     add("switch mode", function()
       if d.status == "running" then
         vim.notify("nowork: cannot switch mode while running", vim.log.levels.WARN)
@@ -239,11 +242,11 @@ local function build_action_items(d)
     add("shadow review", function()
       require("djinni.nowork.shadow").review(d)
     end)
-  elseif d.mode == "explore" then
+  elseif d.mode == "explore" or d.mode == "planner" then
     if d.state and d.state.qfix_items and #d.state.qfix_items > 0 then
       add("view results", function()
         require("djinni.nowork.qfix").set(d.state.qfix_items, {
-          mode = "replace", open = true, title = d.state.qfix_title or "nowork explore",
+          mode = "replace", open = true, title = d.state.qfix_title or "nowork planner",
         })
       end)
     end

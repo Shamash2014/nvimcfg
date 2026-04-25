@@ -27,6 +27,7 @@ end
 
 local function set_status(droid, status)
   lifecycle.set_droid_status(droid, status)
+  pcall(vim.cmd, "redrawstatus")
 end
 
 local function set_discussion_phase(droid, phase)
@@ -149,6 +150,50 @@ local function extract_available_commands(result)
   return result.availableCommands or result.available_commands or result.commands or {}
 end
 
+local function extract_acp_modes(result)
+  if type(result) ~= "table" then return nil, nil end
+  local m = result.modes or result.modeInfo or result.mode_info
+  if type(m) ~= "table" then
+    local available = result.availableModes or result.available_modes
+    local current = result.currentModeId or result.current_mode_id
+    if available or current then return available or {}, current end
+    return nil, nil
+  end
+  local available = m.availableModes or m.available_modes or {}
+  local current = m.currentModeId or m.current_mode_id
+  return available, current
+end
+
+local function mode_label(mode)
+  if type(mode) ~= "table" then return tostring(mode) end
+  return mode.name or mode.title or mode.label or mode.id or "?"
+end
+
+function M.apply_acp_modes(droid, available, current_id)
+  if not droid then return end
+  droid.acp_modes = droid.acp_modes or { available = {}, current_id = nil }
+  if available then droid.acp_modes.available = available end
+  if current_id then droid.acp_modes.current_id = current_id end
+  pcall(function() require("djinni.nowork.status_panel").update() end)
+  pcall(vim.cmd, "redrawstatus")
+end
+
+function M.set_acp_mode_id(droid, mode_id)
+  if not droid or not mode_id then return end
+  droid.acp_modes = droid.acp_modes or { available = {}, current_id = nil }
+  if droid.acp_modes.current_id == mode_id then return end
+  droid.acp_modes.current_id = mode_id
+  local label = mode_id
+  for _, m in ipairs(droid.acp_modes.available or {}) do
+    if m.id == mode_id then label = mode_label(m); break end
+  end
+  if droid.log_buf and droid.log_buf.append then
+    droid.log_buf:append("[acp mode → " .. label .. "]")
+  end
+  pcall(function() require("djinni.nowork.status_panel").update() end)
+  pcall(vim.cmd, "redrawstatus")
+end
+
 function M._turn(droid, text)
   if droid.session_id and session.get_client and not session.get_client(droid.session_id) then
     local cwd = droid.opts and droid.opts.cwd or vim.fn.getcwd()
@@ -162,6 +207,10 @@ function M._turn(droid, text)
       end
       droid.session_id = session_id or droid.session_id
       droid.state.available_commands = extract_available_commands(result)
+      do
+        local available, current = extract_acp_modes(result)
+        if available or current then M.apply_acp_modes(droid, available, current) end
+      end
       attach_reconnect_handler(droid)
       M._turn(droid, text)
     end, { provider = droid.provider_name, model = droid.model_name })
@@ -290,6 +339,14 @@ function M._turn(droid, text)
     on_commands = function(commands)
       droid.state.available_commands = commands or {}
     end,
+    on_mode = function(payload)
+      if payload.available_modes then
+        M.apply_acp_modes(droid, payload.available_modes, payload.current_mode_id)
+      end
+      if payload.current_mode_id then
+        M.set_acp_mode_id(droid, payload.current_mode_id)
+      end
+    end,
     on_tool_call = function(su)
       local tc = su.toolCall or su.tool_call or su
       tc_log_line(tc)
@@ -378,7 +435,7 @@ function M.new(mode_name, initial_prompt, opts)
     _log_fh = nil,
     _log_path = nil,
     state = {
-      phase = mode_name == "autorun" and "plan" or nil,
+      phase = (mode_name == "autorun" or mode_name == "planner") and "plan" or nil,
       tasks = nil,
       topo_order = nil,
       current_task_id = nil,
@@ -474,6 +531,9 @@ function M.new(mode_name, initial_prompt, opts)
     end,
   })
   local lb = droid.log_buf
+  lb:set_statusline_provider(function()
+    return require("djinni.nowork.status_text").compact(droid)
+  end)
 
   M.active[id] = droid
   announce(droid)
@@ -492,6 +552,12 @@ function M.new(mode_name, initial_prompt, opts)
   vim.keymap.set("n", "a", open_compose, { buffer = lb.buf, desc = "nowork: open compose" })
   vim.keymap.set("n", "<CR>", open_compose, { buffer = lb.buf, desc = "nowork: open compose" })
   vim.keymap.set("n", "<C-c>", function() M.cancel_request(droid) end, { buffer = lb.buf, desc = "nowork: cancel active request" })
+  vim.keymap.set("n", "<S-Tab>", function()
+    require("djinni.nowork.acp_mode").pick(droid)
+  end, { buffer = lb.buf, desc = "nowork: switch ACP mode" })
+  vim.keymap.set("n", "<C-l>", function()
+    require("djinni.nowork.model_picker").pick(droid)
+  end, { buffer = lb.buf, desc = "nowork: switch ACP model" })
   vim.keymap.set("n", "r", function() M.reopen_prompt(droid) end, { buffer = lb.buf, desc = "nowork: reopen pending prompt" })
   vim.keymap.set("n", ".", function()
     require("djinni.nowork.picker").run_action(droid)
@@ -500,6 +566,8 @@ function M.new(mode_name, initial_prompt, opts)
     require("djinni.nowork.help").show("droid log", {
       { key = "i / a / <CR>", desc = "open compose" },
       { key = "<C-c>",        desc = "cancel active request" },
+      { key = "<S-Tab>",      desc = "switch ACP mode (default/plan/accept_edits/…)" },
+      { key = "<C-l>",        desc = "switch ACP model (LLM)" },
       { key = ".",            desc = "actions menu (cancel / done / switch mode / …)" },
       { key = "r",            desc = "reopen pending prompt (ask/question)" },
       { key = "]t / [t",      desc = "next / prev turn" },
@@ -542,6 +610,10 @@ function M.new(mode_name, initial_prompt, opts)
     end
     droid.session_id = session_id
     droid.state.available_commands = extract_available_commands(result)
+    do
+      local available, current = extract_acp_modes(result)
+      if available or current then M.apply_acp_modes(droid, available, current) end
+    end
     set_status(droid, lifecycle.droid.idle)
     attach_reconnect_handler(droid)
     if opts.preamble and opts.preamble ~= "" then

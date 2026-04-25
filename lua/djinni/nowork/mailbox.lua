@@ -12,7 +12,7 @@ local HELP_ENTRIES = {
   { key = "r",    desc = "reject_once (opens compose)" },
   { key = "R",    desc = "reject_always (sticky + compose)" },
   { key = "p",    desc = "preview exact command / payload" },
-  { key = "m",    desc = "switch droid mode (explore/routine/autorun)" },
+  { key = "m",    desc = "switch droid mode (explore/routine/autorun/planner)" },
   { key = "g",    desc = "go to droid log" },
   { key = "d",    desc = "dismiss (no response)" },
   { key = "q",    desc = "close mailbox" },

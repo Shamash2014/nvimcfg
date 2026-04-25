@@ -48,6 +48,17 @@ function M.run(session_id, text, opts, cb)
       if opts.on_commands then
         opts.on_commands(extract_commands(su))
       end
+    elseif kind == "current_mode_update" then
+      if opts.on_mode and su.modeId then
+        opts.on_mode({ current_mode_id = su.modeId })
+      end
+    elseif kind == "available_modes_update" or (kind == "modes" and (su.availableModes or su.available_modes)) then
+      if opts.on_mode then
+        opts.on_mode({
+          available_modes = su.availableModes or su.available_modes,
+          current_mode_id = su.currentModeId or su.current_mode_id,
+        })
+      end
     end
   end
 

@@ -35,6 +35,7 @@ function M.pick(droid)
     end
     require("djinni.nowork.archive").write_state(droid)
     require("djinni.nowork.status_panel").update()
+    pcall(vim.cmd, "redrawstatus")
   end)
 end
 

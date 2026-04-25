@@ -4,7 +4,7 @@ local M = {}
 
 local DEFAULT_SECTIONS = { "Summary", "Review", "Observation", "Tasks" }
 local ROUTINE_CHAT_TITLE = " routine chat — <C-CR> send · <C-n> new · <C-c> close "
-local FOOTER = " <C-CR> send · <S-Tab> switch mode · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
+local FOOTER = " <C-CR> send · <S-Tab> ACP mode · <C-l> model · <C-s> local policy · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
 
 local state_by_droid = {}
 local autorun_title
@@ -56,9 +56,14 @@ local function command_name(cmd)
 end
 
 local function format_footer(droid)
+  local prefix = ""
+  if droid then
+    local status = require("djinni.nowork.status_text").compact(droid)
+    if status ~= "" then prefix = " " .. status .. " │" end
+  end
   local cmds = available_commands(droid)
   if #cmds == 0 then
-    return FOOTER
+    return prefix .. FOOTER
   end
   local shown = {}
   for i = 1, math.min(3, #cmds) do
@@ -68,10 +73,10 @@ local function format_footer(droid)
     end
   end
   if #shown == 0 then
-    return FOOTER
+    return prefix .. FOOTER
   end
   local suffix = #cmds > #shown and (" +" .. (#cmds - #shown)) or ""
-  return " " .. table.concat(shown, " ") .. suffix .. " ·" .. FOOTER
+  return prefix .. " " .. table.concat(shown, " ") .. suffix .. " ·" .. FOOTER
 end
 
 local function resolve_window_opts(opts)
@@ -361,12 +366,12 @@ function M.open(droid, opts)
     reseed(nil, nil)
   end
 
-  local function switch_mode()
+  local function switch_local_policy()
     if not droid then
       vim.notify("nowork: compose is not attached to a droid", vim.log.levels.WARN)
       return
     end
-    Snacks.picker.select({ "routine", "autorun", "explore" }, { prompt = "switch mode" }, function(mode_name)
+    Snacks.picker.select({ "routine", "autorun", "explore" }, { prompt = "switch local policy" }, function(mode_name)
       if not mode_name or mode_name == droid.mode then return end
       local ok, policy = pcall(require, "djinni.nowork.modes." .. mode_name)
       if not ok then return end
@@ -380,11 +385,28 @@ function M.open(droid, opts)
     end)
   end
 
+  local function switch_acp_mode()
+    if not droid then
+      vim.notify("nowork: compose is not attached to a droid", vim.log.levels.WARN)
+      return
+    end
+    require("djinni.nowork.acp_mode").pick(droid)
+  end
+
+  local function switch_model()
+    if not droid then
+      vim.notify("nowork: compose is not attached to a droid", vim.log.levels.WARN)
+      return
+    end
+    require("djinni.nowork.model_picker").pick(droid)
+  end
+
   local km = { buffer = buf, nowait = true }
   vim.keymap.set({ "n", "i" }, "<C-CR>", submit, km)
-  vim.keymap.set({ "n", "i" }, "<S-Tab>", switch_mode, km)
+  vim.keymap.set({ "n", "i" }, "<S-Tab>", switch_acp_mode, km)
+  vim.keymap.set({ "n", "i" }, "<C-l>", switch_model, km)
   vim.keymap.set({ "n", "i" }, "<C-c>", close, km)
-  vim.keymap.set({ "n", "i" }, "<C-s>", switch_mode, km)
+  vim.keymap.set({ "n", "i" }, "<C-s>", switch_local_policy, km)
   vim.keymap.set({ "n", "i" }, "<C-q>", function() insert_token("#{qflist}") end, km)
   vim.keymap.set({ "n", "i" }, "<C-b>", function() insert_token("#{buffer}") end, km)
   vim.keymap.set({ "n", "i" }, "<C-d>", function() insert_token("#{diff}") end, km)
@@ -394,9 +416,10 @@ function M.open(droid, opts)
   vim.keymap.set("n", "?", function()
     local entries = {
       { key = "<C-CR>", desc = "send" },
-      { key = "<S-Tab>", desc = "switch attached droid mode" },
+      { key = "<S-Tab>", desc = "switch ACP mode (default/plan/accept_edits/…)" },
+      { key = "<C-l>", desc = "switch ACP model (LLM)" },
       { key = "clear", desc = "send /clear to attached droid" },
-      { key = "<C-s>", desc = "switch attached droid mode" },
+      { key = "<C-s>", desc = "switch local policy (routine/autorun/explore)" },
       { key = "<C-q>", desc = "insert #{qflist}" },
       { key = "<C-b>", desc = "insert #{buffer}" },
       { key = "<C-d>", desc = "insert #{diff}" },

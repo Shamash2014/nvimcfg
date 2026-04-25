@@ -33,6 +33,11 @@ function M.explore(prompt, opts)
   return droid.new("explore", prompt, merged_opts(opts))
 end
 
+function M.planner(prompt, opts)
+  local droid = require("djinni.nowork.droid")
+  return droid.new("planner", prompt, merged_opts(opts))
+end
+
 function M.routine(prompt, opts)
   local droid = require("djinni.nowork.droid")
   return droid.new("routine", prompt, merged_opts(opts))
@@ -152,10 +157,10 @@ function M.projects()
   end)
 end
 
-local MODE_LABELS = { explore = "explore", routine = "routine", autorun = "autorun" }
+local MODE_LABELS = { explore = "explore", routine = "routine", autorun = "autorun", planner = "planner", plan = "planner" }
 
 function M.launch(mode_name)
-  local spawn = ({ explore = M.explore, routine = M.routine, autorun = M.auto })[mode_name]
+  local spawn = ({ explore = M.explore, routine = M.routine, autorun = M.auto, planner = M.planner, plan = M.planner })[mode_name]
   if not spawn then
     vim.notify("nowork.launch: unknown mode '" .. tostring(mode_name) .. "'", vim.log.levels.WARN)
     return
@@ -283,8 +288,10 @@ function M.setup(opts)
       M.routine(prompt, {})
     elseif mode == "autorun" or mode == "auto" then
       M.auto(prompt, {})
+    elseif mode == "planner" or mode == "plan" then
+      M.planner(prompt, {})
     else
-      vim.notify("nowork: unknown mode '" .. tostring(mode) .. "'. Use: explore, routine, autorun", vim.log.levels.WARN)
+      vim.notify("nowork: unknown mode '" .. tostring(mode) .. "'. Use: explore, routine, autorun, planner", vim.log.levels.WARN)
     end
   end, { nargs = "+" })
 
@@ -384,7 +391,7 @@ function M.setup(opts)
     end })
   end, { nargs = 0 })
 
-  vim.keymap.set("n", "<leader>as", function() M.launch("explore") end, { desc = "nowork: explore" })
+  vim.keymap.set("n", "<leader>as", function() M.launch("planner") end, { desc = "nowork: universal planner (search + autorun)" })
   vim.keymap.set("n", "<leader>aw", function() M.launch("routine") end, { desc = "nowork: routine" })
   vim.keymap.set("n", "<leader>aa", function() M.launch("autorun") end, { desc = "nowork: autorun" })
 
@@ -639,7 +646,7 @@ function M.setup(opts)
   if ok_wk and wk.add then
     pcall(wk.add, {
       { "<leader>a",  group = "nowork" },
-      { "<leader>as", desc = "explore" },
+      { "<leader>as", desc = "universal planner (search + autorun)" },
       { "<leader>aw", desc = "routine" },
       { "<leader>aa", desc = "autorun" },
       { "<leader>al", desc = "logs (active + recent + archive)" },

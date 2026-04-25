@@ -2,6 +2,16 @@ local M = {}
 
 local ns = vim.api.nvim_create_namespace("nowork_log")
 
+local statusline_providers = {}
+
+function M._sl(buf)
+  local fn = statusline_providers[buf]
+  if not fn then return "" end
+  local ok, text = pcall(fn)
+  if not ok or type(text) ~= "string" then return "" end
+  return vim.fn.escape(text, "%")
+end
+
 local HL = {
   turn     = "Title",
   user     = "Statement",
@@ -111,11 +121,40 @@ function M.new(opts)
     vim.bo[buf].modifiable = false
   end
 
+  local function apply_statusline_to_window(w)
+    if w and vim.api.nvim_win_is_valid(w) then
+      vim.wo[w].statusline = "%{%v:lua.require'djinni.nowork.log_buffer'._sl(" .. buf .. ")%}"
+    end
+  end
+
+  local function set_statusline_provider(_, fn)
+    statusline_providers[buf] = fn
+    local w = find_win()
+    if w then apply_statusline_to_window(w) end
+    local group = vim.api.nvim_create_augroup("NoworkLogStatusline_" .. buf, { clear = true })
+    vim.api.nvim_create_autocmd({ "BufWinEnter", "WinNew" }, {
+      group = group,
+      buffer = buf,
+      callback = function()
+        apply_statusline_to_window(find_win())
+      end,
+    })
+    vim.api.nvim_create_autocmd("BufWipeout", {
+      group = group,
+      buffer = buf,
+      once = true,
+      callback = function()
+        statusline_providers[buf] = nil
+      end,
+    })
+  end
+
   local lb = { buf = buf }
   lb.append = append
   lb.show = show
   lb.hide = hide
   lb.clear = clear
+  lb.set_statusline_provider = set_statusline_provider
 
   return lb
 end
