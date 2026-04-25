@@ -86,6 +86,55 @@ function M.by_buf(bufnr)
   return nil
 end
 
+function M.current(callback)
+  local cur = vim.api.nvim_get_current_buf()
+  local d = M.by_buf(cur)
+  if not d then
+    local ok, compose = pcall(require, "djinni.nowork.compose")
+    if ok and compose.droid_for_buf then
+      d = compose.droid_for_buf(cur)
+    end
+  end
+  if d then
+    if callback then callback(d) end
+    return d
+  end
+  local candidates = {}
+  for _, dr in pairs(M.active) do
+    if not lifecycle.is_finished(dr) then
+      candidates[#candidates + 1] = dr
+    end
+  end
+  if #candidates == 0 then
+    vim.notify("nowork: no active droid", vim.log.levels.WARN)
+    if callback then callback(nil) end
+    return nil
+  end
+  if #candidates == 1 then
+    if callback then callback(candidates[1]) end
+    return candidates[1]
+  end
+  table.sort(candidates, function(a, b) return (a.id or "") < (b.id or "") end)
+  local labels = {}
+  for _, dr in ipairs(candidates) do
+    labels[#labels + 1] = string.format("[%s] %s %s", dr.id or "?", dr.mode or "?", dr.status or "?")
+  end
+  Snacks.picker.select(labels, { prompt = "select droid" }, function(choice)
+    if not choice then
+      if callback then callback(nil) end
+      return
+    end
+    for i, label in ipairs(labels) do
+      if label == choice then
+        if callback then callback(candidates[i]) end
+        return
+      end
+    end
+    if callback then callback(nil) end
+  end)
+  return nil
+end
+
 function M._dispatch(droid, action)
   if action == "done" then
     if droid.status ~= lifecycle.droid.cancelled and droid.status ~= lifecycle.droid.blocked then

@@ -453,6 +453,12 @@ function M.setup(opts)
     require("djinni.nowork.mailbox").open()
   end, { desc = "nowork: permissions mailbox" })
 
+  vim.keymap.set("n", "<leader>ai", function()
+    require("djinni.nowork.droid").current(function(d)
+      if d then require("djinni.nowork.picker").run_action(d) end
+    end)
+  end, { desc = "nowork: per-droid actions menu (interact)" })
+
   vim.keymap.set("n", "<leader>ak", function()
     local droid = require("djinni.nowork.droid")
     local targets = {}
@@ -654,6 +660,7 @@ function M.setup(opts)
       { "<leader>aO", desc = "overview — autoruns per project" },
       { "<leader>aD", desc = "dashboard — autoruns per project" },
       { "<leader>ap", desc = "permissions mailbox" },
+      { "<leader>ai", desc = "interact (actions menu for current droid)" },
       { "<leader>ak", desc = "kill all routines" },
       { "<leader>ac", desc = "chat composer (routine persistent)" },
       { "<leader>av", desc = "review routine / capture selection", mode = { "n", "x" } },

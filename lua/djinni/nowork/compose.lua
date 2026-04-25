@@ -4,7 +4,7 @@ local M = {}
 
 local DEFAULT_SECTIONS = { "Summary", "Review", "Observation", "Tasks" }
 local ROUTINE_CHAT_TITLE = " routine chat — <C-CR> send · <C-n> new · <C-c> close "
-local FOOTER = " <C-CR> send · <S-Tab> ACP mode · <C-l> model · <C-s> local policy · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
+local FOOTER = " <C-CR> send · <S-Tab> ACP mode · <C-l> model · <C-s> local policy · . actions · Q populate · R restart · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
 
 local state_by_droid = {}
 local autorun_title
@@ -407,6 +407,15 @@ function M.open(droid, opts)
   vim.keymap.set({ "n", "i" }, "<C-l>", switch_model, km)
   vim.keymap.set({ "n", "i" }, "<C-c>", close, km)
   vim.keymap.set({ "n", "i" }, "<C-s>", switch_local_policy, km)
+  vim.keymap.set("n", ".", function()
+    if droid then require("djinni.nowork.picker").run_action(droid) end
+  end, km)
+  vim.keymap.set("n", "Q", function()
+    if droid then require("djinni.nowork.qfix_share").populate(droid) end
+  end, km)
+  vim.keymap.set("n", "R", function()
+    if droid then require("djinni.nowork.droid").restart(droid) end
+  end, km)
   vim.keymap.set({ "n", "i" }, "<C-q>", function() insert_token("#{qflist}") end, km)
   vim.keymap.set({ "n", "i" }, "<C-b>", function() insert_token("#{buffer}") end, km)
   vim.keymap.set({ "n", "i" }, "<C-d>", function() insert_token("#{diff}") end, km)
@@ -418,6 +427,9 @@ function M.open(droid, opts)
       { key = "<C-CR>", desc = "send" },
       { key = "<S-Tab>", desc = "switch ACP mode (default/plan/accept_edits/…)" },
       { key = "<C-l>", desc = "switch ACP model (LLM)" },
+      { key = ".", desc = "actions menu (cancel / done / populate / restart / …)" },
+      { key = "Q", desc = "populate quickfix from this droid" },
+      { key = "R", desc = "restart from saved state (after done/cancel)" },
       { key = "clear", desc = "send /clear to attached droid" },
       { key = "<C-s>", desc = "switch local policy (routine/autorun/explore)" },
       { key = "<C-q>", desc = "insert #{qflist}" },
@@ -488,6 +500,16 @@ function M.toggle(droid, opts)
   end
   M.open(droid, opts)
   return true
+end
+
+function M.droid_for_buf(buf)
+  if not buf then return nil end
+  for _, state in pairs(state_by_droid) do
+    if state and state.buf == buf and state.alive ~= false then
+      return state.droid
+    end
+  end
+  return nil
 end
 
 return M
