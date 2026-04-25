@@ -1,4 +1,5 @@
 # Agent Guidelines for Djinni.nvim
+IMPORTANT: Try to preserve the original code and the logic of the original code as much as possible
 
 ## Before Making Changes
 1. Read `lua/djinni/acp/agents.md` for ACP protocol spec

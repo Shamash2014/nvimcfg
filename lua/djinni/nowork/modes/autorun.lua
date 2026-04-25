@@ -1,4 +1,6 @@
 local markers = require("djinni.nowork.markers")
+local log_render = require("djinni.nowork.log_render")
+local qfix_share = require("djinni.nowork.qfix_share")
 local tasks_parser = require("djinni.nowork.tasks_parser")
 local templates = require("djinni.nowork.templates")
 
@@ -6,27 +8,6 @@ local function checkpoint(droid)
   pcall(function()
     require("djinni.nowork.archive").write_state(droid)
   end)
-end
-
-local function render_slices(text, log_buf)
-  local slices = require("djinni.nowork.parser").extract_log_slices(text)
-  for _, s in ipairs(slices) do
-    if s.kind == "block" then
-      local open_tag
-      if s.title and s.title ~= "" then
-        open_tag = "<" .. s.tag .. " title=\"" .. s.title .. "\">"
-      else
-        open_tag = "<" .. s.tag .. ">"
-      end
-      log_buf:append(open_tag)
-      for _, line in ipairs(vim.split(s.body or "", "\n", { plain = true })) do
-        log_buf:append(line)
-      end
-      log_buf:append("</" .. s.tag .. ">")
-    else
-      log_buf:append(s.tag)
-    end
-  end
 end
 
 local function render_task_qf(droid, opts)
@@ -335,7 +316,7 @@ end
 return {
   name = "autorun",
   tail_stream = false,
-  log_render = render_slices,
+  log_render = log_render.render_slices,
   template_wrap = function(user_prompt, state, opts)
     state = state or {}
     opts = opts or {}
@@ -364,30 +345,32 @@ return {
     elseif phase == "generate" then
       action = handle_generate(text, droid)
       if action ~= "suspend" then
-        local qfix_share = require("djinni.nowork.qfix_share")
-        local qfix = require("djinni.nowork.qfix")
         local items, title = qfix_share.extract_review(text, { cwd = droid.opts and droid.opts.cwd })
-        if #items > 0 then
-          qfix.set(items, {
-            mode = "append",
-            open = true,
-            title = title or ("nowork " .. droid.mode .. ": " .. droid.id),
-          })
-        end
+        qfix_share.collect_to_droid(droid, {
+          items = items,
+          title = title,
+          default_title = "nowork " .. droid.mode .. ": " .. droid.id,
+          qfix_mode = "append",
+          open = true,
+          log_prefix = nil,
+          notify_prefix = nil,
+          empty_notify = false,
+        })
       end
     elseif phase == "evaluate" then
       action = handle_evaluate(text, droid)
       if action ~= "suspend" then
-        local qfix_share = require("djinni.nowork.qfix_share")
-        local qfix = require("djinni.nowork.qfix")
         local items, title = qfix_share.extract_review(text, { cwd = droid.opts and droid.opts.cwd })
-        if #items > 0 then
-          qfix.set(items, {
-            mode = "append",
-            open = true,
-            title = title or ("nowork eval: " .. droid.id),
-          })
-        end
+        qfix_share.collect_to_droid(droid, {
+          items = items,
+          title = title,
+          default_title = "nowork eval: " .. droid.id,
+          qfix_mode = "append",
+          open = true,
+          log_prefix = nil,
+          notify_prefix = nil,
+          empty_notify = false,
+        })
       end
     else
       action = "done"

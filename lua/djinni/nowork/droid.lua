@@ -3,6 +3,7 @@ local log_buffer = require("djinni.nowork.log_buffer")
 local turn = require("djinni.nowork.turn")
 local templates = require("djinni.nowork.templates")
 local lifecycle = require("djinni.nowork.state")
+local tool_call = require("djinni.nowork.tool_call")
 
 local M = {}
 M.active = {}
@@ -44,21 +45,6 @@ end
 
 local function interrupt_requested(droid)
   return droid and droid._interrupt_requested == true
-end
-
-local function open_routine_chat(droid, opts)
-  local compose = require("djinni.nowork.compose")
-  if compose.open_routine_chat then
-    return compose.open_routine_chat(droid, opts)
-  end
-  return compose.open(droid, {
-    title = " routine chat — <C-CR> send · <C-n> new · <C-c> close ",
-    alt_buf = opts and opts.alt_buf or vim.fn.bufnr("#"),
-    persistent = true,
-    sections = { "Summary", "Review", "Observation", "Tasks" },
-    prefill = opts and opts.prefill or nil,
-    on_submit = function(text) M.send(droid, text) end,
-  })
 end
 
 local function apply_resume_preamble(droid, text)
@@ -223,6 +209,29 @@ function M.apply_acp_modes(droid, available, current_id)
   droid.acp_modes = droid.acp_modes or { available = {}, current_id = nil }
   if available then droid.acp_modes.available = available end
   if current_id then droid.acp_modes.current_id = current_id end
+
+  if droid.mode == "planner"
+      and not droid.acp_modes._auto_applied
+      and droid.session_id
+      and droid.acp_modes.available
+      and #droid.acp_modes.available > 0 then
+    droid.acp_modes._auto_applied = true
+    local target
+    for _, m in ipairs(droid.acp_modes.available) do
+      if m.id == "plan" then target = m.id; break end
+    end
+    if not target then
+      for _, m in ipairs(droid.acp_modes.available) do
+        if m.id == "readonly" then target = m.id; break end
+      end
+    end
+    if target and target ~= droid.acp_modes.current_id then
+      vim.schedule(function()
+        require("djinni.nowork.acp_mode").set(droid, target)
+      end)
+    end
+  end
+
   pcall(function() require("djinni.nowork.status_panel").update() end)
   pcall(vim.cmd, "redrawstatus")
 end
@@ -288,82 +297,6 @@ function M._turn(droid, text)
   announce(droid)
 
   local tc_state = {}
-  local function tc_log_line(tc)
-    local id = tc.toolCallId or tc.id or tc.title or tostring(tc)
-    local kind = tc.kind or (tc_state[id] and tc_state[id].kind) or "tool"
-    local title = tc.title or tc.name or (tc_state[id] and tc_state[id].title) or kind
-    local status = (tc.status or "pending"):lower()
-    local prev = tc_state[id]
-    if prev and prev.status == status then return end
-    tc_state[id] = { kind = kind, title = title, status = status }
-    local marker
-    if status == "completed" then marker = "  ✓"
-    elseif status == "failed" or status == "error" then marker = "  ✗"
-    elseif status == "running" or status == "in_progress" then marker = "  …"
-    else marker = "  ·"
-    end
-    droid.log_buf:append(string.format("%s [%s] %s · %s", marker, status, kind, title))
-    local detail
-    local raw_in = tc.rawInput or tc.raw_input or tc.input
-    if not prev and type(raw_in) == "table" then
-      local cmd = raw_in.command or raw_in.cmd
-      if cmd then
-        detail = "$ " .. tostring(cmd)
-        if raw_in.description and raw_in.description ~= "" then
-          detail = detail .. "  — " .. tostring(raw_in.description)
-        end
-      elseif (raw_in.path or raw_in.file_path) and raw_in.content then
-        detail = "📝 " .. tostring(raw_in.path or raw_in.file_path)
-      elseif raw_in.old_string or raw_in.new_string or raw_in.patch then
-        detail = "✎ " .. tostring(raw_in.path or raw_in.file_path or "?")
-      elseif raw_in.path or raw_in.file_path or raw_in.filePath then
-        detail = tostring(raw_in.path or raw_in.file_path or raw_in.filePath)
-      elseif raw_in.pattern then
-        detail = "🔎 " .. tostring(raw_in.pattern)
-      elseif raw_in.query then
-        detail = "? " .. tostring(raw_in.query)
-      elseif raw_in.url then
-        detail = "↗ " .. tostring(raw_in.url)
-      elseif raw_in.description then
-        detail = tostring(raw_in.description)
-      end
-    end
-    if not detail and not prev and tc.locations and tc.locations[1] then
-      local parts = {}
-      for i, l in ipairs(tc.locations) do
-        if i > 3 then parts[#parts + 1] = "…"; break end
-        local p = l.path or l.file or ""
-        if l.line then p = p .. ":" .. tostring(l.line) end
-        if p ~= "" then parts[#parts + 1] = p end
-      end
-      if #parts > 0 then detail = table.concat(parts, ", ") end
-    end
-    if detail then
-      for _, l in ipairs(vim.split(detail, "\n", { plain = true })) do
-        droid.log_buf:append("     " .. l)
-      end
-    end
-    if status == "completed" or status == "failed" or status == "error" then
-      local buf = {}
-      for _, c in ipairs(tc.content or {}) do
-        local text
-        if c.type == "content" and c.content and c.content.text then text = c.content.text
-        elseif c.text then text = c.text end
-        if text and text ~= "" then buf[#buf + 1] = text end
-      end
-      local body = table.concat(buf, "\n")
-      if body ~= "" then
-        local lines = vim.split(body, "\n", { plain = true })
-        local max = 6
-        for i = 1, math.min(#lines, max) do
-          droid.log_buf:append("     " .. lines[i])
-        end
-        if #lines > max then
-          droid.log_buf:append(string.format("     … (%d more lines)", #lines - max))
-        end
-      end
-    end
-  end
   local turn_opts = {
     provider_name = droid.provider_name,
     on_chunk = (droid.policy.tail_stream and not droid.policy.log_render) and function(kind, chunk)
@@ -398,7 +331,7 @@ function M._turn(droid, text)
     end,
     on_tool_call = function(su)
       local tc = su.toolCall or su.tool_call or su
-      tc_log_line(tc)
+      tool_call.append_log(droid.log_buf, tc, tc_state)
     end,
     on_permission = function(params, respond)
       droid.policy.on_permission(params, respond, droid)
@@ -1098,7 +1031,7 @@ function M.fork_from_archive(log_path)
           summary = "Files carried over from the prior session — re-check these:\n" .. table.concat(carried_refs, "\n"),
         }
       end
-      open_routine_chat(droid, {
+      require("djinni.nowork.compose").open_routine_chat(droid, {
         prefill = prefill,
       })
     end)

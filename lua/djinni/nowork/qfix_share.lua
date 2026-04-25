@@ -6,6 +6,10 @@ local M = {}
 
 local MAX_ENTRIES = 200
 
+local function dedup_key(it)
+  return (it.filename or "") .. ":" .. tostring(it.lnum or 0) .. ":" .. tostring(it.col or 0) .. "|" .. (it.text or "")
+end
+
 local function format_entry(item)
   local filename = item.filename or (item.bufnr and vim.fn.bufname(item.bufnr)) or ""
   if filename == "" then return nil end
@@ -160,18 +164,7 @@ function M.pull_from_droid(droid)
   local log_ref = droid._log_path or ""
   local items = parser.parse_with_sections(text, { filename = log_ref, cwd = droid.opts and droid.opts.cwd })
   local review_items, review_title = extract_review(text, { cwd = droid.opts and droid.opts.cwd })
-  local seen = {}
-  local merged = {}
-  local function push(it)
-    if not it or not it.filename then return end
-    local key = it.filename .. ":" .. (it.lnum or 0) .. ":" .. (it.col or 0) .. "|" .. (it.text or "")
-    if not seen[key] then
-      seen[key] = true
-      merged[#merged + 1] = it
-    end
-  end
-  for _, it in ipairs(items) do push(it) end
-  for _, it in ipairs(review_items) do push(it) end
+  local merged = M.merge_items(items, review_items)
   if #merged >= 1 then
     qfix.set(merged, {
       mode = "replace",
@@ -184,8 +177,55 @@ function M.pull_from_droid(droid)
   end
 end
 
-local function dedup_key(it)
-  return (it.filename or "") .. ":" .. tostring(it.lnum or 0) .. ":" .. tostring(it.col or 0) .. "|" .. (it.text or "")
+function M.merge_items(...)
+  local seen = {}
+  local merged = {}
+  for i = 1, select("#", ...) do
+    for _, it in ipairs(select(i, ...) or {}) do
+      if it and it.filename and it.filename ~= "" then
+        local k = dedup_key(it)
+        if not seen[k] then
+          seen[k] = true
+          merged[#merged + 1] = it
+        end
+      end
+    end
+  end
+  return merged
+end
+
+function M.collect_to_droid(droid, opts)
+  opts = opts or {}
+  local items = M.merge_items(opts.items)
+  if #items > 0 then
+    droid.state.qfix_items = items
+    droid.state.qfix_title = opts.title or opts.default_title or ("nowork " .. droid.mode .. ": " .. (droid.initial_prompt or droid.id))
+    qfix.set(items, {
+      mode = opts.qfix_mode or "replace",
+      open = opts.open == true,
+      title = droid.state.qfix_title,
+    })
+    if opts.log_prefix and droid.log_buf then
+      droid.log_buf:append(("[%s] %d location(s) → qflist"):format(opts.log_prefix, #items))
+    end
+    if opts.notify_prefix then
+      vim.notify(
+        ("%s [%s]: %d location(s) → qflist"):format(opts.notify_prefix, droid.id, #items),
+        vim.log.levels.INFO
+      )
+    end
+  else
+    if opts.log_prefix and droid.log_buf then
+      droid.log_buf:append("[" .. opts.log_prefix .. "] no locations parsed")
+    end
+    if opts.empty_notify ~= false and opts.notify_prefix then
+      vim.notify(
+        ("%s [%s]: %s"):format(opts.notify_prefix, droid.id, opts.empty_message or "no locations parsed"),
+        vim.log.levels.WARN
+      )
+    end
+  end
+  return items, droid.state.qfix_title
 end
 
 function M.populate(droid)

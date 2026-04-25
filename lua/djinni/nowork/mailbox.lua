@@ -1,4 +1,6 @@
 local M = {}
+local mode_switch = require("djinni.nowork.mode_switch")
+local tool_call = require("djinni.nowork.tool_call")
 
 M._counter = 0
 M._buf = nil
@@ -19,75 +21,6 @@ local HELP_ENTRIES = {
   { key = "<Esc>", desc = "close mailbox" },
   { key = "?",    desc = "this help" },
 }
-
-local function content_text(tc)
-  local out = {}
-  for _, c in ipairs((tc or {}).content or {}) do
-    if c and c.type == "content" and c.content and c.content.text then
-      out[#out + 1] = c.content.text
-    elseif c and c.text then
-      out[#out + 1] = c.text
-    end
-  end
-  return table.concat(out, "\n")
-end
-
-local function locations_summary(tc)
-  local locs = tc and tc.locations
-  if not locs or #locs == 0 then return nil end
-  local parts = {}
-  for i, l in ipairs(locs) do
-    if i > 3 then parts[#parts + 1] = "…"; break end
-    local p = l.path or l.file or ""
-    if l.line then p = p .. ":" .. tostring(l.line) end
-    if p ~= "" then parts[#parts + 1] = p end
-  end
-  if #parts == 0 then return nil end
-  return table.concat(parts, ", ")
-end
-
-local function render_command(tool_kind, raw_input, tc)
-  if type(raw_input) == "string" and raw_input ~= "" then return raw_input end
-  if type(raw_input) == "table" then
-    local command = raw_input.command or raw_input.cmd
-    if command and command ~= "" then
-      local desc = raw_input.description
-      if desc and desc ~= "" then
-        return "$ " .. tostring(command) .. "  — " .. tostring(desc)
-      end
-      return "$ " .. tostring(command)
-    end
-    if raw_input.file_path and raw_input.content then
-      return "📝 " .. tostring(raw_input.file_path)
-    end
-    if raw_input.path and raw_input.content then
-      return "📝 " .. tostring(raw_input.path)
-    end
-    local path = raw_input.file_path or raw_input.path or raw_input.filePath
-    if path and path ~= "" then
-      if raw_input.old_string or raw_input.new_string or raw_input.patch then
-        return "✎ " .. tostring(path)
-      end
-      return tostring(path)
-    end
-    if raw_input.url then return "↗ " .. tostring(raw_input.url) end
-    if raw_input.pattern then return "🔎 " .. tostring(raw_input.pattern) end
-    if raw_input.query then return "? " .. tostring(raw_input.query) end
-    if raw_input.description then return tostring(raw_input.description) end
-  end
-  local loc = locations_summary(tc)
-  if loc then return loc end
-  local txt = content_text(tc)
-  if txt and txt ~= "" then
-    local first = txt:match("([^\n]+)") or txt
-    return first
-  end
-  if type(raw_input) == "table" and next(raw_input) then
-    local ok, encoded = pcall(vim.json.encode, raw_input)
-    if ok and encoded then return encoded end
-  end
-  return nil
-end
 
 local function next_id()
   M._counter = M._counter + 1
@@ -284,30 +217,21 @@ end
 local function switch_mode_and_redispatch(entry)
   local droid = resolve_droid(entry.droid_id)
   if not droid then return end
-  Snacks.picker.select({ "explore", "routine", "autorun" }, {
+  mode_switch.select(droid, {
+    modes = { "explore", "routine", "autorun" },
     prompt = "switch " .. droid.id .. " mode",
-  }, function(chosen)
-    if not chosen then return end
-    if chosen == droid.mode then return end
-    local ok, policy = pcall(require, "djinni.nowork.modes." .. chosen)
-    if not ok then
-      vim.notify("mailbox: failed to load mode '" .. chosen .. "'", vim.log.levels.ERROR)
-      return
-    end
-    local list = droid.state.pending_permissions
-    for i = #list, 1, -1 do
-      if list[i].id == entry.id then table.remove(list, i) end
-    end
-    entry.resolved = true
-    droid.mode = chosen
-    droid.policy = policy
-    droid.log_buf:append("[mode → " .. chosen .. "]")
-    require("djinni.nowork.status_panel").update()
-    vim.schedule(function()
-      policy.on_permission(entry.params, entry.respond, droid)
-      M._refresh()
-    end)
-  end)
+    after_switch = function(_, _, policy)
+      local list = droid.state.pending_permissions
+      for i = #list, 1, -1 do
+        if list[i].id == entry.id then table.remove(list, i) end
+      end
+      entry.resolved = true
+      vim.schedule(function()
+        policy.on_permission(entry.params, entry.respond, droid)
+        M._refresh()
+      end)
+    end,
+  })
 end
 
 local function close()
@@ -459,7 +383,7 @@ function M.enqueue(droid, params, respond)
     tool_title = tc and tc.title or "tool",
     tool_kind = tc and tc.kind,
     tool_raw_input = raw_input,
-    tool_command = render_command(tc and tc.kind, raw_input, tc),
+    tool_command = tool_call.render_command(raw_input, tc),
     options = params and params.options or {},
     respond = respond,
     received_at = os.time(),

@@ -1,30 +1,10 @@
 local lifecycle = require("djinni.nowork.state")
-
-local function render_slices(text, log_buf)
-  local slices = require("djinni.nowork.parser").extract_log_slices(text)
-  for _, s in ipairs(slices) do
-    if s.kind == "block" then
-      local open_tag
-      if s.title and s.title ~= "" then
-        open_tag = "<" .. s.tag .. " title=\"" .. s.title .. "\">"
-      else
-        open_tag = "<" .. s.tag .. ">"
-      end
-      log_buf:append(open_tag)
-      for _, line in ipairs(vim.split(s.body or "", "\n", { plain = true })) do
-        log_buf:append(line)
-      end
-      log_buf:append("</" .. s.tag .. ">")
-    else
-      log_buf:append(s.tag)
-    end
-  end
-end
+local log_render = require("djinni.nowork.log_render")
 
 return {
   name = "routine",
   tail_stream = true,
-  log_render = render_slices,
+  log_render = log_render.render_slices,
   template_wrap = function(user_prompt, ctx)
     local templates = require("djinni.nowork.templates")
     local tail = templates.routine_tail()

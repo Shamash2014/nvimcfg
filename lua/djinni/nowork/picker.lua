@@ -1,5 +1,6 @@
 local droid_mod = require("djinni.nowork.droid")
 local lifecycle = require("djinni.nowork.state")
+local mode_switch = require("djinni.nowork.mode_switch")
 
 local M = {}
 
@@ -223,15 +224,7 @@ local function build_action_items(d)
       vim.notify("nowork: cannot switch mode while running", vim.log.levels.WARN)
       return
     end
-    Snacks.picker.select({ "routine", "autorun", "explore" }, { prompt = "switch mode" }, function(m)
-      if not m or m == d.mode then return end
-      local ok, policy = pcall(require, "djinni.nowork.modes." .. m)
-      if not ok then return end
-      d.mode = m
-      d.policy = policy
-      d.log_buf:append("[mode → " .. m .. "]")
-      require("djinni.nowork.status_panel").update()
-    end)
+    mode_switch.select(d, { prompt = "switch mode" })
   end)
 
   add("populate qfix", function()

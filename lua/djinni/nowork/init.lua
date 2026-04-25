@@ -30,7 +30,7 @@ end
 
 function M.explore(prompt, opts)
   local droid = require("djinni.nowork.droid")
-  return droid.new("explore", prompt, merged_opts(opts))
+  return droid.new("planner", prompt, merged_opts(opts))
 end
 
 function M.planner(prompt, opts)
@@ -157,7 +157,7 @@ function M.projects()
   end)
 end
 
-local MODE_LABELS = { explore = "explore", routine = "routine", autorun = "autorun", planner = "planner", plan = "planner" }
+local MODE_LABELS = { explore = "planner", routine = "routine", autorun = "autorun", planner = "planner", plan = "planner" }
 
 function M.launch(mode_name)
   local spawn = ({ explore = M.explore, routine = M.routine, autorun = M.auto, planner = M.planner, plan = M.planner })[mode_name]

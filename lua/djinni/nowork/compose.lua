@@ -1,4 +1,5 @@
 local lifecycle = require("djinni.nowork.state")
+local mode_switch = require("djinni.nowork.mode_switch")
 
 local M = {}
 
@@ -371,18 +372,12 @@ function M.open(droid, opts)
       vim.notify("nowork: compose is not attached to a droid", vim.log.levels.WARN)
       return
     end
-    Snacks.picker.select({ "routine", "autorun", "explore" }, { prompt = "switch local policy" }, function(mode_name)
-      if not mode_name or mode_name == droid.mode then return end
-      local ok, policy = pcall(require, "djinni.nowork.modes." .. mode_name)
-      if not ok then return end
-      droid.mode = mode_name
-      droid.policy = policy
-      if droid.log_buf and droid.log_buf.append then
-        droid.log_buf:append("[mode → " .. mode_name .. "]")
-      end
-      require("djinni.nowork.status_panel").update()
-      refresh_window_chrome(state)
-    end)
+    mode_switch.select(droid, {
+      prompt = "switch local policy",
+      after_switch = function()
+        refresh_window_chrome(state)
+      end,
+    })
   end
 
   local function switch_acp_mode()
