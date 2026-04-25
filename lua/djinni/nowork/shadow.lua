@@ -91,6 +91,8 @@ function M.review(droid_or_id, opts)
     return
   end
 
+  pcall(require("djinni.nowork.qfix_share").populate, droid)
+
   local prompt = table.concat(sections, "\n")
   local explore_opts = { cwd = cwd }
   if opts.provider then explore_opts.provider = opts.provider end

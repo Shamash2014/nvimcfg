@@ -558,6 +558,12 @@ function M.new(mode_name, initial_prompt, opts)
   vim.keymap.set("n", "<C-l>", function()
     require("djinni.nowork.model_picker").pick(droid)
   end, { buffer = lb.buf, desc = "nowork: switch ACP model" })
+  vim.keymap.set("n", "Q", function()
+    require("djinni.nowork.qfix_share").populate(droid)
+  end, { buffer = lb.buf, desc = "nowork: populate quickfix from droid" })
+  vim.keymap.set("n", "R", function()
+    M.restart(droid)
+  end, { buffer = lb.buf, desc = "nowork: restart from saved state" })
   vim.keymap.set("n", "r", function() M.reopen_prompt(droid) end, { buffer = lb.buf, desc = "nowork: reopen pending prompt" })
   vim.keymap.set("n", ".", function()
     require("djinni.nowork.picker").run_action(droid)
@@ -568,6 +574,8 @@ function M.new(mode_name, initial_prompt, opts)
       { key = "<C-c>",        desc = "cancel active request" },
       { key = "<S-Tab>",      desc = "switch ACP mode (default/plan/accept_edits/…)" },
       { key = "<C-l>",        desc = "switch ACP model (LLM)" },
+      { key = "Q",            desc = "populate quickfix from this droid (touched + tasks)" },
+      { key = "R",            desc = "restart from saved state (after done/cancel)" },
       { key = ".",            desc = "actions menu (cancel / done / switch mode / …)" },
       { key = "r",            desc = "reopen pending prompt (ask/question)" },
       { key = "]t / [t",      desc = "next / prev turn" },
@@ -797,7 +805,6 @@ local function finalize(droid)
   pcall(function()
     require("djinni.nowork.compose").close(droid)
   end)
-  render_autorun_task_qf(droid, false)
   if droid._log_fh then
     pcall(function() droid._log_fh:close() end)
     droid._log_fh = nil
@@ -889,11 +896,6 @@ function M.done(droid_or_id)
     if choice == 3 then return end
     show_diff = choice == 2
   end
-  local bag = droid.state and droid.state.touched
-  if bag and bag.items and #bag.items > 0 then
-    pcall(require("djinni.nowork.qfix_share").flush_touched, droid)
-  end
-  render_autorun_task_qf(droid, true)
   if droid.session_id then
     session.close_task_session(nil, droid.session_id)
   end
@@ -932,6 +934,27 @@ local function infer_archive_meta(log_path)
   end
   fh:close()
   return meta
+end
+
+function M.restart(droid_or_id)
+  local droid = M.resolve(droid_or_id)
+  if not droid then
+    vim.notify("nowork: droid not found", vim.log.levels.WARN)
+    return
+  end
+  if droid.status == lifecycle.droid.running then
+    vim.notify("nowork: cannot restart " .. droid.id .. " while running — cancel first", vim.log.levels.WARN)
+    return
+  end
+  local log_path = droid._log_path
+  if not log_path or log_path == "" then
+    vim.notify("nowork: " .. droid.id .. " has no log path to restart from", vim.log.levels.WARN)
+    return
+  end
+  pcall(function()
+    require("djinni.nowork.archive").write_state(droid)
+  end)
+  M.restart_from_archive(log_path)
 end
 
 function M.restart_from_archive(log_path)

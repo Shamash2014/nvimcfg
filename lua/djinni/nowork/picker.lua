@@ -1,4 +1,5 @@
 local droid_mod = require("djinni.nowork.droid")
+local lifecycle = require("djinni.nowork.state")
 
 local M = {}
 
@@ -209,49 +210,42 @@ local function build_action_items(d)
     add("compose", function()
       require("djinni.nowork.compose").open(d, { alt_buf = vim.fn.bufnr("#") })
     end)
-    add("switch model", function()
-      require("djinni.nowork.model_picker").pick(d)
-    end)
-    add("switch ACP mode", function()
-      require("djinni.nowork.acp_mode").pick(d)
-    end)
-    add("switch mode", function()
-      if d.status == "running" then
-        vim.notify("nowork: cannot switch mode while running", vim.log.levels.WARN)
-        return
-      end
-      Snacks.picker.select({ "routine", "autorun", "explore" }, { prompt = "switch mode" }, function(m)
-        if not m or m == d.mode then return end
-        local ok, policy = pcall(require, "djinni.nowork.modes." .. m)
-        if not ok then return end
-        d.mode = m
-        d.policy = policy
-        d.log_buf:append("[mode → " .. m .. "]")
-        require("djinni.nowork.status_panel").update()
-      end)
-    end)
-    local bag = d.state and d.state.touched
-    if bag and bag.items and #bag.items > 0 then
-      add("flush touched → qf", function()
-        require("djinni.nowork.qfix_share").flush_touched(d)
-      end)
-    end
-    add("log → qf", function()
-      require("djinni.nowork.qfix_share").pull_from_droid(d)
-    end)
-    add("shadow review", function()
-      require("djinni.nowork.shadow").review(d)
-    end)
-  elseif d.mode == "explore" or d.mode == "planner" then
-    if d.state and d.state.qfix_items and #d.state.qfix_items > 0 then
-      add("view results", function()
-        require("djinni.nowork.qfix").set(d.state.qfix_items, {
-          mode = "replace", open = true, title = d.state.qfix_title or "nowork planner",
-        })
-      end)
-    end
   end
 
+  add("switch model", function()
+    require("djinni.nowork.model_picker").pick(d)
+  end)
+  add("switch ACP mode", function()
+    require("djinni.nowork.acp_mode").pick(d)
+  end)
+  add("switch mode", function()
+    if d.status == "running" then
+      vim.notify("nowork: cannot switch mode while running", vim.log.levels.WARN)
+      return
+    end
+    Snacks.picker.select({ "routine", "autorun", "explore" }, { prompt = "switch mode" }, function(m)
+      if not m or m == d.mode then return end
+      local ok, policy = pcall(require, "djinni.nowork.modes." .. m)
+      if not ok then return end
+      d.mode = m
+      d.policy = policy
+      d.log_buf:append("[mode → " .. m .. "]")
+      require("djinni.nowork.status_panel").update()
+    end)
+  end)
+
+  add("populate qfix", function()
+    require("djinni.nowork.qfix_share").populate(d)
+  end)
+  add("shadow review", function()
+    require("djinni.nowork.shadow").review(d)
+  end)
+
+  if lifecycle.is_finished(d) then
+    add("restart (resume from saved state)", function()
+      droid_mod.restart(d)
+    end)
+  end
   add("cancel", function() droid_mod.cancel(d) end)
   add("done",   function() droid_mod.done(d) end)
   return items

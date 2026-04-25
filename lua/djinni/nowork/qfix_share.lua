@@ -184,6 +184,65 @@ function M.pull_from_droid(droid)
   end
 end
 
+local function dedup_key(it)
+  return (it.filename or "") .. ":" .. tostring(it.lnum or 0) .. ":" .. tostring(it.col or 0) .. "|" .. (it.text or "")
+end
+
+function M.populate(droid)
+  if not droid then
+    vim.notify("nowork: no droid", vim.log.levels.WARN)
+    return
+  end
+  local seen = {}
+  local merged = {}
+  local function push(list)
+    for _, it in ipairs(list or {}) do
+      if it and it.filename and it.filename ~= "" then
+        local k = dedup_key(it)
+        if not seen[k] then
+          seen[k] = true
+          merged[#merged + 1] = it
+        end
+      end
+    end
+  end
+  local bag = droid.state and droid.state.touched
+  push(bag and bag.items)
+  push(droid.state and droid.state.qfix_items)
+  local title = (bag and bag.title)
+    or (droid.state and droid.state.qfix_title)
+    or ("nowork " .. droid.mode .. " results: " .. (droid.initial_prompt or droid.id))
+  if #merged > 0 then
+    qfix.set(merged, { mode = "replace", open = true, title = title })
+  end
+  local tasks = {}
+  if droid.mode == "autorun" then
+    local order = droid.state and droid.state.topo_order or {}
+    for _, id in ipairs(order) do
+      local t = (droid.state.tasks or {})[id]
+      if t then
+        tasks[#tasks + 1] = {
+          text = ("[%s] %-10s %s"):format(id, t.status or "open", t.desc or ""),
+          valid = 0,
+        }
+      end
+    end
+    if #tasks > 0 then
+      qfix.set(tasks, {
+        mode = #merged > 0 and "append" or "replace",
+        open = true,
+        title = "nowork autorun tasks: " .. (droid.initial_prompt or droid.id),
+      })
+    end
+  end
+  local total = #merged + #tasks
+  if total == 0 then
+    vim.notify("nowork: nothing to populate from " .. droid.id, vim.log.levels.WARN)
+  else
+    vim.notify(("nowork: populated %d entr%s from %s"):format(total, total == 1 and "y" or "ies", droid.id), vim.log.levels.INFO)
+  end
+end
+
 M.format_block = format_block
 M.format_entry = format_entry
 M.extract_review = extract_review
