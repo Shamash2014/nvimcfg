@@ -5,7 +5,7 @@ local M = {}
 
 local DEFAULT_SECTIONS = { "Summary", "Review", "Observation", "Tasks" }
 local ROUTINE_CHAT_TITLE = " routine chat — <C-CR> send · <C-n> new · <C-c> close "
-local FOOTER = " <C-CR> send · <S-Tab> ACP mode · <C-l> model · <C-s> local policy · . actions · Q populate · R restart · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
+local FOOTER = " <C-CR> send · <S-Tab> ACP mode · <C-l> model · <C-s> local policy · . actions · Q populate · R restart · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-g> previous plans · <C-n> new · <C-c> close "
 
 local state_by_droid = {}
 local autorun_title
@@ -555,6 +555,9 @@ function M.open(droid, opts)
   vim.keymap.set({ "n", "i" }, "<C-CR>", submit, km)
   if opts.on_dispatch then
     vim.keymap.set("n", "<C-m>", dispatch_action, km)
+    vim.keymap.set({ "n", "i" }, "<C-g>", function()
+      require("djinni.nowork.plan_history").pick(droid)
+    end, km)
   end
   vim.keymap.set({ "n", "i" }, "<S-Tab>", switch_acp_mode, km)
   vim.keymap.set({ "n", "i" }, "<C-l>", switch_model, km)
