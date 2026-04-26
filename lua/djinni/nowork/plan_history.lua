@@ -16,6 +16,42 @@ local function fmt_mtime(sec)
   return os.date("%Y-%m-%d %H:%M", sec)
 end
 
+local function read_plan_body(path)
+  local lines = vim.fn.readfile(path)
+  if lines[1] == "---" then
+    for i = 2, #lines do
+      if lines[i] == "---" then
+        return table.concat(vim.list_slice(lines, i + 1), "\n")
+      end
+    end
+  end
+  return table.concat(lines, "\n")
+end
+
+local function apply_qflist(path, opts)
+  opts = opts or {}
+  local body = read_plan_body(path)
+  local tasks_parser = require("djinni.nowork.tasks_parser")
+  local tasks, err = tasks_parser.parse_tasks(body)
+  if err or not tasks or #tasks == 0 then
+    vim.notify("nowork: plan has no parseable tasks", vim.log.levels.WARN)
+    return false
+  end
+  local items = tasks_parser.extract_context_locations(tasks, { cwd = opts.cwd or vim.fn.getcwd() })
+  if #items == 0 then
+    vim.notify("nowork: plan has no context locations", vim.log.levels.INFO)
+    return false
+  end
+  require("djinni.nowork.qfix").set(items, {
+    mode = "replace",
+    open = opts.open ~= false,
+    title = "plan review: " .. vim.fn.fnamemodify(path, ":t"),
+  })
+  return true
+end
+
+M.apply_qflist = apply_qflist
+
 function M.list(droid)
   local dir = plans_dir(droid)
   if vim.fn.isdirectory(dir) ~= 1 then return {} end
@@ -39,7 +75,7 @@ function M.list(droid)
   return result
 end
 
-function M.preview(path)
+function M.preview(path, opts)
   if not path or vim.fn.filereadable(path) ~= 1 then
     vim.notify("nowork: plan file not readable", vim.log.levels.WARN)
     return
@@ -70,16 +106,18 @@ function M.preview(path)
   vim.wo[win].linebreak = true
   vim.wo[win].cursorline = false
 
+  apply_qflist(path, opts)
+
   local function close()
     if vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
     end
   end
-  local opts = { buffer = buf, nowait = true, silent = true }
-  vim.keymap.set("n", "<Esc>", close, opts)
-  vim.keymap.set("n", "q", close, opts)
-  vim.keymap.set("n", "?", close, opts)
-  vim.keymap.set("n", "<CR>", close, opts)
+  local keymaps_opts = { buffer = buf, nowait = true, silent = true }
+  vim.keymap.set("n", "<Esc>", close, keymaps_opts)
+  vim.keymap.set("n", "q", close, keymaps_opts)
+  vim.keymap.set("n", "?", close, keymaps_opts)
+  vim.keymap.set("n", "<CR>", close, keymaps_opts)
 end
 
 function M.pick(droid)
@@ -88,8 +126,9 @@ function M.pick(droid)
     vim.notify("nowork: no previous plans for this cwd", vim.log.levels.INFO)
     return
   end
+  local cwd = (droid and droid.opts and droid.opts.cwd) or vim.fn.getcwd()
   if #entries == 1 then
-    M.preview(entries[1].path)
+    M.preview(entries[1].path, { cwd = cwd })
     return
   end
   local items = {}
@@ -104,7 +143,7 @@ function M.pick(droid)
     prompt = "previous plans",
     format_item = function(item) return item.text end,
   }, function(choice)
-    if choice and choice.path then M.preview(choice.path) end
+    if choice and choice.path then M.preview(choice.path, { cwd = cwd }) end
   end)
 end
 

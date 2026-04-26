@@ -5,54 +5,6 @@ local M = {}
 M._autocmd_registered = false
 M._float_buf = nil
 M._float_win = nil
-M._git_cache = {}
-
-local GIT_TTL = 3
-
-local function git_info(cwd)
-  if not cwd or cwd == "" then return nil end
-  local now = os.time()
-  local cached = M._git_cache[cwd]
-  if cached and (now - cached.at) < GIT_TTL then return cached.info end
-
-  local function run(args)
-    local ok, obj = pcall(function()
-      return vim.system({ "git", unpack(args) }, { cwd = cwd, text = true, timeout = 500 }):wait()
-    end)
-    if not ok or not obj or obj.code ~= 0 then return nil end
-    return (obj.stdout or ""):gsub("%s+$", "")
-  end
-
-  local branch = run({ "rev-parse", "--abbrev-ref", "HEAD" })
-  if not branch then return nil end
-
-  local worktree = run({ "rev-parse", "--show-toplevel" })
-  worktree = worktree and vim.fn.fnamemodify(worktree, ":t") or nil
-
-  local numstat = run({ "diff", "--numstat" }) or ""
-  local added, removed = 0, 0
-  for line in numstat:gmatch("[^\n]+") do
-    local a, r = line:match("^(%S+)%s+(%S+)")
-    if a and a ~= "-" then added = added + (tonumber(a) or 0) end
-    if r and r ~= "-" then removed = removed + (tonumber(r) or 0) end
-  end
-
-  local info = { branch = branch, worktree = worktree, added = added, removed = removed }
-  M._git_cache[cwd] = { at = now, info = info }
-  return info
-end
-
-local function format_tokens(n)
-  if not n or n == 0 then return nil end
-  if n < 1000 then return tostring(n) end
-  if n < 1000000 then return string.format("%.1fk", n / 1000) end
-  return string.format("%.1fM", n / 1000000)
-end
-
-local function format_cost(c)
-  if not c or c == 0 then return nil end
-  return string.format("$%.2f", c)
-end
 
 local function format_elapsed(seconds)
   if not seconds or seconds < 0 then return nil end
@@ -64,75 +16,35 @@ local function format_elapsed(seconds)
   return m .. "m" .. s .. "s"
 end
 
-local function count_done(state)
-  local topo = state and state.topo_order
-  local tasks = state and state.tasks
-  if not topo or not tasks then return 0, 0 end
-  local done = 0
-  for _, id in ipairs(topo) do
-    local t = tasks[id]
-    if t and t.status == "done" then
-      done = done + 1
-    end
-  end
-  return done, #topo
-end
+local function attention_line(d, now)
+  local s = d.state or {}
+  local id = "[" .. (d.id or "?") .. "]"
 
-local function sprint_idx(state)
-  if not state or not state.topo_order or not state.current_task_id then return nil end
-  for i, id in ipairs(state.topo_order) do
-    if id == state.current_task_id then return i end
+  if d.status == "running" then
+    local elapsed = d.started_at and format_elapsed(now - d.started_at)
+    return elapsed and (id .. " running " .. elapsed) or (id .. " running")
   end
+
+  local perms = s.pending_permissions or {}
+  if #perms > 0 then
+    return id .. " perm!" .. #perms
+  end
+
+  local disc = s.discussion or {}
+  if disc.pending_prompt and disc.staged_input then
+    return id .. " req+"
+  elseif disc.pending_prompt or disc.staged_input then
+    return id .. " req"
+  end
+
   return nil
-end
-
-local function format_tag(d)
-  local mode = d.mode or "?"
-  if mode == "planner" or mode == "explore" then
-    local qfix = d.state and d.state.qfix_items
-    if qfix and #qfix > 0 then
-      return mode .. " " .. #qfix .. "loc"
-    end
-    local phase = d.state and d.state.phase or "plan"
-    if phase == "plan" then
-      return mode .. " plan"
-    elseif phase == "validate" then
-      return mode .. " validate"
-    elseif phase == "generate" then
-      return mode .. " sprint " .. tostring(d.state.current_task_id or "?")
-    elseif phase == "evaluate" then
-      return mode .. " eval " .. tostring(d.state.current_task_id or "?")
-    end
-    return mode
-  elseif mode == "routine" then
-    local bits = { "routine" }
-    local staged = lifecycle.staged_input(d)
-    if staged and staged ~= "" then
-      bits[#bits + 1] = "+in"
-    end
-    local q = lifecycle.queue(d)
-    if q and #q > 0 then
-      bits[#bits + 1] = "q:" .. #q
-    end
-    local perms = d.state and d.state.pending_permissions
-    if perms and #perms > 0 then
-      bits[#bits + 1] = "perm!" .. #perms
-    end
-    return table.concat(bits, " ")
-  end
-  local perms = d.state and d.state.pending_permissions
-  if perms and #perms > 0 then
-    return mode .. " perm!" .. #perms
-  end
-  return mode
 end
 
 local function build_lines()
   local droid_mod = require("djinni.nowork.droid")
   local entries = {}
   for _, d in pairs(droid_mod.active) do
-    local finished = lifecycle.is_finished(d)
-    if not finished then
+    if not lifecycle.is_finished(d) then
       entries[#entries + 1] = d
     end
   end
@@ -142,51 +54,10 @@ local function build_lines()
   local now = os.time()
   local lines = {}
   for _, d in ipairs(entries) do
-    local tag = format_tag(d)
-    local status = d.status or "?"
-    local elapsed = d.started_at and format_elapsed(now - d.started_at)
-    local inner = elapsed and (status .. " " .. elapsed) or status
-    local line = "[" .. d.id .. "] " .. tag .. " " .. inner
-    if d.acp_modes and d.acp_modes.current_id then
-      local label = d.acp_modes.current_id
-      for _, mode in ipairs(d.acp_modes.available or {}) do
-        if mode.id == d.acp_modes.current_id then
-          label = mode.name or mode.id
-          break
-        end
-      end
-      line = line .. " [acp:" .. label .. "]"
-    end
-    if d.model_name and d.model_name ~= "" then
-      line = line .. " [model:" .. d.model_name .. "]"
-    end
-    local t = d.state and d.state.tokens
-    if t then
-      local bits = {}
-      local i_str = format_tokens(t.input)
-      local o_str = format_tokens(t.output)
-      if i_str then bits[#bits + 1] = "↑" .. i_str end
-      if o_str then bits[#bits + 1] = "↓" .. o_str end
-      local cache = (t.cache_read or 0) + (t.cache_write or 0)
-      local c_str = format_tokens(cache)
-      if c_str then bits[#bits + 1] = "⊚" .. c_str end
-      local cost = format_cost(t.cost)
-      if cost then bits[#bits + 1] = cost end
-      if #bits > 0 then line = line .. "  " .. table.concat(bits, " ") end
-    end
-    local g = git_info(d.opts and d.opts.cwd)
-    if g then
-      local git_bits = "  " .. g.branch
-      if g.worktree and g.worktree ~= g.branch then
-        git_bits = git_bits .. "@" .. g.worktree
-      end
-      if g.added > 0 or g.removed > 0 then
-        git_bits = git_bits .. " +" .. g.added .. "/-" .. g.removed
-      end
-      line = line .. git_bits
-    end
-    lines[#lines + 1] = line
+    local line = attention_line(d, now)
+    if line then lines[#lines + 1] = line end
   end
+  if #lines == 0 then return nil end
   return lines
 end
 
@@ -254,9 +125,10 @@ function M.update()
   local lines = build_lines()
   if not lines then
     hide_float()
-    return
+  else
+    show_float(lines)
   end
-  show_float(lines)
+  pcall(vim.cmd, "redrawstatus")
 end
 
 return M

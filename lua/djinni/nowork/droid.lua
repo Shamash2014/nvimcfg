@@ -932,6 +932,10 @@ function M.restart(droid_or_id)
     vim.notify("nowork: droid not found", vim.log.levels.WARN)
     return
   end
+  if droid._finalized then
+    vim.notify("nowork: " .. droid.id .. " already restarted — open the new session", vim.log.levels.WARN)
+    return
+  end
   if droid.status == lifecycle.droid.running then
     vim.notify("nowork: cannot restart " .. droid.id .. " while running — cancel first", vim.log.levels.WARN)
     return
@@ -944,6 +948,12 @@ function M.restart(droid_or_id)
   pcall(function()
     require("djinni.nowork.archive").write_state(droid)
   end)
+  if droid.session_id then
+    pcall(function()
+      session.close_task_session(nil, droid.session_id)
+    end)
+  end
+  pcall(function() finalize(droid) end)
   M.restart_from_archive(log_path)
 end
 

@@ -57,81 +57,9 @@ local function sprint_index(topo_order, id)
   return nil
 end
 
-local function extract_tasks_block(text)
-  local interior = text:match("<Tasks>%s*\n(.-)\n?%s*</Tasks>")
-  if interior then
-    return "<Tasks>\n" .. interior .. "\n</Tasks>"
-  end
-  return text
-end
-
 local function extract_feedback_block(text)
   local interior = text:match("<Feedback>%s*\n?(.-)\n?%s*</Feedback>")
   return interior and vim.trim(interior) or ""
-end
-
-local function save_plan(edited, droid)
-  local cwd = droid.opts and droid.opts.cwd and vim.fn.isdirectory(droid.opts.cwd) == 1 and droid.opts.cwd or vim.fn.getcwd()
-  local plans_dir = cwd .. "/nowork/plans"
-  local ok, err = pcall(vim.fn.mkdir, plans_dir, "p")
-  if not ok then return end
-
-  local date_str = os.date("%Y-%m-%d")
-  local prompt_hash = string.sub(tostring(droid.initial_prompt or "untitled"), 1, 32)
-    :gsub("[^a-zA-Z0-9]", "")
-    :lower()
-  local base_name = string.format("%s/%s-%s", plans_dir, date_str, prompt_hash)
-  local plan_file = base_name .. ".md"
-  local counter = 1
-  while vim.loop.fs_stat(plan_file) do
-    counter = counter + 1
-    plan_file = string.format("%s-%d.md", base_name, counter)
-  end
-
-  local fh, fh_err = io.open(plan_file, "w")
-  if not fh then return end
-  local prompt = (droid.initial_prompt or "Untitled Plan")
-  fh:write("---\n")
-  fh:write("title: " .. prompt:gsub("\n", " ") .. "\n")
-  fh:write("date: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n")
-  fh:write("prompt: " .. prompt:gsub("\n", " ") .. "\n")
-  fh:write("---\n\n")
-  fh:write(vim.trim(edited or ""))
-  fh:write("\n")
-  fh:close()
-
-  return plan_file
-end
-
-local function ingest_plan(edited, droid)
-  local tasks, err = tasks_parser.parse_tasks(edited)
-  if err or not tasks then
-    vim.notify("nowork: " .. (err or "parse failed") .. " — edit the plan and resubmit", vim.log.levels.WARN)
-    return nil, err
-  end
-  if tasks_parser.has_cycle(tasks) then
-    vim.notify("nowork: cycle detected in task deps", vim.log.levels.WARN)
-    return nil, "cycle"
-  end
-  local topo, terr = tasks_parser.topo_sort(tasks)
-  if terr or not topo then
-    vim.notify("nowork: " .. (terr or "topo sort failed"), vim.log.levels.WARN)
-    return nil, terr
-  end
-
-  local tasks_map = {}
-  for _, t in ipairs(tasks) do
-    t.status = t.status or "open"
-    tasks_map[t.id] = t
-  end
-
-  droid.state.pending_retry = false
-  droid.state.tasks = tasks_map
-  droid.state.topo_order = topo
-  droid.state.eval_feedback = {}
-  droid.state.sprint_retries = {}
-
-  return tasks, nil
 end
 
 local function handle_plan(text, droid)
@@ -141,93 +69,27 @@ local function handle_plan(text, droid)
     require("djinni.nowork.ask").ask_and_resume(droid, vim.trim(payload or ""), options)
     return "suspend"
   end
+
+  local existing = droid.state.plan_compose
+  local has_existing = existing and existing.alive and existing.release
+
   if name ~= markers.PLAN_COMPLETE then
+    if has_existing then
+      existing.release()
+      return "suspend"
+    end
     return "await_user"
   end
 
-  local droid_mod = require("djinni.nowork.droid")
   local compose = require("djinni.nowork.compose")
-  local initial_md = extract_tasks_block(text)
+  local initial_md = require("djinni.nowork.compose_planner").extract_tasks_block(text)
 
-  compose.open(droid, {
-    title = " planner plan — <C-CR> validate+run · <C-m> dispatch (skip validate) ",
-    label = "planner",
-    initial = initial_md,
-    on_submit = function(edited)
-      local tasks, err = ingest_plan(edited, droid)
-      if not tasks then
-        return
-      end
+  if has_existing then
+    existing.release(initial_md)
+    return "suspend"
+  end
 
-      droid.state.phase = "validate"
-      droid.state.next_prompt = "The plan has been approved. Now, **validate** the generated tasks against the codebase. Ensure all context anchors are valid and implementation notes are technically sound. End with `VALIDATION_PASSED` if everything is correct."
-
-      local plan_file = save_plan(edited, droid)
-      if plan_file then
-        droid.state.plan_file = plan_file
-        droid.log_buf:append("[plan saved] " .. plan_file)
-      end
-
-      local ctx_items = tasks_parser.extract_context_locations(tasks, {
-        cwd = droid.opts and droid.opts.cwd,
-      })
-      qfix_share.collect_to_droid(droid, {
-        items = ctx_items,
-        default_title = "nowork planner: " .. (droid.initial_prompt or droid.id),
-        qfix_mode = "replace",
-        open = false,
-        log_prefix = "planner",
-        notify_prefix = "nowork planner",
-        empty_notify = false,
-      })
-
-      checkpoint(droid)
-      require("djinni.nowork.status_panel").update()
-      droid_mod._resume(droid, "next")
-    end,
-    on_dispatch = function(edited)
-      local tasks, err = ingest_plan(edited, droid)
-      if not tasks then
-        return
-      end
-
-      local plan_file = save_plan(edited, droid)
-      if plan_file then
-        droid.state.plan_file = plan_file
-        droid.log_buf:append("[plan saved] " .. plan_file)
-      end
-
-      local ctx_items = tasks_parser.extract_context_locations(tasks, {
-        cwd = droid.opts and droid.opts.cwd,
-      })
-      qfix_share.collect_to_droid(droid, {
-        items = ctx_items,
-        default_title = "nowork planner: " .. (droid.initial_prompt or droid.id),
-        qfix_mode = "replace",
-        open = false,
-        log_prefix = "planner",
-        notify_prefix = "nowork planner",
-        empty_notify = false,
-      })
-
-      local dispatch = require("djinni.nowork.dispatch")
-      local tasks_list = {}
-      for _, id in ipairs(droid.state.topo_order) do
-        tasks_list[#tasks_list + 1] = droid.state.tasks[id]
-      end
-      dispatch.spawn_subdroids(droid, tasks_list, { isolate = false })
-
-      droid.state.phase = "dispatched"
-      droid.status = "done"
-      checkpoint(droid)
-      require("djinni.nowork.status_panel").update()
-      droid_mod._resume(droid, "done")
-    end,
-    on_close = function()
-      droid.status = "cancelled"
-      droid_mod._resume(droid, "done")
-    end,
-  })
+  compose.open(droid, { initial = initial_md })
   return "suspend"
 end
 
@@ -316,6 +178,7 @@ local function handle_evaluate(text, droid)
       end
       local content = table.concat(lines, "\n")
       compose.open(droid, {
+        _planner_skip = true,
         title = " planner done — all sprints complete ",
         label = "planner",
         initial = content,

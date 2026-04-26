@@ -3,7 +3,7 @@ local M = {}
 M.defaults = {
   provider = "claude",
   log_buffer = { split = "below", height = 15, hidden_default = true },
-  compose = { floating = true, split = "below", height = 20, border = "rounded" },
+  compose = { floating = false, split = "below", height = 20, border = "rounded" },
   explore = { absolute_paths = true, copen_on_first_hit = true },
   routine = {
     skills = {},
@@ -131,8 +131,8 @@ function M.projects()
   end)
 end
 
-local MODE_LABELS = { explore = "planner", routine = "routine", planner = "planner", plan = "planner", multitask = "routine" }
-local MODE_DROID = { explore = "planner", routine = "routine", planner = "planner", plan = "planner", multitask = "routine" }
+local MODE_LABELS = { explore = "planner", routine = "routine", planner = "planner", plan = "plan", multitask = "routine" }
+local MODE_DROID = { explore = "planner", routine = "routine", planner = "planner", plan = "routine", multitask = "routine" }
 
 function M.launch(mode_name)
   if not MODE_DROID[mode_name] then
@@ -153,7 +153,7 @@ function M.launch(mode_name)
       on_submit = function(text)
         local spawn_opts = merged_opts({ provider = provider })
         if mode_name == "multitask" then spawn_opts.multitask = true end
-        if mode_name == "routine" or mode_name == "planner" then
+        if mode_name == "plan" or mode_name == "routine" or mode_name == "planner" then
           local p = require("djinni.acp.provider").get(provider)
           spawn_opts.initial_acp_mode = (p and p.plan_mode) or "plan"
         end
@@ -197,6 +197,18 @@ function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.defaults, opts or {})
 
   require("djinni.nowork.qf_virt").setup()
+
+  do
+    local expr = "%{%v:lua.require'djinni.nowork.statusline'.component()%}"
+    local cur = vim.o.statusline or ""
+    if not cur:find("djinni.nowork.statusline", 1, true) then
+      if cur == "" then
+        vim.o.statusline = "%<%f %h%w%m%r %=%-14.(%l,%c%V%) %P " .. expr
+      else
+        vim.o.statusline = cur .. " " .. expr
+      end
+    end
+  end
 
   vim.api.nvim_create_autocmd("VimLeavePre", {
     group = vim.api.nvim_create_augroup("DjinniNoworkArchive", { clear = true }),
@@ -297,6 +309,8 @@ function M.setup(opts)
     end
   end, { nargs = 0 })
 
+  vim.api.nvim_create_user_command("NoworkPlanReview", function() require("djinni.nowork.plan_history").pick(nil) end, { desc = "nowork: pick and review a saved plan (qflist + preview)" })
+
   vim.api.nvim_create_user_command("NoworkDone", function()
     local droid = require("djinni.nowork.droid")
     local picker = require("djinni.nowork.picker")
@@ -343,7 +357,9 @@ function M.setup(opts)
     end })
   end, { nargs = 0 })
 
-  vim.keymap.set("n", "<leader>as", function() M.launch("planner") end, { desc = "nowork: universal planner (search + routine)" })
+  vim.keymap.set("n", "<leader>as", function() M.launch("plan") end, { desc = "nowork: chat-plan (routine in plan mode, refine via follow-up messages)" })
+  vim.keymap.set("n", "<leader>aS", function() M.launch("planner") end, { desc = "nowork: SDLC planner pipeline (validate→generate→evaluate→dispatch)" })
+  vim.keymap.set("n", "<leader>aP", function() require("djinni.nowork.plan_history").pick(nil) end, { desc = "nowork: review saved plan (qflist + preview)" })
   vim.keymap.set("n", "<leader>aw", function() M.launch("routine") end, { desc = "nowork: routine" })
 
   vim.keymap.set("n", "<leader>av", function()
@@ -379,7 +395,7 @@ function M.setup(opts)
     require("djinni.nowork.capture").route(snippet)
   end, { desc = "nowork: capture selection → routine droid" })
 
-  vim.keymap.set("n", "<leader>al", function()
+  vim.keymap.set("n", "<leader>aa", function()
     require("djinni.nowork.picker").pick({
       include_history = true,
       include_archive = true,
@@ -602,8 +618,9 @@ function M.setup(opts)
     pcall(wk.add, {
       { "<leader>a",  group = "nowork" },
       { "<leader>as", desc = "universal planner (search + routine)" },
+      { "<leader>aP", desc = "review saved plan (qflist + preview)" },
       { "<leader>aw", desc = "routine" },
-      { "<leader>al", desc = "logs (active + recent + archive)" },
+      { "<leader>aa", desc = "logs (active + recent + archive)" },
       { "<leader>ao", desc = "projects" },
       { "<leader>ai", desc = "interact (actions menu for current droid)" },
       { "<leader>ak", desc = "kill all routines" },

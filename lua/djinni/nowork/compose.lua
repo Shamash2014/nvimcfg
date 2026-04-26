@@ -1,5 +1,6 @@
 local lifecycle = require("djinni.nowork.state")
 local mode_switch = require("djinni.nowork.mode_switch")
+local compose_chrome = require("djinni.nowork.compose_chrome")
 
 local M = {}
 
@@ -23,18 +24,8 @@ local function build_scaffold(droid, opts)
   local scope = opts.cwd or (droid and droid.opts and droid.opts.cwd) or vim.fn.getcwd()
   
   local lines = {}
-  
-  -- 1. Metadata Header (Overview style)
-  lines[#lines + 1] = "  Nowork Status"
-  lines[#lines + 1] = string.format("  %-8s %s", "Head", label)
-  lines[#lines + 1] = string.format("  %-8s %s", "Root", scope)
-  if droid and droid.id then
-    lines[#lines + 1] = string.format("  %-8s %s", "Session", droid.id)
-  end
-  lines[#lines + 1] = "  " .. string.rep("─", 70)
-  lines[#lines + 1] = ""
 
-  -- 2. Sections
+  -- Sections (metadata moved to winbar)
   for i, s in ipairs(sections) do
     lines[#lines + 1] = "## " .. s
     local body = prefill[s:lower()]
@@ -143,89 +134,23 @@ local function render_dashboard(state)
 
   local ns = vim.api.nvim_create_namespace("nowork_compose_dash")
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-  
+
   local line_count = vim.api.nvim_buf_line_count(buf)
-  local width = vim.api.nvim_win_get_width(win)
-  local win_height = vim.api.nvim_win_get_height(win)
-  
-  local dash_lines = {}
-  
-  -- Separator
-  table.insert(dash_lines, { { string.rep("─", width - 8), "Comment" } })
-  table.insert(dash_lines, { { "", "" } })
-
-  -- 1. Arguments (Flags)
-  table.insert(dash_lines, { { "Arguments", "Bold" } })
-  local arg_line = { { "  " } }
   local iso = (droid and droid.opts and droid.opts.isolate) and "on" or "off"
-  table.insert(arg_line, { "-i ", "Comment" })
-  table.insert(arg_line, { "Isolate (", "None" })
-  table.insert(arg_line, { iso, iso == "on" and "NoworkQfEdit" or "Comment" })
-  table.insert(arg_line, { ")   ", "None" })
-  
-  table.insert(arg_line, { "-p ", "Comment" })
-  table.insert(arg_line, { "Provider (", "None" })
-  table.insert(arg_line, { (droid and droid.provider_name) or "claude", "NoworkQfReview" })
-  table.insert(arg_line, { ")", "None" })
-  table.insert(dash_lines, arg_line)
-  table.insert(dash_lines, { { "", "" } })
+  local provider = (droid and droid.provider_name) or "claude"
 
-  -- 2. Commands (Grouped Columns)
-  local groups = {
-    { title = "Session", cmds = { { "r", "restart" }, { "k", "stop" }, { "c", "clear" } } },
-    { title = "Context", cmds = { { "b", "buffer" }, { "d", "diff" }, { "q", "qflist" } } },
-    { title = "Multi", cmds = { { "m", "mul" }, { "i", "isolate" }, { "s", "staged" } } },
+  local summary = {
+    { "args ", "Comment" },
+    { "-i ", "Comment" },
+    { iso, iso == "on" and "NoworkQfEdit" or "Comment" },
+    { "  -p ", "Comment" },
+    { provider, "NoworkQfReview" },
+    { "   ·   ", "Comment" },
+    { "^CR send · ^C close · ? help", "Comment" },
   }
 
-  local mode = (droid and droid.mode) or (state.opts and state.opts.label) or ""
-  if mode == "planner" or mode == "explore" then
-    table.insert(groups, { title = "Plan", cmds = { { "a", "approve" }, { "v", "revise" }, { "t", "tasks" } } })
-  else
-    table.insert(groups, { title = "Global", cmds = { { "^CR", "Send" }, { "^C", "Close" }, { "^Q", "Qflist" } } })
-  end
-  
-  local col_width = 24
-  
-  -- Header Row
-  local header = {}
-  for _, g in ipairs(groups) do
-    table.insert(header, { g.title .. string.rep(" ", col_width - #g.title), "Bold" })
-  end
-  table.insert(dash_lines, header)
-  
-  -- Body Rows
-  local max_rows = 0
-  for _, g in ipairs(groups) do max_rows = math.max(max_rows, #g.cmds) end
-  
-  for r = 1, max_rows do
-    local row = {}
-    for _, g in ipairs(groups) do
-      local pair = g.cmds[r]
-      if pair then
-        local key, name = pair[1], pair[2]
-        table.insert(row, { " " .. key .. " ", "NoworkQfNext" })
-        local label = name .. string.rep(" ", col_width - #name - 4)
-        table.insert(row, { label, "None" })
-      else
-        table.insert(row, { string.rep(" ", col_width), "None" })
-      end
-    end
-    table.insert(dash_lines, row)
-  end
-
-  -- Padding logic to keep dashboard at bottom
-  local total_dash_lines = #dash_lines
-  local current_lines = vim.api.nvim_buf_line_count(buf)
-  local target_padding = win_height - total_dash_lines - current_lines - 1
-  
-  local final_virt = {}
-  if target_padding > 0 then
-    for i = 1, target_padding do table.insert(final_virt, { { "", "" } }) end
-  end
-  for _, l in ipairs(dash_lines) do table.insert(final_virt, l) end
-  
   pcall(vim.api.nvim_buf_set_extmark, buf, ns, line_count - 1, 0, {
-    virt_lines = final_virt,
+    virt_lines = { summary },
     virt_lines_above = false,
   })
 end
@@ -317,7 +242,7 @@ function M.open(droid, opts)
     if s.alive and vim.api.nvim_win_is_valid(s.win) then
       vim.api.nvim_set_current_win(s.win)
       vim.cmd("startinsert")
-      return
+      return s
     end
     state_by_droid[key] = nil
   end
@@ -338,6 +263,19 @@ function M.open(droid, opts)
   local title = opts.title or autorun_title(droid)
   local win, window_opts = open_window(buf, title, format_footer(droid), opts.window or opts.compose)
 
+  if window_opts.floating == false then
+    local label_w = opts.label or (droid and droid.mode) or "compose"
+    local scope_w = opts.cwd or (droid and droid.opts and droid.opts.cwd) or vim.fn.getcwd()
+    local parts = { "%#NeogitSectionHeader# " .. label_w .. " " }
+    if scope_w and scope_w ~= "" then
+      parts[#parts + 1] = "%#Comment# · " .. vim.fn.fnamemodify(scope_w, ":~")
+    end
+    if droid and droid.id then
+      parts[#parts + 1] = "%#Comment# · " .. tostring(droid.id):sub(1, 8)
+    end
+    pcall(function() vim.wo[win].winbar = table.concat(parts, "") end)
+  end
+
   local initial
   local structured = opts.sections ~= nil
   if opts.initial then
@@ -349,24 +287,11 @@ function M.open(droid, opts)
   end
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, initial)
 
-  -- Apply highlights for the header (only when structured scaffold is present)
-  if #initial > 4 then
-    local nns = vim.api.nvim_create_namespace("nowork_compose_hl")
-    pcall(vim.api.nvim_buf_add_highlight, buf, nns, "NeoworkIdxTitle", 0, 2, -1)
-    for i = 1, math.min(3, #initial - 1) do
-      local line = initial[i + 1]
-      if line and line:match("^  ") then
-        pcall(vim.api.nvim_buf_add_highlight, buf, nns, "NeoworkIdxSection", i, 2, 10)
-        pcall(vim.api.nvim_buf_add_highlight, buf, nns, "NeoworkIdxMuted", i, 11, -1)
-      end
-    end
-    local rule_idx = nil
-    for idx, l in ipairs(initial) do
-      if l:match("^  ─") then rule_idx = idx - 1; break end
-    end
-    if rule_idx then
-      pcall(vim.api.nvim_buf_add_highlight, buf, nns, "NeoworkIdxRule", rule_idx, 0, -1)
-    end
+  local non_floating = window_opts.floating == false
+
+  if non_floating then
+    compose_chrome.apply_highlights()
+    compose_chrome.apply_neogit_chrome(buf, win)
   end
 
   place_cursor_first_blank(buf, win, sections)
@@ -419,7 +344,7 @@ function M.open(droid, opts)
       lifecycle.set_composer_persistent(droid, false)
       lifecycle.set_discussion_phase(droid, lifecycle.discussion.closed)
     end
-    if opts.on_close then pcall(opts.on_close) end
+    if opts.on_close then pcall(opts.on_close, state.last_action) end
   end
 
   local function reseed(prefill, raw)
@@ -428,20 +353,47 @@ function M.open(droid, opts)
     state.busy = false
     if droid then lifecycle.set_discussion_phase(droid, lifecycle.discussion.composing) end
     refresh_window_chrome(state)
+    if non_floating then compose_chrome.apply_section_overlay(state.buf) end
     place_cursor_first_blank(state.buf, state.win, state.sections)
   end
 
   state.reseed = reseed
   state.close = close
 
+  local saved_body = nil
+
   local function mark_busy(label)
     if not vim.api.nvim_buf_is_valid(state.buf) then return end
+    saved_body = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
     state.busy = true
     if droid then lifecycle.set_discussion_phase(droid, lifecycle.discussion.sending) end
     set_buffer_body(state.buf, { "## " .. (label or "sending…"), "", "(waiting for agent reply)" }, false)
+    if non_floating then compose_chrome.apply_section_overlay(state.buf) end
+  end
+
+  local function release(new_body)
+    if not state.alive or not vim.api.nvim_buf_is_valid(state.buf) then return end
+    state.busy = false
+    if droid then lifecycle.set_discussion_phase(droid, lifecycle.discussion.composing) end
+    local lines
+    if new_body and new_body ~= "" then
+      lines = vim.split(new_body, "\n", { plain = true })
+    elseif saved_body then
+      lines = saved_body
+    else
+      lines = { "" }
+    end
+    set_buffer_body(state.buf, lines, true)
+    saved_body = nil
+    refresh_window_chrome(state)
+    if non_floating then compose_chrome.apply_section_overlay(state.buf) end
+    if state.win and vim.api.nvim_win_is_valid(state.win) then
+      pcall(vim.api.nvim_win_set_cursor, state.win, { #lines, #(lines[#lines] or "") })
+    end
   end
 
   state.mark_busy = mark_busy
+  state.release = release
 
   local function submit()
     if state.busy then return end
@@ -499,8 +451,23 @@ function M.open(droid, opts)
       vim.notify("nowork: empty message", vim.log.levels.WARN)
       return
     end
+    state.last_action = "dispatch"
     close()
     vim.schedule(function() opts.on_dispatch(text) end)
+  end
+
+  local function validate_action()
+    if state.busy then return end
+    if not opts.on_validate then return end
+    local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
+    local text = table.concat(lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then
+      vim.notify("nowork: empty plan", vim.log.levels.WARN)
+      return
+    end
+    state.last_action = "validate"
+    close()
+    vim.schedule(function() opts.on_validate(text) end)
   end
 
   local function insert_token(token)
@@ -554,11 +521,17 @@ function M.open(droid, opts)
 
   local km = { buffer = buf, nowait = true }
   vim.keymap.set({ "n", "i" }, "<C-CR>", submit, km)
+  if non_floating then
+    vim.keymap.set("n", "<Tab>", function() compose_chrome.toggle_section_fold(buf) end, km)
+  end
   if opts.on_dispatch then
     vim.keymap.set("n", "<C-m>", dispatch_action, km)
     vim.keymap.set({ "n", "i" }, "<C-g>", function()
       require("djinni.nowork.plan_history").pick(droid)
     end, km)
+  end
+  if opts.on_validate then
+    vim.keymap.set({ "n", "i" }, "<C-y>", validate_action, km)
   end
   vim.keymap.set({ "n", "i" }, "<S-Tab>", switch_acp_mode, km)
   vim.keymap.set({ "n", "i" }, "<C-l>", switch_model, km)
@@ -600,6 +573,9 @@ function M.open(droid, opts)
     if opts.on_dispatch then
       table.insert(entries, { key = "<C-m>", desc = "dispatch to sub-droids (planner only — skips validate)" })
     end
+    if opts.on_validate then
+      table.insert(entries, { key = "<C-y>", desc = "approve plan and advance to validate" })
+    end
     for _, cmd in ipairs(available_commands(droid)) do
       local name = command_name(cmd)
       if name and name ~= "" then
@@ -626,6 +602,8 @@ function M.open(droid, opts)
       end
     end,
   })
+
+  return state
 end
 
 function M.reopen(droid, prefill, raw)

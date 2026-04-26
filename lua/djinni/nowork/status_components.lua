@@ -74,6 +74,41 @@ function M.compact_render(droid)
   return M.render(M.components(droid))
 end
 
+function M.statusline_parts(droids)
+  local R, B, I = 0, 0, 0
+  local Tt, Qt, Stg, Pt, Dt = 0, 0, 0, 0, 0
+  local cost = 0
+  for _, d in ipairs(droids) do
+    local st = d.status
+    if st == "running" then R = R + 1
+    elseif st == "booting" then B = B + 1
+    elseif st == "idle" then I = I + 1 end
+    local s = d.state or {}
+    local tok = s.tokens or {}
+    Tt = Tt + (tok.input or 0) + (tok.output or 0)
+    cost = cost + (tok.cost or 0)
+    local disc = s.discussion or {}
+    Qt = Qt + #(disc.queue or {})
+    if disc.staged_input then Stg = Stg + 1 end
+    if disc.pending_prompt then Dt = Dt + 1 end
+    Pt = Pt + #(s.pending_permissions or {})
+  end
+  local parts = {}
+  local function push(sym, n)
+    if n and n > 0 then parts[#parts + 1] = { sym = sym, val = tostring(n) } end
+  end
+  push("R", R); push("B", B); push("I", I)
+  if Tt > 0 then parts[#parts + 1] = { sym = "T", val = M.token_compact(Tt) } end
+  push("Q", Qt); push("+", Stg); push("P", Pt); push("D", Dt)
+  local cost_str = M.cost_compact(cost)
+  if cost_str then parts[#parts + 1] = { sym = nil, val = cost_str } end
+  return parts
+end
+
+function M.statusline_render(droids)
+  return M.render(M.statusline_parts(droids), " ")
+end
+
 if vim and vim.env and vim.env.DJINNI_TEST == "1" then
   local cases = {
     {

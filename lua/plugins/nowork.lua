@@ -4,6 +4,7 @@ return {
   dependencies = {
     "folke/snacks.nvim",
   },
+  event = "VeryLazy",
   cmd = {
     "Nowork",
     "NoworkSay",
@@ -19,9 +20,8 @@ return {
   keys = {
     { "<leader>as", function() require("djinni.nowork").launch("explore") end, desc = "nowork: explore" },
     { "<leader>aw", function() require("djinni.nowork").launch("routine") end, desc = "nowork: routine" },
-    { "<leader>aa", function() require("djinni.nowork").launch("autorun") end, desc = "nowork: autorun" },
     { "<leader>ao", function() require("djinni.nowork").projects() end, desc = "nowork: projects" },
-    { "<leader>al", function()
+    { "<leader>aa", function()
       require("djinni.nowork.picker").pick({ include_history = true, include_archive = true })
     end, desc = "nowork: logs (active + recent + archive)" },
     { "<leader>ap", function()
@@ -70,7 +70,7 @@ return {
       end
       local picker = require("djinni.nowork.picker")
       if picker.count({ mode_filter = { "routine", "autorun" } }) == 0 then
-        vim.notify("nowork: no routine/autorun droids — start one with <leader>aw or <leader>aa", vim.log.levels.WARN)
+        vim.notify("nowork: no routine/autorun droids — start one with <leader>aw", vim.log.levels.WARN)
         return
       end
       local share = require("djinni.nowork.qfix_share")
@@ -96,7 +96,7 @@ return {
       end
       local picker = require("djinni.nowork.picker")
       if picker.count({ mode_filter = { "routine", "autorun" } }) == 0 then
-        vim.notify("nowork: no routine/autorun droids — start one with <leader>aw or <leader>aa", vim.log.levels.WARN)
+        vim.notify("nowork: no routine/autorun droids — start one with <leader>aw", vim.log.levels.WARN)
         return
       end
       picker.pick({
