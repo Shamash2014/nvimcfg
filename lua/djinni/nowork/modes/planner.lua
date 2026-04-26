@@ -103,6 +103,37 @@ local function save_plan(edited, droid)
   return plan_file
 end
 
+local function ingest_plan(edited, droid)
+  local tasks, err = tasks_parser.parse_tasks(edited)
+  if err or not tasks then
+    vim.notify("nowork: " .. (err or "parse failed") .. " — edit the plan and resubmit", vim.log.levels.WARN)
+    return nil, err
+  end
+  if tasks_parser.has_cycle(tasks) then
+    vim.notify("nowork: cycle detected in task deps", vim.log.levels.WARN)
+    return nil, "cycle"
+  end
+  local topo, terr = tasks_parser.topo_sort(tasks)
+  if terr or not topo then
+    vim.notify("nowork: " .. (terr or "topo sort failed"), vim.log.levels.WARN)
+    return nil, terr
+  end
+
+  local tasks_map = {}
+  for _, t in ipairs(tasks) do
+    t.status = t.status or "open"
+    tasks_map[t.id] = t
+  end
+
+  droid.state.pending_retry = false
+  droid.state.tasks = tasks_map
+  droid.state.topo_order = topo
+  droid.state.eval_feedback = {}
+  droid.state.sprint_retries = {}
+
+  return tasks, nil
+end
+
 local function handle_plan(text, droid)
   local name, payload = markers.detect(text)
   if name == markers.QUESTION then
@@ -119,36 +150,14 @@ local function handle_plan(text, droid)
   local initial_md = extract_tasks_block(text)
 
   compose.open(droid, {
-    title = " planner plan — approve or revise ",
+    title = " planner plan — <C-CR> validate+run · <C-m> dispatch (skip validate) ",
     label = "planner",
     initial = initial_md,
     on_submit = function(edited)
-      local tasks, err = tasks_parser.parse_tasks(edited)
-      if err or not tasks then
-        vim.notify("nowork: " .. (err or "parse failed") .. " — edit the plan and resubmit", vim.log.levels.WARN)
+      local tasks, err = ingest_plan(edited, droid)
+      if not tasks then
         return
       end
-      if tasks_parser.has_cycle(tasks) then
-        vim.notify("nowork: cycle detected in task deps", vim.log.levels.WARN)
-        return
-      end
-      local topo, terr = tasks_parser.topo_sort(tasks)
-      if terr or not topo then
-        vim.notify("nowork: " .. (terr or "topo sort failed"), vim.log.levels.WARN)
-        return
-      end
-
-      local tasks_map = {}
-      for _, t in ipairs(tasks) do
-        t.status = t.status or "open"
-        tasks_map[t.id] = t
-      end
-
-      droid.state.pending_retry = false
-      droid.state.tasks = tasks_map
-      droid.state.topo_order = topo
-      droid.state.eval_feedback = {}
-      droid.state.sprint_retries = {}
 
       droid.state.phase = "validate"
       droid.state.next_prompt = "The plan has been approved. Now, **validate** the generated tasks against the codebase. Ensure all context anchors are valid and implementation notes are technically sound. End with `VALIDATION_PASSED` if everything is correct."
@@ -175,6 +184,44 @@ local function handle_plan(text, droid)
       checkpoint(droid)
       require("djinni.nowork.status_panel").update()
       droid_mod._resume(droid, "next")
+    end,
+    on_dispatch = function(edited)
+      local tasks, err = ingest_plan(edited, droid)
+      if not tasks then
+        return
+      end
+
+      local plan_file = save_plan(edited, droid)
+      if plan_file then
+        droid.state.plan_file = plan_file
+        droid.log_buf:append("[plan saved] " .. plan_file)
+      end
+
+      local ctx_items = tasks_parser.extract_context_locations(tasks, {
+        cwd = droid.opts and droid.opts.cwd,
+      })
+      qfix_share.collect_to_droid(droid, {
+        items = ctx_items,
+        default_title = "nowork planner: " .. (droid.initial_prompt or droid.id),
+        qfix_mode = "replace",
+        open = false,
+        log_prefix = "planner",
+        notify_prefix = "nowork planner",
+        empty_notify = false,
+      })
+
+      local dispatch = require("djinni.nowork.dispatch")
+      local tasks_list = {}
+      for _, id in ipairs(droid.state.topo_order) do
+        tasks_list[#tasks_list + 1] = droid.state.tasks[id]
+      end
+      dispatch.spawn_subdroids(droid, tasks_list, { isolate = false })
+
+      droid.state.phase = "dispatched"
+      droid.status = "done"
+      checkpoint(droid)
+      require("djinni.nowork.status_panel").update()
+      droid_mod._resume(droid, "done")
     end,
     on_close = function()
       droid.status = "cancelled"
@@ -417,8 +464,9 @@ return {
     elseif phase == "evaluate" then
       action = handle_evaluate(text, droid)
     elseif phase == "validate" then
-      -- New validation phase for the leader
       action = handle_validate(text, droid)
+    elseif phase == "dispatched" then
+      action = "done"
     else
       action = "done"
     end

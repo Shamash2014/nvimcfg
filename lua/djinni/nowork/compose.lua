@@ -490,6 +490,19 @@ function M.open(droid, opts)
     end
   end
 
+  local function dispatch_action()
+    if state.busy then return end
+    if not opts.on_dispatch then return end
+    local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
+    local text = table.concat(lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then
+      vim.notify("nowork: empty message", vim.log.levels.WARN)
+      return
+    end
+    close()
+    vim.schedule(function() opts.on_dispatch(text) end)
+  end
+
   local function insert_token(token)
     if state.busy then return end
     local mode = vim.api.nvim_get_mode().mode
@@ -540,6 +553,9 @@ function M.open(droid, opts)
 
   local km = { buffer = buf, nowait = true }
   vim.keymap.set({ "n", "i" }, "<C-CR>", submit, km)
+  if opts.on_dispatch then
+    vim.keymap.set("n", "<C-m>", dispatch_action, km)
+  end
   vim.keymap.set({ "n", "i" }, "<S-Tab>", switch_acp_mode, km)
   vim.keymap.set({ "n", "i" }, "<C-l>", switch_model, km)
   vim.keymap.set({ "n", "i" }, "<C-c>", close, km)
@@ -577,6 +593,9 @@ function M.open(droid, opts)
       { key = "q / <Esc>", desc = "close (normal mode)" },
       { key = "?",     desc = "this help" },
     }
+    if opts.on_dispatch then
+      table.insert(entries, { key = "<C-m>", desc = "dispatch to sub-droids (planner only — skips validate)" })
+    end
     for _, cmd in ipairs(available_commands(droid)) do
       local name = command_name(cmd)
       if name and name ~= "" then

@@ -27,72 +27,8 @@ return {
       end
 
       if #tasks > 0 then
-        local droid_mod = require("djinni.nowork.droid")
-        droid.state.tasks = droid.state.tasks or {}
-        droid.state.topo_order = droid.state.topo_order or {}
-
-        for _, t in ipairs(tasks) do
-          if not droid.state.tasks[t.id] then
-            droid.state.tasks[t.id] = t
-            table.insert(droid.state.topo_order, t.id)
-
-            local sub_cwd = droid.opts and droid.opts.cwd
-            if droid.opts and droid.opts.isolate then
-              local wt_path = sub_cwd .. "/.nowork/worktrees/" .. t.id
-              vim.fn.mkdir(vim.fn.fnamemodify(wt_path, ":h"), "p")
-              local branch = "nowork-" .. t.id
-              local obj = vim.system({ "git", "-C", sub_cwd, "worktree", "add", "-B", branch, wt_path }, { text = true }):wait()
-              if obj.code == 0 then
-                sub_cwd = wt_path
-                t.worktree = wt_path
-                t.branch = branch
-              else
-                vim.notify("multitask: failed to create worktree for " .. t.id .. ": " .. (obj.stderr or "?"), vim.log.levels.ERROR)
-              end
-            end
-
-            local context = t.context and table.concat(t.context, "\n") or "none"
-            local implementation = t.implementation and table.concat(t.implementation, "\n") or "none"
-            local skills = t.skills and table.concat(t.skills, ", ") or "none"
-            local acceptance = {}
-            for _, a in ipairs(t.acceptance or {}) do
-              table.insert(acceptance, (a.required and "[REQ] " or "[OPT] ") .. a.text)
-            end
-            
-            local sub_prompt = string.format([[
-You are a worker sub-droid for task %s: %s
-
-### Context
-%s
-
-### Implementation Blueprint
-%s
-
-### Skills to Use
-%s
-
-### Acceptance Criteria
-%s
-
-Please execute this task and keep a detailed record of your work.
-]], t.id, t.desc, context, implementation, skills, table.concat(acceptance, "\n"))
-
-            local sub = droid_mod.new("routine", sub_prompt, {
-              parent_id = droid.id,
-              task_id = t.id,
-              cwd = sub_cwd,
-              provider = droid.opts and droid.opts.provider,
-              skills = t.skills or {},
-            })
-            droid.state.tasks[t.id].droid_id = sub.id
-            droid.state.tasks[t.id].status = "running"
-            if droid._log_fh then
-              droid._log_fh:write(string.format("[trace] spawned sub-droid %s for task %s in %s\n", sub.id, t.id, sub_cwd))
-              droid._log_fh:flush()
-            end
-          end
-        end
-        qfix_share.render_tasks(droid, { title = "multitask status" })
+        local dispatch = require("djinni.nowork.dispatch")
+        dispatch.spawn_subdroids(droid, tasks, { isolate = droid.opts and droid.opts.isolate })
         return "await_user"
       end
     end
