@@ -215,12 +215,19 @@ autorun_title = function(droid)
   return string.format(" autorun %d/%d · no active sprint ", done, total)
 end
 
+function M.open_plan(droid, opts)
+  local cp = require("djinni.nowork.compose_planner")
+  opts = vim.tbl_deep_extend("force", cp.attach(droid), opts or {})
+  local state = M.open(droid, opts)
+  if droid then
+    droid.state = droid.state or {}
+    droid.state.plan_compose = state
+  end
+  return state
+end
+
 function M.open(droid, opts)
   opts = opts or {}
-  if droid and droid.mode == "planner" and (droid.state and droid.state.phase) == "plan" and not opts._planner_skip then
-    local cp = require("djinni.nowork.compose_planner")
-    opts = vim.tbl_deep_extend("force", cp.attach(droid), opts)
-  end
   if droid then
     if opts.persistent == nil then opts.persistent = true end
     if opts.on_submit == nil then
@@ -600,10 +607,6 @@ function M.open(droid, opts)
       end
     end,
   })
-
-  if droid and droid.mode == "planner" then
-    droid.state.plan_compose = state
-  end
 
   return state
 end

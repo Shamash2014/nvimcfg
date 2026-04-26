@@ -89,7 +89,7 @@ local function handle_plan(text, droid)
     return "suspend"
   end
 
-  compose.open(droid, { initial = initial_md })
+  compose.open_plan(droid, { initial = initial_md })
   return "suspend"
 end
 
@@ -178,7 +178,6 @@ local function handle_evaluate(text, droid)
       end
       local content = table.concat(lines, "\n")
       compose.open(droid, {
-        _planner_skip = true,
         title = " planner done — all sprints complete ",
         label = "planner",
         initial = content,
