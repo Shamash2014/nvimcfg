@@ -68,6 +68,51 @@ function M.new(opts)
 
   local on_append = opts.on_append
 
+  local function refresh_dashboard()
+    local dash_ns = vim.api.nvim_create_namespace("nowork_log_dash")
+    vim.api.nvim_buf_clear_namespace(buf, dash_ns, 0, -1)
+    local count = vim.api.nvim_buf_line_count(buf)
+    if count == 0 then return end
+
+    local groups = {
+      { title = "Session", cmds = { { "r", "restart" }, { "k", "stop" }, { "c", "clear" } } },
+      { title = "Global", cmds = { { "i", "compose" }, { "q", "close" } } },
+    }
+    
+    local col_width = 24
+    local dash_lines = {
+      { { string.rep("─", 60), "Comment" } },
+      { { "", "" } }
+    }
+    
+    local header = {}
+    for _, g in ipairs(groups) do
+      table.insert(header, { g.title .. string.rep(" ", col_width - #g.title), "Bold" })
+    end
+    table.insert(dash_lines, header)
+    
+    local max_rows = 0
+    for _, g in ipairs(groups) do max_rows = math.max(max_rows, #g.cmds) end
+    for r = 1, max_rows do
+      local row = {}
+      for _, g in ipairs(groups) do
+        local pair = g.cmds[r]
+        if pair then
+          table.insert(row, { " " .. pair[1] .. " ", "DiagnosticHint" })
+          table.insert(row, { pair[2] .. string.rep(" ", col_width - #pair[2] - 4), "None" })
+        else
+          table.insert(row, { string.rep(" ", col_width), "None" })
+        end
+      end
+      table.insert(dash_lines, row)
+    end
+
+    pcall(vim.api.nvim_buf_set_extmark, buf, dash_ns, count - 1, 0, {
+      virt_lines = dash_lines,
+      virt_lines_above = false,
+    })
+  end
+
   local function append(self, lines)
     if type(lines) == "string" then
       lines = vim.split(lines, "\n", { plain = true })
@@ -85,6 +130,7 @@ function M.new(opts)
         pcall(on_append, line)
       end
     end
+    refresh_dashboard()
     local w = find_win()
     if w then
       local last = vim.api.nvim_buf_line_count(buf)
@@ -105,6 +151,7 @@ function M.new(opts)
     vim.cmd(cmd_map[split] or ("below " .. height .. "split"))
     win_id = vim.api.nvim_get_current_win()
     vim.api.nvim_win_set_buf(win_id, buf)
+    refresh_dashboard()
   end
 
   local function hide(self)
@@ -119,6 +166,7 @@ function M.new(opts)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
     vim.bo[buf].modified = false
     vim.bo[buf].modifiable = false
+    refresh_dashboard()
   end
 
   local function apply_statusline_to_window(w)

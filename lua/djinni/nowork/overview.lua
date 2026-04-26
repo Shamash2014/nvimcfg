@@ -750,12 +750,9 @@ local function render(buf, state)
     add(rule)
     hl(#lines - 1, 0, #rule, "NeoworkIdxRule")
   end
-  do
-    local footer = "  Commands <CR> visit  <Tab> details  . actions  i compose  x cancel  r restart  d delete  n new  R refresh  q quit"
-    add(footer)
-    hl(#lines - 1, 2, 10, "NeoworkIdxSection")
-    hl(#lines - 1, 11, #footer, "NeoworkIdxMuted")
-  end
+  
+  -- The dashboard will be rendered via extmarks to stay at the bottom
+  -- We don't add the text directly to the buffer here anymore
 
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -771,6 +768,46 @@ local function render(buf, state)
   M._line_index[buf] = row_index
   M._fold_state[buf] = prev_folds
   apply_folds(buf, fold_ranges, prev_folds)
+
+  -- Render Neogit-style dashboard
+  local dash_ns = vim.api.nvim_create_namespace("nowork_overview_dash")
+  vim.api.nvim_buf_clear_namespace(buf, dash_ns, 0, -1)
+  
+  local groups = {
+    { title = "Navigate", cmds = { { "CR", "visit" }, { "Tab", "details" }, { "R", "refresh" }, { "q", "quit" } } },
+    { title = "Lifecycle", cmds = { { "n", "new" }, { "x", "cancel" }, { "r", "restart" }, { "d", "delete" } } },
+    { title = "Agent", cmds = { { ".", "actions" }, { "i", "compose" } } },
+  }
+  
+  local dash_lines = { { { "", "" } } }
+  local col_width = 24
+  
+  local header = {}
+  for _, g in ipairs(groups) do
+    table.insert(header, { g.title .. string.rep(" ", col_width - #g.title), "Bold" })
+  end
+  table.insert(dash_lines, header)
+  
+  local max_rows = 0
+  for _, g in ipairs(groups) do max_rows = math.max(max_rows, #g.cmds) end
+  for r = 1, max_rows do
+    local row = {}
+    for _, g in ipairs(groups) do
+      local pair = g.cmds[r]
+      if pair then
+        table.insert(row, { " " .. pair[1] .. " ", "NoworkQfNext" })
+        table.insert(row, { pair[2] .. string.rep(" ", col_width - #pair[2] - 4), "None" })
+      else
+        table.insert(row, { string.rep(" ", col_width), "None" })
+      end
+    end
+    table.insert(dash_lines, row)
+  end
+
+  pcall(vim.api.nvim_buf_set_extmark, buf, dash_ns, #lines - 1, 0, {
+    virt_lines = dash_lines,
+    virt_lines_above = false,
+  })
 end
 
 local function entry_at_cursor(buf)

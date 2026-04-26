@@ -15,10 +15,26 @@ local function droid_key(droid)
   return droid.id or tostring(droid)
 end
 
-local function build_scaffold(sections, prefill, raw)
-  sections = sections or DEFAULT_SECTIONS
-  prefill = prefill or {}
+local function build_scaffold(droid, opts)
+  local sections = opts.sections or DEFAULT_SECTIONS
+  local prefill = opts.prefill or {}
+  local raw = opts.raw
+  local label = opts.label or (droid and droid.mode) or "compose"
+  local scope = opts.cwd or (droid and droid.opts and droid.opts.cwd) or vim.fn.getcwd()
+  
   local lines = {}
+  
+  -- 1. Metadata Header (Overview style)
+  lines[#lines + 1] = "  Nowork Status"
+  lines[#lines + 1] = string.format("  %-8s %s", "Head", label)
+  lines[#lines + 1] = string.format("  %-8s %s", "Root", scope)
+  if droid and droid.id then
+    lines[#lines + 1] = string.format("  %-8s %s", "Session", droid.id)
+  end
+  lines[#lines + 1] = "  " .. string.rep("─", 70)
+  lines[#lines + 1] = ""
+
+  -- 2. Sections
   for i, s in ipairs(sections) do
     lines[#lines + 1] = "## " .. s
     local body = prefill[s:lower()]
@@ -119,14 +135,18 @@ local function open_window(buf, title, footer, opts)
 end
 
 local function render_dashboard(state)
+  if not state.alive then return end
   local droid = state.droid
-  if not droid or not state.alive then return end
   local buf = state.buf
+  local win = state.win
+  if not vim.api.nvim_win_is_valid(win) then return end
+
   local ns = vim.api.nvim_create_namespace("nowork_compose_dash")
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   
   local line_count = vim.api.nvim_buf_line_count(buf)
-  local width = state.window_opts.width
+  local width = vim.api.nvim_win_get_width(win)
+  local win_height = vim.api.nvim_win_get_height(win)
   
   local dash_lines = {}
   
@@ -137,7 +157,7 @@ local function render_dashboard(state)
   -- 1. Arguments (Flags)
   table.insert(dash_lines, { { "Arguments", "Bold" } })
   local arg_line = { { "  " } }
-  local iso = (droid.opts and droid.opts.isolate) and "on" or "off"
+  local iso = (droid and droid.opts and droid.opts.isolate) and "on" or "off"
   table.insert(arg_line, { "-i ", "Comment" })
   table.insert(arg_line, { "Isolate (", "None" })
   table.insert(arg_line, { iso, iso == "on" and "NoworkQfEdit" or "Comment" })
@@ -145,7 +165,7 @@ local function render_dashboard(state)
   
   table.insert(arg_line, { "-p ", "Comment" })
   table.insert(arg_line, { "Provider (", "None" })
-  table.insert(arg_line, { droid.provider_name or "claude", "NoworkQfReview" })
+  table.insert(arg_line, { (droid and droid.provider_name) or "claude", "NoworkQfReview" })
   table.insert(arg_line, { ")", "None" })
   table.insert(dash_lines, arg_line)
   table.insert(dash_lines, { { "", "" } })
@@ -155,8 +175,14 @@ local function render_dashboard(state)
     { title = "Session", cmds = { { "r", "restart" }, { "k", "stop" }, { "c", "clear" } } },
     { title = "Context", cmds = { { "b", "buffer" }, { "d", "diff" }, { "q", "qflist" } } },
     { title = "Multi", cmds = { { "m", "mul" }, { "i", "isolate" }, { "s", "staged" } } },
-    { title = "Global", cmds = { { "^CR", "Send" }, { "^C", "Close" }, { "^Q", "Qflist" } } },
   }
+
+  local mode = (droid and droid.mode) or (state.opts and state.opts.label) or ""
+  if mode == "planner" or mode == "explore" then
+    table.insert(groups, { title = "Plan", cmds = { { "a", "approve" }, { "v", "revise" }, { "t", "tasks" } } })
+  else
+    table.insert(groups, { title = "Global", cmds = { { "^CR", "Send" }, { "^C", "Close" }, { "^Q", "Qflist" } } })
+  end
   
   local col_width = 24
   
@@ -188,7 +214,6 @@ local function render_dashboard(state)
   end
 
   -- Padding logic to keep dashboard at bottom
-  local win_height = state.window_opts.height
   local total_dash_lines = #dash_lines
   local current_lines = vim.api.nvim_buf_line_count(buf)
   local target_padding = win_height - total_dash_lines - current_lines - 1
@@ -231,8 +256,6 @@ local function refresh_window_chrome(state)
   local cfg = vim.api.nvim_win_get_config(state.win)
   cfg.title = state.opts.title or autorun_title(state.droid) or " nowork compose "
   cfg.title_pos = "center"
-  cfg.footer = format_footer(state.droid)
-  cfg.footer_pos = "left"
   pcall(vim.api.nvim_win_set_config, state.win, cfg)
 end
 
@@ -316,14 +339,36 @@ function M.open(droid, opts)
   local win, window_opts = open_window(buf, title, format_footer(droid), opts.window or opts.compose)
 
   local initial
+  local structured = opts.sections ~= nil
   if opts.initial then
     initial = vim.split(opts.initial, "\n", { plain = true })
-  elseif opts.sections or persistent or opts.prefill then
-    initial = build_scaffold(sections, opts.prefill, opts.raw)
+  elseif structured then
+    initial = build_scaffold(droid, opts)
   else
     initial = { "" }
   end
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, initial)
+
+  -- Apply highlights for the header (only when structured scaffold is present)
+  if #initial > 4 then
+    local nns = vim.api.nvim_create_namespace("nowork_compose_hl")
+    pcall(vim.api.nvim_buf_add_highlight, buf, nns, "NeoworkIdxTitle", 0, 2, -1)
+    for i = 1, math.min(3, #initial - 1) do
+      local line = initial[i + 1]
+      if line and line:match("^  ") then
+        pcall(vim.api.nvim_buf_add_highlight, buf, nns, "NeoworkIdxSection", i, 2, 10)
+        pcall(vim.api.nvim_buf_add_highlight, buf, nns, "NeoworkIdxMuted", i, 11, -1)
+      end
+    end
+    local rule_idx = nil
+    for idx, l in ipairs(initial) do
+      if l:match("^  ─") then rule_idx = idx - 1; break end
+    end
+    if rule_idx then
+      pcall(vim.api.nvim_buf_add_highlight, buf, nns, "NeoworkIdxRule", rule_idx, 0, -1)
+    end
+  end
+
   place_cursor_first_blank(buf, win, sections)
   vim.cmd("startinsert")
 
@@ -339,15 +384,25 @@ function M.open(droid, opts)
     droid = droid,
     busy = false,
   }
-  if persistent and key then
+  if persistent and key and droid then
     state_by_droid[key] = state
     lifecycle.set_composer_persistent(droid, true)
     lifecycle.set_discussion_phase(droid, lifecycle.discussion.composing)
   end
 
+  local group = vim.api.nvim_create_augroup("nowork_compose_" .. buf, { clear = true })
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+    group = group,
     buffer = buf,
     callback = function() render_dashboard(state) end,
+  })
+  vim.api.nvim_create_autocmd("WinResized", {
+    group = group,
+    callback = function() 
+      if vim.api.nvim_get_current_buf() == buf then
+        render_dashboard(state) 
+      end
+    end,
   })
   render_dashboard(state)
 
@@ -360,7 +415,7 @@ function M.open(droid, opts)
     if key and state_by_droid[key] == state then
       state_by_droid[key] = nil
     end
-    if persistent then
+    if persistent and droid then
       lifecycle.set_composer_persistent(droid, false)
       lifecycle.set_discussion_phase(droid, lifecycle.discussion.closed)
     end
@@ -369,9 +424,9 @@ function M.open(droid, opts)
 
   local function reseed(prefill, raw)
     if not vim.api.nvim_buf_is_valid(state.buf) then return end
-    set_buffer_body(state.buf, build_scaffold(state.sections, prefill, raw), true)
+    set_buffer_body(state.buf, build_scaffold(droid, { sections = state.sections, prefill = prefill, raw = raw, label = opts.label }), true)
     state.busy = false
-    lifecycle.set_discussion_phase(droid, lifecycle.discussion.composing)
+    if droid then lifecycle.set_discussion_phase(droid, lifecycle.discussion.composing) end
     refresh_window_chrome(state)
     place_cursor_first_blank(state.buf, state.win, state.sections)
   end
@@ -382,7 +437,7 @@ function M.open(droid, opts)
   local function mark_busy(label)
     if not vim.api.nvim_buf_is_valid(state.buf) then return end
     state.busy = true
-    lifecycle.set_discussion_phase(droid, lifecycle.discussion.sending)
+    if droid then lifecycle.set_discussion_phase(droid, lifecycle.discussion.sending) end
     set_buffer_body(state.buf, { "## " .. (label or "sending…"), "", "(waiting for agent reply)" }, false)
   end
 
@@ -542,7 +597,7 @@ function M.open(droid, opts)
       if key and state_by_droid[key] == state then
         state_by_droid[key] = nil
       end
-      if persistent then
+      if persistent and droid then
         lifecycle.set_composer_persistent(droid, false)
         lifecycle.set_discussion_phase(droid, lifecycle.discussion.closed)
       end

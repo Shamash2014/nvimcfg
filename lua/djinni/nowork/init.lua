@@ -22,21 +22,33 @@ local function merged_opts(opts)
 end
 
 function M.explore(prompt, opts)
+  if not prompt or prompt == "" then
+    return M.launch("explore")
+  end
   local droid = require("djinni.nowork.droid")
   return droid.new("planner", prompt, merged_opts(opts))
 end
 
 function M.planner(prompt, opts)
+  if not prompt or prompt == "" then
+    return M.launch("planner")
+  end
   local droid = require("djinni.nowork.droid")
   return droid.new("planner", prompt, merged_opts(opts))
 end
 
 function M.routine(prompt, opts)
+  if not prompt or prompt == "" then
+    return M.launch("routine")
+  end
   local droid = require("djinni.nowork.droid")
   return droid.new("routine", prompt, merged_opts(opts))
 end
 
 function M.multitask(prompt, opts)
+  if not prompt or prompt == "" then
+    return M.launch("multitask")
+  end
   opts = opts or {}
   opts.multitask = true
   return M.routine(prompt, opts)
@@ -120,10 +132,10 @@ function M.projects()
 end
 
 local MODE_LABELS = { explore = "planner", routine = "routine", planner = "planner", plan = "planner", multitask = "routine" }
+local MODE_DROID = { explore = "planner", routine = "routine", planner = "planner", plan = "planner", multitask = "routine" }
 
 function M.launch(mode_name)
-  local spawn = ({ explore = M.explore, routine = M.routine, planner = M.planner, plan = M.planner, multitask = M.multitask })[mode_name]
-  if not spawn then
+  if not MODE_DROID[mode_name] then
     vim.notify("nowork.launch: unknown mode '" .. tostring(mode_name) .. "'", vim.log.levels.WARN)
     return
   end
@@ -132,15 +144,18 @@ function M.launch(mode_name)
   local default = M.config.provider
 
   local function after_provider(provider)
-    if mode_name == "routine" then
-      spawn("", { provider = provider })
-      return
-    end
     local label = " nowork " .. (MODE_LABELS[mode_name] or mode_name)
     if provider then label = label .. " [" .. provider .. "] " end
     require("djinni.nowork.compose").open(nil, {
       title = label,
-      on_submit = function(text) spawn(text, { provider = provider }) end,
+      label = mode_name,
+      floating = false,
+      on_submit = function(text)
+        local spawn_opts = merged_opts({ provider = provider })
+        if mode_name == "multitask" then spawn_opts.multitask = true end
+        local droid_mode = MODE_DROID[mode_name]
+        require("djinni.nowork.droid").new(droid_mode, text, spawn_opts)
+      end,
     })
   end
 

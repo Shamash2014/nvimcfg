@@ -115,31 +115,28 @@ local function handle_plan(text, droid)
   end
 
   local droid_mod = require("djinni.nowork.droid")
-  local plan_buffer = require("djinni.nowork.plan_buffer")
+  local compose = require("djinni.nowork.compose")
   local initial_md = extract_tasks_block(text)
 
-  plan_buffer.open({
-    title = " planner plan — <C-s> approve · <C-r> replan · <C-c> cancel ",
-    footer = " <C-s> approve · <C-r> ask agent to revise per edits · <C-c> cancel ",
-    content = initial_md,
-    filetype = "markdown",
-    extra_keys = {
-      ["<C-r>"] = function(close)
-        local cur = vim.api.nvim_get_current_buf()
-        local edited = table.concat(vim.api.nvim_buf_get_lines(cur, 0, -1, false), "\n")
-        close()
-        droid.state.next_prompt = "Revise the sprint plan. My edits/notes:\n\n"
-          .. edited
-          .. "\n\nRe-emit a valid markdown <Tasks> block ending with `PLAN_COMPLETE`."
-        droid_mod._resume(droid, "next")
-      end,
-    },
+  compose.open(droid, {
+    title = " planner plan — approve or revise ",
+    label = "planner",
+    initial = initial_md,
     on_submit = function(edited)
       local tasks, err = tasks_parser.parse(edited)
-      if err or not tasks then return false, err or "parse failed" end
-      if tasks_parser.has_cycle(tasks) then return false, "cycle detected in task deps" end
+      if err or not tasks then
+        vim.notify("nowork: " .. (err or "parse failed") .. " — edit the plan and resubmit", vim.log.levels.WARN)
+        return
+      end
+      if tasks_parser.has_cycle(tasks) then
+        vim.notify("nowork: cycle detected in task deps", vim.log.levels.WARN)
+        return
+      end
       local topo, terr = tasks_parser.topo_sort(tasks)
-      if terr or not topo then return false, terr or "topo sort failed" end
+      if terr or not topo then
+        vim.notify("nowork: " .. (terr or "topo sort failed"), vim.log.levels.WARN)
+        return
+      end
 
       local tasks_map = {}
       for _, t in ipairs(tasks) do
@@ -156,8 +153,6 @@ local function handle_plan(text, droid)
       droid.state.phase = "validate"
       droid.state.next_prompt = "The plan has been approved. Now, **validate** the generated tasks against the codebase. Ensure all context anchors are valid and implementation notes are technically sound. End with `VALIDATION_PASSED` if everything is correct."
 
-      -- render_task_qf(droid, { open = true })
-
       local plan_file = save_plan(edited, droid)
       if plan_file then
         droid.state.plan_file = plan_file
@@ -167,9 +162,8 @@ local function handle_plan(text, droid)
       checkpoint(droid)
       require("djinni.nowork.status_panel").update()
       droid_mod._resume(droid, "next")
-      return true
     end,
-    on_cancel = function()
+    on_close = function()
       droid.status = "cancelled"
       droid_mod._resume(droid, "done")
     end,
@@ -252,7 +246,7 @@ local function handle_evaluate(text, droid)
     -- render_task_qf(droid, { open = next_id == nil })
     if not next_id then
       local droid_mod = require("djinni.nowork.droid")
-      local plan_buffer = require("djinni.nowork.plan_buffer")
+      local compose = require("djinni.nowork.compose")
       local lines = { "## Sprints", "" }
       for _, tid in ipairs(droid.state.topo_order or {}) do
         local t = (droid.state.tasks or {})[tid]
@@ -261,19 +255,16 @@ local function handle_evaluate(text, droid)
         end
       end
       local content = table.concat(lines, "\n")
-      plan_buffer.open({
-        title = " planner done — <C-s> close · <C-c> cancel ",
-        footer = " <C-s> close · <C-c> cancel ",
-        content = content,
-        filetype = "markdown",
-        readonly = true,
+      compose.open(droid, {
+        title = " planner done — all sprints complete ",
+        label = "planner",
+        initial = content,
         on_submit = function()
           droid.state.phase = "done"
           require("djinni.nowork.status_panel").update()
           droid_mod._resume(droid, "done")
-          return true
         end,
-        on_cancel = function()
+        on_close = function()
           droid.status = "cancelled"
           droid_mod._resume(droid, "done")
         end,
