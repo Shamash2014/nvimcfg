@@ -1,0 +1,112 @@
+local M = {}
+
+local function acp_label(droid)
+  if not (droid.acp_modes and droid.acp_modes.current_id) then return nil end
+  local id = droid.acp_modes.current_id
+  for _, mode in ipairs(droid.acp_modes.available or {}) do
+    if mode.id == id then return mode.name or mode.id end
+  end
+  return id
+end
+
+function M.token_compact(n)
+  n = tonumber(n) or 0
+  if n < 1000 then return tostring(math.floor(n)) end
+  if n < 1e6  then return string.format("%.1fk", n / 1e3) end
+  if n < 1e9  then return string.format("%.1fM", n / 1e6) end
+  return string.format("%.1fB", n / 1e9)
+end
+
+function M.cost_compact(n)
+  n = tonumber(n)
+  if not n or n <= 0 then return nil end
+  return string.format("$%.2f", n)
+end
+
+function M.components(droid)
+  if not droid then return {} end
+  local s     = droid.state or {}
+  local tok   = s.tokens or {}
+  local disc  = s.discussion or {}
+  local q     = disc.queue or {}
+  local perms = s.pending_permissions or {}
+
+  local parts = {}
+  local function push(sym, val)
+    if val == nil or val == "" then return end
+    parts[#parts + 1] = { sym = sym, val = tostring(val) }
+  end
+
+  if droid.id then parts[#parts + 1] = { sym = nil, val = "[" .. tostring(droid.id) .. "]" } end
+  if droid.status and droid.status ~= "" then
+    parts[#parts + 1] = { sym = nil, val = droid.status }
+  end
+
+  local total = (tok.input or 0) + (tok.output or 0)
+  if total > 0 then push("T", M.token_compact(total)) end
+  if (tok.input or 0)  > 0 then push("I", M.token_compact(tok.input))  end
+  if (tok.output or 0) > 0 then push("O", M.token_compact(tok.output)) end
+  local cache = (tok.cache_read or 0) + (tok.cache_write or 0)
+  if cache > 0 then push("C", M.token_compact(cache)) end
+  push("$", M.cost_compact(tok.cost))
+  if #q > 0                  then push("Q", tostring(#q))     end
+  if disc.staged_input       then push("+", "1")              end
+  if #perms > 0              then push("P", tostring(#perms)) end
+  if disc.pending_prompt     then push("D", "1")              end
+  push("M", droid.model_name)
+  push("A", acp_label(droid))
+  push("policy", droid.mode)
+
+  return parts
+end
+
+function M.render(parts, sep)
+  sep = sep or " · "
+  local out = {}
+  for _, p in ipairs(parts) do
+    if p.sym then out[#out + 1] = p.sym .. " " .. p.val
+    else          out[#out + 1] = p.val end
+  end
+  return table.concat(out, sep)
+end
+
+function M.compact_render(droid)
+  return M.render(M.components(droid))
+end
+
+if vim and vim.env and vim.env.DJINNI_TEST == "1" then
+  local cases = {
+    {
+      name   = "zero-state",
+      droid  = { id = "a1" },
+      expect = "[a1]",
+    },
+    {
+      name = "busy-with-tokens",
+      droid = {
+        id = "b2", status = "running",
+        state = { tokens = { input = 1500, output = 200, cost = 0.07 } },
+      },
+      expect = "[b2] · running · T 1.7k · I 1.5k · O 200 · $ $0.07",
+    },
+    {
+      name = "decision-pending",
+      droid = {
+        id = "c3", status = "waiting",
+        state = {
+          pending_permissions = { {}, {} },
+          discussion = { queue = {}, pending_prompt = true },
+        },
+      },
+      expect = "[c3] · waiting · P 2 · D 1",
+    },
+  }
+  for _, c in ipairs(cases) do
+    local got = M.compact_render(c.droid)
+    if got ~= c.expect then
+      error(("DJINNI_TEST golden mismatch [%s]\n  expect %q\n  got    %q"):format(c.name, c.expect, got))
+    end
+  end
+end
+
+return M
