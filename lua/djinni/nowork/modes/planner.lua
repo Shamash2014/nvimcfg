@@ -123,7 +123,7 @@ local function handle_plan(text, droid)
     label = "planner",
     initial = initial_md,
     on_submit = function(edited)
-      local tasks, err = tasks_parser.parse(edited)
+      local tasks, err = tasks_parser.parse_tasks(edited)
       if err or not tasks then
         vim.notify("nowork: " .. (err or "parse failed") .. " — edit the plan and resubmit", vim.log.levels.WARN)
         return
@@ -158,6 +158,19 @@ local function handle_plan(text, droid)
         droid.state.plan_file = plan_file
         droid.log_buf:append("[plan saved] " .. plan_file)
       end
+
+      local ctx_items = tasks_parser.extract_context_locations(tasks, {
+        cwd = droid.opts and droid.opts.cwd,
+      })
+      qfix_share.collect_to_droid(droid, {
+        items = ctx_items,
+        default_title = "nowork planner: " .. (droid.initial_prompt or droid.id),
+        qfix_mode = "replace",
+        open = false,
+        log_prefix = "planner",
+        notify_prefix = "nowork planner",
+        empty_notify = false,
+      })
 
       checkpoint(droid)
       require("djinni.nowork.status_panel").update()
@@ -374,6 +387,7 @@ return {
   log_render = log_render.render_slices,
   template_wrap = function(user_prompt, state, opts)
     state = state or {}
+    opts = opts or {}
     local phase = state.phase or "plan"
     local tail
     if phase == "plan" then
@@ -408,7 +422,7 @@ return {
     else
       action = "done"
     end
-    if action ~= "suspend" then
+    if action ~= "suspend" and phase ~= "plan" then
       push_locations(text, droid)
     end
     return action

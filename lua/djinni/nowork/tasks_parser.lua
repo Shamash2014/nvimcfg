@@ -185,6 +185,52 @@ function M.has_cycle(tasks)
   return false
 end
 
+function M.extract_context_locations(tasks, ref)
+  local qfix = require("djinni.nowork.qfix")
+  local cwd = ref and ref.cwd
+  local items = {}
+  for _, t in ipairs(tasks or {}) do
+    for _, line in ipairs(t.context or {}) do
+      local path = line:match("^`([^`]+)`")
+        or line:match("^%[[^%]]+%]%(([^%)]+)%)")
+        or line:match("^(%S+%.[%w_]+)")
+      if path then
+        local paren = line:match("%((.-)%)") or ""
+        local note = line:match("—%s*(.+)$")
+          or line:match("%-%s*(.+)$")
+          or line
+        note = trim(note or "")
+        local label = t.id and t.id ~= "" and t.id or "task"
+        local found_any = false
+        for lnum_str in paren:gmatch("[Ll]ines?%s*(%d+)") do
+          local item = qfix.build_item({
+            filename = path,
+            lnum = tonumber(lnum_str) or 1,
+            col = 1,
+            text = string.format("[%s] %s", label, note),
+            cwd = cwd,
+          })
+          if item then
+            items[#items + 1] = item
+            found_any = true
+          end
+        end
+        if not found_any then
+          local item = qfix.build_item({
+            filename = path,
+            lnum = 1,
+            col = 1,
+            text = string.format("[%s] %s", label, note),
+            cwd = cwd,
+          })
+          if item then items[#items + 1] = item end
+        end
+      end
+    end
+  end
+  return items
+end
+
 function M.topo_sort(tasks)
   local indeg = {}
   local id_to_task = {}

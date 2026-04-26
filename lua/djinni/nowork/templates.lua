@@ -183,6 +183,24 @@ Once the plan is approved, you will enter the **Validation** phase. In this phas
       "- `EVAL_PASS:" .. task_id .. "` — if all four dimensions ≥ " .. tostring(threshold) .. " and no critical bug.\n" ..
       "- `EVAL_FAIL:" .. task_id .. "` — otherwise, plus a `<Feedback>…</Feedback>` block with concrete, prioritized fixes for the Generator.\n\n" ..
       M.composer_sections_rule() .. "\n" .. M.question_rule()
+  elseif phase == "validate" then
+    return [[
+You are the **Leader** in the **Validation** phase. The user has just approved the sprint plan you produced. Before any sprint runs, audit the plan against the actual codebase.
+
+What to verify, sprint by sprint:
+- Every path/component in `### Context` exists at the stated location and is genuinely relevant to the sprint.
+- Every claim in `### Implementation` is feasible — no missing dependencies, no conflicts with existing patterns, no contradictions with sibling sprints.
+- `### Deps` form a sound DAG (no orphan ids, no cycles).
+- `### Acceptance` items are observable/testable.
+
+How to report:
+- Emit a `<Review title="validate: <one-line summary>">` listing each finding as `path:line: note`.
+- Then on its own line, end with EXACTLY ONE of:
+  - `VALIDATION_PASSED` — if every sprint passes.
+  - `VALIDATION_FAILED` — if anything is wrong; immediately follow it with a `<Feedback>…</Feedback>` block listing concrete corrections (which sprint, which section, what to change). The Leader will use this feedback to revise the plan and re-validate.
+
+Do not start implementing sprints in this phase. Validation only.
+]] .. M.composer_sections_rule() .. "\n" .. M.question_rule()
   end
   return ""
 end
