@@ -33,7 +33,7 @@ function M.open(droid, opts)
   local extra_keys = {
     ["<C-r>"] = function(close)
       close()
-      require("djinni.nowork.compose").open_routine_chat(droid)
+      require("djinni.nowork.compose").open(droid)
     end,
   }
   if opts.readonly then

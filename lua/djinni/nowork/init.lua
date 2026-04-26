@@ -3,7 +3,7 @@ local M = {}
 M.defaults = {
   provider = "claude",
   log_buffer = { split = "below", height = 15, hidden_default = true },
-  compose = { floating = false, split = "below", height = 20, border = "rounded" },
+  compose = { floating = true, split = "below", height = 20, border = "rounded" },
   explore = { absolute_paths = true, copen_on_first_hit = true },
   routine = {
     skills = {},
@@ -149,7 +149,6 @@ function M.launch(mode_name)
     require("djinni.nowork.compose").open(nil, {
       title = label,
       label = mode_name,
-      floating = false,
       on_submit = function(text)
         local spawn_opts = merged_opts({ provider = provider })
         if mode_name == "multitask" then spawn_opts.multitask = true end
@@ -454,13 +453,7 @@ function M.setup(opts)
     picker.pick({
       mode_filter = { "routine" },
       on_droid = function(d)
-        if d.mode == "routine" then
-          compose.toggle(d, compose.routine_chat_config(d, {
-            alt_buf = alt_buf,
-          }))
-        else
-          compose.open(d, { alt_buf = alt_buf })
-        end
+        compose.toggle(d, { alt_buf = alt_buf })
       end,
     })
   end, { desc = "nowork: chat composer (routine persistent)" })

@@ -6,7 +6,8 @@ local M = {}
 
 local DEFAULT_SECTIONS = { "Summary", "Review", "Observation", "Tasks" }
 local ROUTINE_CHAT_TITLE = " routine chat — <C-CR> send · <C-n> new · <C-c> close "
-local FOOTER = " <C-CR> send · <S-Tab> ACP mode · <C-l> model · <C-s> local policy · . actions · Q populate · R restart · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-g> previous plans · <C-n> new · <C-c> close "
+local FOOTER_BASE = " <C-CR> send · <S-Tab> ACP mode · <C-l> model · <C-s> local policy · . actions · Q populate · R restart · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
+local FOOTER_PLANNER_EXT = " · <C-y> validate · <C-m> dispatch · <C-g> previous plans"
 
 local state_by_droid = {}
 local autorun_title
@@ -69,7 +70,11 @@ local function format_footer(droid)
     local status = require("djinni.nowork.status_text").compact(droid)
     if status ~= "" then prefix = " " .. status .. " │" end
   end
-  return prefix .. FOOTER
+  local footer = FOOTER_BASE
+  if droid and droid.mode == "planner" then
+    footer = FOOTER_BASE:sub(1, -3) .. FOOTER_PLANNER_EXT .. " "
+  end
+  return prefix .. footer
 end
 
 local function resolve_window_opts(opts)
@@ -210,28 +215,20 @@ autorun_title = function(droid)
   return string.format(" autorun %d/%d · no active sprint ", done, total)
 end
 
-function M.routine_chat_config(droid, opts)
-  opts = opts or {}
-  local config = vim.tbl_deep_extend("force", {
-    title = ROUTINE_CHAT_TITLE,
-    alt_buf = vim.fn.bufnr("#"),
-    persistent = true,
-    sections = DEFAULT_SECTIONS,
-  }, opts)
-  if droid and config.on_submit == nil then
-    config.on_submit = function(text)
-      require("djinni.nowork.droid").send(droid, text)
-    end
-  end
-  return config
-end
-
-function M.open_routine_chat(droid, opts)
-  return M.open(droid, M.routine_chat_config(droid, opts))
-end
-
 function M.open(droid, opts)
   opts = opts or {}
+  if droid and droid.mode == "planner" and (droid.state and droid.state.phase) == "plan" and not opts._planner_skip then
+    local cp = require("djinni.nowork.compose_planner")
+    opts = vim.tbl_deep_extend("force", cp.attach(droid), opts)
+  end
+  if droid then
+    if opts.persistent == nil then opts.persistent = true end
+    if opts.on_submit == nil then
+      opts.on_submit = function(text) require("djinni.nowork.droid").send(droid, text) end
+    end
+    if opts.alt_buf == nil then opts.alt_buf = vim.fn.bufnr("#") end
+    if opts.sections == nil then opts.sections = DEFAULT_SECTIONS end
+  end
   local alt_buf = opts.alt_buf or vim.fn.bufnr("#")
   local sections = opts.sections or DEFAULT_SECTIONS
   local persistent = opts.persistent == true
@@ -570,11 +567,12 @@ function M.open(droid, opts)
       { key = "q / <Esc>", desc = "close (normal mode)" },
       { key = "?",     desc = "this help" },
     }
-    if opts.on_dispatch then
-      table.insert(entries, { key = "<C-m>", desc = "dispatch to sub-droids (planner only — skips validate)" })
-    end
     if opts.on_validate then
       table.insert(entries, { key = "<C-y>", desc = "approve plan and advance to validate" })
+    end
+    if opts.on_dispatch then
+      table.insert(entries, { key = "<C-m>", desc = "dispatch to sub-droids (planner only — skips validate)" })
+      table.insert(entries, { key = "<C-g>", desc = "previous plans" })
     end
     for _, cmd in ipairs(available_commands(droid)) do
       local name = command_name(cmd)
@@ -602,6 +600,10 @@ function M.open(droid, opts)
       end
     end,
   })
+
+  if droid and droid.mode == "planner" then
+    droid.state.plan_compose = state
+  end
 
   return state
 end

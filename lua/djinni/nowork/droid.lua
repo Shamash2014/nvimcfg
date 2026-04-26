@@ -1049,7 +1049,7 @@ function M.fork_from_archive(log_path)
           summary = "Files carried over from the prior session — re-check these:\n" .. table.concat(carried_refs, "\n"),
         }
       end
-      require("djinni.nowork.compose").open_routine_chat(droid, {
+      require("djinni.nowork.compose").open(droid, {
         prefill = prefill,
       })
     end)
