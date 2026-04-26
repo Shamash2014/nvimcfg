@@ -7,7 +7,7 @@ local M = {}
 local DEFAULT_SECTIONS = { "Summary", "Review", "Observation", "Tasks" }
 local ROUTINE_CHAT_TITLE = " routine chat — <C-CR> send · <C-n> new · <C-c> close "
 local FOOTER_BASE = " <C-CR> send · <S-Tab> ACP mode · <C-l> model · <C-s> local policy · . actions · Q populate · R restart · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
-local FOOTER_PLANNER_EXT = " · <C-y> validate · <C-m> dispatch · <C-g> previous plans"
+local FOOTER_PLANNER_EXT = " · <C-m> dispatch · <C-g> previous plans"
 
 local state_by_droid = {}
 local autorun_title
@@ -215,17 +215,6 @@ autorun_title = function(droid)
   return string.format(" autorun %d/%d · no active sprint ", done, total)
 end
 
-function M.open_plan(droid, opts)
-  local cp = require("djinni.nowork.compose_planner")
-  opts = vim.tbl_deep_extend("force", cp.attach(droid), opts or {})
-  local state = M.open(droid, opts)
-  if droid then
-    droid.state = droid.state or {}
-    droid.state.plan_compose = state
-  end
-  return state
-end
-
 function M.open(droid, opts)
   opts = opts or {}
   if droid then
@@ -235,6 +224,11 @@ function M.open(droid, opts)
     end
     if opts.alt_buf == nil then opts.alt_buf = vim.fn.bufnr("#") end
     if opts.sections == nil then opts.sections = DEFAULT_SECTIONS end
+  end
+  if droid and droid.mode == "planner" and opts.on_dispatch == nil then
+    opts.on_dispatch = function(text)
+      require("djinni.nowork.compose_planner").dispatch(droid, text)
+    end
   end
   local alt_buf = opts.alt_buf or vim.fn.bufnr("#")
   local sections = opts.sections or DEFAULT_SECTIONS
@@ -460,20 +454,6 @@ function M.open(droid, opts)
     vim.schedule(function() opts.on_dispatch(text) end)
   end
 
-  local function validate_action()
-    if state.busy then return end
-    if not opts.on_validate then return end
-    local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
-    local text = table.concat(lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
-    if text == "" then
-      vim.notify("nowork: empty plan", vim.log.levels.WARN)
-      return
-    end
-    state.last_action = "validate"
-    close()
-    vim.schedule(function() opts.on_validate(text) end)
-  end
-
   local function insert_token(token)
     if state.busy then return end
     local mode = vim.api.nvim_get_mode().mode
@@ -534,9 +514,6 @@ function M.open(droid, opts)
       require("djinni.nowork.plan_history").pick(droid)
     end, km)
   end
-  if opts.on_validate then
-    vim.keymap.set({ "n", "i" }, "<C-y>", validate_action, km)
-  end
   vim.keymap.set({ "n", "i" }, "<S-Tab>", switch_acp_mode, km)
   vim.keymap.set({ "n", "i" }, "<C-l>", switch_model, km)
   vim.keymap.set({ "n", "i" }, "<C-c>", close, km)
@@ -574,9 +551,6 @@ function M.open(droid, opts)
       { key = "q / <Esc>", desc = "close (normal mode)" },
       { key = "?",     desc = "this help" },
     }
-    if opts.on_validate then
-      table.insert(entries, { key = "<C-y>", desc = "approve plan and advance to validate" })
-    end
     if opts.on_dispatch then
       table.insert(entries, { key = "<C-m>", desc = "dispatch to sub-droids (planner only — skips validate)" })
       table.insert(entries, { key = "<C-g>", desc = "previous plans" })

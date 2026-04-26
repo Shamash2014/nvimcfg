@@ -3,7 +3,7 @@ local M = {}
 M.defaults = {
   provider = "claude",
   log_buffer = { split = "below", height = 15, hidden_default = true },
-  compose = { floating = true, split = "below", height = 20, border = "rounded" },
+  compose = { floating = true, split = "below", border = "rounded" },
   explore = { absolute_paths = true, copen_on_first_hit = true },
   routine = {
     skills = {},
@@ -84,7 +84,7 @@ function M.projects()
       local ok, wt_obj = pcall(function()
         return vim.system({ "git", "-C", root, "worktree", "list", "--porcelain" }, { text = true }):wait()
       end)
-      
+
       if ok and wt_obj and wt_obj.code == 0 then
         local current = {}
         for line in wt_obj.stdout:gmatch("([^\n]*)\n") do
@@ -308,7 +308,16 @@ function M.setup(opts)
     end
   end, { nargs = 0 })
 
-  vim.api.nvim_create_user_command("NoworkPlanReview", function() require("djinni.nowork.plan_history").pick(nil) end, { desc = "nowork: pick and review a saved plan (qflist + preview)" })
+  vim.api.nvim_create_user_command("NoworkPlanReview", function(info)
+    local arg = info.args ~= "" and info.args or nil
+    local plan_history = require("djinni.nowork.plan_history")
+    if arg then
+      local p = vim.fn.fnamemodify(arg, ":p")
+      plan_history.preview(p, { cwd = vim.fn.fnamemodify(p, ":h:h:h") })
+    else
+      plan_history.pick(nil)
+    end
+  end, { desc = "nowork: pick and review a saved plan (qflist + preview)", nargs = "?", complete = "file" })
 
   vim.api.nvim_create_user_command("NoworkDone", function()
     local droid = require("djinni.nowork.droid")
@@ -357,7 +366,6 @@ function M.setup(opts)
   end, { nargs = 0 })
 
   vim.keymap.set("n", "<leader>as", function() M.launch("plan") end, { desc = "nowork: chat-plan (routine in plan mode, refine via follow-up messages)" })
-  vim.keymap.set("n", "<leader>aS", function() M.launch("planner") end, { desc = "nowork: SDLC planner pipeline (validate→generate→evaluate→dispatch)" })
   vim.keymap.set("n", "<leader>aP", function() require("djinni.nowork.plan_history").pick(nil) end, { desc = "nowork: review saved plan (qflist + preview)" })
   vim.keymap.set("n", "<leader>aw", function() M.launch("routine") end, { desc = "nowork: routine" })
 

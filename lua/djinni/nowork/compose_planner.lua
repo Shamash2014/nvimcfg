@@ -1,6 +1,3 @@
-local qfix_share = require("djinni.nowork.qfix_share")
-local tasks_parser = require("djinni.nowork.tasks_parser")
-
 local M = {}
 
 function M.extract_tasks_block(text)
@@ -41,6 +38,14 @@ function M.save_plan(edited, droid)
   fh:write("\n")
   fh:close()
 
+  local index_dir = vim.fn.stdpath("data") .. "/djinni-nowork"
+  pcall(vim.fn.mkdir, index_dir, "p")
+  local idx_fh = io.open(index_dir .. "/plan-index.txt", "a")
+  if idx_fh then
+    idx_fh:write(plan_file .. "\n")
+    idx_fh:close()
+  end
+
   return plan_file
 end
 
@@ -75,99 +80,39 @@ function M.ingest_plan(edited, droid)
   return tasks, nil
 end
 
-function M.attach(droid)
-  local droid_mod = require("djinni.nowork.droid")
-  local dispatch = require("djinni.nowork.dispatch")
+function M.dispatch(droid, edited)
+  local tasks, err = M.ingest_plan(edited, droid)
+  if not tasks then return end
 
-  local function checkpoint()
-    pcall(function()
-      require("djinni.nowork.archive").write_state(droid)
-    end)
+  local plan_file = M.save_plan(edited, droid)
+  if plan_file then
+    droid.state.plan_file = plan_file
+    droid.log_buf:append("[plan saved] " .. plan_file)
   end
 
-  return {
-    title = " planner plan — <C-CR> refine · <C-y> validate · <C-m> dispatch ",
-    label = "planner",
-    persistent = true,
-    on_submit = function(edited)
-      droid_mod.send(droid, edited)
-    end,
-    on_validate = function(edited)
-      local tasks, err = M.ingest_plan(edited, droid)
-      if not tasks then
-        return
-      end
+  local ctx_items = require("djinni.nowork.tasks_parser").extract_context_locations(tasks, {
+    cwd = droid.opts and droid.opts.cwd,
+  })
+  require("djinni.nowork.qfix_share").collect_to_droid(droid, {
+    items = ctx_items,
+    default_title = "nowork planner: " .. (droid.initial_prompt or droid.id),
+    qfix_mode = "replace",
+    open = false,
+    log_prefix = "planner",
+    notify_prefix = "nowork planner",
+    empty_notify = false,
+  })
 
-      droid.state.phase = "validate"
-      droid.state.next_prompt = "The plan has been approved. Now, **validate** the generated tasks against the codebase. Ensure all context anchors are valid and implementation notes are technically sound. End with `VALIDATION_PASSED` if everything is correct."
+  local tasks_list = {}
+  for _, id in ipairs(droid.state.topo_order) do
+    tasks_list[#tasks_list + 1] = droid.state.tasks[id]
+  end
+  require("djinni.nowork.dispatch").spawn_subdroids(droid, tasks_list, { isolate = false })
 
-      local plan_file = M.save_plan(edited, droid)
-      if plan_file then
-        droid.state.plan_file = plan_file
-        droid.log_buf:append("[plan saved] " .. plan_file)
-      end
-
-      local ctx_items = tasks_parser.extract_context_locations(tasks, {
-        cwd = droid.opts and droid.opts.cwd,
-      })
-      qfix_share.collect_to_droid(droid, {
-        items = ctx_items,
-        default_title = "nowork planner: " .. (droid.initial_prompt or droid.id),
-        qfix_mode = "replace",
-        open = false,
-        log_prefix = "planner",
-        notify_prefix = "nowork planner",
-        empty_notify = false,
-      })
-
-      checkpoint()
-      require("djinni.nowork.status_panel").update()
-      droid_mod._resume(droid, "next")
-    end,
-    on_dispatch = function(edited)
-      local tasks, err = M.ingest_plan(edited, droid)
-      if not tasks then
-        return
-      end
-
-      local plan_file = M.save_plan(edited, droid)
-      if plan_file then
-        droid.state.plan_file = plan_file
-        droid.log_buf:append("[plan saved] " .. plan_file)
-      end
-
-      local ctx_items = tasks_parser.extract_context_locations(tasks, {
-        cwd = droid.opts and droid.opts.cwd,
-      })
-      qfix_share.collect_to_droid(droid, {
-        items = ctx_items,
-        default_title = "nowork planner: " .. (droid.initial_prompt or droid.id),
-        qfix_mode = "replace",
-        open = false,
-        log_prefix = "planner",
-        notify_prefix = "nowork planner",
-        empty_notify = false,
-      })
-
-      local tasks_list = {}
-      for _, id in ipairs(droid.state.topo_order) do
-        tasks_list[#tasks_list + 1] = droid.state.tasks[id]
-      end
-      dispatch.spawn_subdroids(droid, tasks_list, { isolate = false })
-
-      droid.state.phase = "dispatched"
-      droid.status = "done"
-      checkpoint()
-      require("djinni.nowork.status_panel").update()
-      droid_mod._resume(droid, "done")
-    end,
-    on_close = function(action)
-      droid.state.plan_compose = nil
-      if action == "validate" or action == "dispatch" then return end
-      droid.status = "cancelled"
-      droid_mod._resume(droid, "done")
-    end,
-  }
+  droid.status = "done"
+  pcall(function() require("djinni.nowork.archive").write_state(droid) end)
+  require("djinni.nowork.status_panel").update()
+  require("djinni.nowork.droid")._resume(droid, "done")
 end
 
 return M
