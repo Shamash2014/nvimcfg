@@ -2,6 +2,7 @@ return {
   "NeogitOrg/neogit",
   dependencies = {
     "nvim-lua/plenary.nvim",
+    "sindrets/diffview.nvim",
   },
   keys = {
     { "<leader>gg", function() require("neogit").open() end, desc = "Neogit" },
@@ -44,11 +45,11 @@ return {
     },
     integrations = {
       telescope = false,
-      diffview = false,
-      codediff = true,
+      diffview = true,
+      codediff = false,
       snacks = true,
     },
-    diff_viewer = "codediff",
+    diff_viewer = "diffview",
     mappings = {
       popup = {
         ["p"] = "PushPopup",

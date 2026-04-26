@@ -210,15 +210,17 @@ function M.apply_acp_modes(droid, available, current_id)
   if available then droid.acp_modes.available = available end
   if current_id then droid.acp_modes.current_id = current_id end
 
-  if droid.mode == "planner"
+  local should_auto = droid.mode == "planner" or droid.initial_acp_mode ~= nil
+  if should_auto
       and not droid.acp_modes._auto_applied
       and droid.session_id
       and droid.acp_modes.available
       and #droid.acp_modes.available > 0 then
     droid.acp_modes._auto_applied = true
+    local preferred = droid.initial_acp_mode or "plan"
     local target
     for _, m in ipairs(droid.acp_modes.available) do
-      if m.id == "plan" then target = m.id; break end
+      if m.id == preferred then target = m.id; break end
     end
     if not target then
       for _, m in ipairs(droid.acp_modes.available) do
@@ -413,6 +415,7 @@ function M.new(mode_name, initial_prompt, opts)
     parent_id = opts.parent_id,
     on_finish = opts.on_finish,
     initial_prompt = initial_prompt,
+    initial_acp_mode = opts.initial_acp_mode,
     provider_name = opts.provider or "claude",
     model_name = opts.model,
     log_buf = nil,

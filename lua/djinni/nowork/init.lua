@@ -153,6 +153,10 @@ function M.launch(mode_name)
       on_submit = function(text)
         local spawn_opts = merged_opts({ provider = provider })
         if mode_name == "multitask" then spawn_opts.multitask = true end
+        if mode_name == "routine" or mode_name == "planner" then
+          local p = require("djinni.acp.provider").get(provider)
+          spawn_opts.initial_acp_mode = (p and p.plan_mode) or "plan"
+        end
         local droid_mode = MODE_DROID[mode_name]
         require("djinni.nowork.droid").new(droid_mode, text, spawn_opts)
       end,

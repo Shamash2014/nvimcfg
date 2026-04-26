@@ -517,6 +517,7 @@ function M.open(droid, opts)
       vim.api.nvim_win_set_cursor(0, { pos[1], pos[2] + #token })
     end
   end
+  state.insert_token = insert_token
 
   local function new_empty()
     reseed(nil, nil)
@@ -669,6 +670,53 @@ function M.droid_for_buf(buf)
     end
   end
   return nil
+end
+
+function M.has_open()
+  for _, state in pairs(state_by_droid) do
+    if state and state.alive == true and vim.api.nvim_buf_is_valid(state.buf) then
+      return true
+    end
+  end
+  return false
+end
+
+function M.append_text(text, opts)
+  opts = opts or {}
+  local target
+  if opts.droid then
+    local key = nil
+    for k, state in pairs(state_by_droid) do
+      if state and state.droid == opts.droid then key = k; break end
+    end
+    if key then target = state_by_droid[key] end
+  end
+  if not target then
+    for _, state in pairs(state_by_droid) do
+      if state and state.alive == true and vim.api.nvim_buf_is_valid(state.buf) then
+        target = state
+        break
+      end
+    end
+  end
+  if not target or not target.alive or not vim.api.nvim_buf_is_valid(target.buf) or not target.insert_token then
+    return false
+  end
+
+  if target.win and vim.api.nvim_win_is_valid(target.win) then
+    vim.api.nvim_set_current_win(target.win)
+  end
+
+  local line_count = vim.api.nvim_buf_line_count(target.buf)
+  local last_line = vim.api.nvim_buf_get_lines(target.buf, line_count - 1, line_count, false)[1] or ""
+  vim.api.nvim_win_set_cursor(0, { line_count, #last_line })
+
+  local prefix = ""
+  if last_line ~= "" then
+    prefix = "\n\n"
+  end
+  target.insert_token(prefix .. (text or ""))
+  return true
 end
 
 return M

@@ -22,7 +22,14 @@ return {
     { "<leader>ft", function() require("djinni.code").create_task() end, desc = "New neowork task" },
     { "ga", function() return require("djinni.code").ga_operator() end, expr = true, desc = "AI task operator" },
     { "gac", function() return require("djinni.code").gac_operator() end, expr = true, desc = "AI named task operator" },
-    { "gav", function() require("djinni.code").create_with_selection() end, mode = "v", desc = "Task with selection" },
+    { "gav", function()
+        local code = require("djinni.code")
+        if require("djinni.nowork.compose").has_open() then
+          code.send_selection_to_compose()
+        else
+          code.create_with_selection()
+        end
+      end, mode = "v", desc = "AI: send selection (compose if open, else new task)" },
     { "gas", function() require("djinni.code").send_selection_to_chat() end, mode = "v", desc = "Send to chat" },
   },
   config = function()

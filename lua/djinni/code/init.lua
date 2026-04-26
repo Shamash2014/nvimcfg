@@ -239,4 +239,27 @@ function M.send_selection_to_chat()
   append_compose_text(chat_buf, text)
 end
 
+function M.send_selection_to_compose()
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
+
+  local name = vim.api.nvim_buf_get_name(0)
+  local rel_path = vim.fn.fnamemodify(name, ":.")
+  local start_line = vim.fn.line("'<")
+  local end_line = vim.fn.line("'>")
+  local lines = vim.api.nvim_buf_get_lines(0, start_line - 1, end_line, false)
+  if #lines == 0 then
+    vim.notify("[djinni] Empty selection", vim.log.levels.WARN)
+    return
+  end
+
+  local ft = vim.bo.filetype or ""
+  local selection = table.concat(lines, "\n")
+  local text = "From `" .. rel_path .. ":" .. start_line .. "-" .. end_line .. "`:\n\n```" .. ft .. "\n" .. selection .. "\n```"
+
+  local ok = require("djinni.nowork.compose").append_text(text)
+  if not ok then
+    vim.notify("[djinni] No open compose buffer", vim.log.levels.WARN)
+  end
+end
+
 return M

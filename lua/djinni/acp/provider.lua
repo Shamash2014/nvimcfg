@@ -5,30 +5,35 @@ M.providers = {
     command = "claude-agent-acp",
     models = {},
     resume = { method = "session/resume" },
+    plan_mode = "plan",
   },
   ["opencode"] = {
     command = "opencode",
     args = { "acp" },
     models = {},
     resume = { method = "session/load", needs_cwd = true },
+    plan_mode = "plan",
   },
   ["codex"] = {
     command = "codex-acp",
     args = {},
     models = {},
     resume = { method = "session/load", needs_cwd = true },
+    plan_mode = "plan",
   },
   ["hermes"] = {
     command = "hermes",
     args = { "acp" },
     models = {},
     resume = { method = "session/load", needs_cwd = true },
+    plan_mode = "plan",
   },
   ["cursor"] = {
     command = "agent",
     args = { "acp" },
     models = {},
     resume = { method = "session/load", needs_cwd = true },
+    plan_mode = "plan",
     static_models = {
       { id = "claude-opus-4-6",    label = "claude-opus-4-6" },
       { id = "claude-sonnet-4-6",  label = "claude-sonnet-4-6" },
@@ -47,6 +52,7 @@ M.providers = {
     args = {},
     models = {},
     resume = { method = "session/load", needs_cwd = true },
+    plan_mode = "plan",
     static_models = {
       { id = "gemini-2.5-pro",    label = "gemini-2.5-pro" },
       { id = "gemini-2.0-flash",  label = "gemini-2.0-flash" },
@@ -57,6 +63,7 @@ M.providers = {
     args = {},
     models = {},
     resume = { method = "session/load", needs_cwd = true },
+    plan_mode = "plan",
   },
 }
 
