@@ -1,6 +1,6 @@
 return {
   "dgagn/diagflow.nvim",
-  event = { "LspAttach", "BufReadPost" },
+  event = "VeryLazy",
   opts = {
     scope = "line",
     show_sign = false,

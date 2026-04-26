@@ -63,6 +63,21 @@ o.hidden = true
 -- Clipboard
 o.clipboard = "unnamedplus"
 
+-- Trim trailing whitespace on save
+vim.api.nvim_create_autocmd("BufWritePre", {
+  group = vim.api.nvim_create_augroup("TrimWhitespace", { clear = true }),
+  pattern = "*",
+  callback = function()
+    local ft_blocklist = { "markdown", "text", "rst", "org", "tex" }
+    if vim.tbl_contains(ft_blocklist, vim.bo.filetype) then
+      return
+    end
+    local save_cursor = vim.fn.getpos(".")
+    vim.cmd([[%s/\s\+$//e]])
+    vim.fn.setpos(".", save_cursor)
+  end,
+})
+
 -- Completion
 o.completeopt = "menu,menuone,noselect"
 o.pumheight = 10
@@ -78,25 +93,28 @@ o.mouse = "a"
 vim.diagnostic.config({
   signs = {
     text = {
-      [vim.diagnostic.severity.ERROR] = " ",
-      [vim.diagnostic.severity.INFO] = " ",
-      [vim.diagnostic.severity.WARN] = " ",
+      [vim.diagnostic.severity.ERROR] = "󰅚 ",
+      [vim.diagnostic.severity.WARN] = "󰀪 ",
+      [vim.diagnostic.severity.INFO] = "󰋽 ",
       [vim.diagnostic.severity.HINT] = "󰌵 ",
     },
+    linehl = {
+      [vim.diagnostic.severity.ERROR] = "ErrorMsg",
+    },
+    numhl = {
+      [vim.diagnostic.severity.ERROR] = "ErrorMsg",
+    },
   },
-  virtual_text = {
-    prefix = "●",
-    spacing = 4,
-    source = true,
-    underline = true,
-  },
+  virtual_text = false,
   severity_sort = true,
   float = {
     border = "rounded",
-    source = true,
+    source = "always",
     header = "",
     prefix = "",
+    focusable = false,
   },
+  update_in_insert = false,
 })
 
 local map = vim.keymap.set
@@ -179,19 +197,31 @@ require("core.ci_watch").setup()
 vim.api.nvim_create_autocmd("LspAttach", {
   group = vim.api.nvim_create_augroup("UserLspConfig", {}),
   callback = function(ev)
-    local opts = { buffer = ev.buf, noremap = true, silent = true }
+    local bufnr = ev.buf
+    local client = vim.lsp.get_client_by_id(ev.data.client_id)
+    local opts = { buffer = bufnr, noremap = true, silent = true }
+
     vim.keymap.set("n", "gD", vim.lsp.buf.declaration, opts)
     vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
     vim.keymap.set("n", "K", vim.lsp.buf.hover, opts)
     vim.keymap.set("n", "gi", vim.lsp.buf.implementation, opts)
     vim.keymap.set("n", "gr", vim.lsp.buf.references, opts)
+    vim.keymap.set("n", "gs", vim.lsp.buf.signature_help, opts)
     vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, opts)
     vim.keymap.set("n", "<leader>cr", vim.lsp.buf.rename, opts)
     vim.keymap.set("n", "<leader>D", vim.lsp.buf.type_definition, opts)
     vim.keymap.set("n", "<leader>ds", vim.lsp.buf.document_symbol, opts)
+    vim.keymap.set("n", "<leader>ws", vim.lsp.buf.workspace_symbol, opts)
     vim.keymap.set("n", "<leader>e", vim.diagnostic.open_float, opts)
     vim.keymap.set("n", "[d", vim.diagnostic.goto_prev, opts)
     vim.keymap.set("n", "]d", vim.diagnostic.goto_next, opts)
+
+    -- Formatting
+    if client and client.supports_method("textDocument/formatting") then
+      vim.keymap.set("n", "<leader>cf", function()
+        vim.lsp.buf.format({ bufnr = bufnr, async = true })
+      end, opts)
+    end
   end,
 })
 

@@ -21,7 +21,7 @@ local function split_heading(rest)
   return strip_quotes(id or ""), strip_quotes(desc)
 end
 
-function M.parse(text)
+function M.parse_tasks(text)
   local interior = text:match("<Tasks>%s*\n(.-)\n?%s*</Tasks>") or text
 
   local tasks = {}
@@ -34,7 +34,7 @@ function M.parse(text)
     if trimmed:match("^##%s+[^#]") then
       local rest = trimmed:match("^##%s+(.+)$")
       local id, desc = split_heading(rest)
-      current = { id = id, desc = desc, deps = {}, subtasks = {}, acceptance = {} }
+      current = { id = id, desc = desc, deps = {}, subtasks = {}, acceptance = {}, context = {}, implementation = {} }
       tasks[#tasks + 1] = current
       section = nil
     elseif current and trimmed:match("^###%s+") then
@@ -45,6 +45,12 @@ function M.parse(text)
         section = "subtasks"
       elseif label == "acceptance" then
         section = "acceptance"
+      elseif label == "context" then
+        section = "context"
+      elseif label == "implementation" then
+        section = "implementation"
+      elseif label == "skills" then
+        section = "skills"
       else
         section = nil
       end
@@ -54,6 +60,15 @@ function M.parse(text)
         if dep then
           dep = strip_quotes(trim(dep))
           if dep ~= "" then current.deps[#current.deps + 1] = dep end
+        end
+      elseif section == "skills" then
+        local skill = trimmed:match("^[%-%*]%s+(.+)$")
+        if skill then
+          skill = strip_quotes(trim(skill))
+          if skill ~= "" then
+            current.skills = current.skills or {}
+            current.skills[#current.skills + 1] = skill
+          end
         end
       elseif section == "subtasks" then
         local done_mark, st_text = trimmed:match("^[%-%*]%s+%[([ xX])%]%s*(.*)$")
@@ -83,6 +98,16 @@ function M.parse(text)
           if plain then
             current.acceptance[#current.acceptance + 1] = { required = false, text = strip_quotes(trim(plain)) }
           end
+        end
+      elseif section == "context" then
+        local line_text = trimmed:match("^[%-%*]%s+(.+)$")
+        if line_text then
+          current.context[#current.context + 1] = strip_quotes(trim(line_text))
+        end
+      elseif section == "implementation" then
+        local line_text = trimmed:match("^[%-%*]%s+(.+)$")
+        if line_text then
+          current.implementation[#current.implementation + 1] = strip_quotes(trim(line_text))
         end
       end
     end

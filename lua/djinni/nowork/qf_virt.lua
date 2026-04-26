@@ -1,6 +1,7 @@
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("nowork_qf_virt")
+local focus_ns = vim.api.nvim_create_namespace("nowork_qf_focus")
 local enabled = true
 
 pcall(vim.api.nvim_set_hl, 0, "NoworkQfVirt", { link = "DiagnosticHint", default = true })
@@ -10,6 +11,10 @@ pcall(vim.api.nvim_set_hl, 0, "NoworkQfObservation", { link = "DiagnosticHint", 
 pcall(vim.api.nvim_set_hl, 0, "NoworkQfNext",        { link = "DiagnosticWarn",  default = true })
 pcall(vim.api.nvim_set_hl, 0, "NoworkQfTasks",       { link = "Todo",            default = true })
 pcall(vim.api.nvim_set_hl, 0, "NoworkQfWorklog",    { link = "Comment",         default = true })
+pcall(vim.api.nvim_set_hl, 0, "NoworkQfEdit",       { link = "DiagnosticWarn",    default = true })
+pcall(vim.api.nvim_set_hl, 0, "NoworkQfWrite",      { link = "DiagnosticOk",      default = true })
+pcall(vim.api.nvim_set_hl, 0, "NoworkQfCreate",     { link = "DiagnosticHint",    default = true })
+pcall(vim.api.nvim_set_hl, 0, "NoworkQfDelete",     { link = "DiagnosticError",   default = true })
 
 local TAG_HL = {
   Summary      = "NoworkQfSummary",
@@ -19,6 +24,10 @@ local TAG_HL = {
   Next         = "NoworkQfNext",
   Tasks        = "NoworkQfTasks",
   worklog      = "NoworkQfWorklog",
+  edit         = "NoworkQfEdit",
+  write        = "NoworkQfWrite",
+  create       = "NoworkQfCreate",
+  delete       = "NoworkQfDelete",
 }
 
 local TAG_ICON = {
@@ -29,6 +38,10 @@ local TAG_ICON = {
   Next         = "▶",
   Tasks        = "✅",
   worklog      = "📄",
+  edit         = "⚡",
+  write        = "💾",
+  create       = "✨",
+  delete       = "🗑",
 }
 
 local function buf_path(buf)
@@ -52,6 +65,42 @@ end
 function M.clear(buf)
   if buf and vim.api.nvim_buf_is_valid(buf) then
     vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  end
+end
+
+function M.clear_focus(buf)
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    vim.api.nvim_buf_clear_namespace(buf, focus_ns, 0, -1)
+  end
+end
+
+function M.apply_focus(buf)
+  M.clear_focus(buf)
+  local target = buf_path(buf)
+  if not target then return end
+  
+  local qf = vim.fn.getqflist({ idx = 0, items = 0 })
+  if qf.idx == 0 or not qf.items or #qf.items == 0 then return end
+  
+  local it = qf.items[qf.idx]
+  if not it then return end
+  
+  local p = item_path(it)
+  if p == target and it.lnum and it.lnum > 0 then
+    local text = (it.text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then return end
+    
+    local tag = text:match("^%[(%w+)[:%]]")
+    local hl = (tag and TAG_HL[tag]) or "NoworkQfVirt"
+    local icon = (tag and TAG_ICON[tag]) or "▶"
+    
+    local line_count = vim.api.nvim_buf_line_count(buf)
+    local lnum = math.min(it.lnum, line_count)
+    
+    pcall(vim.api.nvim_buf_set_extmark, buf, focus_ns, lnum - 1, 0, {
+      virt_lines = { { { "  " .. icon .. " " .. text, hl } } },
+      virt_lines_above = true,
+    })
   end
 end
 
@@ -124,10 +173,13 @@ end
 function M.setup()
   local group = vim.api.nvim_create_augroup("NoworkQfVirt", { clear = true })
 
-  vim.api.nvim_create_autocmd({ "BufWinEnter", "BufReadPost" }, {
+  vim.api.nvim_create_autocmd({ "BufWinEnter", "BufReadPost", "BufEnter" }, {
     group = group,
     callback = function(args)
-      vim.schedule(function() M.apply(args.buf) end)
+      vim.schedule(function() 
+        M.apply(args.buf) 
+        M.apply_focus(args.buf)
+      end)
     end,
   })
 

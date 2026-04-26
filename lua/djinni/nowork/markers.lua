@@ -8,6 +8,8 @@ M.TASK_COMPLETE = "TASK_COMPLETE"
 M.TASK_BLOCKED = "TASK_BLOCKED"
 M.QUESTION = "QUESTION"
 M.REQUIREMENT_NOT_MET = "REQUIREMENT_NOT_MET"
+M.VALIDATION_PASSED = "VALIDATION_PASSED"
+M.VALIDATION_FAILED = "VALIDATION_FAILED"
 
 function M.detect(text)
   local lines = vim.split(text, "\n", { plain = true })
@@ -28,6 +30,12 @@ function M.detect(text)
       if name then return name, payload end
       name, payload = line:match("^(QUESTION):(.+)$")
       if name then return name, payload end
+      name, payload = line:match("^(VALIDATION_PASSED):?(.+)$")
+      if not name and line == "VALIDATION_PASSED" then name = "VALIDATION_PASSED" end
+      if name then return name, payload end
+      name, payload = line:match("^(VALIDATION_FAILED):?(.+)$")
+      if not name and line == "VALIDATION_FAILED" then name = "VALIDATION_FAILED" end
+      if name then return name, payload end
       name, payload = line:match("^(REQUIREMENT_NOT_MET):(.+)$")
       if name then return name, payload end
     end
@@ -42,7 +50,7 @@ function M.extract_options(text)
   for line in (block .. "\n"):gmatch("([^\n]*)\n") do
     local v = vim.trim(line)
     if v ~= "" then
-      v = v:gsub("^%-%s*", ""):gsub("^%d+[%.%)]%s*", "")
+      v = v:gsub("^[%-%*]%s*", ""):gsub("^%d+[%.%)]%s*", ""):gsub("^%[.-%]%s*", "")
       opts[#opts + 1] = v
     end
   end

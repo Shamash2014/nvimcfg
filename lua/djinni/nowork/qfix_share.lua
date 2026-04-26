@@ -137,6 +137,7 @@ local function extract_review(text, ref)
       title = block.title
     end
     for _, item in ipairs(parser.parse(block.body, parse_ref)) do
+      item.text = string.format("[%s] %s", block.tag or "Review", item.text or "")
       items[#items + 1] = item
     end
   end
@@ -247,8 +248,12 @@ function M.populate(droid)
     end
   end
   local bag = droid.state and droid.state.touched
-  push(bag and bag.items)
-  push(droid.state and droid.state.qfix_items)
+  if droid.mode == "routine" then
+    push(droid.state and droid.state.last_turn_items)
+  else
+    push(bag and bag.items)
+    push(droid.state and droid.state.qfix_items)
+  end
   local title = (bag and bag.title)
     or (droid.state and droid.state.qfix_title)
     or ("nowork " .. droid.mode .. " results: " .. (droid.initial_prompt or droid.id))
@@ -256,13 +261,19 @@ function M.populate(droid)
     qfix.set(merged, { mode = "replace", open = true, title = title })
   end
   local tasks = {}
-  if droid.mode == "autorun" then
+  if droid.mode == "planner" or droid.mode == "explore" then
     local order = droid.state and droid.state.topo_order or {}
     for _, id in ipairs(order) do
       local t = (droid.state.tasks or {})[id]
       if t then
+        local status = t.status or "open"
+        local symbol = "○"
+        if status == "done" then symbol = "●"
+        elseif status == "running" then symbol = "▶"
+        elseif status == "blocked" then symbol = "✖"
+        elseif status == "to_verify" then symbol = "□" end
         tasks[#tasks + 1] = {
-          text = ("[%s] %-10s %s"):format(id, t.status or "open", t.desc or ""),
+          text = ("%s [%s] %s"):format(symbol, id, t.desc or ""),
           valid = 0,
         }
       end
@@ -271,7 +282,7 @@ function M.populate(droid)
       qfix.set(tasks, {
         mode = #merged > 0 and "append" or "replace",
         open = true,
-        title = "nowork autorun tasks: " .. (droid.initial_prompt or droid.id),
+        title = "nowork " .. droid.mode .. " tasks: " .. (droid.initial_prompt or droid.id),
       })
     end
   end
@@ -281,6 +292,35 @@ function M.populate(droid)
   else
     vim.notify(("nowork: populated %d entr%s from %s"):format(total, total == 1 and "y" or "ies", droid.id), vim.log.levels.INFO)
   end
+end
+
+function M.render_tasks(droid, opts)
+  opts = opts or {}
+  local state = droid.state or {}
+  local topo = state.topo_order or {}
+  local tasks = state.tasks or {}
+  local items = {}
+  for _, id in ipairs(topo) do
+    local t = tasks[id]
+    if t then
+      local status = t.status or "open"
+      local symbol = "○"
+      if status == "done" then symbol = "●"
+      elseif status == "running" then symbol = "▶"
+      elseif status == "blocked" then symbol = "✖"
+      elseif status == "to_verify" then symbol = "□" end
+      items[#items + 1] = {
+        text = ("%s [%s] %s"):format(symbol, id, t.desc or ""),
+        valid = 0,
+      }
+    end
+  end
+  if #items == 0 then return end
+  qfix.set(items, {
+    mode = "replace",
+    open = opts.open == true,
+    title = (opts.title or "tasks") .. ": " .. (droid.initial_prompt or droid.id),
+  })
 end
 
 M.format_block = format_block

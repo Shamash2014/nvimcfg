@@ -88,54 +88,22 @@ end
 
 local function format_tag(d)
   local mode = d.mode or "?"
-  if mode == "autorun" then
-    local state = d.state or {}
-    local tag = "auto:" .. (state.phase or "?")
-    if state.current_task_id then
-      tag = tag .. "·" .. state.current_task_id
-    end
-    if state.phase == "generate" or state.phase == "evaluate" then
-      local idx = sprint_idx(state)
-      local total = state.topo_order and #state.topo_order or 0
-      if idx and total > 0 then
-        tag = tag .. " sprint " .. idx .. "/" .. total
-      end
-      local retries = state.sprint_retries and state.current_task_id and state.sprint_retries[state.current_task_id]
-      if retries and retries > 0 then
-        tag = tag .. " r" .. retries
-      end
-    end
-    if state.turns_on_task and state.turns_on_task > 0 then
-      tag = tag .. " T:" .. state.turns_on_task
-    end
-    local done, total = count_done(state)
-    if total > 0 then
-      tag = tag .. " " .. done .. "/" .. total
-    end
-    if state.pending_retry then
-      tag = tag .. " R!"
-    end
-    return tag
-  elseif mode == "explore" then
+  if mode == "planner" or mode == "explore" then
     local qfix = d.state and d.state.qfix_items
     if qfix and #qfix > 0 then
-      return "explore " .. #qfix .. "loc"
+      return mode .. " " .. #qfix .. "loc"
     end
-    return "explore"
-  elseif mode == "planner" then
-    local qfix = d.state and d.state.qfix_items
-    if qfix and #qfix > 0 then
-      return "planner " .. #qfix .. "loc"
-    end
-    local phase = d.state and d.state.phase
+    local phase = d.state and d.state.phase or "plan"
     if phase == "plan" then
-      return "planner plan"
+      return mode .. " plan"
+    elseif phase == "validate" then
+      return mode .. " validate"
     elseif phase == "generate" then
-      return "planner sprint " .. tostring(d.state.current_task_id or "?")
+      return mode .. " sprint " .. tostring(d.state.current_task_id or "?")
     elseif phase == "evaluate" then
-      return "planner eval " .. tostring(d.state.current_task_id or "?")
+      return mode .. " eval " .. tostring(d.state.current_task_id or "?")
     end
-    return "planner"
+    return mode
   elseif mode == "routine" then
     local bits = { "routine" }
     local staged = lifecycle.staged_input(d)

@@ -61,6 +61,12 @@ return {
           codesettings.with_local_settings(config.name, config)
         end
       end,
+      on_attach = function(client, bufnr)
+        -- Common on_attach logic
+        if client.server_capabilities.inlayHintProvider then
+          vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
+        end
+      end,
     }
 
     vim.lsp.config("*", default_config)
@@ -82,6 +88,41 @@ return {
         return false
       end
       return true
+    end
+
+    -- Lua Language Server
+    if vim.fn.executable("lua-language-server") == 1 then
+      vim.lsp.config("lua_ls", {
+        cmd = { "lua-language-server" },
+        filetypes = { "lua" },
+        root_markers = { ".luarc.json", ".luarc.jsonc", ".git", "init.lua" },
+        settings = {
+          Lua = {
+            runtime = {
+              version = "LuaJIT",
+            },
+            diagnostics = {
+              globals = { "vim" },
+            },
+            workspace = {
+              library = vim.api.nvim_get_runtime_file("", true),
+              checkThirdParty = false,
+            },
+            telemetry = {
+              enable = false,
+            },
+            hint = {
+              enable = true,
+              arrayIndex = "Disable",
+              setType = true,
+              paramName = "All",
+              paramType = true,
+              await = true,
+            },
+          },
+        },
+      })
+      safe_enable("lua_ls")
     end
 
     local ts_filetypes = {
@@ -1441,9 +1482,8 @@ return {
       })
       safe_enable("taplo")
     end
+    vim.keymap.set("n", "<localleader>ol", function()
+      require("mobile-dev.android.logcat").toggle()
+    end, { desc = "Toggle Android logcat" })
   end,
-
-  vim.keymap.set("n", "<localleader>ol", function()
-    require("mobile-dev.android.logcat").toggle()
-  end, { desc = "Toggle Android logcat" })
 }

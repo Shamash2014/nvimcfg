@@ -410,6 +410,8 @@ function M.new(mode_name, initial_prompt, opts)
     mode = mode_name,
     policy = policy,
     session_id = nil,
+    parent_id = opts.parent_id,
+    on_finish = opts.on_finish,
     initial_prompt = initial_prompt,
     provider_name = opts.provider or "claude",
     model_name = opts.model,
@@ -827,6 +829,9 @@ local function finalize(droid)
   pcall(function()
     require("djinni.nowork.overview").refresh_all()
   end)
+  if droid.on_finish then
+    pcall(droid.on_finish, droid)
+  end
 end
 
 function M.cancel(droid_or_id)

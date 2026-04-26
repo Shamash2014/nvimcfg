@@ -2,9 +2,19 @@ local lifecycle = require("djinni.nowork.state")
 
 local M = {}
 
-local function build_context_initial(question, options)
+local function build_context_initial(droid, question, options)
   if not question or question == "" then return nil end
   local lines = {}
+  local summary = droid and droid.state and droid.state.summary
+  if summary and summary ~= "" then
+    lines[#lines + 1] = "--- Agent Summary ---"
+    for _, sline in ipairs(vim.split(summary, "\n", { plain = true })) do
+      lines[#lines + 1] = "> " .. sline
+    end
+    lines[#lines + 1] = ""
+  end
+
+  lines[#lines + 1] = "--- Question ---"
   for _, qline in ipairs(vim.split(question, "\n", { plain = true })) do
     lines[#lines + 1] = "> " .. qline
   end
@@ -15,6 +25,7 @@ local function build_context_initial(question, options)
     end
   end
   lines[#lines + 1] = ""
+  lines[#lines + 1] = "--- Your Answer ---"
   lines[#lines + 1] = ""
   return table.concat(lines, "\n")
 end
@@ -23,7 +34,7 @@ local function open_compose_for(droid, title, finish, question, options)
   require("djinni.nowork.compose").open(droid, {
     title = title,
     alt_buf = vim.fn.bufnr("#"),
-    initial = build_context_initial(question, options),
+    initial = build_context_initial(droid, question, options),
     on_submit = function(text)
       if not text then finish(nil); return end
       local cleaned = {}
@@ -109,7 +120,14 @@ function M.ask_and_resume(droid, question, options)
   local droid_mod = require("djinni.nowork.droid")
   M.ask(droid, question, function(answer)
     if answer then
-      lifecycle.set_next_prompt(droid, answer)
+      local feedback = answer
+      for _, opt in ipairs(options or {}) do
+        if opt == answer then
+          feedback = "Selected Option: " .. answer
+          break
+        end
+      end
+      lifecycle.set_next_prompt(droid, feedback)
       droid_mod._resume(droid, "next")
     else
       droid.log_buf:append("[ask] cancelled")

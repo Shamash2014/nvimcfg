@@ -20,76 +20,10 @@ third plausible answer
 ]]
 end
 
-function M.explore_tail()
-  return [[
-<Locations>
-/path/to/project/src/foo.js:24:8,3,Some notes here about some stuff, it can contain commas
-/path/to/project/src/foo.js:71:12,7,more notes, everything is great!
-/path/to/project/src/bar.js:13:2,1,more notes again, this time specfically about bar and why bar is so important
-/path/to/project/src/baz.js:1:1,52,Notes about why baz is very important to the results
-</Locations>
-<Rule>Text locations are in the format of: /path/to/file.ext:lnum:cnum,X,NOTES
-lnum = starting line number 1 based
-cnum = starting column number 1 based
-X = how many lines should be highlighted
-NOTES = A text description of why this highlight is important
-
-See <Locations> for example
-</Rule>
-<Rule>NOTES cannot have new lines</Rule>
-<Rule>You must adhere to the output format</Rule>
-<Rule>Double check output format before writing it to the file</Rule>
-<Rule>Each location is separated by new lines</Rule>
-<Rule>Each path is specified in absolute pathing</Rule>
-<Rule>You can provide notes you think are relevant per location</Rule>
-<Rule>You must provide output as a single <Locations> block without commentary around it</Rule>
-<Example>
-You have found 3 locations in files foo.js, bar.js, and baz.js.
-There are 2 locations in foo.js, 1 in bar.js and baz.js.
-<Meaning>
-This means that the search results found
-foo.js at line 24, char 8 and the next 2 lines
-foo.js at line 71, char 12 and the next 6 lines
-bar.js at line 13, char 2
-baz.js at line 1, char 1 and the next 51 lines
-</Meaning>
-</Example>
-<TaskDescription>
-you are given a prompt and you must search through this project and return code that matches the description provided.
-</TaskDescription>
-
-<Focus>
-Beyond exact matches, also include:
-- Missing work: TODO / FIXME / XXX / HACK / "not implemented" / empty or
-  stub function bodies / placeholder literals / commented-out call sites
-  touching the topic.
-- Unfinished: partial implementations, fall-through branches, switch arms
-  without a case for this topic, signatures whose bodies don't match,
-  skipped or pending tests (`.skip`, `xdescribe`, `xit`, `pending`,
-  `todo`).
-- Co-change candidates: other callers of the same symbol, sibling
-  implementations (interface/base/impl pairs), tests covering it, docs
-  or schema entries that reference it, config keys, public re-exports.
-
-For each such location, the NOTES field should state which bucket applies
-and why — e.g., "TODO: handle quota", "stub: returns nil", "caller pair:
-updates here should match foo.lua:42".
-
-If nothing matches a bucket, skip it silently — do not invent locations.
-</Focus>
-
-<Interaction>
-If the user's intent is ambiguous or you need a disambiguator before you can
-answer, you may end a turn with a QUESTION (see QuestionRule below).
-
-The user will answer on the next turn. Ask at most two questions across the
-whole search, and only when truly necessary. When you have enough context,
-output the final <Locations> block as described above.
-</Interaction>
-]] .. M.question_rule()
-end
-
-function M.routine_wrap(user_prompt)
+function M.routine_wrap(user_prompt, droid_opts)
+  if droid_opts and droid_opts.multitask then
+    return user_prompt .. "\n\n" .. M.multitask_lead_tail()
+  end
   return user_prompt
 end
 
@@ -162,27 +96,34 @@ Found several distinct units of work. Which should I tackle first?
 ]] .. M.composer_sections_rule()
 end
 
-function M.autorun_phase_tail(phase, ctx)
+function M.leader_phase_tail(phase, ctx)
   ctx = ctx or {}
   if phase == "plan" then
     return [[
-You are the **Planner** in a three-phase harness (Planner → Generator → Evaluator).
+You are the **Leader** in an integrated workflow (Planner → Generator → Evaluator).
 
 Expand the user's short prompt into an ambitious, cohesive product spec, then decompose it into sprints. Each sprint = one shippable feature.
 
 Guidance:
-- Be ambitious about scope. Prefer a product that feels complete and opinionated over a demo.
-- Stay at product / high-level technical design. Do NOT dictate granular implementation (file names, function signatures, library choices beyond the stack) — the Generator figures that out.
-- Weave AI features into the product where they add real value (summarization, retrieval, nudges, classification, auto-fill). Avoid AI-for-AI's-sake.
-- If anything is genuinely ambiguous, ask via QuestionRule before emitting the plan.
+- **Ambitious Scope**: Prefer a product that feels complete, opinionated, and premium. Avoid "minimum viable" stubs.
+- **Visual Excellence**: Prioritize rich aesthetics, modern typography, and interactive depth. Use best practices in web design (vibrant colors, dark modes, smooth transitions).
+- **Use Skills**: Proactively identify and leverage available **Skills** (e.g., `gsd-*`, `react-doctor`, `golang-pro`) to ensure the highest implementation quality. If a task benefits from a specific skill, list it in a `### Skills` section.
+- **Contextual Anchors (Step 0)**: Provide specific file paths or components for each task. Assume the subagent has no prior context; your `Implementation` notes must be an expert's technical blueprint.
+- **Ambiguity**: If anything is genuinely ambiguous, ask via QuestionRule before emitting the plan.
 
 Emit the decomposition as a `<Tasks>` block in markdown. Each task is one sprint:
 
 <Tasks>
 ## 01 — short sprint description
 
+### Context
+- list of relevant files, directories, or existing code components to use as anchors
+
 ### Deps
 - 00
+
+### Implementation
+- Detailed technical notes, design decisions, or logic requirements for the subagent.
 
 ### Subtasks
 - [ ] first sub-deliverable
@@ -193,19 +134,25 @@ Emit the decomposition as a `<Tasks>` block in markdown. Each task is one sprint
 - optional: nice to have
 
 ## 02 — next sprint description
-
-### Acceptance
-- required: another observable outcome
+...
 </Tasks>
 
 Rules:
 - Each task starts with `## <id> — <short description>`. The id is unique, no spaces.
 - Level-3 sections (omit empty):
+  - `### Context` — bullet list of file paths or architectural anchors.
   - `### Deps` — bullet list of earlier sprint ids this depends on.
+  - `### Skills` — bullet list of skills to invoke (e.g., `gsd-add-tests`, `react-doctor`).
+  - `### Implementation` — bulleted notes on logic/tech for the subagent.
   - `### Subtasks` — `- [ ] …` display-only breakdown.
   - `### Acceptance` — bullets `- required: …` / `- optional: …`. At least one required per sprint.
 - End your response with `PLAN_COMPLETE` on its own line.
 
+Once the plan is approved, you will enter the **Validation** phase. In this phase, you must:
+- Verify that every file/component in the `Context` exists and is relevant.
+- Ensure that the `Implementation` logic is feasible and doesn't conflict with existing patterns.
+- If everything is correct, end the turn with `VALIDATION_PASSED`.
+- If you find issues, emit `VALIDATION_FAILED` with the corrections.
 ]] .. M.question_rule()
   elseif phase == "generate" then
     local task_id = ctx.current_task_id or ""
@@ -238,6 +185,41 @@ Rules:
       M.composer_sections_rule() .. "\n" .. M.question_rule()
   end
   return ""
+end
+
+function M.multitask_lead_tail()
+  return [[
+You are the **Lead Orchestrator** in a parallel execution environment.
+Your goal is to decompose the user's request into independent, parallelizable tasks.
+
+Guidance for Parallel Execution:
+- **Maximum Concurrency**: Decompose work into units that can be executed in parallel by multiple droids simultaneously.
+- **Architectural Cohesion**: Ensure all tasks follow a unified design pattern. Specify shared components in the `Context` of multiple tasks if necessary.
+- **Expert Blueprints**: Your `Implementation` notes must be a technical blueprint. Assume sub-droids have no prior context; provide all necessary logic, API signatures, and design constraints.
+- **Skill Delegation**: Explicitly list required **Skills** (e.g., `gsd-*`, `react-doctor`, `golang-pro`) for each task.
+
+Emit the plan as a `<Tasks>` block:
+
+<Tasks>
+## 01 — short task description
+
+### Context
+- file paths or architectural anchors (absolute or repo-relative)
+
+### Skills
+- bullet list of skills to invoke
+
+### Implementation
+- Detailed technical notes for the sub-droid.
+
+### Acceptance
+- required: measurable/testable outcome
+</Tasks>
+
+Rules:
+- Each task starts with `## <id> — <description>`. The id is short and unique.
+- End your response with `PLAN_COMPLETE` on its own line when the plan is ready for execution.
+]] .. M.question_rule()
 end
 
 return M

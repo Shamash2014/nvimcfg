@@ -9,13 +9,6 @@ M.defaults = {
     skills = {},
     test_cmd = "make test",
   },
-  autorun = {
-    max_steps = 30,
-    turns_per_task_cap = 8,
-    allow_kinds = { "edit", "execute" },
-    test_after_edit = false,
-    test_cmd = "make test",
-  },
 }
 
 M.config = vim.tbl_extend("force", {}, M.defaults)
@@ -43,86 +36,12 @@ function M.routine(prompt, opts)
   return droid.new("routine", prompt, merged_opts(opts))
 end
 
-local function spawn_autorun(prompt, opts)
-  local droid = require("djinni.nowork.droid")
-  return droid.new("autorun", prompt, merged_opts(opts))
+function M.multitask(prompt, opts)
+  opts = opts or {}
+  opts.multitask = true
+  return M.routine(prompt, opts)
 end
 
-local function sanitize_branch(s)
-  s = tostring(s or ""):gsub("%s+", "-"):gsub("[^%w%-_/]", "")
-  return s
-end
-
-local function suggest_branch_name(prompt)
-  local slug = sanitize_branch((prompt or ""):sub(1, 40)):lower()
-  if slug == "" then slug = "session" end
-  return "autorun/" .. os.date("%Y%m%d-%H%M%S") .. "-" .. slug
-end
-
-local function with_autorun_worktree(prompt, opts, cont)
-  if opts and (opts.cwd or opts.skip_worktree_prompt) then
-    cont(opts)
-    return
-  end
-  local ok_wt, wt = pcall(require, "djinni.integrations.worktrunk")
-  if not ok_wt or not wt or not wt.create then
-    cont(opts)
-    return
-  end
-  local choices = {
-    "new worktree (isolate this autorun)",
-    "current directory",
-    "pick existing worktree",
-    "cancel",
-  }
-  Snacks.picker.select(choices, { prompt = "autorun cwd" }, function(choice)
-    if not choice or choice == "cancel" then return end
-    if choice:match("^current") then
-      cont(opts)
-      return
-    end
-    if choice:match("^pick") then
-      local snacks = require("djinni.integrations.snacks")
-      snacks.pick_worktree("Run autorun in worktree", function(item)
-        if not item or not item.branch then return end
-        wt.get_path(item.branch, function(path)
-          if not path then
-            vim.notify("nowork: could not resolve worktree path for " .. item.branch, vim.log.levels.ERROR)
-            return
-          end
-          local merged = vim.tbl_extend("force", opts or {}, { cwd = path })
-          cont(merged)
-        end)
-      end)
-      return
-    end
-    vim.ui.input({ prompt = "New worktree branch: ", default = suggest_branch_name(prompt) }, function(branch)
-      branch = branch and vim.trim(branch) or ""
-      if branch == "" then return end
-      wt.create(branch, function(ok, result)
-        if not ok then
-          vim.notify("nowork: worktree create failed — " .. tostring(result or "?"), vim.log.levels.ERROR)
-          return
-        end
-        wt.get_path(branch, function(path)
-          if not path then
-            vim.notify("nowork: worktree created but path missing for " .. branch, vim.log.levels.ERROR)
-            return
-          end
-          vim.notify("nowork: autorun in worktree " .. branch, vim.log.levels.INFO)
-          local merged = vim.tbl_extend("force", opts or {}, { cwd = path })
-          cont(merged)
-        end)
-      end)
-    end)
-  end)
-end
-
-function M.auto(prompt, opts)
-  with_autorun_worktree(prompt, opts, function(resolved_opts)
-    spawn_autorun(prompt, resolved_opts)
-  end)
-end
 
 function M.projects()
   local roots = {}
@@ -144,23 +63,66 @@ function M.projects()
   end
   table.sort(roots)
 
-  local labels = {}
+  local items = {}
+  local processed = {}
+
   for _, root in ipairs(roots) do
-    labels[#labels + 1] = vim.fn.fnamemodify(root, ":t") .. "  " .. root
+    if not processed[root] then
+      local worktrees = {}
+      local ok, wt_obj = pcall(function()
+        return vim.system({ "git", "-C", root, "worktree", "list", "--porcelain" }, { text = true }):wait()
+      end)
+      
+      if ok and wt_obj and wt_obj.code == 0 then
+        local current = {}
+        for line in wt_obj.stdout:gmatch("([^\n]*)\n") do
+          if line:match("^worktree ") then
+            current.path = vim.fn.fnamemodify(line:match("^worktree (.+)$"), ":p"):gsub("/$", "")
+          elseif line:match("^branch ") then
+            current.branch = line:match("^branch refs/heads/(.+)$")
+          elseif line == "" then
+            if current.path then table.insert(worktrees, current) end
+            current = {}
+          end
+        end
+      end
+
+      if #worktrees > 1 then
+        -- Find the "parent" (main worktree)
+        local parent = worktrees[1].path
+        items[#items + 1] = { label = "📁 " .. vim.fn.fnamemodify(parent, ":t"), path = parent, is_parent = true }
+        processed[parent] = true
+        for i = 1, #worktrees do
+          local wt = worktrees[i]
+          local name = vim.fn.fnamemodify(wt.path, ":t")
+          local branch = wt.branch and (" [" .. wt.branch .. "]") or ""
+          local prefix = (i == #worktrees) and "  └─ " or "  ├─ "
+          items[#items + 1] = { label = prefix .. name .. branch, path = wt.path }
+          processed[wt.path] = true
+        end
+      else
+        items[#items + 1] = { label = "📄 " .. vim.fn.fnamemodify(root, ":t"), path = root }
+        processed[root] = true
+      end
+    end
   end
 
-  require("djinni.integrations.snacks_ui").select(labels, { prompt = "nowork project" }, function(_, idx)
-    local root = idx and roots[idx] or nil
-    if not root then return end
+  local labels = {}
+  for _, it in ipairs(items) do labels[#labels + 1] = it.label end
+
+  require("djinni.integrations.snacks_ui").select(labels, { prompt = "nowork projects & worktrees" }, function(_, idx)
+    local it = idx and items[idx] or nil
+    if not it then return end
+    local root = it.path
     vim.cmd("lcd " .. vim.fn.fnameescape(root))
-    require("djinni.nowork.overview").open({ cwd = root, label = "projects", project_visit_split = "vsplit" })
+    vim.cmd("Oil " .. vim.fn.fnameescape(root))
   end)
 end
 
-local MODE_LABELS = { explore = "planner", routine = "routine", autorun = "autorun", planner = "planner", plan = "planner" }
+local MODE_LABELS = { explore = "planner", routine = "routine", planner = "planner", plan = "planner", multitask = "routine" }
 
 function M.launch(mode_name)
-  local spawn = ({ explore = M.explore, routine = M.routine, autorun = M.auto, planner = M.planner, plan = M.planner })[mode_name]
+  local spawn = ({ explore = M.explore, routine = M.routine, planner = M.planner, plan = M.planner, multitask = M.multitask })[mode_name]
   if not spawn then
     vim.notify("nowork.launch: unknown mode '" .. tostring(mode_name) .. "'", vim.log.levels.WARN)
     return
@@ -170,7 +132,7 @@ function M.launch(mode_name)
   local default = M.config.provider
 
   local function after_provider(provider)
-    if mode_name == "routine" or mode_name == "autorun" then
+    if mode_name == "routine" then
       spawn("", { provider = provider })
       return
     end
@@ -286,12 +248,10 @@ function M.setup(opts)
       M.explore(prompt, {})
     elseif mode == "routine" then
       M.routine(prompt, {})
-    elseif mode == "autorun" or mode == "auto" then
-      M.auto(prompt, {})
     elseif mode == "planner" or mode == "plan" then
       M.planner(prompt, {})
     else
-      vim.notify("nowork: unknown mode '" .. tostring(mode) .. "'. Use: explore, routine, autorun, planner", vim.log.levels.WARN)
+      vim.notify("nowork: unknown mode '" .. tostring(mode) .. "'. Use: explore, routine", vim.log.levels.WARN)
     end
   end, { nargs = "+" })
 
@@ -357,33 +317,6 @@ function M.setup(opts)
     })
   end, { nargs = 0, bang = true })
 
-  vim.api.nvim_create_user_command("NoworkToggleAutoApply", function()
-    local droid = require("djinni.nowork.droid")
-    local picker = require("djinni.nowork.picker")
-    local function toggle(d)
-      if d.mode ~= "autorun" then
-        vim.notify("nowork: ToggleAutoApply only applies to autorun droids", vim.log.levels.WARN)
-        return
-      end
-      if not d._stored_allow_kinds then
-        d._stored_allow_kinds = d.opts.allow_kinds
-      end
-      if #d.opts.allow_kinds > 0 then
-        d.opts.allow_kinds = {}
-        d.log_buf:append("[autorun] auto-apply disabled")
-      else
-        d.opts.allow_kinds = d._stored_allow_kinds
-        d.log_buf:append("[autorun] auto-apply enabled")
-      end
-    end
-    local target = resolve_target()
-    if target then
-      toggle(target)
-    else
-      picker.pick({ on_droid = toggle })
-    end
-  end, { nargs = 0 })
-
   vim.api.nvim_create_user_command("NoworkQfixFromLog", function()
     local picker = require("djinni.nowork.picker")
     picker.pick({ on_droid = function(d)
@@ -391,9 +324,8 @@ function M.setup(opts)
     end })
   end, { nargs = 0 })
 
-  vim.keymap.set("n", "<leader>as", function() M.launch("planner") end, { desc = "nowork: universal planner (search + autorun)" })
+  vim.keymap.set("n", "<leader>as", function() M.launch("planner") end, { desc = "nowork: universal planner (search + routine)" })
   vim.keymap.set("n", "<leader>aw", function() M.launch("routine") end, { desc = "nowork: routine" })
-  vim.keymap.set("n", "<leader>aa", function() M.launch("autorun") end, { desc = "nowork: autorun" })
 
   vim.keymap.set("n", "<leader>av", function()
     local droid_mod = require("djinni.nowork.droid")
@@ -441,17 +373,7 @@ function M.setup(opts)
 
   vim.keymap.set("n", "<leader>ao", M.projects, { desc = "nowork: projects" })
 
-  vim.keymap.set("n", "<leader>aO", function()
-    open_overview("autorun", "autorun")
-  end, { desc = "nowork: project overview (autoruns)" })
-
-  vim.keymap.set("n", "<leader>aD", function()
-    open_overview("autorun")
-  end, { desc = "nowork: dashboard (autoruns)" })
-
-  vim.keymap.set("n", "<leader>ap", function()
-    require("djinni.nowork.mailbox").open()
-  end, { desc = "nowork: permissions mailbox" })
+  vim.keymap.set("n", "<leader>ao", M.projects, { desc = "nowork: projects" })
 
   vim.keymap.set("n", "<leader>ai", function()
     require("djinni.nowork.droid").current(function(d)
@@ -485,7 +407,7 @@ function M.setup(opts)
     local picker = require("djinni.nowork.picker")
     local compose = require("djinni.nowork.compose")
     local alt_buf = vim.fn.bufnr("#")
-    if picker.count({ mode_filter = { "routine", "autorun" } }) == 0 then
+    if picker.count({ mode_filter = { "routine" } }) == 0 then
       compose.open(nil, {
         alt_buf = alt_buf,
         title = " compose → new routine droid ",
@@ -495,7 +417,7 @@ function M.setup(opts)
       return
     end
     picker.pick({
-      mode_filter = { "routine", "autorun" },
+      mode_filter = { "routine" },
       on_droid = function(d)
         if d.mode == "routine" then
           compose.toggle(d, compose.routine_chat_config(d, {
@@ -506,7 +428,7 @@ function M.setup(opts)
         end
       end,
     })
-  end, { desc = "nowork: chat composer (routine persistent, autorun oneshot)" })
+  end, { desc = "nowork: chat composer (routine persistent)" })
 
   local function share_qflist_guard()
     local info = vim.fn.getqflist({ items = 0 })
@@ -515,9 +437,9 @@ function M.setup(opts)
       return false
     end
     local picker = require("djinni.nowork.picker")
-    local filter = { "routine", "autorun" }
+    local filter = { "routine" }
     if picker.count({ mode_filter = filter }) == 0 then
-      vim.notify("nowork: no routine/autorun droids — start one with <leader>aw or <leader>aa", vim.log.levels.WARN)
+      vim.notify("nowork: no routine droids — start one with <leader>aw", vim.log.levels.WARN)
       return false
     end
     return true
@@ -529,7 +451,7 @@ function M.setup(opts)
     local marks = require("djinni.nowork.qf_marks")
     local use_marks = marks.has_marks()
     require("djinni.nowork.picker").pick({
-      mode_filter = { "routine", "autorun" },
+      mode_filter = { "routine" },
       on_droid = function(d)
         if use_marks then share.share_marked(d) else share.share_full(d) end
       end,
@@ -547,7 +469,7 @@ function M.setup(opts)
     vim.cmd("normal! \27")
     if not share_qflist_guard() then return end
     require("djinni.nowork.picker").pick({
-      mode_filter = { "routine", "autorun" },
+      mode_filter = { "routine" },
       on_droid = function(d) require("djinni.nowork.qfix_share").share_range(d, l1, l2) end,
     })
   end, { desc = "nowork: share qf range to droid" })
@@ -568,19 +490,27 @@ function M.setup(opts)
     end })
   end, { desc = "nowork: pull from droid (touched→qflist or log parse)" })
 
+  vim.api.nvim_create_user_command("NoworkPopulate", function()
+    local picker = require("djinni.nowork.picker")
+    picker.pick({ on_droid = function(d)
+      require("djinni.nowork.qfix_share").populate(d)
+    end })
+  end, { nargs = 0 })
+
   vim.api.nvim_create_user_command("NoworkQueueClear", function()
     local picker = require("djinni.nowork.picker")
-    picker.pick({ mode_filter = { "routine", "autorun" }, on_droid = function(d)
+    picker.pick({ mode_filter = { "routine" }, on_droid = function(d)
       require("djinni.nowork.droid").clear_queue(d)
     end })
   end, { nargs = 0 })
 
   vim.api.nvim_create_user_command("NoworkShadow", function()
     local picker = require("djinni.nowork.picker")
-    picker.pick({ mode_filter = { "routine", "autorun" }, on_droid = function(d)
+    picker.pick({ mode_filter = { "routine" }, on_droid = function(d)
       require("djinni.nowork.shadow").review(d)
     end })
   end, { nargs = 0 })
+
 
   vim.api.nvim_create_user_command("NoworkMailbox", function()
     require("djinni.nowork.mailbox").open()
@@ -652,14 +582,10 @@ function M.setup(opts)
   if ok_wk and wk.add then
     pcall(wk.add, {
       { "<leader>a",  group = "nowork" },
-      { "<leader>as", desc = "universal planner (search + autorun)" },
+      { "<leader>as", desc = "universal planner (search + routine)" },
       { "<leader>aw", desc = "routine" },
-      { "<leader>aa", desc = "autorun" },
       { "<leader>al", desc = "logs (active + recent + archive)" },
       { "<leader>ao", desc = "projects" },
-      { "<leader>aO", desc = "overview — autoruns per project" },
-      { "<leader>aD", desc = "dashboard — autoruns per project" },
-      { "<leader>ap", desc = "permissions mailbox" },
       { "<leader>ai", desc = "interact (actions menu for current droid)" },
       { "<leader>ak", desc = "kill all routines" },
       { "<leader>ac", desc = "chat composer (routine persistent)" },

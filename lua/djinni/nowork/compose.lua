@@ -62,22 +62,7 @@ local function format_footer(droid)
     local status = require("djinni.nowork.status_text").compact(droid)
     if status ~= "" then prefix = " " .. status .. " │" end
   end
-  local cmds = available_commands(droid)
-  if #cmds == 0 then
-    return prefix .. FOOTER
-  end
-  local shown = {}
-  for i = 1, math.min(3, #cmds) do
-    local name = command_name(cmds[i])
-    if name and name ~= "" then
-      shown[#shown + 1] = "/" .. name
-    end
-  end
-  if #shown == 0 then
-    return prefix .. FOOTER
-  end
-  local suffix = #cmds > #shown and (" +" .. (#cmds - #shown)) or ""
-  return prefix .. " " .. table.concat(shown, " ") .. suffix .. " ·" .. FOOTER
+  return prefix .. FOOTER
 end
 
 local function resolve_window_opts(opts)
@@ -88,8 +73,8 @@ local function resolve_window_opts(opts)
   end
   return vim.tbl_deep_extend("force", {
     floating = true,
-    width = math.min(100, math.floor(vim.o.columns * 0.8)),
-    height = math.min(20, math.floor(vim.o.lines * 0.5)),
+    width = math.min(120, math.floor(vim.o.columns * 0.95)),
+    height = math.min(45, math.floor(vim.o.lines * 0.85)),
     split = "below",
   }, settings, opts or {})
 end
@@ -127,12 +112,97 @@ local function open_window(buf, title, footer, opts)
       border = opts.border or "rounded",
       title = title or " nowork compose ",
       title_pos = "center",
-      footer = footer or FOOTER,
-      footer_pos = "left",
     })
   end
   apply_window_local_opts(win)
   return win, opts
+end
+
+local function render_dashboard(state)
+  local droid = state.droid
+  if not droid or not state.alive then return end
+  local buf = state.buf
+  local ns = vim.api.nvim_create_namespace("nowork_compose_dash")
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  local width = state.window_opts.width
+  
+  local dash_lines = {}
+  
+  -- Separator
+  table.insert(dash_lines, { { string.rep("─", width - 8), "Comment" } })
+  table.insert(dash_lines, { { "", "" } })
+
+  -- 1. Arguments (Flags)
+  table.insert(dash_lines, { { "Arguments", "Bold" } })
+  local arg_line = { { "  " } }
+  local iso = (droid.opts and droid.opts.isolate) and "on" or "off"
+  table.insert(arg_line, { "-i ", "Comment" })
+  table.insert(arg_line, { "Isolate (", "None" })
+  table.insert(arg_line, { iso, iso == "on" and "NoworkQfEdit" or "Comment" })
+  table.insert(arg_line, { ")   ", "None" })
+  
+  table.insert(arg_line, { "-p ", "Comment" })
+  table.insert(arg_line, { "Provider (", "None" })
+  table.insert(arg_line, { droid.provider_name or "claude", "NoworkQfReview" })
+  table.insert(arg_line, { ")", "None" })
+  table.insert(dash_lines, arg_line)
+  table.insert(dash_lines, { { "", "" } })
+
+  -- 2. Commands (Grouped Columns)
+  local groups = {
+    { title = "Session", cmds = { { "r", "restart" }, { "k", "stop" }, { "c", "clear" } } },
+    { title = "Context", cmds = { { "b", "buffer" }, { "d", "diff" }, { "q", "qflist" } } },
+    { title = "Multi", cmds = { { "m", "mul" }, { "i", "isolate" }, { "s", "staged" } } },
+    { title = "Global", cmds = { { "^CR", "Send" }, { "^C", "Close" }, { "^Q", "Qflist" } } },
+  }
+  
+  local col_width = 24
+  
+  -- Header Row
+  local header = {}
+  for _, g in ipairs(groups) do
+    table.insert(header, { g.title .. string.rep(" ", col_width - #g.title), "Bold" })
+  end
+  table.insert(dash_lines, header)
+  
+  -- Body Rows
+  local max_rows = 0
+  for _, g in ipairs(groups) do max_rows = math.max(max_rows, #g.cmds) end
+  
+  for r = 1, max_rows do
+    local row = {}
+    for _, g in ipairs(groups) do
+      local pair = g.cmds[r]
+      if pair then
+        local key, name = pair[1], pair[2]
+        table.insert(row, { " " .. key .. " ", "NoworkQfNext" })
+        local label = name .. string.rep(" ", col_width - #name - 4)
+        table.insert(row, { label, "None" })
+      else
+        table.insert(row, { string.rep(" ", col_width), "None" })
+      end
+    end
+    table.insert(dash_lines, row)
+  end
+
+  -- Padding logic to keep dashboard at bottom
+  local win_height = state.window_opts.height
+  local total_dash_lines = #dash_lines
+  local current_lines = vim.api.nvim_buf_line_count(buf)
+  local target_padding = win_height - total_dash_lines - current_lines - 1
+  
+  local final_virt = {}
+  if target_padding > 0 then
+    for i = 1, target_padding do table.insert(final_virt, { { "", "" } }) end
+  end
+  for _, l in ipairs(dash_lines) do table.insert(final_virt, l) end
+  
+  pcall(vim.api.nvim_buf_set_extmark, buf, ns, line_count - 1, 0, {
+    virt_lines = final_virt,
+    virt_lines_above = false,
+  })
 end
 
 local function place_cursor_first_blank(buf, win, sections)
@@ -275,6 +345,12 @@ function M.open(droid, opts)
     lifecycle.set_discussion_phase(droid, lifecycle.discussion.composing)
   end
 
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+    buffer = buf,
+    callback = function() render_dashboard(state) end,
+  })
+  render_dashboard(state)
+
   local function close()
     if not state.alive then return end
     state.alive = false
@@ -322,6 +398,17 @@ function M.open(droid, opts)
     end
     if droid and text == "clear" then
       text = "/clear"
+    end
+    if text:match("^/mul%s") then
+      local isolate = text:match("^/mul%s+%-%-isolate")
+      local prompt = text:gsub("^/mul%s+%-?%-?%w*%s*", "")
+      local expanded = require("djinni.nowork.expand").expand(prompt, { alt_buf = state.alt_buf })
+      require("djinni.nowork").multitask(expanded, { 
+        cwd = droid and droid.opts and droid.opts.cwd,
+        isolate = isolate ~= nil
+      })
+      close()
+      return
     end
     local expanded = require("djinni.nowork.expand").expand(text, { alt_buf = state.alt_buf })
 
