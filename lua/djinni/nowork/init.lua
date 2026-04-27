@@ -29,12 +29,23 @@ local function merged_opts(opts)
   return merged
 end
 
+local function plan_mode_for(opts)
+  local provider = opts and opts.provider or M.config.provider
+  local p = require("djinni.acp.provider").get(provider)
+  return (p and p.plan_mode) or "plan"
+end
+
+local function with_plan_mode(merged)
+  merged.initial_acp_mode = merged.initial_acp_mode or plan_mode_for(merged)
+  return merged
+end
+
 function M.explore(prompt, opts)
   if not prompt or prompt == "" then
     return M.launch("explore")
   end
   local droid = require("djinni.nowork.droid")
-  return droid.new("planner", prompt, merged_opts(opts))
+  return droid.new("planner", prompt, with_plan_mode(merged_opts(opts)))
 end
 
 function M.planner(prompt, opts)
@@ -42,7 +53,7 @@ function M.planner(prompt, opts)
     return M.launch("planner")
   end
   local droid = require("djinni.nowork.droid")
-  return droid.new("planner", prompt, merged_opts(opts))
+  return droid.new("planner", prompt, with_plan_mode(merged_opts(opts)))
 end
 
 function M.routine(prompt, opts)
@@ -203,8 +214,7 @@ function M.launch(mode_name)
         local spawn_opts = merged_opts({ provider = provider })
         if mode_name == "multitask" then spawn_opts.multitask = true end
         if mode_name == "plan" or mode_name == "routine" or mode_name == "planner" then
-          local p = require("djinni.acp.provider").get(provider)
-          spawn_opts.initial_acp_mode = (p and p.plan_mode) or "plan"
+          spawn_opts.initial_acp_mode = plan_mode_for(spawn_opts)
         end
         local droid_mode = MODE_DROID[mode_name]
         require("djinni.nowork.droid").new(droid_mode, text, spawn_opts)

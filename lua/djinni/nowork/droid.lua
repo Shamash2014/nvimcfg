@@ -257,11 +257,13 @@ function M.apply_acp_modes(droid, available, current_id)
       if m.id == preferred then target = m.id; break end
     end
     if not target then
-      for _, m in ipairs(droid.acp_modes.available) do
-        if m.id == "readonly" then target = m.id; break end
+      local ids = {}
+      for _, m in ipairs(droid.acp_modes.available) do ids[#ids + 1] = m.id end
+      if droid.log_buf and droid.log_buf.append then
+        droid.log_buf:append(("[acp mode] requested '%s' but provider only offers: %s; staying on %s")
+          :format(preferred, table.concat(ids, ", "), tostring(droid.acp_modes.current_id)))
       end
-    end
-    if target and target ~= droid.acp_modes.current_id then
+    elseif target ~= droid.acp_modes.current_id then
       vim.schedule(function()
         require("djinni.nowork.acp_mode").set(droid, target)
       end)
