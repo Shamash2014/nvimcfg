@@ -29,7 +29,7 @@ function M.components(droid)
   local tok   = s.tokens or {}
   local disc  = s.discussion or {}
   local q     = disc.queue or {}
-  local perm_count = require("djinni.nowork.events").permission_count_for_state(s)
+  local sum   = require("djinni.nowork.events").summary(droid)
 
   local parts = {}
   local function push(sym, val)
@@ -49,10 +49,11 @@ function M.components(droid)
   local cache = (tok.cache_read or 0) + (tok.cache_write or 0)
   if cache > 0 then push("C", M.token_compact(cache)) end
   push("$", M.cost_compact(tok.cost))
-  if #q > 0                  then push("Q", tostring(#q))     end
-  if disc.staged_input       then push("+", "1")              end
-  if perm_count > 0          then push("P", tostring(perm_count)) end
-  if disc.pending_prompt     then push("D", "1")              end
+  if #q > 0              then push("Q", tostring(#q)) end
+  if sum.staged > 0      then push("+", tostring(sum.staged)) end
+  if sum.permissions > 0 then push("P", tostring(sum.permissions)) end
+  if sum.questions > 0   then push("?", tostring(sum.questions)) end
+  if sum.blockers > 0    then push("!", tostring(sum.blockers)) end
   push("M", droid.model_name)
   push("A", acp_label(droid))
   push("policy", droid.mode)
@@ -76,7 +77,7 @@ end
 
 function M.statusline_parts(droids)
   local R, B, I = 0, 0, 0
-  local Tt, Qt, Stg, Pt, Dt = 0, 0, 0, 0, 0
+  local Tt, Qt = 0, 0
   local cost = 0
   for _, d in ipairs(droids) do
     local st = d.status
@@ -89,17 +90,19 @@ function M.statusline_parts(droids)
     cost = cost + (tok.cost or 0)
     local disc = s.discussion or {}
     Qt = Qt + #(disc.queue or {})
-    if disc.staged_input then Stg = Stg + 1 end
-    if disc.pending_prompt then Dt = Dt + 1 end
-    Pt = Pt + require("djinni.nowork.events").permission_count_for_state(s)
   end
+  local agg = require("djinni.nowork.events").aggregate(droids)
   local parts = {}
   local function push(sym, n)
     if n and n > 0 then parts[#parts + 1] = { sym = sym, val = tostring(n) } end
   end
   push("R", R); push("B", B); push("I", I)
   if Tt > 0 then parts[#parts + 1] = { sym = "T", val = M.token_compact(Tt) } end
-  push("Q", Qt); push("+", Stg); push("P", Pt); push("D", Dt)
+  push("Q", Qt)
+  push("+", agg.staged)
+  push("P", agg.permissions)
+  push("?", agg.questions)
+  push("!", agg.blockers)
   local cost_str = M.cost_compact(cost)
   if cost_str then parts[#parts + 1] = { sym = nil, val = cost_str } end
   return parts
@@ -133,7 +136,7 @@ if vim and vim.env and vim.env.DJINNI_TEST == "1" then
           discussion = { queue = {}, pending_prompt = true },
         },
       },
-      expect = "[c3] · waiting · P 2 · D 1",
+      expect = "[c3] · waiting · P 2 · ? 1",
     },
   }
   for _, c in ipairs(cases) do

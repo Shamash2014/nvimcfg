@@ -599,7 +599,7 @@ function M.setup(opts)
 
 
   vim.api.nvim_create_user_command("NoworkMailbox", function()
-    require("djinni.nowork.mailbox").open()
+    require("djinni.nowork.events").open()
   end, { nargs = 0 })
 
   vim.api.nvim_create_user_command("NoworkSummarizeWorklogs", function()

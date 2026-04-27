@@ -126,6 +126,6 @@ return {
         end
       end
     end
-    require("djinni.nowork.mailbox").enqueue(droid, params, respond)
+    require("djinni.nowork.events").enqueue(droid, params, respond)
   end,
 }

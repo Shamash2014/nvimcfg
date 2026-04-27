@@ -359,41 +359,6 @@ function M.open(droid, opts)
   state.reseed = reseed
   state.close = close
 
-  local saved_body = nil
-
-  local function mark_busy(label)
-    if not vim.api.nvim_buf_is_valid(state.buf) then return end
-    saved_body = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
-    state.busy = true
-    if droid then lifecycle.set_discussion_phase(droid, lifecycle.discussion.sending) end
-    set_buffer_body(state.buf, { "## " .. (label or "sending…"), "", "(waiting for agent reply)" }, false)
-    if non_floating then compose_chrome.apply_section_overlay(state.buf) end
-  end
-
-  local function release(new_body)
-    if not state.alive or not vim.api.nvim_buf_is_valid(state.buf) then return end
-    state.busy = false
-    if droid then lifecycle.set_discussion_phase(droid, lifecycle.discussion.composing) end
-    local lines
-    if new_body and new_body ~= "" then
-      lines = vim.split(new_body, "\n", { plain = true })
-    elseif saved_body then
-      lines = saved_body
-    else
-      lines = { "" }
-    end
-    set_buffer_body(state.buf, lines, true)
-    saved_body = nil
-    refresh_window_chrome(state)
-    if non_floating then compose_chrome.apply_section_overlay(state.buf) end
-    if state.win and vim.api.nvim_win_is_valid(state.win) then
-      pcall(vim.api.nvim_win_set_cursor, state.win, { #lines, #(lines[#lines] or "") })
-    end
-  end
-
-  state.mark_busy = mark_busy
-  state.release = release
-
   local function submit()
     if state.busy then return end
     local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
@@ -409,7 +374,7 @@ function M.open(droid, opts)
       local isolate = text:match("^/mul%s+%-%-isolate")
       local prompt = text:gsub("^/mul%s+%-?%-?%w*%s*", "")
       local expanded = require("djinni.nowork.expand").expand(prompt, { alt_buf = state.alt_buf })
-      require("djinni.nowork").multitask(expanded, { 
+      require("djinni.nowork").multitask(expanded, {
         cwd = droid and droid.opts and droid.opts.cwd,
         isolate = isolate ~= nil
       })
@@ -417,28 +382,15 @@ function M.open(droid, opts)
       return
     end
     local expanded = require("djinni.nowork.expand").expand(text, { alt_buf = state.alt_buf })
-
-    if persistent then
-      mark_busy("sending…")
-      vim.schedule(function()
-        if opts.on_submit then
-          opts.on_submit(expanded)
-        else
-          local droid_mod = require("djinni.nowork.droid")
-          droid_mod.send(droid, expanded)
-        end
-      end)
-    else
-      close()
-      vim.schedule(function()
-        if opts.on_submit then
-          opts.on_submit(expanded)
-        else
-          local droid_mod = require("djinni.nowork.droid")
-          droid_mod.send(droid, expanded)
-        end
-      end)
-    end
+    close()
+    vim.schedule(function()
+      if opts.on_submit then
+        opts.on_submit(expanded)
+      else
+        local droid_mod = require("djinni.nowork.droid")
+        droid_mod.send(droid, expanded)
+      end
+    end)
   end
 
   local function insert_token(token)

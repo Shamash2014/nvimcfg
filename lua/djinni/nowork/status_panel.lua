@@ -17,24 +17,33 @@ local function format_elapsed(seconds)
 end
 
 local function attention_line(d, now)
-  local s = d.state or {}
   local id = "[" .. (d.id or "?") .. "]"
+  local items = require("djinni.nowork.events").attention_items(d)
+
+  local labels = {}
+  for _, it in ipairs(items) do
+    if it.kind == "permission" then
+      labels[#labels + 1] = "perm " .. it.n
+    elseif it.kind == "question" then
+      labels[#labels + 1] = "?"
+    elseif it.kind == "blocker" then
+      labels[#labels + 1] = it.reason and ("blk(" .. it.reason .. ")") or "blk"
+    elseif it.kind == "staged" then
+      labels[#labels + 1] = "+"
+    end
+  end
 
   if d.status == "running" then
     local elapsed = d.started_at and format_elapsed(now - d.started_at)
-    return elapsed and (id .. " running " .. elapsed) or (id .. " running")
+    local prefix = elapsed and (id .. " running " .. elapsed) or (id .. " running")
+    if #labels > 0 then
+      return prefix .. " · " .. table.concat(labels, " · ")
+    end
+    return prefix
   end
 
-  local perm_count = require("djinni.nowork.events").permission_count_for_state(s)
-  if perm_count > 0 then
-    return id .. " perm!" .. perm_count
-  end
-
-  local disc = s.discussion or {}
-  if disc.pending_prompt and disc.staged_input then
-    return id .. " req+"
-  elseif disc.pending_prompt or disc.staged_input then
-    return id .. " req"
+  if #labels > 0 then
+    return id .. " " .. table.concat(labels, " · ")
   end
 
   return nil

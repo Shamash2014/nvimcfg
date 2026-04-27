@@ -25,7 +25,7 @@ return {
       require("djinni.nowork.picker").pick({ include_history = true, include_archive = true })
     end, desc = "nowork: logs (active + recent + archive)" },
     { "<leader>ap", function()
-      require("djinni.nowork.mailbox").open()
+      require("djinni.nowork.events").open()
     end, desc = "nowork: permissions mailbox" },
     { "<leader>av", mode = "x", function()
       local l1, l2 = vim.fn.line("v"), vim.fn.line(".")

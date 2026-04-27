@@ -54,7 +54,13 @@ local function discussion(droid)
   return lifecycle.ensure_discussion(droid)
 end
 
-local function set_status(droid, status)
+local function set_status(droid, status, reason)
+  droid.state = droid.state or {}
+  if status == lifecycle.droid.blocked then
+    droid.state.last_blocker_reason = reason
+  else
+    droid.state.last_blocker_reason = nil
+  end
   lifecycle.set_droid_status(droid, status)
   pcall(vim.cmd, "redrawstatus")
 end
@@ -189,7 +195,7 @@ local function attach_reconnect_handler(droid)
   if not droid or not droid.session_id then return end
   pcall(session.on_reconnect, droid.session_id, function()
     droid.log_buf:append("[session reconnected]")
-    pcall(require("djinni.nowork.mailbox").drain_droid, droid, "cancelled")
+    pcall(require("djinni.nowork.events").drain_droid, droid, "cancelled")
   end)
 end
 
@@ -291,7 +297,7 @@ function M._turn(droid, text)
       if err then
         if recover_session_and_retry(droid, original_text, "resume failed") then return end
         droid.log_buf:append("[error] session unavailable: " .. tostring(err.message or err))
-        set_status(droid, lifecycle.droid.blocked)
+        set_status(droid, lifecycle.droid.blocked, "session unavailable")
         set_discussion_phase(droid, lifecycle.discussion.closed)
         announce(droid)
         return
@@ -386,9 +392,9 @@ function M._turn(droid, text)
         return
       else
         droid.log_buf:append("[error] " .. tostring(err.message or err))
-        set_status(droid, lifecycle.droid.blocked)
+        set_status(droid, lifecycle.droid.blocked, "turn error")
       end
-      pcall(require("djinni.nowork.mailbox").drain_droid, droid, "cancelled")
+      pcall(require("djinni.nowork.events").drain_droid, droid, "cancelled")
       recover_persistent_compose(droid)
       announce(droid)
       return
@@ -414,7 +420,7 @@ function M._turn(droid, text)
     end
     if res.stop_reason == "error" then
       droid.log_buf:append("[error] turn failed")
-      set_status(droid, lifecycle.droid.blocked)
+      set_status(droid, lifecycle.droid.blocked, "stop=error")
       recover_persistent_compose(droid)
       announce(droid)
       return
@@ -643,7 +649,7 @@ function M.new(mode_name, initial_prompt, opts)
   session.create_task_session(cwd, function(err, session_id, result)
     if err then
       lb:append("[error] session create failed: " .. tostring(err.message or err))
-      set_status(droid, lifecycle.droid.blocked)
+      set_status(droid, lifecycle.droid.blocked, "session create failed")
       set_discussion_phase(droid, lifecycle.discussion.closed)
       announce(droid)
       return
@@ -885,7 +891,7 @@ end
 function M.cancel(droid_or_id)
   local droid = M.resolve(droid_or_id)
   if not droid then return end
-  pcall(require("djinni.nowork.mailbox").drain_droid, droid, "cancelled")
+  pcall(require("djinni.nowork.events").drain_droid, droid, "cancelled")
   droid.cancelled = true
   if droid.session_id and droid._sink then
     droid._sink:cancel()
@@ -901,7 +907,7 @@ end
 function M.done(droid_or_id)
   local droid = M.resolve(droid_or_id)
   if not droid then return end
-  pcall(require("djinni.nowork.mailbox").drain_droid, droid, "cancelled")
+  pcall(require("djinni.nowork.events").drain_droid, droid, "cancelled")
   local show_diff = false
   if droid.mode == "autorun" then
     local order = droid.state and droid.state.topo_order or {}

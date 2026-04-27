@@ -65,6 +65,69 @@ function M.permission_count_for_state(state)
   return n
 end
 
+local function is_blocked(droid)
+  return droid and droid.status == "blocked"
+end
+
+local function blocker_reason(droid)
+  if not droid then return nil end
+  local s = droid.state or {}
+  return s.last_blocker_reason
+end
+
+local EMPTY_SUMMARY = { permissions = 0, questions = 0, blockers = 0, staged = 0, total = 0 }
+
+function M.summary(droid)
+  if not droid then
+    return { permissions = 0, questions = 0, blockers = 0, staged = 0, total = 0 }
+  end
+  local state = droid.state or {}
+  local disc = state.discussion or {}
+  local permissions = M.permission_count_for_state(state)
+  local questions   = (disc.pending_prompt and 1) or 0
+  local staged      = (disc.staged_input and 1) or 0
+  local blockers    = is_blocked(droid) and 1 or 0
+  return {
+    permissions = permissions,
+    questions   = questions,
+    blockers    = blockers,
+    staged      = staged,
+    total       = permissions + questions + blockers + staged,
+  }
+end
+
+function M.aggregate(droids)
+  if not droids then
+    droids = {}
+    local droid_mod = require("djinni.nowork.droid")
+    for _, d in pairs(droid_mod.active) do droids[#droids + 1] = d end
+  end
+  local out = { permissions = 0, questions = 0, blockers = 0, staged = 0, total = 0 }
+  for _, d in ipairs(droids) do
+    local s = M.summary(d)
+    out.permissions = out.permissions + s.permissions
+    out.questions   = out.questions   + s.questions
+    out.blockers    = out.blockers    + s.blockers
+    out.staged      = out.staged      + s.staged
+    out.total       = out.total       + s.total
+  end
+  return out
+end
+
+function M.attention_items(droid)
+  local out = {}
+  if not droid then return out end
+  local s = M.summary(droid)
+  if s.permissions > 0 then out[#out + 1] = { kind = "permission", n = s.permissions } end
+  if s.questions   > 0 then out[#out + 1] = { kind = "question" } end
+  if s.blockers    > 0 then out[#out + 1] = { kind = "blocker", reason = blocker_reason(droid) } end
+  if s.staged      > 0 then out[#out + 1] = { kind = "staged" } end
+  return out
+end
+
+M._is_blocked = is_blocked
+M._blocker_reason = blocker_reason
+
 local function collect_entries()
   local droid_mod = require("djinni.nowork.droid")
   local entries = {}
