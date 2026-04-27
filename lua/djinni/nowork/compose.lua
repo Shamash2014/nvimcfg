@@ -312,23 +312,18 @@ function M.open(droid, opts)
     buffer = buf,
     callback = function() render_chrome(state) end,
   })
-  vim.api.nvim_create_autocmd({ "VimResized", "WinResized" }, {
+  vim.api.nvim_create_autocmd({ "VimResized" }, {
     group = group,
     callback = function()
       if not state.alive or not vim.api.nvim_win_is_valid(state.win) then return end
       if state.window_opts.floating ~= false then
-        local user_width = (opts.window and opts.window.width)
-          or (require("djinni.nowork").config and require("djinni.nowork").config.compose and require("djinni.nowork").config.compose.width)
-        local user_height = (opts.window and opts.window.height)
-          or (require("djinni.nowork").config and require("djinni.nowork").config.compose and require("djinni.nowork").config.compose.height)
-        local width = user_width or math.floor(vim.o.columns * 0.80)
-        local height = user_height or math.floor(vim.o.lines * 0.80)
+        local width = state.window_opts.width
+        local height = state.window_opts.height
         local row = math.floor((vim.o.lines - height) / 2) - 1
         local col = math.floor((vim.o.columns - width) / 2)
         local cfg = vim.api.nvim_win_get_config(state.win)
         cfg.row, cfg.col, cfg.width, cfg.height = row, col, width, height
         pcall(vim.api.nvim_win_set_config, state.win, cfg)
-        state.window_opts.width, state.window_opts.height = width, height
       end
       render_chrome(state)
     end,
