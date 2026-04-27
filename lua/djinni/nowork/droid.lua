@@ -10,6 +10,34 @@ M.active = {}
 
 local counter = 0
 
+local function is_session_not_found(err)
+  if not err then return false end
+  if err.code == -32603 then return true end
+  local msg = tostring(err.message or err or ""):lower()
+  return msg:find("session not found", 1, true) ~= nil
+end
+
+local function recover_session_and_retry(droid, text_for_retry, reason_label)
+  if (droid._session_recreate_attempts or 0) >= 1 then return false end
+  droid._session_recreate_attempts = (droid._session_recreate_attempts or 0) + 1
+  droid.log_buf:append("[" .. reason_label .. " — recreating session]")
+  droid.session_id = nil
+  droid.state.available_commands = nil
+  droid.acp_modes = nil
+  local cwd = droid.opts and droid.opts.cwd or vim.fn.getcwd()
+  session.create_task_session(cwd, function(create_err, new_sid)
+    if create_err or not new_sid then
+      droid.log_buf:append("[error] failed to recreate session: " .. tostring((create_err and create_err.message) or create_err or "no session"))
+      pcall(function() require("djinni.nowork.status_panel").update() end)
+      return
+    end
+    droid.session_id = new_sid
+    droid.log_buf:append("[session recreated: " .. tostring(new_sid) .. "]")
+    M._turn(droid, text_for_retry)
+  end, { provider = droid.provider_name, model = droid.model_name })
+  return true
+end
+
 local function announce(droid)
   require("djinni.nowork.status_panel").update()
   pcall(function()
@@ -132,7 +160,7 @@ function M._dispatch(droid, action)
     set_status(droid, lifecycle.droid.idle)
     set_discussion_phase(droid, lifecycle.discussion.awaiting_user)
     if lifecycle.should_close_session_on_idle(droid) and droid.session_id then
-      session.close_task_session(nil, droid.session_id)
+      droid._sink:close()
       lifecycle.clear_close_session_on_idle(droid)
     end
     local next_text = lifecycle.dequeue(droid)
@@ -255,10 +283,13 @@ function M.set_acp_mode_id(droid, mode_id)
 end
 
 function M._turn(droid, text)
+  local original_text = text
+  local pre_output_tokens = (droid.state and droid.state.tokens and droid.state.tokens.output) or 0
   if droid.session_id and session.get_client and not session.get_client(droid.session_id) then
     local cwd = droid.opts and droid.opts.cwd or vim.fn.getcwd()
     session.create_or_resume_session(cwd, droid.session_id, function(err, session_id, result)
       if err then
+        if recover_session_and_retry(droid, original_text, "resume failed") then return end
         droid.log_buf:append("[error] session unavailable: " .. tostring(err.message or err))
         set_status(droid, lifecycle.droid.blocked)
         set_discussion_phase(droid, lifecycle.discussion.closed)
@@ -280,10 +311,6 @@ function M._turn(droid, text)
   local ts = os.date("%H:%M:%S")
   droid.log_buf:append("")
   droid.log_buf:append(string.format("─── turn %d · %s ───────────────", droid.state.turn_n, ts))
-  for _, line in ipairs(vim.split(text, "\n", { plain = true })) do
-    droid.log_buf:append("user: " .. line)
-  end
-  droid.log_buf:append("")
   droid.log_buf:append("agent:")
 
   local final_prompt
@@ -299,13 +326,15 @@ function M._turn(droid, text)
   announce(droid)
 
   local tc_state = {}
+  local stream_to_log = droid.policy.tail_stream and not droid.policy.log_render
   local turn_opts = {
     provider_name = droid.provider_name,
-    on_chunk = (droid.policy.tail_stream and not droid.policy.log_render) and function(kind, chunk)
-      if kind == "agent_message_chunk" then
+    on_chunk = function(kind, chunk)
+      if kind ~= "agent_message_chunk" then return end
+      if stream_to_log then
         droid.log_buf:append(chunk)
       end
-    end or nil,
+    end,
     on_usage = function(usage, cost)
       droid.state.tokens = droid.state.tokens or { input = 0, output = 0, cache_read = 0, cache_write = 0, cost = 0 }
       local t = droid.state.tokens
@@ -340,7 +369,7 @@ function M._turn(droid, text)
     end,
   }
 
-  turn.run(droid.session_id, final_prompt, turn_opts, function(err, res)
+  turn.run(droid, final_prompt, turn_opts, function(err, res)
     if err or droid.cancelled then
       if interrupt_requested(droid) then
         clear_interrupt_request(droid)
@@ -353,6 +382,8 @@ function M._turn(droid, text)
         droid.log_buf:append("[cancelled]")
         set_status(droid, lifecycle.droid.cancelled)
         set_discussion_phase(droid, lifecycle.discussion.closed)
+      elseif is_session_not_found(err) and recover_session_and_retry(droid, original_text, "session expired") then
+        return
       else
         droid.log_buf:append("[error] " .. tostring(err.message or err))
         set_status(droid, lifecycle.droid.blocked)
@@ -362,6 +393,8 @@ function M._turn(droid, text)
       announce(droid)
       return
     end
+
+    droid._session_recreate_attempts = 0
 
     if res.stop_reason == "cancelled" then
       droid.log_buf:append("[cancelled]")
@@ -385,6 +418,15 @@ function M._turn(droid, text)
       recover_persistent_compose(droid)
       announce(droid)
       return
+    end
+
+    local post_output_tokens = (droid.state and droid.state.tokens and droid.state.tokens.output) or 0
+    local empty_text = (res.text or "") == ""
+    local empty_tools = not res.tool_calls or #res.tool_calls == 0
+    if empty_text and empty_tools and post_output_tokens == pre_output_tokens then
+      if recover_session_and_retry(droid, original_text, "empty turn — session may be broken") then
+        return
+      end
     end
 
     if droid.policy.log_render then
@@ -429,7 +471,7 @@ function M.new(mode_name, initial_prompt, opts)
       turns_on_task = 0,
       pending_retry = false,
       sticky_permissions = {},
-      pending_permissions = {},
+      pending_events = {},
       eval_feedback = {},
       sprint_retries = {},
       discussion = {
@@ -521,6 +563,9 @@ function M.new(mode_name, initial_prompt, opts)
   lb:set_statusline_provider(function()
     return require("djinni.nowork.status_text").compact(droid)
   end)
+
+  droid._plan_path = opts.plan_path
+  droid._sink = require("djinni.nowork.sink").new(droid)
 
   M.active[id] = droid
   announce(droid)
@@ -656,7 +701,7 @@ function M.cancel_request(droid_or_id)
     return
   end
   mark_interrupt_request(droid)
-  session.interrupt(nil, droid.session_id)
+  droid._sink:cancel()
   droid.log_buf:append("[cancel requested]")
 end
 
@@ -842,8 +887,8 @@ function M.cancel(droid_or_id)
   if not droid then return end
   pcall(require("djinni.nowork.mailbox").drain_droid, droid, "cancelled")
   droid.cancelled = true
-  if droid.session_id then
-    session.interrupt(nil, droid.session_id)
+  if droid.session_id and droid._sink then
+    droid._sink:cancel()
   end
   droid.log_buf:append("[cancelled]")
   set_status(droid, lifecycle.droid.cancelled)
@@ -887,7 +932,7 @@ function M.done(droid_or_id)
     show_diff = choice == 2
   end
   if droid.session_id then
-    session.close_task_session(nil, droid.session_id)
+    droid._sink:close()
   end
   finalize(droid)
   if show_diff then
@@ -949,9 +994,7 @@ function M.restart(droid_or_id)
     require("djinni.nowork.archive").write_state(droid)
   end)
   if droid.session_id then
-    pcall(function()
-      session.close_task_session(nil, droid.session_id)
-    end)
+    pcall(function() droid._sink:close() end)
   end
   pcall(function() finalize(droid) end)
   M.restart_from_archive(log_path)

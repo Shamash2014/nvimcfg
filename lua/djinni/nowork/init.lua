@@ -3,7 +3,15 @@ local M = {}
 M.defaults = {
   provider = "claude",
   log_buffer = { split = "below", height = 15, hidden_default = true },
-  compose = { floating = true, split = "below", border = "rounded" },
+  compose = {
+    floating = true,
+    split = "below",
+    border = {
+      { " ", "FloatBorder" }, { " ", "FloatBorder" }, { " ", "FloatBorder" },
+      { " ", "FloatBorder" }, { " ", "FloatBorder" }, { " ", "FloatBorder" },
+      { " ", "FloatBorder" }, { " ", "FloatBorder" },
+    },
+  },
   explore = { absolute_paths = true, copen_on_first_hit = true },
   routine = {
     skills = {},
@@ -54,6 +62,48 @@ function M.multitask(prompt, opts)
   return M.routine(prompt, opts)
 end
 
+function M.run_plan(opts)
+  opts = opts or {}
+  local cwd = opts.cwd or vim.fn.getcwd()
+  local plans = require("djinni.nowork.plans")
+  local plan_path = opts.plan_path or plans.current_plan_path(cwd)
+  if not plan_path then
+    plans.pick(cwd, function(p)
+      M.run_plan(vim.tbl_extend("force", opts, { plan_path = p }))
+    end)
+    return
+  end
+  local plan_text = plans.read(plan_path)
+  if not plan_text or vim.trim(plan_text) == "" then
+    vim.notify("nowork: plan is empty: " .. plan_path, vim.log.levels.WARN)
+    return
+  end
+
+  local plan_name = vim.fn.fnamemodify(plan_path, ":t")
+  local prompt_parts = {
+    "Implement the following plan (" .. plan_name .. ").",
+    "Mark tasks as you complete them by editing " .. plan_path .. " (replace `- [ ]` with `- [x]`).",
+    "",
+    "## Plan",
+    "",
+    plan_text,
+  }
+
+  if opts.selection and opts.selection ~= "" then
+    table.insert(prompt_parts, "")
+    table.insert(prompt_parts, "## Selection context")
+    table.insert(prompt_parts, "")
+    table.insert(prompt_parts, opts.selection)
+  end
+
+  local prompt = table.concat(prompt_parts, "\n")
+  local routine_opts = merged_opts({
+    cwd = cwd,
+    plan_snapshot = plan_text,
+    plan_path = plan_path,
+  })
+  return M.routine(prompt, routine_opts)
+end
 
 function M.projects()
   local roots = {}
@@ -308,17 +358,6 @@ function M.setup(opts)
     end
   end, { nargs = 0 })
 
-  vim.api.nvim_create_user_command("NoworkPlanReview", function(info)
-    local arg = info.args ~= "" and info.args or nil
-    local plan_history = require("djinni.nowork.plan_history")
-    if arg then
-      local p = vim.fn.fnamemodify(arg, ":p")
-      plan_history.preview(p, { cwd = vim.fn.fnamemodify(p, ":h:h:h") })
-    else
-      plan_history.pick(nil)
-    end
-  end, { desc = "nowork: pick and review a saved plan (qflist + preview)", nargs = "?", complete = "file" })
-
   vim.api.nvim_create_user_command("NoworkDone", function()
     local droid = require("djinni.nowork.droid")
     local picker = require("djinni.nowork.picker")
@@ -365,9 +404,20 @@ function M.setup(opts)
     end })
   end, { nargs = 0 })
 
-  vim.keymap.set("n", "<leader>as", function() M.launch("plan") end, { desc = "nowork: chat-plan (routine in plan mode, refine via follow-up messages)" })
-  vim.keymap.set("n", "<leader>aP", function() require("djinni.nowork.plan_history").pick(nil) end, { desc = "nowork: review saved plan (qflist + preview)" })
+  vim.keymap.set("n", "<leader>as", function() require("djinni.nowork.plans").start_flow(vim.fn.getcwd()) end, { desc = "nowork: start plan flow (compose → save to plans/)" })
+  vim.keymap.set("n", "<leader>aS", function() M.launch("plan") end, { desc = "nowork: chat-plan (legacy launcher)" })
   vim.keymap.set("n", "<leader>aw", function() M.launch("routine") end, { desc = "nowork: routine" })
+
+  vim.keymap.set("n", "<leader>ar", function() M.run_plan({}) end, { desc = "nowork: run agent on plan.md" })
+  vim.keymap.set("x", "<leader>ar", function()
+    local l1, l2 = vim.fn.line("v"), vim.fn.line(".")
+    if l1 > l2 then l1, l2 = l2, l1 end
+    vim.cmd("normal! \27")
+    local lines = vim.api.nvim_buf_get_lines(0, l1 - 1, l2, false)
+    M.run_plan({ selection = table.concat(lines, "\n") })
+  end, { desc = "nowork: run agent on plan.md (with visual selection as context)" })
+
+  vim.keymap.set("n", "<leader>ae", function() require("djinni.nowork.events").open() end, { desc = "nowork: events (permissions + questions + blocked)" })
 
   vim.keymap.set("n", "<leader>av", function()
     local droid_mod = require("djinni.nowork.droid")
@@ -618,8 +668,10 @@ function M.setup(opts)
   if ok_wk and wk.add then
     pcall(wk.add, {
       { "<leader>a",  group = "nowork" },
-      { "<leader>as", desc = "universal planner (search + routine)" },
-      { "<leader>aP", desc = "review saved plan (qflist + preview)" },
+      { "<leader>as", desc = "start plan flow (empty compose → save)" },
+      { "<leader>aS", desc = "chat-plan (legacy)" },
+      { "<leader>ar", desc = "run agent on plan.md", mode = { "n", "x" } },
+      { "<leader>ae", desc = "events (permissions + questions + blocked)" },
       { "<leader>aw", desc = "routine" },
       { "<leader>aa", desc = "logs (active + recent + archive)" },
       { "<leader>ao", desc = "projects" },

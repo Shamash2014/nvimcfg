@@ -6,6 +6,22 @@ local M = {}
 
 pcall(vim.api.nvim_set_hl, 0, "NoworkPickerSkill", { bold = true, link = "Special" })
 
+local function derive_cwd_from_archive(path)
+  if not path or path == "" then return nil end
+  local ok, archive = pcall(require, "djinni.nowork.archive")
+  if ok and archive and archive.read_state then
+    local state = archive.read_state(path)
+    if state and state.opts and state.opts.cwd and vim.fn.isdirectory(state.opts.cwd) == 1 then
+      return state.opts.cwd
+    end
+  end
+  local guess = path:match("^(.-)/%.nowork/logs/")
+  if guess and vim.fn.isdirectory(guess) == 1 then
+    return guess
+  end
+  return nil
+end
+
 local function split_skills(text)
   local parts = {}
   local i = 1
@@ -71,9 +87,9 @@ local function format_item(item)
   if (d.mode == "explore" or d.mode == "planner") and d.state and d.state.qfix_items and #d.state.qfix_items > 0 then
     parts[#parts + 1] = { " [" .. #d.state.qfix_items .. " results]", "SnacksPickerLabel" }
   end
-  local perms = d.state and d.state.pending_permissions
-  if perms and #perms > 0 then
-    parts[#parts + 1] = { " perm!" .. #perms, "DiagnosticWarn" }
+  local perm_count = require("djinni.nowork.events").permission_count(d)
+  if perm_count > 0 then
+    parts[#parts + 1] = { " perm!" .. perm_count, "DiagnosticWarn" }
   end
   return parts
 end
@@ -189,10 +205,10 @@ local function build_action_items(d)
   local items = {}
   local function add(label, fn) items[#items + 1] = { text = label, fn = fn } end
 
-  local perms = d.state and d.state.pending_permissions
-  if perms and #perms > 0 then
-    add(("resolve %d permission%s"):format(#perms, #perms == 1 and "" or "s"), function()
-      require("djinni.nowork.mailbox").open()
+  local perm_count = require("djinni.nowork.events").permission_count(d)
+  if perm_count > 0 then
+    add(("resolve %d permission%s"):format(perm_count, perm_count == 1 and "" or "s"), function()
+      require("djinni.nowork.events").open()
     end)
   end
 
@@ -233,6 +249,13 @@ local function build_action_items(d)
   add("shadow review", function()
     require("djinni.nowork.shadow").review(d)
   end)
+
+  local plan_cwd = d.opts and d.opts.cwd
+  if plan_cwd and vim.fn.isdirectory(plan_cwd .. "/.nowork/plans") == 1 then
+    add("review plan", function()
+      require("djinni.nowork.plans").pick(plan_cwd)
+    end)
+  end
 
   if lifecycle.is_finished(d) then
     add("restart (resume from saved state)", function()
@@ -289,6 +312,15 @@ local function build_archive_actions(path, has_state)
     text = "open log (read-only)",
     fn = function() archive.open(path) end,
   }
+  local plan_cwd = derive_cwd_from_archive(path)
+  if plan_cwd and vim.fn.isdirectory(plan_cwd .. "/.nowork/plans") == 1 then
+    actions[#actions + 1] = {
+      text = "review plan",
+      fn = function()
+        require("djinni.nowork.plans").pick(plan_cwd)
+      end,
+    }
+  end
   actions[#actions + 1] = {
     text = "copy log path",
     fn = function()
@@ -342,6 +374,13 @@ local function build_history_action_items(history_entry)
   else
     add("show missing log warning", function()
       vim.notify("nowork: log buffer gone and no archive for " .. (history_entry.id or "?"), vim.log.levels.WARN)
+    end)
+  end
+
+  local plan_cwd = history_entry and history_entry.cwd or nil
+  if plan_cwd and vim.fn.isdirectory(plan_cwd .. "/.nowork/plans") == 1 then
+    add("review plan", function()
+      require("djinni.nowork.plans").pick(plan_cwd)
     end)
   end
 

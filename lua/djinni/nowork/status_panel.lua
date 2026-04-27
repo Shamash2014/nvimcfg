@@ -25,9 +25,9 @@ local function attention_line(d, now)
     return elapsed and (id .. " running " .. elapsed) or (id .. " running")
   end
 
-  local perms = s.pending_permissions or {}
-  if #perms > 0 then
-    return id .. " perm!" .. #perms
+  local perm_count = require("djinni.nowork.events").permission_count_for_state(s)
+  if perm_count > 0 then
+    return id .. " perm!" .. perm_count
   end
 
   local disc = s.discussion or {}

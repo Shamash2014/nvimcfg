@@ -29,7 +29,7 @@ function M.components(droid)
   local tok   = s.tokens or {}
   local disc  = s.discussion or {}
   local q     = disc.queue or {}
-  local perms = s.pending_permissions or {}
+  local perm_count = require("djinni.nowork.events").permission_count_for_state(s)
 
   local parts = {}
   local function push(sym, val)
@@ -51,7 +51,7 @@ function M.components(droid)
   push("$", M.cost_compact(tok.cost))
   if #q > 0                  then push("Q", tostring(#q))     end
   if disc.staged_input       then push("+", "1")              end
-  if #perms > 0              then push("P", tostring(#perms)) end
+  if perm_count > 0          then push("P", tostring(perm_count)) end
   if disc.pending_prompt     then push("D", "1")              end
   push("M", droid.model_name)
   push("A", acp_label(droid))
@@ -91,7 +91,7 @@ function M.statusline_parts(droids)
     Qt = Qt + #(disc.queue or {})
     if disc.staged_input then Stg = Stg + 1 end
     if disc.pending_prompt then Dt = Dt + 1 end
-    Pt = Pt + #(s.pending_permissions or {})
+    Pt = Pt + require("djinni.nowork.events").permission_count_for_state(s)
   end
   local parts = {}
   local function push(sym, n)
@@ -129,7 +129,7 @@ if vim and vim.env and vim.env.DJINNI_TEST == "1" then
       droid = {
         id = "c3", status = "waiting",
         state = {
-          pending_permissions = { {}, {} },
+          pending_events = { { kind = "permission" }, { kind = "permission" } },
           discussion = { queue = {}, pending_prompt = true },
         },
       },

@@ -11,6 +11,18 @@ local function acp_label(droid)
   return id
 end
 
+function M.one_line(s, max)
+  s = tostring(s or ""):gsub("[\r\n]+", " ⏎ "):gsub("%s+", " ")
+  if max and #s > max then s = s:sub(1, max - 1) .. "…" end
+  return s
+end
+
+function M.format_elapsed(seconds)
+  if seconds < 60 then return seconds .. "s ago" end
+  if seconds < 3600 then return math.floor(seconds / 60) .. "m ago" end
+  return math.floor(seconds / 3600) .. "h ago"
+end
+
 function M.compact(droid)
   if not droid then return "" end
   local bits = { "[" .. (droid.id or "?") .. "]" }

@@ -1,5 +1,11 @@
 local M = {}
 
+function M.droid_log(droid, line)
+  if droid and droid.log_buf and droid.log_buf.append then
+    droid.log_buf:append(line)
+  end
+end
+
 local ns = vim.api.nvim_create_namespace("nowork_log")
 
 local statusline_providers = {}

@@ -4,10 +4,9 @@ local compose_chrome = require("djinni.nowork.compose_chrome")
 
 local M = {}
 
-local DEFAULT_SECTIONS = { "Summary", "Review", "Observation", "Tasks" }
+local DEFAULT_SECTIONS = {}
 local ROUTINE_CHAT_TITLE = " routine chat — <C-CR> send · <C-n> new · <C-c> close "
 local FOOTER_BASE = " <C-CR> send · <S-Tab> ACP mode · <C-l> model · <C-s> local policy · . actions · Q populate · R restart · clear→/clear · <C-q> qflist · <C-b> buffer · <C-d> diff · <C-n> new · <C-c> close "
-local FOOTER_PLANNER_EXT = " · <C-m> dispatch · <C-g> previous plans"
 
 local state_by_droid = {}
 local autorun_title
@@ -64,19 +63,6 @@ local function command_name(cmd)
   return name
 end
 
-local function format_footer(droid)
-  local prefix = ""
-  if droid then
-    local status = require("djinni.nowork.status_text").compact(droid)
-    if status ~= "" then prefix = " " .. status .. " │" end
-  end
-  local footer = FOOTER_BASE
-  if droid and droid.mode == "planner" then
-    footer = FOOTER_BASE:sub(1, -3) .. FOOTER_PLANNER_EXT .. " "
-  end
-  return prefix .. footer
-end
-
 local function resolve_window_opts(opts)
   local settings = {}
   local ok, nowork = pcall(require, "djinni.nowork")
@@ -85,8 +71,8 @@ local function resolve_window_opts(opts)
   end
   return vim.tbl_deep_extend("force", {
     floating = true,
-    width = math.min(120, math.floor(vim.o.columns * 0.95)),
-    height = math.min(45, math.floor(vim.o.lines * 0.85)),
+    width = math.floor(vim.o.columns * 0.40),
+    height = math.floor(vim.o.lines * 0.40),
     split = "below",
   }, settings, opts or {})
 end
@@ -124,28 +110,26 @@ local function open_window(buf, title, footer, opts)
       border = opts.border or "rounded",
       title = title or " nowork compose ",
       title_pos = "center",
+      footer = " ",
+      footer_pos = "left",
     })
   end
   apply_window_local_opts(win)
   return win, opts
 end
 
-local function render_dashboard(state)
+local function render_chrome(state)
   if not state.alive then return end
-  local droid = state.droid
-  local buf = state.buf
+  if state.window_opts.floating == false then return end
   local win = state.win
   if not vim.api.nvim_win_is_valid(win) then return end
 
-  local ns = vim.api.nvim_create_namespace("nowork_compose_dash")
-  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-
-  local line_count = vim.api.nvim_buf_line_count(buf)
+  local droid = state.droid
   local iso = (droid and droid.opts and droid.opts.isolate) and "on" or "off"
   local provider = (droid and droid.provider_name) or "claude"
 
-  local summary = {
-    { "args ", "Comment" },
+  local chunks = {
+    { " args ", "Comment" },
     { "-i ", "Comment" },
     { iso, iso == "on" and "NoworkQfEdit" or "Comment" },
     { "  -p ", "Comment" },
@@ -154,10 +138,18 @@ local function render_dashboard(state)
     { "^CR send · ^C close · ? help", "Comment" },
   }
 
-  pcall(vim.api.nvim_buf_set_extmark, buf, ns, line_count - 1, 0, {
-    virt_lines = { summary },
-    virt_lines_above = false,
-  })
+  if droid and droid._plan_path then
+    local basename = vim.fn.fnamemodify(droid._plan_path, ":t")
+    chunks[#chunks + 1] = { "  ·  plan: ", "Comment" }
+    chunks[#chunks + 1] = { basename .. " ", "NeogitGraphAuthor" }
+  else
+    chunks[#chunks + 1] = { " ", "Comment" }
+  end
+
+  local cfg = vim.api.nvim_win_get_config(win)
+  cfg.footer = chunks
+  cfg.footer_pos = "left"
+  pcall(vim.api.nvim_win_set_config, win, cfg)
 end
 
 local function place_cursor_first_blank(buf, win, sections)
@@ -187,6 +179,7 @@ local function refresh_window_chrome(state)
   cfg.title = state.opts.title or autorun_title(state.droid) or " nowork compose "
   cfg.title_pos = "center"
   pcall(vim.api.nvim_win_set_config, state.win, cfg)
+  render_chrome(state)
 end
 
 autorun_title = function(droid)
@@ -223,11 +216,11 @@ function M.open(droid, opts)
       opts.on_submit = function(text) require("djinni.nowork.droid").send(droid, text) end
     end
     if opts.alt_buf == nil then opts.alt_buf = vim.fn.bufnr("#") end
-    if opts.sections == nil then opts.sections = DEFAULT_SECTIONS end
-  end
-  if droid and droid.mode == "planner" and opts.on_dispatch == nil then
-    opts.on_dispatch = function(text)
-      require("djinni.nowork.compose_planner").dispatch(droid, text)
+    if opts.sections == nil then opts.sections = {} end
+    if opts.title == nil and droid.mode == "planner" and droid._plan_path then
+      opts.title = " planner · plan: " .. vim.fn.fnamemodify(droid._plan_path, ":t") .. " "
+    elseif opts.title == nil and droid.mode == "routine" then
+      opts.title = " routine · " .. (droid.id and ("[" .. tostring(droid.id) .. "]") or "") .. " "
     end
   end
   local alt_buf = opts.alt_buf or vim.fn.bufnr("#")
@@ -259,7 +252,7 @@ function M.open(droid, opts)
   end
 
   local title = opts.title or autorun_title(droid)
-  local win, window_opts = open_window(buf, title, format_footer(droid), opts.window or opts.compose)
+  local win, window_opts = open_window(buf, title, nil, opts.window or opts.compose)
 
   if window_opts.floating == false then
     local label_w = opts.label or (droid and droid.mode) or "compose"
@@ -317,17 +310,30 @@ function M.open(droid, opts)
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
     group = group,
     buffer = buf,
-    callback = function() render_dashboard(state) end,
+    callback = function() render_chrome(state) end,
   })
-  vim.api.nvim_create_autocmd("WinResized", {
+  vim.api.nvim_create_autocmd({ "VimResized", "WinResized" }, {
     group = group,
-    callback = function() 
-      if vim.api.nvim_get_current_buf() == buf then
-        render_dashboard(state) 
+    callback = function()
+      if not state.alive or not vim.api.nvim_win_is_valid(state.win) then return end
+      if state.window_opts.floating ~= false then
+        local user_width = (opts.window and opts.window.width)
+          or (require("djinni.nowork").config and require("djinni.nowork").config.compose and require("djinni.nowork").config.compose.width)
+        local user_height = (opts.window and opts.window.height)
+          or (require("djinni.nowork").config and require("djinni.nowork").config.compose and require("djinni.nowork").config.compose.height)
+        local width = user_width or math.floor(vim.o.columns * 0.80)
+        local height = user_height or math.floor(vim.o.lines * 0.80)
+        local row = math.floor((vim.o.lines - height) / 2) - 1
+        local col = math.floor((vim.o.columns - width) / 2)
+        local cfg = vim.api.nvim_win_get_config(state.win)
+        cfg.row, cfg.col, cfg.width, cfg.height = row, col, width, height
+        pcall(vim.api.nvim_win_set_config, state.win, cfg)
+        state.window_opts.width, state.window_opts.height = width, height
       end
+      render_chrome(state)
     end,
   })
-  render_dashboard(state)
+  render_chrome(state)
 
   local function close()
     if not state.alive then return end
@@ -440,20 +446,6 @@ function M.open(droid, opts)
     end
   end
 
-  local function dispatch_action()
-    if state.busy then return end
-    if not opts.on_dispatch then return end
-    local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
-    local text = table.concat(lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
-    if text == "" then
-      vim.notify("nowork: empty message", vim.log.levels.WARN)
-      return
-    end
-    state.last_action = "dispatch"
-    close()
-    vim.schedule(function() opts.on_dispatch(text) end)
-  end
-
   local function insert_token(token)
     if state.busy then return end
     local mode = vim.api.nvim_get_mode().mode
@@ -503,16 +495,59 @@ function M.open(droid, opts)
     require("djinni.nowork.model_picker").pick(droid)
   end
 
+  local function peek_plan()
+    if not droid or not droid._plan_path then
+      vim.notify("nowork: no plan attached", vim.log.levels.WARN)
+      return
+    end
+    if vim.fn.filereadable(droid._plan_path) ~= 1 then
+      vim.notify("nowork: plan file unreadable: " .. droid._plan_path, vim.log.levels.WARN)
+      return
+    end
+    local plans = require("djinni.nowork.plans")
+    local body = plans.read(droid._plan_path) or ""
+    local lines = vim.split(body, "\n", { plain = true })
+    local pbuf = vim.api.nvim_create_buf(false, true)
+    vim.bo[pbuf].buftype = "nofile"
+    vim.bo[pbuf].bufhidden = "wipe"
+    vim.bo[pbuf].swapfile = false
+    vim.bo[pbuf].filetype = "markdown"
+    vim.api.nvim_buf_set_lines(pbuf, 0, -1, false, lines)
+    vim.bo[pbuf].modifiable = false
+    vim.bo[pbuf].readonly = true
+    local pwidth = math.floor(vim.o.columns * 0.70)
+    local pheight = math.floor(vim.o.lines * 0.70)
+    local prow = math.floor((vim.o.lines - pheight) / 2) - 1
+    local pcol = math.floor((vim.o.columns - pwidth) / 2)
+    local pwin = vim.api.nvim_open_win(pbuf, true, {
+      relative = "editor",
+      row = prow,
+      col = pcol,
+      width = pwidth,
+      height = pheight,
+      style = "minimal",
+      border = "rounded",
+      title = " plan: " .. vim.fn.fnamemodify(droid._plan_path, ":t") .. " ",
+      title_pos = "center",
+    })
+    vim.wo[pwin].wrap = true
+    vim.wo[pwin].linebreak = true
+    local close_peek = function()
+      if vim.api.nvim_win_is_valid(pwin) then
+        vim.api.nvim_win_close(pwin, true)
+      end
+    end
+    local pkm = { buffer = pbuf, nowait = true }
+    vim.keymap.set("n", "q", close_peek, pkm)
+    vim.keymap.set("n", "<Esc>", close_peek, pkm)
+    vim.keymap.set("n", "<C-c>", close_peek, pkm)
+    vim.keymap.set("n", "<C-p>", close_peek, pkm)
+  end
+
   local km = { buffer = buf, nowait = true }
   vim.keymap.set({ "n", "i" }, "<C-CR>", submit, km)
   if non_floating then
     vim.keymap.set("n", "<Tab>", function() compose_chrome.toggle_section_fold(buf) end, km)
-  end
-  if opts.on_dispatch then
-    vim.keymap.set("n", "<C-m>", dispatch_action, km)
-    vim.keymap.set({ "n", "i" }, "<C-g>", function()
-      require("djinni.nowork.plan_history").pick(droid)
-    end, km)
   end
   vim.keymap.set({ "n", "i" }, "<S-Tab>", switch_acp_mode, km)
   vim.keymap.set({ "n", "i" }, "<C-l>", switch_model, km)
@@ -531,6 +566,7 @@ function M.open(droid, opts)
   vim.keymap.set({ "n", "i" }, "<C-b>", function() insert_token("#{buffer}") end, km)
   vim.keymap.set({ "n", "i" }, "<C-d>", function() insert_token("#{diff}") end, km)
   vim.keymap.set({ "n", "i" }, "<C-n>", new_empty, km)
+  vim.keymap.set({ "n", "i" }, "<C-p>", peek_plan, km)
   vim.keymap.set("n", "q", close, km)
   vim.keymap.set("n", "<Esc>", close, km)
   vim.keymap.set("n", "?", function()
@@ -543,6 +579,7 @@ function M.open(droid, opts)
       { key = "R", desc = "restart from saved state (after done/cancel)" },
       { key = "clear", desc = "send /clear to attached droid" },
       { key = "<C-s>", desc = "switch local policy (routine/autorun/explore)" },
+      { key = "<C-p>", desc = "peek plan (read-only)" },
       { key = "<C-q>", desc = "insert #{qflist}" },
       { key = "<C-b>", desc = "insert #{buffer}" },
       { key = "<C-d>", desc = "insert #{diff}" },
@@ -551,10 +588,6 @@ function M.open(droid, opts)
       { key = "q / <Esc>", desc = "close (normal mode)" },
       { key = "?",     desc = "this help" },
     }
-    if opts.on_dispatch then
-      table.insert(entries, { key = "<C-m>", desc = "dispatch to sub-droids (planner only — skips validate)" })
-      table.insert(entries, { key = "<C-g>", desc = "previous plans" })
-    end
     for _, cmd in ipairs(available_commands(droid)) do
       local name = command_name(cmd)
       if name and name ~= "" then
