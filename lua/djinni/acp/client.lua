@@ -596,6 +596,20 @@ function M:is_alive()
   return self.job_id ~= nil
 end
 
+function M:respawn()
+  if self:is_alive() then return false end
+  self._shutting_down = false
+  self._ready = false
+  self._reconnect_count = (self._reconnect_count or 0) + 1
+  self.exit_code = nil
+  self.pending_requests = {}
+  self._update_queue = {}
+  self._stderr_recent = {}
+  self._stderr_hint = nil
+  self:_spawn()
+  return self.job_id ~= nil
+end
+
 function M:_close_request_timer(id)
   local timers = self._request_timers
   if not timers then return end

@@ -71,6 +71,14 @@ local function expand_changed()
   return "<Changed>\n" .. combined .. "\n</Changed>"
 end
 
+local function expand_project_context(ctx)
+  local ok, pragmas = pcall(function()
+    return require("djinni.pragmas").project_context()
+  end)
+  if not ok or not pragmas or pragmas == "" then return "" end
+  return pragmas
+end
+
 local expanders = {
   buffer = expand_buffer,
   buf = expand_buffer,
@@ -81,6 +89,7 @@ local expanders = {
   worktree = expand_worktree,
   status = expand_worktree,
   changed = expand_changed,
+  project_context = expand_project_context,
 }
 
 function M.expand(text, ctx)
@@ -89,6 +98,10 @@ function M.expand(text, ctx)
   return (text:gsub("#{(%w+)}", function(tok)
     local fn = expanders[tok]
     if fn then return fn(ctx) end
+    local ok, feature_xml = pcall(function()
+      return require("djinni.pragmas").resolve_feature(tok)
+    end)
+    if ok and feature_xml then return feature_xml end
     return "#{" .. tok .. "}"
   end))
 end

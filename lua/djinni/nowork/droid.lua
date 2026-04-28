@@ -28,7 +28,6 @@ local function recover_session_and_retry(droid, text_for_retry, reason_label)
   session.create_task_session(cwd, function(create_err, new_sid)
     if create_err or not new_sid then
       droid.log_buf:append("[error] failed to recreate session: " .. tostring((create_err and create_err.message) or create_err or "no session"))
-      pcall(function() require("djinni.nowork.status_panel").update() end)
       return
     end
     droid.session_id = new_sid
@@ -39,7 +38,6 @@ local function recover_session_and_retry(droid, text_for_retry, reason_label)
 end
 
 local function announce(droid)
-  require("djinni.nowork.status_panel").update()
   pcall(function()
     require("djinni.nowork.overview").refresh_all()
   end)
@@ -243,7 +241,6 @@ function M.apply_acp_modes(droid, available, current_id)
   droid.acp_modes = droid.acp_modes or { available = {}, current_id = nil }
   if available then droid.acp_modes.available = available end
   if current_id then droid.acp_modes.current_id = current_id end
-
   local should_auto = droid.mode == "planner" or droid.initial_acp_mode ~= nil
   if should_auto
       and not droid.acp_modes._auto_applied
@@ -269,8 +266,6 @@ function M.apply_acp_modes(droid, available, current_id)
       end)
     end
   end
-
-  pcall(function() require("djinni.nowork.status_panel").update() end)
   pcall(vim.cmd, "redrawstatus")
 end
 
@@ -286,7 +281,6 @@ function M.set_acp_mode_id(droid, mode_id)
   if droid.log_buf and droid.log_buf.append then
     droid.log_buf:append("[acp mode → " .. label .. "]")
   end
-  pcall(function() require("djinni.nowork.status_panel").update() end)
   pcall(vim.cmd, "redrawstatus")
 end
 
@@ -355,7 +349,6 @@ function M._turn(droid, text)
       if cost then
         t.cost = math.max(t.cost, tonumber(cost) or t.cost)
       end
-      require("djinni.nowork.status_panel").update()
     end,
     on_commands = function(commands)
       droid.state.available_commands = commands or {}
@@ -515,6 +508,7 @@ function M.new(mode_name, initial_prompt, opts)
     s.tasks = r.tasks or s.tasks
     s.topo_order = r.topo_order or s.topo_order
     s.current_task_id = r.current_task_id or s.current_task_id
+    s.title = r.title or s.title
     s.turns_on_task = 0
     s.sprint_retries = r.sprint_retries or s.sprint_retries
     s.eval_feedback = r.eval_feedback or s.eval_feedback
@@ -605,6 +599,9 @@ function M.new(mode_name, initial_prompt, opts)
     M.restart(droid)
   end, { buffer = lb.buf, desc = "nowork: restart from saved state" })
   vim.keymap.set("n", "r", function() M.reopen_prompt(droid) end, { buffer = lb.buf, desc = "nowork: reopen pending prompt" })
+  vim.keymap.set("n", "m", function()
+    require("djinni.nowork.events").open()
+  end, { buffer = lb.buf, desc = "nowork: open permissions mailbox" })
   vim.keymap.set("n", ".", function()
     require("djinni.nowork.picker").run_action(droid)
   end, { buffer = lb.buf, desc = "nowork: droid actions menu" })
@@ -619,7 +616,7 @@ function M.new(mode_name, initial_prompt, opts)
       { key = ".",            desc = "actions menu (cancel / done / switch mode / …)" },
       { key = "r",            desc = "reopen pending prompt (ask/question)" },
       { key = "]t / [t",      desc = "next / prev turn" },
-      { key = "<leader>ap",   desc = "permissions mailbox (global)" },
+      { key = "m / <leader>ap", desc = "permissions mailbox" },
       { key = "<leader>av",   desc = "review routine droid diff (normal)" },
       { key = "?",            desc = "this help" },
     })
@@ -731,7 +728,6 @@ function M.stage(droid_or_id, text)
   for _, line in ipairs(vim.split(text, "\n", { plain = true })) do
     droid.log_buf:append("  " .. line)
   end
-  require("djinni.nowork.status_panel").update()
 end
 
 function M.stage_append(droid_or_id, text)
@@ -747,7 +743,6 @@ function M.stage_append(droid_or_id, text)
   for _, line in ipairs(vim.split(text, "\n", { plain = true })) do
     droid.log_buf:append("  " .. line)
   end
-  require("djinni.nowork.status_panel").update()
 end
 
 function M.submit_staged(droid_or_id)
@@ -770,7 +765,6 @@ function M.clear_queue(droid_or_id)
     return
   end
   droid.log_buf:append("[queue cleared] " .. count .. " items dropped")
-  require("djinni.nowork.status_panel").update()
 end
 
 function M.enqueue(droid_or_id, text)
@@ -778,7 +772,53 @@ function M.enqueue(droid_or_id, text)
   if not droid or not text or text == "" then return end
   lifecycle.enqueue(droid, text)
   droid.log_buf:append("[queued] " .. text:sub(1, 80):gsub("\n", " "))
-  require("djinni.nowork.status_panel").update()
+end
+
+function M.dispatch(droid_or_id, text)
+  local droid = M.resolve(droid_or_id)
+  if not droid then
+    vim.notify("nowork: no active droid for compose", vim.log.levels.WARN)
+    return
+  end
+  if not text or text == "" then return end
+
+  if droid._successor_id then
+    local successor = M.active[droid._successor_id]
+    if successor then
+      vim.notify("nowork: forwarded to " .. droid._successor_id, vim.log.levels.INFO)
+      return M.dispatch(successor, text)
+    end
+  end
+
+  if droid._finalized then
+    if droid._log_path and droid._log_path ~= "" then
+      local new_id = M.restart_from_archive(droid._log_path)
+      if new_id then
+        droid._successor_id = new_id
+        vim.notify("nowork: restarted " .. droid.id .. " → " .. new_id, vim.log.levels.INFO)
+        local successor = M.active[new_id]
+        if successor then return M.dispatch(successor, text) end
+      end
+    end
+    vim.notify("nowork: " .. droid.id .. " is finalized — cannot send", vim.log.levels.WARN)
+    return
+  end
+
+  if droid.session_id and session.get_client then
+    local client = session.get_client(droid.session_id)
+    if client and client.is_alive and not client:is_alive() then
+      if droid.log_buf and droid.log_buf.append then
+        droid.log_buf:append("[client died — recreating session]")
+      end
+      if session.detach_client_session then
+        session.detach_client_session(droid.session_id)
+      end
+      droid._session_recreate_attempts = 0
+      vim.notify("nowork: starting client…", vim.log.levels.INFO)
+    end
+  end
+
+  return M.send(droid, text)
 end
 
 function M.send(droid_or_id, text)
@@ -903,7 +943,6 @@ function M.cancel(droid_or_id)
   set_discussion_phase(droid, lifecycle.discussion.closed)
   announce(droid)
   finalize(droid)
-  require("djinni.nowork.status_panel").update()
 end
 
 function M.done(droid_or_id)
@@ -946,7 +985,6 @@ function M.done(droid_or_id)
   if show_diff then
     require("djinni.nowork.routine_review").open(droid, { readonly = true })
   end
-  require("djinni.nowork.status_panel").update()
 end
 
 function M.checkpoint(droid_or_id)
@@ -985,9 +1023,8 @@ function M.restart(droid_or_id)
     vim.notify("nowork: droid not found", vim.log.levels.WARN)
     return
   end
-  if droid._finalized then
-    vim.notify("nowork: " .. droid.id .. " already restarted — open the new session", vim.log.levels.WARN)
-    return
+  if droid._successor_id and M.active[droid._successor_id] then
+    return droid._successor_id
   end
   if droid.status == lifecycle.droid.running then
     vim.notify("nowork: cannot restart " .. droid.id .. " while running — cancel first", vim.log.levels.WARN)
@@ -1004,8 +1041,14 @@ function M.restart(droid_or_id)
   if droid.session_id then
     pcall(function() droid._sink:close() end)
   end
+  local old_id = droid.id
   pcall(function() finalize(droid) end)
-  M.restart_from_archive(log_path)
+  local new_id = M.restart_from_archive(log_path)
+  if new_id then
+    droid._successor_id = new_id
+    vim.notify("nowork: restarted " .. old_id .. " → " .. new_id, vim.log.levels.INFO)
+  end
+  return new_id
 end
 
 function M.restart_from_archive(log_path)

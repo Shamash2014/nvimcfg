@@ -43,6 +43,20 @@ Before the `<Review>` block, emit these four blocks in order so the user's compo
 ]]
 end
 
+function M.title_rule()
+  return [[
+<TitleRule>
+On your FIRST response in a new conversation only, prepend a single line:
+
+<Title>five-or-fewer-word task name</Title>
+
+- Lowercase, hyphen-or-space separated, no quotes, ≤6 words.
+- Pick a name that captures the user's goal, not the next mechanical step.
+- Do NOT emit <Title> on follow-up turns; once set, the title is fixed for the session.
+</TitleRule>
+]]
+end
+
 function M.routine_tail()
   return [[
 <ReviewRule>
@@ -93,7 +107,7 @@ Found several distinct units of work. Which should I tackle first?
 - Use `<Tasks>` form only when the user is really prioritizing discrete tasks. For yes/no or approach choices, stick with `<Options>`.
 </AskUserRule>
 
-]] .. M.composer_sections_rule()
+]] .. M.composer_sections_rule() .. M.title_rule()
 end
 
 function M.leader_phase_tail(phase, ctx)
@@ -237,7 +251,7 @@ Emit the plan as a `<Tasks>` block:
 Rules:
 - Each task starts with `## <id> — <description>`. The id is short and unique.
 - End your response with `PLAN_COMPLETE` on its own line when the plan is ready for execution.
-]] .. M.question_rule()
+]] .. M.question_rule() .. M.title_rule()
 end
 
 return M

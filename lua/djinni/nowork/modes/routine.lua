@@ -17,6 +17,12 @@ return {
     return user_prompt
   end,
   on_turn_end = function(text, droid, tool_calls)
+    droid.state = droid.state or {}
+    if not droid.state.title then
+      local t = text and text:match("<Title>%s*(.-)%s*</Title>")
+      if t and t ~= "" then droid.state.title = t:sub(1, 60) end
+    end
+
     local qfix_share = require("djinni.nowork.qfix_share")
     local tasks_parser = require("djinni.nowork.tasks_parser")
 
@@ -81,7 +87,7 @@ return {
       qfix.set(bag.items, {
         mode = "replace",
         open = false,
-        title = bag.title or ("nowork routine: " .. (droid.initial_prompt or droid.id)),
+        title = bag.title or ("nowork routine: " .. ((droid.state and droid.state.title) or droid.initial_prompt or droid.id)),
       })
       local added = #bag.items - before
       if added > 0 then

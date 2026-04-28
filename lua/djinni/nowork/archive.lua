@@ -62,6 +62,7 @@ local function serialize_state(droid)
     status = droid.status,
     phase = st.phase,
     current_task_id = st.current_task_id,
+    title = st.title,
     turns_on_task = st.turns_on_task or 0,
     tasks = as_object(tasks_copy),
     topo_order = st.topo_order or {},

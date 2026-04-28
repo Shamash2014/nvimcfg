@@ -34,7 +34,6 @@ function M.pick(droid)
       droid.log_buf:append("[model → " .. tostring(choice.label or choice.id) .. "]")
     end
     require("djinni.nowork.archive").write_state(droid)
-    require("djinni.nowork.status_panel").update()
     pcall(vim.cmd, "redrawstatus")
   end)
 end

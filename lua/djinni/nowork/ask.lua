@@ -103,7 +103,6 @@ function M.ask(droid, question, on_answer, opts)
 
   if droid and droid.state then
     lifecycle.set_pending_prompt(droid, { kind = "question", title = question, show = show })
-    require("djinni.nowork.status_panel").update()
     vim.notify(
       string.format("nowork: %s awaiting answer — %s", droid.id or "question", trunc),
       vim.log.levels.INFO

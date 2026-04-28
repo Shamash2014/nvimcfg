@@ -1,0 +1,338 @@
+*djinni-pragmas.txt*    Pragma comments for AI context in djinni.nvim
+
+
+                                                              *djinni-pragmas*
+                       PRAGMAS — AI CONTEXT FOR CODE                       ~
+
+
+A lightweight way to tag code with feature and project comments so the AI
+in your |.chat| buffer gets exactly the context you want — and only that.
+
+You write tags once, in the source files where they belong. Djinni harvests
+them on demand and turns them into XML the agent reads.
+
+==============================================================================
+CONTENTS                                             *djinni-pragmas-contents*
+
+  1. Why pragmas .................. |djinni-pragmas-why|
+  2. Quick start .................. |djinni-pragmas-quickstart|
+  3. Pragma types ................. |djinni-pragmas-types|
+  4. Comment styles ............... |djinni-pragmas-comments|
+  5. Where to put pragmas ......... |djinni-pragmas-placement|
+  6. Description extraction ....... |djinni-pragmas-description|
+  7. Commands ..................... |djinni-pragmas-commands|
+  8. Token expansion .............. |djinni-pragmas-tokens|
+  9. Patterns ..................... |djinni-pragmas-patterns|
+  10. What ships to the agent ...... |djinni-pragmas-output|
+  11. Caching ...................... |djinni-pragmas-cache|
+  12. Cross-tool compatibility ..... |djinni-pragmas-crosstool|
+  13. Lua API ...................... |djinni-pragmas-api|
+  14. Troubleshooting .............. |djinni-pragmas-troubleshooting|
+  15. Not yet implemented .......... |djinni-pragmas-roadmap|
+  16. Reference .................... |djinni-pragmas-reference|
+
+==============================================================================
+1. WHY PRAGMAS                                            *djinni-pragmas-why*
+
+Buffer-and-diff context is noisy. The agent sees what you happen to be
+looking at, not what is relevant to the *feature* you are working on.
+Pragmas flip that:
+
+    "Here is everything related to auth, regardless of where it lives."
+    → `#{auth}` in your prompt.
+
+Pragmas are comments in your source. They live next to the code they
+describe and survive moves, refactors, and cross-language boundaries.
+
+==============================================================================
+2. QUICK START                                     *djinni-pragmas-quickstart*
+
+1. Tag a file. Anywhere in `lua/auth/login.lua`: >lua
+
+       -- @feature:auth
+       -- Handles the OAuth callback and session token.
+<
+2. In a `.chat` buffer, type a prompt that references the feature: >
+
+       fix the timeout bug in #{auth}
+<
+3. Submit. The agent receives `#{auth}` expanded into a `<feature>...</feature>`
+   block listing every file tagged with `@feature:auth` plus their function
+   signatures.
+
+That is the whole loop.
+
+==============================================================================
+3. PRAGMA TYPES                                         *djinni-pragmas-types*
+
+Five tag types. Names follow `[A-Za-z0-9_.-]+`.
+
+  TAG                     SHAPE        MEANING                                ~
+  ----------------------- ------------ ---------------------------------------
+  @feature:NAME           named        Marks the file as part of feature NAME
+  @project                no name      Top-level project description
+  @constraint             no name      Hard rule the agent must respect
+  @stack                  no name      Tech-stack note
+  @convention             no name      Code-style or naming rule
+
+The four nameless types get bundled into a single `<project>` block
+addressable via `#{project_context}`. Feature tags expand individually as
+`#{NAME}`.
+
+==============================================================================
+4. COMMENT STYLES                                    *djinni-pragmas-comments*
+
+The parser recognises these comment markers (after leading whitespace):
+
+  STYLE     EXAMPLE LANGUAGES                                                 ~
+  --------- ------------------------------------------------------------------
+  --        Lua, SQL, Haskell, Ada
+  #         Python, Ruby, sh, YAML, TOML, Make
+  //        JavaScript, TypeScript, Go, Rust, C, C++, Java
+  /* */     C, CSS, Java
+  *         Block-comment continuations
+  ;         Clojure, Lisp, asm
+  %         Erlang, LaTeX, MATLAB
+  (* *)     OCaml, Pascal
+
+Adding a marker is a single line in `lua/djinni/pragmas/patterns.lua`.
+
+==============================================================================
+5. WHERE TO PUT PRAGMAS                             *djinni-pragmas-placement*
+
+Put them near the code they describe — usually as the first non-shebang
+line of the file, or right above the relevant block. The parser is
+line-oriented; the pragma's location inside the file does not change the
+output, but adjacent comment lines DO become the description.
+
+==============================================================================
+6. DESCRIPTION EXTRACTION                         *djinni-pragmas-description*
+
+The parser walks UPWARD from the pragma line through contiguous comment
+lines, collecting them as the description. It also captures text AFTER
+the pragma on the same line.
+
+Example — description scanned upward: >lua
+
+    -- Handles OAuth callbacks and exchanges the auth code for a token.
+    -- Idempotent: re-entry on the same code returns the existing session.
+    -- @feature:auth
+<
+Description: "Handles OAuth callbacks ... existing session."
+
+Example — description after the tag: >python
+
+    # @feature:auth Handles OAuth callbacks
+<
+Description: "Handles OAuth callbacks"
+
+A blank line breaks the chain; the description stops at the nearest
+non-comment line.
+
+==============================================================================
+7. COMMANDS                                          *djinni-pragmas-commands*
+
+All commands are auto-registered when djinni loads. They are scoped to
+your current working directory.
+
+                                                            *:NeoworkFeatures*
+:NeoworkFeatures
+        Picker over all detected features. Snacks if available, otherwise
+        |vim.ui.select|. Each entry shows the feature name, its first
+        description, and file count. <CR> opens the feature preview.
+
+                                                     *:NeoworkFeaturePreview*
+:NeoworkFeaturePreview [{name}]
+        Opens a scratch buffer `djinni://feature/{name}` with the live XML
+        the agent would see. With no argument, prompts for a name. Inside
+        the buffer:
+
+            q   close the preview
+            r   re-resolve from disk (after editing pragmas)
+
+                                                      *:NeoworkProjectContext*
+:NeoworkProjectContext
+        Same scratch-buffer mechanic, for the bundled `<project>...</project>`
+        XML built from `@project`, `@constraint`, `@stack`, `@convention`.
+        Buffer name `djinni://project`.
+
+                                                            *:NeoworkCoverage*
+:NeoworkCoverage
+        Markdown report at `djinni://coverage` partitioning every file
+        under cwd into "tagged" and "untagged". Useful for finding what
+        is missing pragmas. `r` re-runs the scan.
+
+==============================================================================
+8. TOKEN EXPANSION                                     *djinni-pragmas-tokens*
+
+The expander recognises tokens of the form `#{name}`. These are resolved
+at submit time, before the prompt leaves your buffer.
+
+  TOKEN                       RESOLVES TO                                     ~
+  --------------------------- --------------------------------------------
+  `#{<featureName>}`            <feature>...</feature> XML for that feature
+  `#{project_context}`          <project>...</project> XML
+  `#{buffer}`                   alternate buffer's contents
+  `#{diff}`                     `git diff` output
+  `#{staged}`                   `git diff --cached`
+  `#{worktree}`                 `git status --short`
+  `#{changed}`                  list of changed file paths
+  `#{qflist}`                   quickfix list
+
+Unknown tokens that do not match a feature stay literal — `#{xyzzy}` ships
+as `#{xyzzy}` to the agent.
+
+Example: >
+
+    We just refactored #{auth}. Look at the new error path and tell me
+    if it could deadlock under #{constraint}-level concurrency.
+    Cross-reference with #{project_context}.
+<
+==============================================================================
+9. PATTERNS                                          *djinni-pragmas-patterns*
+
+ONE FEATURE, MANY FILES~
+Tag every file related to `auth` with `@feature:auth`. The signatures
+of all of them get collected into one block.
+
+ONE FILE, MANY FEATURES~
+A glue file can carry: >lua
+
+    -- @feature:auth
+    -- @feature:billing
+<
+It appears in both feature blocks.
+
+PROJECT PRAGMAS AT THE TOP OF ONE WELL-KNOWN FILE~
+Many people put `@project`, `@stack`, `@constraint`, `@convention` at the
+top of `init.lua` / `main.go` / `package.json`. They do not have to be
+there — but it is easy to find later.
+
+CONSTRAINTS ARE SHORT~
+"Must handle 10k connections" — not a paragraph. The agent reads each
+`<constraint>` as a hard rule.
+
+==============================================================================
+10. WHAT SHIPS TO THE AGENT                            *djinni-pragmas-output*
+
+For each file in a feature, the agent receives:
+
+  - The file path (relative to cwd)
+  - Function/method/class signatures, extracted via |treesitter| when a
+    parser is available for the language
+  - A 5-line non-blank fallback when treesitter has no parser (markdown,
+    yaml, etc.)
+
+Bodies are NOT shipped. If the agent needs more, it will ask — or you can
+paste in `#{buffer}` alongside.
+
+Duplicate file paths (one file, multiple pragma lines for the same
+feature) are deduped automatically.
+
+==============================================================================
+11. CACHING                                             *djinni-pragmas-cache*
+
+  - Per-process memoization, 5-second TTL with mtime invalidation.
+  - Editing a pragma and re-running `#{auth}` will pick up the change as
+    soon as the file is saved.
+  - The `r` key in any preview buffer forces a re-scan.
+
+If you tag a brand new file and do not see it yet, it is almost always
+one of:
+
+  - The file is not saved.
+  - The file's path is in the ignore list (node_modules, .git, .chat,
+    dist, build).
+  - The pragma is on a line not recognised as a comment in that
+    language. See |djinni-pragmas-comments|.
+
+==============================================================================
+12. CROSS-TOOL COMPATIBILITY                        *djinni-pragmas-crosstool*
+
+The pragma syntax is identical to dwight.nvim — the same `@feature:` tags
+work in both. You can have djinni and dwight installed side-by-side and
+both pickers will see the same tags. No coordination needed; no `.djinni/`
+index files.
+
+==============================================================================
+13. LUA API                                               *djinni-pragmas-api*
+
+Inspect the data manually from a Lua command line:
+                                                       *djinni-pragmas.list()*
+>vim
+    :lua print(vim.inspect(require('djinni.pragmas').list()))
+<
+Returns a sorted list of `{name, file_count, description}` tables. Safe
+to feed to a |snacks.picker| (no live records).
+                                            *djinni-pragmas.resolve_feature()*
+>vim
+    :lua print(require('djinni.pragmas').resolve_feature('auth'))
+<
+Returns the `<feature>...</feature>` XML string for a feature, or nil
+if the name is unknown.
+                                           *djinni-pragmas.project_context()*
+>vim
+    :lua print(require('djinni.pragmas').project_context())
+<
+Returns the bundled `<project>...</project>` XML, or empty string if no
+project-level pragmas exist.
+                                              *djinni-pragmas.coverage.report()*
+>vim
+    :lua print(vim.inspect(require('djinni.pragmas.coverage').report()))
+<
+Returns `{tagged, untagged, tagged_count, untagged_count, total, ratio}`.
+
+==============================================================================
+14. TROUBLESHOOTING                            *djinni-pragmas-troubleshooting*
+
+`:NeoworkFeatures` says "No features found"~
+The scanner could not see your pragmas. Try `:NeoworkCoverage` — if your
+file shows up in the untagged section, the pragma line either is not a
+comment in that language, or the file is in an ignored directory.
+
+Feature XML is huge or dumps full files~
+Treesitter has no parser loaded for that filetype. Install
+`nvim-treesitter` and `:TSInstall {lang}`, or accept the 5-line fallback.
+
+`#{auth}` ships literal instead of expanding~
+You are submitting from a buffer that does not go through the expander.
+Only `.chat` buffers run `expand()`. Verify the buffer's filetype is
+`nowork` or that your prompt path actually calls `djinni.nowork.expand`.
+
+ripgrep notification appears once per session~
+Cosmetic. The scanner falls back to a manual filesystem walk when `rg`
+is not on $PATH. Install ripgrep for faster scans on large repos.
+
+==============================================================================
+15. NOT YET IMPLEMENTED                               *djinni-pragmas-roadmap*
+
+BOOTSTRAP                                          *:NeoworkBootstrap*
+        `:NeoworkBootstrap` will auto-tag untagged files via a `--quick`
+        heuristic or `--agentic` ACP session. Designed but gated until
+        expansion + coverage have been used in real work. See plan file
+        in `~/.claude/plans/question-abundant-parnas.md` Phase 3.
+
+DOCS PRAGMAS~
+        `@docs:`, `@docs-title:`, `@feature-no-docs` for documentation
+        generation. Out of scope for v1.
+
+FILE WATCHER~
+        Auto-rescan on |BufWritePost|. The 5-second cache + mtime check
+        covers most cases; refresh manually with `r` in preview buffers.
+
+==============================================================================
+16. REFERENCE                                       *djinni-pragmas-reference*
+
+Source files (relative to plugin root):
+
+  lua/djinni/pragmas/patterns.lua    Pragma regex patterns
+  lua/djinni/pragmas/scanner.lua     ripgrep + walk fallback
+  lua/djinni/pragmas/features.lua    Feature XML formatter
+  lua/djinni/pragmas/project.lua     Project XML formatter
+  lua/djinni/pragmas/init.lua        Public API + cache
+  lua/djinni/pragmas/coverage.lua    Coverage report
+  lua/djinni/nowork/expand.lua       Token expansion entry point
+  lua/djinni/init.lua                Command registration
+
+==============================================================================
+vim:tw=78:ts=8:noet:ft=help:norl:

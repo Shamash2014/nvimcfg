@@ -112,6 +112,7 @@ local function collect_worklogs(base_cwd)
         cwd = cwd,
         started_at = d.started_at or 0,
         provider = d.provider_name,
+        title = d.state and d.state.title or nil,
         prompt = d.initial_prompt,
         excerpt = active_excerpt(d, 120, 5000),
       }
@@ -122,6 +123,7 @@ local function collect_worklogs(base_cwd)
     local key = "archive::" .. tostring(a.path)
     if not seen[key] then
       seen[key] = true
+      local state = archive.read_state(a.path)
       items[#items + 1] = {
         kind = "archive",
         id = a.id,
@@ -131,6 +133,7 @@ local function collect_worklogs(base_cwd)
         date = a.date,
         stamp = a.stamp,
         path = a.path,
+        title = state and state.title or nil,
         prompt = archive.prompt_hint and archive.prompt_hint(a.path) or nil,
         excerpt = read_excerpt(a.path, 120, 5000),
       }
@@ -174,6 +177,7 @@ local function build_prompt(items)
     out[#out + 1] = "status: " .. tostring(item.status or "?")
     if item.cwd then out[#out + 1] = "cwd: " .. item.cwd end
     if item.provider then out[#out + 1] = "provider: " .. item.provider end
+    if item.title and item.title ~= "" then out[#out + 1] = "title: " .. item.title end
     if item.prompt and item.prompt ~= "" then out[#out + 1] = "prompt: " .. item.prompt end
     if item.path then out[#out + 1] = "path: " .. item.path end
     if item.date or item.stamp then out[#out + 1] = "timestamp: " .. tostring(item.date or "?") .. " " .. tostring(item.stamp or "") end

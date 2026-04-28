@@ -17,7 +17,6 @@ function M.apply(droid, mode_name, opts)
   if droid.log_buf and droid.log_buf.append then
     droid.log_buf:append("[mode → " .. mode_name .. "]")
   end
-  require("djinni.nowork.status_panel").update()
   if opts.after_switch then
     opts.after_switch(droid, mode_name, policy)
   end

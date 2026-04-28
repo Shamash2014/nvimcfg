@@ -261,8 +261,6 @@ local function finish_entry(entry, option)
   if droid and droid.log_buf then
     droid.log_buf:append(string.format("[perm] %s · %s", option and option.kind or "dismissed", kind or "?"))
   end
-
-  require("djinni.nowork.status_panel").update()
 end
 
 local function open_reject_compose(entry)
@@ -538,7 +536,6 @@ function M.enqueue(droid, params, respond)
       entry.tool_command or entry.tool_title),
     vim.log.levels.WARN
   )
-  require("djinni.nowork.status_panel").update()
   if M._win and vim.api.nvim_win_is_valid(M._win) then
     M._refresh()
   end
@@ -563,7 +560,6 @@ function M.drain_droid(droid, outcome)
     end
     droid.state.pending_events = {}
   end
-  require("djinni.nowork.status_panel").update()
   if M._win and vim.api.nvim_win_is_valid(M._win) then
     M._refresh()
   end

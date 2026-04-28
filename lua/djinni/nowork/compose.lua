@@ -213,7 +213,7 @@ function M.open(droid, opts)
   if droid then
     if opts.persistent == nil then opts.persistent = true end
     if opts.on_submit == nil then
-      opts.on_submit = function(text) require("djinni.nowork.droid").send(droid, text) end
+      opts.on_submit = function(text) require("djinni.nowork.droid").dispatch(droid, text) end
     end
     if opts.alt_buf == nil then opts.alt_buf = vim.fn.bufnr("#") end
     if opts.sections == nil then opts.sections = {} end
@@ -388,7 +388,7 @@ function M.open(droid, opts)
         opts.on_submit(expanded)
       else
         local droid_mod = require("djinni.nowork.droid")
-        droid_mod.send(droid, expanded)
+        droid_mod.dispatch(droid, expanded)
       end
     end)
   end
