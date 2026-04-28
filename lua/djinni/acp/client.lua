@@ -234,6 +234,90 @@ local CHUNK_TYPES = {
   usage_update = true,
 }
 
+local function first_non_nil(...)
+  for i = 1, select("#", ...) do
+    local v = select(i, ...)
+    if v ~= nil then return v end
+  end
+  return nil
+end
+
+local function normalize_content(content)
+  if type(content) == "string" then
+    return { type = "text", text = content }
+  end
+  if type(content) ~= "table" then return content end
+  if content.text == nil then
+    content.text = first_non_nil(
+      content.content and content.content.text,
+      content.delta and content.delta.text,
+      content.message,
+      content.value
+    )
+  end
+  return content
+end
+
+local function normalize_tool_call(tc)
+  if type(tc) ~= "table" then return tc end
+  tc.toolCallId = first_non_nil(tc.toolCallId, tc.tool_call_id, tc.id)
+  tc.rawInput = first_non_nil(tc.rawInput, tc.raw_input, tc.input, tc.arguments, tc.args)
+  tc.rawOutput = first_non_nil(tc.rawOutput, tc.raw_output, tc.output, tc.result)
+  tc.title = first_non_nil(tc.title, tc.name)
+  return tc
+end
+
+local function normalize_update_params(params)
+  if type(params) ~= "table" then return params end
+  local out = params
+  out.sessionId = first_non_nil(out.sessionId, out.session_id)
+  local su = out.update or out
+  if type(su) ~= "table" then return out end
+
+  su.sessionUpdate = first_non_nil(su.sessionUpdate, su.session_update, su.updateType, su.update_type, su.type)
+  su.content = normalize_content(su.content or su.delta)
+  su.modeId = first_non_nil(su.modeId, su.mode_id)
+  su.availableModes = first_non_nil(su.availableModes, su.available_modes)
+  su.currentModeId = first_non_nil(su.currentModeId, su.current_mode_id)
+  su.availableCommands = first_non_nil(su.availableCommands, su.available_commands)
+  su.configOptionId = first_non_nil(su.configOptionId, su.config_option_id)
+  su.optionId = first_non_nil(su.optionId, su.option_id)
+  su.currentValue = first_non_nil(su.currentValue, su.current_value)
+  su.stopReason = first_non_nil(su.stopReason, su.stop_reason)
+  su.tokenUsage = first_non_nil(su.tokenUsage, su.token_usage, su.usage)
+  su.totalCostUsd = first_non_nil(su.totalCostUsd, su.total_cost_usd)
+  su.toolCall = normalize_tool_call(first_non_nil(su.toolCall, su.tool_call))
+  if su.toolCall then
+    su.toolCall.status = first_non_nil(su.toolCall.status, su.status)
+    su.toolCall.kind = first_non_nil(su.toolCall.kind, su.kind)
+    su.toolCall.title = first_non_nil(su.toolCall.title, su.title, su.name)
+    su.toolCall.content = first_non_nil(su.toolCall.content, su.content)
+    su.toolCall.locations = first_non_nil(su.toolCall.locations, su.locations)
+    su.toolCall.rawOutput = first_non_nil(su.toolCall.rawOutput, su.rawOutput, su.raw_output)
+  elseif su.sessionUpdate == "tool_call" or su.sessionUpdate == "tool_call_update" then
+    su.toolCall = normalize_tool_call(su)
+  end
+  return out
+end
+
+local function normalize_permission_params(params)
+  if type(params) ~= "table" then return params end
+  params.sessionId = first_non_nil(params.sessionId, params.session_id)
+  params.toolCall = normalize_tool_call(first_non_nil(params.toolCall, params.tool_call, params.tool))
+  params.options = params.options or params.permissionOptions or params.permission_options or {}
+  for _, opt in ipairs(params.options) do
+    if type(opt) == "table" then
+      opt.optionId = first_non_nil(opt.optionId, opt.option_id, opt.id)
+      if opt.kind == "deny_once" then
+        opt.kind = "reject_once"
+      elseif opt.kind == "deny_always" then
+        opt.kind = "reject_always"
+      end
+    end
+  end
+  return params
+end
+
 local function subscriber_list(subscribers, sid)
   local subs = subscribers[sid]
   if not subs then return nil end
@@ -425,6 +509,9 @@ function M:_route_message(msg)
       })
       vim.fn.chansend(self.job_id, resp .. "\n")
     end
+    if msg.method == "session/request_permission" then
+      msg.params = normalize_permission_params(msg.params)
+    end
     local sid = msg.params and msg.params.sessionId
     local subs = sid and subscriber_list(self.subscribers, sid)
     if subs and msg.method == "session/request_permission" then
@@ -448,6 +535,9 @@ function M:_route_message(msg)
       end
     end
   elseif msg.method and not msg.id then
+    if msg.method == "session/update" then
+      msg.params = normalize_update_params(msg.params)
+    end
     local sid = msg.params and msg.params.sessionId
     if sid and msg.method == "session/update" then
       local uq = self._update_queue[sid]

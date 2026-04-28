@@ -19,7 +19,7 @@ M.providers = {
     args = {},
     models = {},
     resume = { method = "session/load", needs_cwd = true },
-    plan_mode = "plan",
+    plan_mode = "read-only",
   },
   ["hermes"] = {
     command = "hermes",

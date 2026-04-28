@@ -227,9 +227,8 @@ function M.setup(opts)
     end, { bang = true, desc = "Initialize .config/wt.toml for this repo" })
 
     require("djinni.integrations.worktrunk").start_statusline(30000)
-    vim.o.laststatus = 2
-    vim.opt.statusline = require("djinni.statusline").line()
   end
+  require("djinni.statusline").install()
 
   local keymaps = require("neowork.keymaps")
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do

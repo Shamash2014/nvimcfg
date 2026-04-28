@@ -6,6 +6,19 @@ local M = {}
 
 local KINDS = { "text", "thought", "tool_call", "plan", "usage", "mode", "commands", "result", "permission" }
 
+local function text_content(su)
+  local content = su and su.content
+  if type(content) == "string" then return content end
+  if type(content) == "table" then
+    return content.text
+      or (content.content and content.content.text)
+      or (content.delta and content.delta.text)
+      or content.message
+      or ""
+  end
+  return su and (su.text or su.message or "") or ""
+end
+
 function M.new(droid)
   local self = {
     droid = droid,
@@ -31,11 +44,11 @@ function M.new(droid)
 
   local function on_update(params)
     local su = params.update or params
-    local kind = su.sessionUpdate
-    if kind == "agent_message_chunk" then
-      dispatch("text", (su.content and su.content.text) or "")
-    elseif kind == "agent_thought_chunk" then
-      local text = (su.content and su.content.text) or ""
+    local kind = su.sessionUpdate or su.session_update or su.type
+    if kind == "agent_message_chunk" or kind == "agent_message" or kind == "assistant_message" then
+      dispatch("text", text_content(su))
+    elseif kind == "agent_thought_chunk" or kind == "agent_thought" or kind == "thinking" then
+      local text = text_content(su)
       log_buffer.droid_log(droid, "[listen/thought] " .. strutil.one_line(text, 120))
       dispatch("thought", text)
     elseif kind == "tool_call" or kind == "tool_call_update" then

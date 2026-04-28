@@ -18,10 +18,8 @@ return {
   end,
   on_turn_end = function(text, droid, tool_calls)
     droid.state = droid.state or {}
-    if not droid.state.title then
-      local t = text and text:match("<Title>%s*(.-)%s*</Title>")
-      if t and t ~= "" then droid.state.title = t:sub(1, 60) end
-    end
+    local t = text and text:match("<Title>%s*(.-)%s*</Title>")
+    if t and t ~= "" then droid.state.title = t:sub(1, 60) end
 
     local qfix_share = require("djinni.nowork.qfix_share")
     local tasks_parser = require("djinni.nowork.tasks_parser")
@@ -121,13 +119,15 @@ return {
     return "await_user"
   end,
   on_permission = function(params, respond, droid)
-    local kind = params and params.toolCall and params.toolCall.kind
+    local tc = params and (params.toolCall or params.tool_call)
+    local kind = tc and tc.kind
     if kind and droid.state.sticky_permissions[kind] then
       local sticky = droid.state.sticky_permissions[kind]
       for _, opt in ipairs(params.options or {}) do
+        local opt_id = opt.optionId or opt.option_id or opt.id
         if (sticky == "allow" and (opt.kind == "allow_once" or opt.kind == "allow_always"))
            or (sticky == "deny" and (opt.kind == "reject_once" or opt.kind == "reject_always")) then
-          respond({ outcome = { outcome = "selected", optionId = opt.optionId } })
+          respond({ outcome = { outcome = "selected", optionId = opt_id } })
           return
         end
       end

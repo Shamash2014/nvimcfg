@@ -16,6 +16,10 @@ local function extract_usage(su)
   return usage, cost
 end
 
+local function stop_reason(result)
+  return result and (result.stopReason or result.stop_reason) or nil
+end
+
 function M.run(droid, text, opts, cb)
   opts = opts or {}
   if not droid or not droid.session_id or not droid._sink then
@@ -82,7 +86,7 @@ function M.run(droid, text, opts, cb)
     L:stop()
     cb(err, {
       text = table.concat(text_buf),
-      stop_reason = (result and result.stopReason) or nil,
+      stop_reason = stop_reason(result),
       tool_calls = tool_calls,
     })
   end)

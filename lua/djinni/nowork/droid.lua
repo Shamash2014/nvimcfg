@@ -9,6 +9,27 @@ local M = {}
 M.active = {}
 
 local counter = 0
+local attach_reconnect_handler
+local extract_available_commands
+local extract_acp_modes
+
+local function emit_event(pattern, data)
+  pcall(function()
+    require("djinni.nowork.events").emit(pattern, data)
+  end)
+end
+
+local function events_changed(droid, reason)
+  pcall(function()
+    require("djinni.nowork.events").changed(droid, reason)
+  end)
+end
+
+local function drain_events(droid, outcome)
+  pcall(function()
+    require("djinni.nowork.events").drain_droid(droid, outcome)
+  end)
+end
 
 local function is_session_not_found(err)
   if not err then return false end
@@ -21,23 +42,49 @@ local function recover_session_and_retry(droid, text_for_retry, reason_label)
   if (droid._session_recreate_attempts or 0) >= 1 then return false end
   droid._session_recreate_attempts = (droid._session_recreate_attempts or 0) + 1
   droid.log_buf:append("[" .. reason_label .. " — recreating session]")
+  local wanted_mode = droid._desired_acp_mode
+    or droid.initial_acp_mode
+    or (droid.acp_modes and droid.acp_modes.current_id)
   droid.session_id = nil
   droid.state.available_commands = nil
-  droid.acp_modes = nil
+  droid.acp_modes = wanted_mode and { available = {}, current_id = nil, _auto_applied = true } or nil
   local cwd = droid.opts and droid.opts.cwd or vim.fn.getcwd()
-  session.create_task_session(cwd, function(create_err, new_sid)
+  session.create_task_session(cwd, function(create_err, new_sid, result)
     if create_err or not new_sid then
       droid.log_buf:append("[error] failed to recreate session: " .. tostring((create_err and create_err.message) or create_err or "no session"))
       return
     end
     droid.session_id = new_sid
+    droid.state.available_commands = extract_available_commands(result)
+    do
+      local available, current = extract_acp_modes(result)
+      if available or current then M.apply_acp_modes(droid, available, current) end
+    end
+    attach_reconnect_handler(droid)
     droid.log_buf:append("[session recreated: " .. tostring(new_sid) .. "]")
-    M._turn(droid, text_for_retry)
+    emit_event("NoworkSessionRecreated", {
+      droid_id = droid.id,
+      session_id = new_sid,
+      reason = reason_label,
+    })
+    events_changed(droid, "session_recreated")
+    if wanted_mode and wanted_mode ~= "" then
+      droid._desired_acp_mode = wanted_mode
+      session.set_mode(nil, new_sid, wanted_mode, droid.provider_name, function(mode_err)
+        if mode_err then
+          droid.log_buf:append("[warn] failed to restore ACP mode: " .. tostring(mode_err.message or mode_err))
+        end
+        M._turn(droid, text_for_retry)
+      end)
+    else
+      M._turn(droid, text_for_retry)
+    end
   end, { provider = droid.provider_name, model = droid.model_name })
   return true
 end
 
 local function announce(droid)
+  events_changed(droid, "state")
   pcall(function()
     require("djinni.nowork.overview").refresh_all()
   end)
@@ -46,6 +93,18 @@ end
 local function next_id()
   counter = counter + 1
   return "nowork" .. counter
+end
+
+local function derive_title(initial_prompt)
+  if not initial_prompt or initial_prompt == "" then return nil end
+  for line in initial_prompt:gmatch("[^\r\n]+") do
+    local stripped = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if stripped ~= "" then
+      if #stripped > 60 then stripped = stripped:sub(1, 57) .. "…" end
+      return stripped
+    end
+  end
+  return nil
 end
 
 local function discussion(droid)
@@ -200,11 +259,16 @@ function M._resume(droid, action)
   end)
 end
 
-local function attach_reconnect_handler(droid)
+attach_reconnect_handler = function(droid)
   if not droid or not droid.session_id then return end
   pcall(session.on_reconnect, droid.session_id, function()
     droid.log_buf:append("[session reconnected]")
-    pcall(require("djinni.nowork.events").drain_droid, droid, "cancelled")
+    drain_events(droid, "cancelled")
+    emit_event("NoworkSessionReconnected", {
+      droid_id = droid.id,
+      session_id = droid.session_id,
+    })
+    events_changed(droid, "session_reconnected")
   end)
 end
 
@@ -223,12 +287,12 @@ local function recover_persistent_compose(droid)
   return false
 end
 
-local function extract_available_commands(result)
+extract_available_commands = function(result)
   if type(result) ~= "table" then return {} end
   return result.availableCommands or result.available_commands or result.commands or {}
 end
 
-local function extract_acp_modes(result)
+extract_acp_modes = function(result)
   if type(result) ~= "table" then return nil, nil end
   local m = result.modes or result.modeInfo or result.mode_info
   if type(m) ~= "table" then
@@ -252,6 +316,7 @@ function M.apply_acp_modes(droid, available, current_id)
   droid.acp_modes = droid.acp_modes or { available = {}, current_id = nil }
   if available then droid.acp_modes.available = available end
   if current_id then droid.acp_modes.current_id = current_id end
+  events_changed(droid, "modes")
   local should_auto = droid.mode == "planner" or droid.initial_acp_mode ~= nil
   if should_auto
       and not droid.acp_modes._auto_applied
@@ -292,6 +357,12 @@ function M.set_acp_mode_id(droid, mode_id)
   if droid.log_buf and droid.log_buf.append then
     droid.log_buf:append("[acp mode → " .. label .. "]")
   end
+  emit_event("NoworkAcpModeChanged", {
+    droid_id = droid.id,
+    session_id = droid.session_id,
+    mode_id = mode_id,
+  })
+  events_changed(droid, "mode")
   vim.schedule(function() pcall(vim.cmd, "redrawstatus!") end)
 end
 
@@ -328,7 +399,9 @@ function M._turn(droid, text)
 
   local final_prompt
   text = apply_resume_preamble(droid, text)
-  if droid.policy.template_wrap then
+  if droid.opts and droid.opts.no_template then
+    final_prompt = text
+  elseif droid.policy.template_wrap then
     final_prompt = droid.policy.template_wrap(text, droid.state, droid.opts)
   else
     final_prompt = text
@@ -365,6 +438,7 @@ function M._turn(droid, text)
     end,
     on_commands = function(commands)
       droid.state.available_commands = commands or {}
+      events_changed(droid, "commands")
       redraw_soon()
     end,
     on_mode = function(payload)
@@ -404,7 +478,7 @@ function M._turn(droid, text)
         droid.log_buf:append("[error] " .. tostring(err.message or err))
         set_status(droid, lifecycle.droid.blocked, "turn error")
       end
-      pcall(require("djinni.nowork.events").drain_droid, droid, "cancelled")
+      drain_events(droid, "cancelled")
       recover_persistent_compose(droid)
       announce(droid)
       return
@@ -480,6 +554,7 @@ function M.new(mode_name, initial_prompt, opts)
     _log_fh = nil,
     _log_path = nil,
     state = {
+      title = derive_title(initial_prompt),
       phase = (mode_name == "autorun" or mode_name == "planner") and "plan" or nil,
       tasks = nil,
       topo_order = nil,
@@ -509,6 +584,7 @@ function M.new(mode_name, initial_prompt, opts)
         or "make test",
       skills = (opts.routine and opts.routine.skills) or opts.skills or {},
       model = opts.model,
+      no_template = opts.no_template == true,
     },
     status = lifecycle.droid.booting,
     cancelled = false,
@@ -950,7 +1026,7 @@ end
 function M.cancel(droid_or_id)
   local droid = M.resolve(droid_or_id)
   if not droid then return end
-  pcall(require("djinni.nowork.events").drain_droid, droid, "cancelled")
+  drain_events(droid, "cancelled")
   droid.cancelled = true
   if droid.session_id and droid._sink then
     droid._sink:cancel()
@@ -965,7 +1041,7 @@ end
 function M.done(droid_or_id)
   local droid = M.resolve(droid_or_id)
   if not droid then return end
-  pcall(require("djinni.nowork.events").drain_droid, droid, "cancelled")
+  drain_events(droid, "cancelled")
   local show_diff = false
   if droid.mode == "autorun" then
     local order = droid.state and droid.state.topo_order or {}

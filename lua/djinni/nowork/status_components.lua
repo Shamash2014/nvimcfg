@@ -98,6 +98,7 @@ function M.statusline_parts(droids)
   local function push(sym, n)
     if n and n > 0 then parts[#parts + 1] = { sym = sym, val = tostring(n) } end
   end
+  push("D", #droids)
   push("B", B); push("I", I); push("W", W)
   if Tt > 0 then parts[#parts + 1] = { sym = "T", val = M.token_compact(Tt) } end
   push("Q", Qt)
@@ -160,21 +161,21 @@ if vim and vim.env and vim.env.DJINNI_TEST == "1" then
   end
   do
     local got = M.statusline_render({ { id = "w1", status = "waiting", state = { pending_events = { { kind = "permission" } } } } })
-    local expect = "W 1 P 1"
+    local expect = "D 1 W 1 P 1"
     if got ~= expect then
       error(("DJINNI_TEST statusline_render mismatch\n  expect %q\n  got    %q"):format(expect, got))
     end
   end
   do
     local got = M.statusline_render({ { id = "r1", status = "running" } })
-    local expect = "%#DjinniDroidActive#● 1%*"
+    local expect = "D 1 %#DjinniDroidActive#● 1%*"
     if got ~= expect then
       error(("DJINNI_TEST running badge mismatch\n  expect %q\n  got    %q"):format(expect, got))
     end
   end
   do
     local got = M.statusline_render({ { id = "b1", status = "blocked" } })
-    local expect = "%#DjinniDroidBlocked#◉ 1%*"
+    local expect = "D 1 %#DjinniDroidBlocked#◉ 1%*"
     if got ~= expect then
       error(("DJINNI_TEST blocked badge mismatch\n  expect %q\n  got    %q"):format(expect, got))
     end
@@ -185,7 +186,7 @@ if vim and vim.env and vim.env.DJINNI_TEST == "1" then
       { id = "r2", status = "running" },
       { id = "b1", status = "blocked" },
     })
-    local expect = "%#DjinniDroidActive#● 2%* %#DjinniDroidBlocked#◉ 1%*"
+    local expect = "D 3 %#DjinniDroidActive#● 2%* %#DjinniDroidBlocked#◉ 1%*"
     if got ~= expect then
       error(("DJINNI_TEST mixed badge mismatch\n  expect %q\n  got    %q"):format(expect, got))
     end

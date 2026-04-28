@@ -8,6 +8,28 @@ M._buf = nil
 M._win = nil
 M._entries_on_screen = nil
 
+local function emit(pattern, data)
+  vim.schedule(function()
+    pcall(vim.api.nvim_exec_autocmds, "User", {
+      pattern = pattern,
+      data = data or vim.empty_dict(),
+    })
+  end)
+end
+
+function M.emit(pattern, data)
+  emit(pattern, data)
+end
+
+function M.changed(droid, reason)
+  emit("NoworkChanged", {
+    reason = reason,
+    droid_id = droid and droid.id or nil,
+    session_id = droid and droid.session_id or nil,
+    status = droid and droid.status or nil,
+  })
+end
+
 local HELP_ENTRIES = {
   { key = "<CR>", desc = "open full option picker" },
   { key = "a",    desc = "allow_once" },
@@ -243,7 +265,7 @@ local function finish_entry(entry, option)
   end
 
   if option then
-    local outcome = { outcome = { outcome = "selected", optionId = option.optionId } }
+    local outcome = { outcome = { outcome = "selected", optionId = option.optionId or option.option_id or option.id } }
     if droid and droid._sink then
       droid._sink:respond(entry, outcome)
     else
@@ -508,7 +530,7 @@ end
 
 function M.enqueue(droid, params, respond)
   droid.state.pending_events = droid.state.pending_events or {}
-  local tc = params and params.toolCall or nil
+  local tc = params and (params.toolCall or params.tool_call or params.tool) or nil
   local raw_input = tc and (tc.rawInput or tc.raw_input or tc.input) or nil
   local entry = {
     kind = "permission",
@@ -541,6 +563,7 @@ function M.enqueue(droid, params, respond)
   end
   local ok_d, droid_mod = pcall(require, "djinni.nowork.droid")
   if ok_d and droid_mod and droid_mod.redraw_soon then droid_mod.redraw_soon() end
+  M.changed(droid, "permission")
 end
 
 function M.drain_droid(droid, outcome)
@@ -567,6 +590,7 @@ function M.drain_droid(droid, outcome)
   end
   local ok_d, droid_mod = pcall(require, "djinni.nowork.droid")
   if ok_d and droid_mod and droid_mod.redraw_soon then droid_mod.redraw_soon() end
+  M.changed(droid, "events_drained")
 end
 
 function M.open()

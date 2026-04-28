@@ -535,7 +535,7 @@ function M.send_message(_, session_id, content, callback, images, _provider_name
   end)
 end
 
-function M.set_mode(_, session_id, mode_id, _provider_name, callback)
+function M.set_mode(_, session_id, mode_id, provider_name, callback)
   local entry = M.sessions_by_id[session_id]
   if not entry then
     if callback then callback({ message = "Session not found" }, nil) end
@@ -547,15 +547,25 @@ function M.set_mode(_, session_id, mode_id, _provider_name, callback)
       return
     end
 
-    entry.client:notify("session/set_mode", {
+    provider_name = provider_name or entry.provider_name
+    if provider_name == "claude" or provider_name == "claude-code" then
+      entry.client:request("session/prompt", {
+        sessionId = session_id,
+        prompt = {
+          { type = "text", text = "/mode " .. mode_id },
+        },
+      }, function(err)
+        if callback then callback(err, vim.empty_dict()) end
+      end)
+      return
+    end
+
+    entry.client:request("session/set_mode", {
       sessionId = session_id,
       modeId = mode_id,
-    })
-    if callback then
-      vim.schedule(function()
-        callback(nil, vim.empty_dict())
-      end)
-    end
+    }, function(err, result)
+      if callback then callback(err, result or vim.empty_dict()) end
+    end)
   end)
 end
 

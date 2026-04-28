@@ -109,12 +109,28 @@ function M.line()
   })
 end
 
+function M.install()
+  vim.o.laststatus = 2
+  local line = M.line()
+  if vim.o.statusline ~= line then
+    vim.opt.statusline = line
+  end
+end
+
 local aug = vim.api.nvim_create_augroup("DjinniStatuslineCache", { clear = true })
 vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
   group = aug,
   callback = function(args)
     local b = args.buf or vim.api.nvim_get_current_buf()
     pcall(function() vim.b[b].djinni_project_name = nil end)
+  end,
+})
+
+vim.api.nvim_create_autocmd("User", {
+  group = aug,
+  pattern = { "NoworkChanged", "NoworkSessionRecreated", "NoworkSessionReconnected", "NoworkAcpModeChanged" },
+  callback = function()
+    pcall(vim.cmd, "redrawstatus!")
   end,
 })
 

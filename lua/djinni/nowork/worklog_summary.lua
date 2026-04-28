@@ -68,6 +68,13 @@ local function read_excerpt(path, max_lines, max_chars)
   return table.concat(out, "\n")
 end
 
+local function prompt_text(value)
+  return tostring(value or "")
+    :gsub("&", "&amp;")
+    :gsub("<", "&lt;")
+    :gsub(">", "&gt;")
+end
+
 local function active_excerpt(droid, max_lines, max_chars)
   local buf = droid and droid.log_buf and droid.log_buf.buf
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
@@ -172,17 +179,17 @@ local function build_prompt(items)
 
   for idx, item in ipairs(items) do
     out[#out + 1] = string.format("<Worklog index=\"%d\" kind=\"%s\">", idx, item.kind)
-    out[#out + 1] = "id: " .. tostring(item.id or "?")
-    out[#out + 1] = "mode: " .. tostring(item.mode or "?")
-    out[#out + 1] = "status: " .. tostring(item.status or "?")
-    if item.cwd then out[#out + 1] = "cwd: " .. item.cwd end
-    if item.provider then out[#out + 1] = "provider: " .. item.provider end
-    if item.title and item.title ~= "" then out[#out + 1] = "title: " .. item.title end
-    if item.prompt and item.prompt ~= "" then out[#out + 1] = "prompt: " .. item.prompt end
-    if item.path then out[#out + 1] = "path: " .. item.path end
-    if item.date or item.stamp then out[#out + 1] = "timestamp: " .. tostring(item.date or "?") .. " " .. tostring(item.stamp or "") end
+    out[#out + 1] = "id: " .. prompt_text(item.id or "?")
+    out[#out + 1] = "mode: " .. prompt_text(item.mode or "?")
+    out[#out + 1] = "status: " .. prompt_text(item.status or "?")
+    if item.cwd then out[#out + 1] = "cwd: " .. prompt_text(item.cwd) end
+    if item.provider then out[#out + 1] = "provider: " .. prompt_text(item.provider) end
+    if item.title and item.title ~= "" then out[#out + 1] = "title: " .. prompt_text(item.title) end
+    if item.prompt and item.prompt ~= "" then out[#out + 1] = "prompt: " .. prompt_text(item.prompt) end
+    if item.path then out[#out + 1] = "path: " .. prompt_text(item.path) end
+    if item.date or item.stamp then out[#out + 1] = "timestamp: " .. prompt_text(tostring(item.date or "?") .. " " .. tostring(item.stamp or "")) end
     out[#out + 1] = ""
-    out[#out + 1] = item.excerpt
+    out[#out + 1] = prompt_text(item.excerpt)
     out[#out + 1] = "</Worklog>"
     out[#out + 1] = ""
   end
@@ -258,6 +265,7 @@ function M.summarize_all(opts)
     cwd = base_cwd,
     provider = opts.provider,
     model = opts.model,
+    no_template = true,
   })
 end
 

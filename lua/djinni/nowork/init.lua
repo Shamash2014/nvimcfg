@@ -213,7 +213,7 @@ function M.launch(mode_name)
       on_submit = function(text)
         local spawn_opts = merged_opts({ provider = provider })
         if mode_name == "multitask" then spawn_opts.multitask = true end
-        if mode_name == "plan" or mode_name == "routine" or mode_name == "planner" then
+        if mode_name == "plan" or mode_name == "planner" then
           spawn_opts.initial_acp_mode = plan_mode_for(spawn_opts)
         end
         local droid_mode = MODE_DROID[mode_name]
@@ -257,17 +257,7 @@ function M.setup(opts)
 
   require("djinni.nowork.qf_virt").setup()
 
-  do
-    local expr = "%{%v:lua.require'djinni.nowork.statusline'.component()%}"
-    local cur = vim.o.statusline or ""
-    if not cur:find("djinni.nowork.statusline", 1, true) then
-      if cur == "" then
-        vim.o.statusline = "%<%f %h%w%m%r %=%-14.(%l,%c%V%) %P " .. expr
-      else
-        vim.o.statusline = cur .. " " .. expr
-      end
-    end
-  end
+  require("djinni.statusline").install()
 
   do
     local function apply_hl()
