@@ -105,7 +105,7 @@ function M.line()
     "[%{v:lua.require'djinni.statusline'.project()}] ",
     "%{v:lua.require'djinni.statusline'.task()} ",
     "%y %l:%c %P ",
-    "%{v:lua.require'djinni.statusline'.droid()}",
+    "%{%v:lua.require'djinni.statusline'.droid()%}",
   })
 end
 

@@ -48,8 +48,9 @@ local function format_item(item)
     local h = item.history_entry
     local head = ("[%s] %s (%s)"):format(h.id, h.mode, h.status or "done")
     local parts = { { head, "SnacksPickerLabel" } }
-    if h.initial_prompt and h.initial_prompt ~= "" then
-      local trunc = h.initial_prompt:sub(1, 50)
+    local label = h.title or h.initial_prompt
+    if label and label ~= "" then
+      local trunc = label:sub(1, 60)
       parts[#parts + 1] = { " — ", "SnacksPickerLabel" }
       for _, seg in ipairs(split_skills(trunc)) do
         parts[#parts + 1] = seg
@@ -63,8 +64,9 @@ local function format_item(item)
     local badge = a.has_state and "↻" or " "
     local head = ("[arch %s %s %s] %s"):format(badge, a.date, hh, a.mode or "?")
     local parts = { { head, "SnacksPickerLabel" } }
-    if a.prompt_hint and a.prompt_hint ~= "" then
-      local trunc = a.prompt_hint:sub(1, 50)
+    local label = a.title or a.prompt_hint
+    if label and label ~= "" then
+      local trunc = label:sub(1, 60)
       parts[#parts + 1] = { " — ", "SnacksPickerLabel" }
       for _, seg in ipairs(split_skills(trunc)) do
         parts[#parts + 1] = seg
@@ -77,8 +79,9 @@ local function format_item(item)
   local phase = d.mode == "autorun" and d.state and d.state.phase and (":" .. d.state.phase) or ""
   local head = ("[%s] %s%s (%s)"):format(d.id, d.mode, phase, d.status)
   local parts = { { head, "SnacksPickerLabel" } }
-  if d.initial_prompt and d.initial_prompt ~= "" then
-    local trunc = d.initial_prompt:sub(1, 50)
+  local label = (d.state and d.state.title) or d.initial_prompt
+  if label and label ~= "" then
+    local trunc = label:sub(1, 60)
     parts[#parts + 1] = { " — ", "SnacksPickerLabel" }
     for _, seg in ipairs(split_skills(trunc)) do
       parts[#parts + 1] = seg
@@ -170,6 +173,10 @@ local function build_items(opts)
       table.sort(entries, function(x, y) return x.stamp > y.stamp end)
       items[#items + 1] = { header = true, text = "── " .. date .. " ──" }
       for _, a in ipairs(entries) do
+        if a.has_state then
+          local st = archive.read_state(a.path)
+          if st then a.title = st.title end
+        end
         a.prompt_hint = archive.prompt_hint(a.path)
         items[#items + 1] = { id = "a:" .. a.path, text = a.path, archive = a }
       end

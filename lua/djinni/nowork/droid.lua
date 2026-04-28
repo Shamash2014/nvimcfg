@@ -928,6 +928,7 @@ local function finalize(droid)
     id = droid.id,
     mode = droid.mode,
     initial_prompt = droid.initial_prompt,
+    title = droid.state and droid.state.title or nil,
     started_at = droid.started_at,
     ended_at = os.time(),
     status = droid.status,
