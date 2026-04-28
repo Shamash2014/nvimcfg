@@ -9,15 +9,7 @@ end
 local function passive_current(bufnr)
   local ok_droid, droid = pcall(require, "djinni.nowork.droid")
   if not ok_droid or not droid then return nil end
-  local by_buf = droid.by_buf and droid.by_buf(bufnr)
-  if by_buf then return by_buf end
-  local ok_state, lifecycle = pcall(require, "djinni.nowork.state")
-  if not ok_state then return nil end
-  local active = {}
-  for _, x in pairs(droid.active or {}) do
-    if not lifecycle.is_finished(x) then active[#active + 1] = x end
-  end
-  if #active == 1 then return active[1] end
+  if droid.by_buf then return droid.by_buf(bufnr) end
   return nil
 end
 
@@ -25,6 +17,47 @@ local function truncate(s, n)
   s = tostring(s or "")
   if #s <= n then return s end
   return s:sub(1, n - 1) .. "…"
+end
+
+local function title_for(d)
+  local s = d.state or {}
+  if s.title and s.title ~= "" then return s.title end
+  local id = s.current_task_id
+  if id and id ~= "" and type(s.tasks) == "table" then
+    local entry = s.tasks[id]
+    if type(entry) == "table" and entry.desc and entry.desc ~= "" then
+      return entry.desc
+    end
+  end
+  local ip = d.initial_prompt
+  if ip and ip ~= "" then
+    local first = ip:match("[^\r\n]+")
+    if first and first ~= "" then return first end
+  end
+  return d.id or ""
+end
+
+local function pick_global_droid()
+  local ok_d, droid = pcall(require, "djinni.nowork.droid")
+  if not ok_d or not droid or not droid.active then return nil end
+  local ok_s, lifecycle = pcall(require, "djinni.nowork.state")
+  if not ok_s then return nil end
+  local ok_e, events = pcall(require, "djinni.nowork.events")
+  if not ok_e then return nil end
+
+  local rank = { waiting = 4, blocked = 3, running = 2, booting = 1, idle = 0 }
+  local best, best_score, best_id
+  for _, d in pairs(droid.active) do
+    if not lifecycle.is_finished(d) then
+      local sum = events.summary(d) or { total = 0 }
+      local score = (sum.total > 0 and 100 or 0) + (rank[d.status] or 0)
+      if not best or score > best_score
+         or (score == best_score and tostring(d.id or "") < tostring(best_id or "")) then
+        best, best_score, best_id = d, score, d.id
+      end
+    end
+  end
+  return best
 end
 
 function M.project()
@@ -47,25 +80,14 @@ end
 function M.task()
   return safe_call(function()
     local bufnr = vim.api.nvim_get_current_buf()
-    local d = passive_current(bufnr)
-    if not d or not d.state then return "" end
-    local id = d.state.current_task_id
-    local title = d.state.title
-    if (not id or id == "") then
-      if title and title ~= "" then return truncate(title, 40) end
-      return ""
+    local d = passive_current(bufnr) or pick_global_droid()
+    if not d then return "" end
+    local title = title_for(d)
+    local st = d.status or ""
+    if st ~= "" and st ~= "idle" then
+      return truncate(title, 36) .. " · " .. st
     end
-    if title and title ~= "" then
-      return "T:" .. id .. " " .. truncate(title, 30)
-    end
-    local tasks = d.state.tasks
-    if type(tasks) == "table" then
-      local entry = tasks[id]
-      if type(entry) == "table" and entry.desc then
-        return "T:" .. id .. " " .. truncate(entry.desc, 30)
-      end
-    end
-    return "T:" .. id
+    return truncate(title, 40)
   end)
 end
 
@@ -82,8 +104,8 @@ function M.line()
     " %f %h%m%r %=",
     "[%{v:lua.require'djinni.statusline'.project()}] ",
     "%{v:lua.require'djinni.statusline'.task()} ",
-    "%{v:lua.require'djinni.statusline'.droid()} ",
     "%y %l:%c %P ",
+    "%{v:lua.require'djinni.statusline'.droid()}",
   })
 end
 

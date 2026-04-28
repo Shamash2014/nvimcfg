@@ -269,6 +269,18 @@ function M.setup(opts)
     end
   end
 
+  do
+    local function apply_hl()
+      pcall(vim.api.nvim_set_hl, 0, "DjinniDroidActive", { default = true, link = "DiagnosticError" })
+      pcall(vim.api.nvim_set_hl, 0, "DjinniDroidBlocked", { default = true, link = "DiagnosticError" })
+    end
+    apply_hl()
+    vim.api.nvim_create_autocmd("ColorScheme", {
+      group = vim.api.nvim_create_augroup("DjinniNoworkTaskHL", { clear = true }),
+      callback = apply_hl,
+    })
+  end
+
   vim.api.nvim_create_autocmd("VimLeavePre", {
     group = vim.api.nvim_create_augroup("DjinniNoworkArchive", { clear = true }),
     callback = function()
@@ -505,6 +517,10 @@ function M.setup(opts)
     vim.notify(("nowork: cancelled %d routine(s)"):format(#targets), vim.log.levels.INFO)
   end, { desc = "nowork: kill all routines" })
 
+  vim.keymap.set("n", "<leader>ad", function()
+    require("djinni.pragmas.update").start(0)
+  end, { desc = "djinni: update pragma description with AI" })
+
   vim.keymap.set("n", "<leader>ac", function()
     local picker = require("djinni.nowork.picker")
     local compose = require("djinni.nowork.compose")
@@ -687,6 +703,7 @@ function M.setup(opts)
       { "<leader>ao", desc = "projects" },
       { "<leader>ai", desc = "interact (actions menu for current droid)" },
       { "<leader>ak", desc = "kill all routines" },
+      { "<leader>ad", desc = "update pragma description with AI" },
       { "<leader>ac", desc = "chat composer (routine persistent)" },
       { "<leader>av", desc = "review routine / capture selection", mode = { "n", "x" } },
       { "<leader>yq", desc = "share qflist to droid" },

@@ -52,6 +52,17 @@ local function discussion(droid)
   return lifecycle.ensure_discussion(droid)
 end
 
+local _redraw_pending = false
+local function redraw_soon()
+  if _redraw_pending then return end
+  _redraw_pending = true
+  vim.defer_fn(function()
+    _redraw_pending = false
+    pcall(vim.cmd, "redrawstatus!")
+  end, 120)
+end
+M.redraw_soon = redraw_soon
+
 local function set_status(droid, status, reason)
   droid.state = droid.state or {}
   if status == lifecycle.droid.blocked then
@@ -60,7 +71,7 @@ local function set_status(droid, status, reason)
     droid.state.last_blocker_reason = nil
   end
   lifecycle.set_droid_status(droid, status)
-  pcall(vim.cmd, "redrawstatus")
+  vim.schedule(function() pcall(vim.cmd, "redrawstatus!") end)
 end
 
 local function set_discussion_phase(droid, phase)
@@ -97,10 +108,10 @@ end
 
 function M.by_buf(bufnr)
   for _, d in pairs(M.active) do
-    if d.log_buf and d.log_buf.buf == bufnr then
-      return d
-    end
+    if d.log_buf and d.log_buf.buf == bufnr then return d end
   end
+  local ok, b = pcall(vim.api.nvim_buf_get_var, bufnr, "nowork_droid")
+  if ok and b and M.active[b] then return M.active[b] end
   return nil
 end
 
@@ -266,7 +277,7 @@ function M.apply_acp_modes(droid, available, current_id)
       end)
     end
   end
-  pcall(vim.cmd, "redrawstatus")
+  vim.schedule(function() pcall(vim.cmd, "redrawstatus!") end)
 end
 
 function M.set_acp_mode_id(droid, mode_id)
@@ -281,7 +292,7 @@ function M.set_acp_mode_id(droid, mode_id)
   if droid.log_buf and droid.log_buf.append then
     droid.log_buf:append("[acp mode → " .. label .. "]")
   end
-  pcall(vim.cmd, "redrawstatus")
+  vim.schedule(function() pcall(vim.cmd, "redrawstatus!") end)
 end
 
 function M._turn(droid, text)
@@ -336,6 +347,7 @@ function M._turn(droid, text)
       if stream_to_log then
         droid.log_buf:append(chunk)
       end
+      redraw_soon()
     end,
     on_usage = function(usage, cost)
       droid.state.tokens = droid.state.tokens or { input = 0, output = 0, cache_read = 0, cache_write = 0, cost = 0 }
@@ -349,9 +361,11 @@ function M._turn(droid, text)
       if cost then
         t.cost = math.max(t.cost, tonumber(cost) or t.cost)
       end
+      redraw_soon()
     end,
     on_commands = function(commands)
       droid.state.available_commands = commands or {}
+      redraw_soon()
     end,
     on_mode = function(payload)
       if payload.available_modes then
@@ -364,6 +378,7 @@ function M._turn(droid, text)
     on_tool_call = function(su)
       local tc = su.toolCall or su.tool_call or su
       tool_call.append_log(droid.log_buf, tc, tc_state)
+      redraw_soon()
     end,
     on_permission = function(params, respond)
       droid.policy.on_permission(params, respond, droid)
@@ -772,6 +787,7 @@ function M.enqueue(droid_or_id, text)
   if not droid or not text or text == "" then return end
   lifecycle.enqueue(droid, text)
   droid.log_buf:append("[queued] " .. text:sub(1, 80):gsub("\n", " "))
+  redraw_soon()
 end
 
 function M.dispatch(droid_or_id, text)

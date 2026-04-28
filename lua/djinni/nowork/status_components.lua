@@ -76,14 +76,16 @@ function M.compact_render(droid)
 end
 
 function M.statusline_parts(droids)
-  local R, B, I = 0, 0, 0
+  local R, B, I, W, BL = 0, 0, 0, 0, 0
   local Tt, Qt = 0, 0
   local cost = 0
   for _, d in ipairs(droids) do
     local st = d.status
     if st == "running" then R = R + 1
     elseif st == "booting" then B = B + 1
-    elseif st == "idle" then I = I + 1 end
+    elseif st == "idle" then I = I + 1
+    elseif st == "blocked" then BL = BL + 1
+    elseif st and st ~= "" then W = W + 1 end
     local s = d.state or {}
     local tok = s.tokens or {}
     Tt = Tt + (tok.input or 0) + (tok.output or 0)
@@ -96,15 +98,26 @@ function M.statusline_parts(droids)
   local function push(sym, n)
     if n and n > 0 then parts[#parts + 1] = { sym = sym, val = tostring(n) } end
   end
-  push("R", R); push("B", B); push("I", I)
+  push("B", B); push("I", I); push("W", W)
   if Tt > 0 then parts[#parts + 1] = { sym = "T", val = M.token_compact(Tt) } end
   push("Q", Qt)
   push("+", agg.staged)
   push("P", agg.permissions)
   push("?", agg.questions)
-  push("!", agg.blockers)
   local cost_str = M.cost_compact(cost)
   if cost_str then parts[#parts + 1] = { sym = nil, val = cost_str } end
+  if R > 0 then
+    parts[#parts + 1] = {
+      sym = nil,
+      val = string.format("%%#DjinniDroidActive#● %d%%*", R),
+    }
+  end
+  if BL > 0 then
+    parts[#parts + 1] = {
+      sym = nil,
+      val = string.format("%%#DjinniDroidBlocked#◉ %d%%*", BL),
+    }
+  end
   return parts
 end
 
@@ -143,6 +156,38 @@ if vim and vim.env and vim.env.DJINNI_TEST == "1" then
     local got = M.compact_render(c.droid)
     if got ~= c.expect then
       error(("DJINNI_TEST golden mismatch [%s]\n  expect %q\n  got    %q"):format(c.name, c.expect, got))
+    end
+  end
+  do
+    local got = M.statusline_render({ { id = "w1", status = "waiting", state = { pending_events = { { kind = "permission" } } } } })
+    local expect = "W 1 P 1"
+    if got ~= expect then
+      error(("DJINNI_TEST statusline_render mismatch\n  expect %q\n  got    %q"):format(expect, got))
+    end
+  end
+  do
+    local got = M.statusline_render({ { id = "r1", status = "running" } })
+    local expect = "%#DjinniDroidActive#● 1%*"
+    if got ~= expect then
+      error(("DJINNI_TEST running badge mismatch\n  expect %q\n  got    %q"):format(expect, got))
+    end
+  end
+  do
+    local got = M.statusline_render({ { id = "b1", status = "blocked" } })
+    local expect = "%#DjinniDroidBlocked#◉ 1%*"
+    if got ~= expect then
+      error(("DJINNI_TEST blocked badge mismatch\n  expect %q\n  got    %q"):format(expect, got))
+    end
+  end
+  do
+    local got = M.statusline_render({
+      { id = "r1", status = "running" },
+      { id = "r2", status = "running" },
+      { id = "b1", status = "blocked" },
+    })
+    local expect = "%#DjinniDroidActive#● 2%* %#DjinniDroidBlocked#◉ 1%*"
+    if got ~= expect then
+      error(("DJINNI_TEST mixed badge mismatch\n  expect %q\n  got    %q"):format(expect, got))
     end
   end
 end

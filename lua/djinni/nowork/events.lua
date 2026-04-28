@@ -539,6 +539,8 @@ function M.enqueue(droid, params, respond)
   if M._win and vim.api.nvim_win_is_valid(M._win) then
     M._refresh()
   end
+  local ok_d, droid_mod = pcall(require, "djinni.nowork.droid")
+  if ok_d and droid_mod and droid_mod.redraw_soon then droid_mod.redraw_soon() end
 end
 
 function M.drain_droid(droid, outcome)
@@ -563,6 +565,8 @@ function M.drain_droid(droid, outcome)
   if M._win and vim.api.nvim_win_is_valid(M._win) then
     M._refresh()
   end
+  local ok_d, droid_mod = pcall(require, "djinni.nowork.droid")
+  if ok_d and droid_mod and droid_mod.redraw_soon then droid_mod.redraw_soon() end
 end
 
 function M.open()

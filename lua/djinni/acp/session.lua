@@ -167,9 +167,7 @@ local register_session
 
 local function apply_session_result(entry, session_id, result, opts)
   entry.model_config_option = result and extract_model_config_option(result.configOptions)
-  if not entry.model_config_option and result and (result.models or result.availableModels) then
-    entry.available_models = result.models or result.availableModels
-  end
+  entry.available_models = result and (result.models or result.availableModels) or entry.available_models
   entry.skills_injected = not (opts and opts.is_new)
   register_session(session_id, entry)
 
@@ -464,17 +462,40 @@ function M.list_task_sessions(project_root, callback, opts)
   end)
 end
 
-function M.set_model(_, session_id, model_id, _provider_name)
+function M.set_model(_, session_id, model_id, _provider_name, cb)
+  local log = require("djinni.log")
   local entry = M.sessions_by_id[session_id]
-  if not entry then return end
+  if not entry then
+    if cb then cb({ message = "Session not found" }, nil) end
+    return
+  end
+  local function set_via_unstable()
+    entry.client:request("session/set_model",
+      { sessionId = session_id, modelId = model_id },
+      function(err, result)
+        if err then
+          log.warn("set_model fallback failed: " .. vim.inspect(err))
+        end
+        if cb then cb(err, result) end
+      end)
+  end
   if entry.model_config_option then
     entry.client:request("session/set_config_option", {
       sessionId = session_id,
-      optionId = entry.model_config_option.optionId,
-      value = model_id,
-    }, function() end)
+      optionId  = entry.model_config_option.optionId,
+      configId  = entry.model_config_option.optionId,
+      value     = model_id,
+    }, function(err, result)
+      if err then
+        log.warn("set_config_option failed (" .. vim.inspect(err) .. "); falling back to session/set_model")
+        set_via_unstable()
+      else
+        entry.model_config_option.currentValue = model_id
+        if cb then cb(nil, result) end
+      end
+    end)
   else
-    entry.client:request("session/set_model", { sessionId = session_id, modelId = model_id }, function() end)
+    set_via_unstable()
   end
 end
 
@@ -579,6 +600,10 @@ function M.on_reconnect(session_id, cb)
   if entry then
     entry.reconnect_cb = cb
   end
+end
+
+function M.get_session_entry(session_id)
+  return M.sessions_by_id[session_id]
 end
 
 function M.get_available_models(session_id)
