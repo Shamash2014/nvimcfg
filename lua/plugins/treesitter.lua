@@ -6,6 +6,15 @@ return {
     "nvim-treesitter/nvim-treesitter-textobjects",
   },
   config = function()
+    for _, lang in ipairs({ "c", "lua", "vim", "vimdoc" }) do
+      for _, p in ipairs(vim.api.nvim_get_runtime_file("parser/" .. lang .. ".so", true)) do
+        if p:find("/lib/nvim/parser/", 1, true) then
+          vim.treesitter.language.add(lang, { path = p })
+          break
+        end
+      end
+    end
+
     local supported_filetypes = {
       'lua', 'python', 'javascript', 'typescript', 'jsx', 'tsx',
       'go', 'rust', 'elixir', 'heex', 'eex', 'bash', 'json',
