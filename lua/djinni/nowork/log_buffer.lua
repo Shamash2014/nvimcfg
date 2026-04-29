@@ -9,6 +9,7 @@ end
 local ns = vim.api.nvim_create_namespace("nowork_log")
 
 local statusline_providers = {}
+local window_statuslines = {}
 
 function M._sl(buf)
   local fn = statusline_providers[buf]
@@ -177,7 +178,30 @@ function M.new(opts)
 
   local function apply_statusline_to_window(w)
     if w and vim.api.nvim_win_is_valid(w) then
+      if window_statuslines[w] == nil then
+        window_statuslines[w] = vim.wo[w].statusline
+      end
       vim.wo[w].statusline = "%{%v:lua.require'djinni.nowork.log_buffer'._sl(" .. buf .. ")%}"
+    end
+  end
+
+  local function restore_statusline_for_window(w)
+    if not w then return end
+    if not vim.api.nvim_win_is_valid(w) then
+      window_statuslines[w] = nil
+      return
+    end
+    if vim.api.nvim_win_get_buf(w) == buf then return end
+    local prev = window_statuslines[w]
+    if prev ~= nil then
+      vim.wo[w].statusline = prev
+      window_statuslines[w] = nil
+    end
+  end
+
+  local function restore_statuslines()
+    for w, _ in pairs(window_statuslines) do
+      restore_statusline_for_window(w)
     end
   end
 
@@ -193,11 +217,19 @@ function M.new(opts)
         apply_statusline_to_window(find_win())
       end,
     })
+    vim.api.nvim_create_autocmd("BufWinLeave", {
+      group = group,
+      buffer = buf,
+      callback = function()
+        restore_statuslines()
+      end,
+    })
     vim.api.nvim_create_autocmd("BufWipeout", {
       group = group,
       buffer = buf,
       once = true,
       callback = function()
+        restore_statuslines()
         statusline_providers[buf] = nil
       end,
     })

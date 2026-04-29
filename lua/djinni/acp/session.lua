@@ -100,6 +100,12 @@ local function request_timeout(provider_name, method)
   return 30000
 end
 
+local function request_empty_result(client, method, params, callback)
+  client:request(method, params, function(err, result)
+    if callback then callback(err, result or vim.empty_dict()) end
+  end)
+end
+
 local function enrich_error(client, err)
   if not err then return nil end
   local out = vim.deepcopy(err)
@@ -547,25 +553,10 @@ function M.set_mode(_, session_id, mode_id, provider_name, callback)
       return
     end
 
-    provider_name = provider_name or entry.provider_name
-    if provider_name == "claude" or provider_name == "claude-code" then
-      entry.client:request("session/prompt", {
-        sessionId = session_id,
-        prompt = {
-          { type = "text", text = "/mode " .. mode_id },
-        },
-      }, function(err)
-        if callback then callback(err, vim.empty_dict()) end
-      end)
-      return
-    end
-
-    entry.client:request("session/set_mode", {
+    request_empty_result(entry.client, "session/set_mode", {
       sessionId = session_id,
       modeId = mode_id,
-    }, function(err, result)
-      if callback then callback(err, result or vim.empty_dict()) end
-    end)
+    }, callback)
   end)
 end
 

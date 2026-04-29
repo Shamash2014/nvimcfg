@@ -9,10 +9,8 @@ It wraps Claude Code's functionality behind the standard ACP protocol.
 
 ### session/set_mode
 - The ACP spec defines this as a REQUEST (with response)
-- `claude-agent-acp` does NOT implement it — request blocks session, notification rejected
-- **WORKAROUND**: Send `/mode <modeId>` as a `session/prompt` message instead
-- Claude Code handles `/mode` as a slash command and sends `current_mode_update` event
-- `session.set_mode()` in our code wraps this as a prompt call
+- `claude-agent-acp` now supports it through the normal ACP request path
+- Use `session/set_mode` directly and handle the minimal response like other providers
 
 ### session/new Response
 Returns: `sessionId`, `configOptions`, `modes`, `models`
@@ -50,7 +48,7 @@ Agent sends this as a REQUEST to the client.
 ### Session Lifecycle
 1. `initialize` -> OK
 2. `session/new` -> sessionId, modes, configOptions
-3. `session/set_mode` -> fire-and-forget (may not respond)
+3. `session/set_mode` -> normal request/response
 4. `session/prompt` -> streaming via session/update notifications -> PromptResponse
 5. `session/cancel` -> notification to interrupt
 

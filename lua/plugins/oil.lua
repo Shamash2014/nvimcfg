@@ -96,7 +96,7 @@ local function parse_ssh_config_async(callback)
 end
 
 return {
-  "stevearc/oil.nvim",
+  "barrettruth/canola.nvim",
   cmd = "Oil",
   keys = {
     { "-", "<CMD>Oil<CR>", desc = "Open Oil file manager" },

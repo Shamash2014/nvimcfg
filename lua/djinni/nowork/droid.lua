@@ -10,6 +10,7 @@ M.active = {}
 
 local counter = 0
 local attach_reconnect_handler
+local ensure_initial_acp_mode
 local extract_available_commands
 local extract_acp_modes
 
@@ -58,7 +59,11 @@ local function recover_session_and_retry(droid, text_for_retry, reason_label)
     droid.state.available_commands = extract_available_commands(result)
     do
       local available, current = extract_acp_modes(result)
-      if available or current then M.apply_acp_modes(droid, available, current) end
+      if available or current then
+        droid._suspend_acp_mode_auto = true
+        M.apply_acp_modes(droid, available, current)
+        droid._suspend_acp_mode_auto = nil
+      end
     end
     attach_reconnect_handler(droid)
     droid.log_buf:append("[session recreated: " .. tostring(new_sid) .. "]")
@@ -69,11 +74,8 @@ local function recover_session_and_retry(droid, text_for_retry, reason_label)
     })
     events_changed(droid, "session_recreated")
     if wanted_mode and wanted_mode ~= "" then
-      droid._desired_acp_mode = wanted_mode
-      session.set_mode(nil, new_sid, wanted_mode, droid.provider_name, function(mode_err)
-        if mode_err then
-          droid.log_buf:append("[warn] failed to restore ACP mode: " .. tostring(mode_err.message or mode_err))
-        end
+      droid.initial_acp_mode = wanted_mode
+      ensure_initial_acp_mode(droid, function()
         M._turn(droid, text_for_retry)
       end)
     else
@@ -319,6 +321,7 @@ function M.apply_acp_modes(droid, available, current_id)
   events_changed(droid, "modes")
   local should_auto = droid.mode == "planner" or droid.initial_acp_mode ~= nil
   if should_auto
+      and not droid._suspend_acp_mode_auto
       and not droid.acp_modes._auto_applied
       and droid.session_id
       and droid.acp_modes.available
@@ -343,6 +346,56 @@ function M.apply_acp_modes(droid, available, current_id)
     end
   end
   vim.schedule(function() pcall(vim.cmd, "redrawstatus!") end)
+end
+
+ensure_initial_acp_mode = function(droid, callback)
+  if not droid then
+    if callback then callback() end
+    return
+  end
+  local modes = droid.acp_modes
+  local available = modes and modes.available or nil
+  local preferred = droid.initial_acp_mode or (droid.mode == "planner" and "plan" or nil)
+  if not preferred or not droid.session_id or type(available) ~= "table" or #available == 0 then
+    if callback then callback() end
+    return
+  end
+  if modes._auto_applied then
+    if callback then callback() end
+    return
+  end
+  modes._auto_applied = true
+
+  local target
+  for _, m in ipairs(available) do
+    if m.id == preferred then target = m.id; break end
+  end
+  if not target then
+    local ids = {}
+    for _, m in ipairs(available) do ids[#ids + 1] = m.id end
+    if droid.log_buf and droid.log_buf.append then
+      droid.log_buf:append(("[acp mode] requested '%s' but provider only offers: %s; staying on %s")
+        :format(preferred, table.concat(ids, ", "), tostring(modes.current_id)))
+    end
+    if callback then callback() end
+    return
+  end
+  if target == modes.current_id then
+    if callback then callback() end
+    return
+  end
+
+  droid._desired_acp_mode = target
+  session.set_mode(nil, droid.session_id, target, droid.provider_name, function(err)
+    if err then
+      if droid.log_buf and droid.log_buf.append then
+        droid.log_buf:append("[warn] failed to set ACP mode: " .. tostring(err.message or err))
+      end
+    else
+      M.set_acp_mode_id(droid, target)
+    end
+    if callback then callback() end
+  end)
 end
 
 function M.set_acp_mode_id(droid, mode_id)
@@ -384,10 +437,16 @@ function M._turn(droid, text)
       droid.state.available_commands = extract_available_commands(result)
       do
         local available, current = extract_acp_modes(result)
-        if available or current then M.apply_acp_modes(droid, available, current) end
+        if available or current then
+          droid._suspend_acp_mode_auto = true
+          M.apply_acp_modes(droid, available, current)
+          droid._suspend_acp_mode_auto = nil
+        end
       end
       attach_reconnect_handler(droid)
-      M._turn(droid, text)
+      ensure_initial_acp_mode(droid, function()
+        M._turn(droid, text)
+      end)
     end, { provider = droid.provider_name, model = droid.model_name })
     return
   end
@@ -748,15 +807,34 @@ function M.new(mode_name, initial_prompt, opts)
     droid.state.available_commands = extract_available_commands(result)
     do
       local available, current = extract_acp_modes(result)
-      if available or current then M.apply_acp_modes(droid, available, current) end
+      if available or current then
+        droid._suspend_acp_mode_auto = true
+        M.apply_acp_modes(droid, available, current)
+        droid._suspend_acp_mode_auto = nil
+      end
     end
     set_status(droid, lifecycle.droid.idle)
     attach_reconnect_handler(droid)
-    if opts.preamble and opts.preamble ~= "" then
-      lb:append("[resume] restoring from " .. (opts.restore and opts.restore.id or "?"))
-      if opts.defer_preamble then
-        lifecycle.set_resume_preamble(droid, opts.preamble)
-        droid._resume_preamble = opts.preamble
+    ensure_initial_acp_mode(droid, function()
+      if opts.preamble and opts.preamble ~= "" then
+        lb:append("[resume] restoring from " .. (opts.restore and opts.restore.id or "?"))
+        if opts.defer_preamble then
+          lifecycle.set_resume_preamble(droid, opts.preamble)
+          droid._resume_preamble = opts.preamble
+          local pending_initial = lifecycle.take_pending_initial(droid)
+          if pending_initial then
+            M._turn(droid, pending_initial)
+          else
+            vim.schedule(function()
+              require("djinni.nowork.compose").open(droid, { alt_buf = vim.fn.bufnr("#") })
+            end)
+          end
+        else
+          M._turn(droid, opts.preamble)
+        end
+      elseif initial_prompt and initial_prompt ~= "" then
+        M._turn(droid, initial_prompt)
+      else
         local pending_initial = lifecycle.take_pending_initial(droid)
         if pending_initial then
           M._turn(droid, pending_initial)
@@ -765,21 +843,8 @@ function M.new(mode_name, initial_prompt, opts)
             require("djinni.nowork.compose").open(droid, { alt_buf = vim.fn.bufnr("#") })
           end)
         end
-      else
-        M._turn(droid, opts.preamble)
       end
-    elseif initial_prompt and initial_prompt ~= "" then
-      M._turn(droid, initial_prompt)
-    else
-      local pending_initial = lifecycle.take_pending_initial(droid)
-      if pending_initial then
-        M._turn(droid, pending_initial)
-      else
-        vim.schedule(function()
-          require("djinni.nowork.compose").open(droid, { alt_buf = vim.fn.bufnr("#") })
-        end)
-      end
-    end
+    end)
   end, { provider = droid.provider_name, model = droid.model_name })
 
   return id
