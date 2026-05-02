@@ -260,9 +260,9 @@ local function setup_hl()
   if _hl_ready then return end
   _hl_ready = true
   local hl = function(n, o) vim.api.nvim_set_hl(0, n, o) end
-  hl("AcpHeader",          { link = "Directory",       default = true })
-  hl("AcpBranch",          { link = "Identifier",      default = true })
-  hl("AcpSectionHeader",   { link = "Statement",       default = true })
+  hl("AcpHeader",          { link = "Comment",         default = true })
+  hl("AcpBranch",          { link = "Title",           default = true })
+  hl("AcpSectionHeader",   { link = "Title",           default = true })
   hl("AcpAgentOk",         { link = "DiagnosticOk",    default = true })
   hl("AcpAgentBusy",       { link = "DiagnosticWarn",  default = true })
   hl("AcpPending",         { link = "DiagnosticError", default = true })
@@ -372,6 +372,19 @@ function M._open_panels()
   vim.wo[_main_win].cursorline     = true
   set_winbar(_main_win, "diff")
 
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = { tostring(_sb_win), tostring(_main_win) },
+    once = true,
+    callback = function(ev)
+      local closed_win = tonumber(ev.match)
+      local other_win = (closed_win == _sb_win) and _main_win or _sb_win
+      if other_win and vim.api.nvim_win_is_valid(other_win) then
+        pcall(vim.api.nvim_win_close, other_win, true)
+      end
+      if closed_win == _sb_win then _sb_win = nil else _main_win = nil end
+    end,
+  })
+
   local saved_visual
   vim.api.nvim_create_autocmd("BufEnter", {
     buffer = main_buf,
@@ -422,10 +435,11 @@ function M.render()
   -- Header (magit-style: project + branch)
   local branch = vim.trim(vim.fn.system(
     "git -C " .. vim.fn.shellescape(cwd) .. " branch --show-current 2>/dev/null"))
-  add("  " .. vim.fn.fnamemodify(cwd, ":~"), "AcpHeader")
+  
   if branch ~= "" then
-    add("  on  " .. branch, "AcpBranch")
+    add("Head: " .. branch, "AcpBranch")
   end
+  add("Path: " .. vim.fn.fnamemodify(cwd, ":~"), "AcpHeader")
   add("")
 
   -- Pending notice (not a section — always visible)
@@ -439,10 +453,10 @@ function M.render()
     local items = {}
     for _, f in ipairs(work_files) do
       local has_log = vim.fn.filereadable(M.log_path(f)) == 1
-      local status  = has_log and "done     " or "pending  "
+      local status  = has_log and "✔ " or "· "
       local hl      = has_log and "AcpWorkDone" or nil
       local name    = vim.fn.fnamemodify(f, ":t:r"):gsub("^%d+%-", "", 1)
-      table.insert(items, { "  " .. status .. "  " .. name, hl, { kind = "work", path = f } })
+      table.insert(items, { status .. " " .. name, hl, { kind = "work", path = f } })
     end
     sect("work", "Plans", items)
   end
@@ -451,34 +465,56 @@ function M.render()
   do
     local items = {}
     for _, c in ipairs(_context) do
-      local kind = c.type == "image" and "image    " or "text     "
-      table.insert(items, { "  " .. kind .. "  " .. (c._label or "context"), "AcpContextItem" })
+      local kind = c.type == "image" and "🖼 " or "📝 "
+      table.insert(items, { kind .. " " .. (c._label or "context"), "AcpContextItem" })
     end
     sect("context", "Context", items)
+  end
+
+  -- Worktrees
+  do
+    local wt_json = vim.fn.system("wt list --format=json")
+    if vim.v.shell_error == 0 then
+      local ok, wt_data = pcall(vim.json.decode, wt_json)
+      if ok and type(wt_data) == "table" then
+        local items = {}
+        for _, wt in ipairs(wt_data) do
+          if wt.kind == "worktree" then
+            local prefix = wt.is_current and "* " or "  "
+            local name = wt.branch or "(detached)"
+            local hl = wt.is_current and "AcpBranch" or "Comment"
+            table.insert(items, { prefix .. name .. "  " .. wt.path:gsub("^" .. vim.env.HOME, "~"), hl, { kind = "worktree", path = wt.path } })
+          end
+        end
+        if #items > 0 then
+          sect("worktrees", "Worktrees", items)
+        end
+      end
+    end
   end
 
   -- Agents (only when active)
   if #agents > 0 then
     local items = {}
     for _, a in ipairs(agents) do
-      local status = a.state == "ready" and "ready    " or "running  "
+      local status = a.state == "ready" and "✓ " or "⟳ "
       local ahl    = a.state == "ready" and "AcpAgentOk" or "AcpAgentBusy"
-      table.insert(items, { "  " .. status .. "  " .. vim.fn.fnamemodify(a.cwd, ":~"), ahl })
+      table.insert(items, { status .. " " .. vim.fn.fnamemodify(a.cwd, ":~"), ahl })
     end
-    sect("agents", "Agents", items)
+    sect("agents", "Active Agents", items)
   end
 
   -- Changed Files
   do
-    local STATUS_WORDS = { A = "new file ", M = "modified ", D = "deleted  " }
+    local STATUS_WORDS = { A = "A ", M = "M ", D = "D " }
     local STATUS_HLS   = { A = "AcpDiffFileA", M = "AcpDiffFileM", D = "AcpDiffFileD" }
     local items = {}
     for _, f in ipairs(diff_files) do
-      local word = STATUS_WORDS[f.status] or "modified "
+      local word = STATUS_WORDS[f.status] or "M "
       local hl   = STATUS_HLS[f.status]
-      table.insert(items, { "  " .. word .. "  " .. f.path, hl, { kind = "diff", path = f.path } })
+      table.insert(items, { word .. " " .. f.path, hl, { kind = "diff", path = f.path } })
     end
-    sect("changed", "Changed", items)
+    sect("changed", "Unstaged changes", items)
   end
 
   -- Threads: work item sessions + diff line comments
@@ -486,24 +522,24 @@ function M.render()
     local items = {}
     for _, f in ipairs(work_files) do
       local has_log = vim.fn.filereadable(M.log_path(f)) == 1
-      local status  = has_log and "done     " or "pending  "
+      local status  = has_log and "✔ " or "· "
       local hl      = has_log and "AcpWorkDone" or "AcpThreadOpen"
       local name    = vim.fn.fnamemodify(f, ":t:r"):gsub("^%d+%-", "", 1)
-      table.insert(items, { "  " .. status .. "  " .. name, hl, { kind = "work", path = f } })
+      table.insert(items, { status .. " " .. name, hl, { kind = "work", path = f } })
     end
     for _, entry in ipairs(require("acp.diff").get_threads(cwd)) do
       local t      = entry.thread
-      local status = t.resolved and "resolved " or "open     "
+      local status = t.resolved and "✔ " or "💬 "
       local hl     = t.resolved and "AcpWorkDone" or "AcpThreadOpen"
       local fname  = vim.fn.fnamemodify(entry.file, ":t")
       local prompt = t.prompt:sub(1, 28) .. (t.prompt:len() > 28 and "…" or "")
       table.insert(items, {
-        "  " .. status .. "  " .. fname .. ":" .. entry.row .. "  " .. prompt,
+        status .. " " .. fname .. ":" .. entry.row .. "  " .. prompt,
         hl,
         { kind = "thread", file = entry.file, row = entry.row },
       })
     end
-    sect("threads", "Threads", items)
+    sect("threads", "Active threads", items)
   end
 
   add("  TAB fold  <CR> open  n new  p pipeline  q close  g? help", "AcpFooter")
@@ -589,6 +625,12 @@ function M._install_keymaps(buf)
         function(t) set_winbar(_main_win, t) end)
       vim.api.nvim_set_current_win(_main_win)
       vim.api.nvim_win_set_cursor(_main_win, { meta.row + 1, 0 })
+    elseif meta.kind == "worktree" then
+      if meta.path ~= vim.fn.getcwd() then
+        vim.cmd("cd " .. vim.fn.fnameescape(meta.path))
+        M.render()
+        vim.notify("Switched to worktree: " .. meta.path, vim.log.levels.INFO, {title="acp"})
+      end
     end
   end, "Run / open diff")
 

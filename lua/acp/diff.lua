@@ -145,7 +145,8 @@ function M.show_file(file_path, main_win, main_buf, on_winbar)
     addh(hunk.header, "AcpDiffHunk")
     for _, dl in ipairs(hunk.lines) do
       local px = dl.type=="add" and "+" or dl.type=="del" and "-" or " "
-      addh(px .. dl.text, nil, { type=dl.type, file=file_path, hunk_header=hunk.header })
+      local hl = dl.type=="add" and "AcpDiffAdd" or dl.type=="del" and "AcpDiffDelete" or nil
+      addh(px .. dl.text, hl, { type=dl.type, file=file_path, hunk_header=hunk.header })
     end
     addh("")
   end
