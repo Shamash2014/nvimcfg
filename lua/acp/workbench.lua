@@ -528,6 +528,17 @@ function M.render()
     sect("context", "Context", items)
   end
 
+  -- Agents (active sessions)
+  do
+    local items = {}
+    for _, s in ipairs(agents) do
+      local label = (require("acp.agents").get(s.key) or {}).display or s.key
+      local mode = s.current_mode and (" (" .. s.current_mode .. ")") or ""
+      table.insert(items, { "● " .. label .. mode, "AcpAgentReady", { kind = "agent", key = s.key } })
+    end
+    sect("agents", "Agents", items)
+  end
+
   -- Worktrees
   do
     local wt_json = exec_async("wt list --format=json")
@@ -724,6 +735,28 @@ function M.close()
   _sb_win = nil; _main_win = nil
 end
 
+function M.pick_mode(key)
+  local agents = require("acp.session").active()
+  local s
+  for _, a in ipairs(agents) do
+    if a.key == key then s = a; break end
+  end
+  if not s or not s.modes or #s.modes == 0 then
+    vim.notify("No modes available for this agent", vim.log.levels.WARN); return
+  end
+
+  local labels = {}
+  for _, m in ipairs(s.modes) do
+    table.insert(labels, m.name .. (m.description and (" — " .. m.description) or ""))
+  end
+
+  vim.ui.select(labels, { prompt = "Set mode for " .. key .. ":" }, function(_, idx)
+    if not idx then return end
+    require("acp.session").set_mode(key, s.modes[idx].modeId)
+    M.render()
+  end)
+end
+
 function M._install_keymaps(buf)
   local function km(lhs, fn, desc)
     vim.keymap.set("n", lhs, fn,
@@ -793,6 +826,13 @@ function M._install_keymaps(buf)
   end, "Show log")
 
   km("gL", M.show_comm_log, "Comm log")
+  
+  km("m", function()
+    local meta = meta_at_cursor()
+    if meta and meta.kind == "agent" then
+      M.pick_mode(meta.key)
+    end
+  end, "Set agent mode")
 
   km("n", function()
     M.set(vim.fn.getcwd())

@@ -16,7 +16,19 @@ local _providers = {
   {
     name    = "codex",
     display = "codex",
-    cmd     = "codex",
+    cmd     = "codex-acp",
+    args    = {},
+  },
+  {
+    name    = "hermes",
+    display = "hermes",
+    cmd     = "hermes",
+    args    = { "acp" },
+  },
+  {
+    name    = "cursor",
+    display = "cursor",
+    cmd     = "agent",
     args    = { "acp" },
   },
 }

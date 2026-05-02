@@ -4,6 +4,8 @@ local NS_DIFF    = vim.api.nvim_create_namespace("acp_diff")
 local NS_THREAD  = vim.api.nvim_create_namespace("acp_thread")
 local NS_SEP     = vim.api.nvim_create_namespace("acp_sep")
 
+local subscribe_to_thread -- Forward declaration
+
 local STATUS_WORDS = { A = "new file  ", M = "modified  ", D = "deleted   " }
 
 local _threads = {}
@@ -85,7 +87,9 @@ end
 M.apply_line_hl = apply_line_hl
 
 local function format_agent_msg(msg)
-  if msg.text then
+  if msg.type == "info" then
+    return "ℹ " .. (msg.text or "")
+  elseif msg.text then
     return msg.text
   elseif msg.call then
     return "Call: " .. (msg.call.name or "?")
@@ -261,19 +265,36 @@ function M.show_file(file_path, main_win, main_buf, on_winbar)
   if on_winbar then on_winbar(file_path) end
 end
 
-local function subscribe_to_thread(sess, cwd, file, row)
+subscribe_to_thread = function(sess, cwd, file, row)
   local t = ((_threads[cwd] or {})[file] or {})[row]
-  if not t then return end
-  sess.rpc:subscribe(sess.session_id, function(notif)
+  if not t or t._unsub then t._unsub() end
+  t._subscribed = true
+
+  t._unsub = sess.rpc:subscribe(sess.session_id, function(notif)
+    if not t._subscribed then return end
     local u = (notif.params or {}).update or {}
-    if u.sessionUpdate == "text" and u.text then
-      table.insert(t.messages, { role="agent", type="text", text=u.text })
-    elseif u.sessionUpdate == "thought" and u.thought then
-      table.insert(t.messages, { role="agent", type="thought", text=u.thought })
+    if (u.sessionUpdate == "text" and u.text) or (u.sessionUpdate == "agent_message_chunk" and u.content) then
+      local text = u.text or (u.content and u.content.text) or ""
+      local last = t.messages[#t.messages]
+      if last and last.role == "agent" and last.type == "text" then
+        last.text = last.text .. text
+      else
+        table.insert(t.messages, { role="agent", type="text", text=text })
+      end
+    elseif (u.sessionUpdate == "thought" and u.thought) or (u.sessionUpdate == "agent_thought_chunk" and u.content) then
+      local text = u.thought or (u.content and u.content.text) or ""
+      local last = t.messages[#t.messages]
+      if last and last.role == "agent" and last.type == "thought" then
+        last.text = last.text .. text
+      else
+        table.insert(t.messages, { role="agent", type="thought", text=text })
+      end
     elseif u.sessionUpdate == "tool_call" and u.toolCall then
       table.insert(t.messages, { role="agent", type="tool_call", call=u.toolCall })
     elseif u.sessionUpdate == "tool_result" and u.toolResult then
       table.insert(t.messages, { role="agent", type="tool_result", result=u.toolResult })
+    elseif u.sessionUpdate == "session_info_update" and u.title then
+      t._title = u.title
     end
     vim.schedule(function()
       redraw_thread(row)
@@ -350,7 +371,12 @@ function M.add_comment(file, row, visual)
           subscribe_to_thread(sess, cwd, file, row)
           sess.rpc:request("session/prompt", {
             sessionId = sess.session_id, prompt = prompt_items,
-          }, function() end)
+          }, function(e, res)
+            if res and res.stopReason then
+              table.insert(t.messages, { role="agent", type="info", text="Turn ended: " .. res.stopReason })
+              vim.schedule(function() redraw_thread(row) end)
+            end
+          end)
         end)
       end,
     }
@@ -467,7 +493,12 @@ function M.delete_thread(file, row)
   local cwd = _cur.cwd or vim.fn.getcwd()
   file = file or _cur.sel_file
   row = row or (vim.api.nvim_win_is_valid(0) and vim.api.nvim_win_get_cursor(0)[1] - 1) or -1
-  if (_threads[cwd] or {})[file] then
+  local t = ((_threads[cwd] or {})[file] or {})[row]
+  if t then
+    if t._unsub then t._unsub() end
+    t._subscribed = false
+    local thread_key = cwd .. ":thread:" .. file .. ":" .. row
+    require("acp.session").close(thread_key)
     _threads[cwd][file][row] = nil
     save_threads(cwd)
   end

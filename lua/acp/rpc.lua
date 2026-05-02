@@ -62,6 +62,12 @@ function M.new(transport_handle)
   function rpc:subscribe(session_id, fn)
     self._subscribers[session_id] = self._subscribers[session_id] or {}
     table.insert(self._subscribers[session_id], fn)
+    local idx = #self._subscribers[session_id]
+    return function()
+      if self._subscribers[session_id] then
+        self._subscribers[session_id][idx] = nil
+      end
+    end
   end
 
   function rpc:drain_callbacks(err)

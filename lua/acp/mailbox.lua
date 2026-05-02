@@ -36,46 +36,50 @@ function M.enqueue_permission(entry)
   entry.id    = id_seq
   entry.state = "pending"
   table.insert(queue, entry)
-  M._open_or_refresh()
+  M.open_permission_float(entry)
   vim.notify("ACP permission request: " .. entry.tool_title, vim.log.levels.WARN, { title = "acp" })
 end
 
--- Open the permission loclist and install <CR> bindings.
-function M._open_or_refresh()
-  local items = {}
-  for _, e in ipairs(queue) do
-    if e.state == "pending" then
-      local preview = e.tool_input and vim.json.encode(e.tool_input):sub(1,60) or ""
-      table.insert(items, {
-        lnum = #items + 1, col = 1, bufnr = 0,
-        text = "[" .. e.tool_kind .. "] " .. e.tool_title
-               .. (preview ~= "" and ("  " .. preview) or ""),
-        _id  = e.id,
-      })
-    end
-  end
-  vim.fn.setloclist(0, items, "r", { title = "ACP Permissions" })
+function M.open_permission_float(e)
+  local lines = {
+    "# Permission Request",
+    "",
+    "**Tool:** " .. e.tool_kind .. " (" .. e.tool_title .. ")",
+    "",
+    "**Input:**",
+    "```json",
+  }
+  local input_str = vim.json.encode(e.tool_input or {})
+  vim.list_extend(lines, vim.split(input_str, "\n", { plain = true }))
+  table.insert(lines, "```")
+  table.insert(lines, "")
+  table.insert(lines, "  <CR> allow once  a allow always  <BS> reject")
 
-  local lwin = vim.fn.getloclist(0, { winid = 0 }).winid
-  if lwin == 0 then
-    vim.cmd("lopen")
-    lwin = vim.fn.getloclist(0, { winid = 0 }).winid
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].filetype = "markdown"
+  vim.bo[buf].modifiable = false
+
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = math.min(80, vim.o.columns - 4),
+    height = math.min(20, #lines + 2),
+    row = (vim.o.lines - 20) / 2,
+    col = (vim.o.columns - 80) / 2,
+    border = "rounded",
+    title = " ACP Permission ",
+    title_pos = "center",
+  })
+
+  local function respond(kind)
+    M.respond(e.id, kind)
+    pcall(vim.api.nvim_win_close, win, true)
   end
 
-  -- <CR> = pick first allow option; <Tab> cycles options; <BS> = reject
-  local buf = vim.api.nvim_win_get_buf(lwin)
-  vim.keymap.set("n", "<CR>", function()
-    local e = M._entry_at_cursor()
-    if e then M.respond(e.id, "allow_once") end
-  end, { buffer = buf, desc = "Allow once" })
-  vim.keymap.set("n", "<BS>", function()
-    local e = M._entry_at_cursor()
-    if e then M.respond(e.id, "reject_once") end
-  end, { buffer = buf, desc = "Reject" })
-  vim.keymap.set("n", "a", function()
-    local e = M._entry_at_cursor()
-    if e then M.respond(e.id, "allow_always") end
-  end, { buffer = buf, desc = "Allow always" })
+  vim.keymap.set("n", "<CR>", function() respond("allow_once") end, { buffer = buf })
+  vim.keymap.set("n", "a",    function() respond("allow_always") end, { buffer = buf })
+  vim.keymap.set("n", "<BS>", function() respond("reject_once") end, { buffer = buf })
+  vim.keymap.set("n", "q",    function() pcall(vim.api.nvim_win_close, win, true) end, { buffer = buf })
 end
 
 function M._entry_at_cursor()

@@ -86,6 +86,8 @@ function M.get_or_create(cwd_or_opts, callback)
 
         stub.session_id        = res.sessionId
         stub.config_options    = res.configOptions or {}
+        stub.available_modes   = res.modes or {}
+        stub.current_mode      = res.currentModeId
         stub.available_commands = {}
         stub.state             = "ready"
 
@@ -96,6 +98,10 @@ function M.get_or_create(cwd_or_opts, callback)
             stub.config_options = u.configOptions
           elseif u.sessionUpdate == "available_commands_update" and u.availableCommands then
             stub.available_commands = u.availableCommands
+          elseif u.sessionUpdate == "modes_update" and u.modes then
+            stub.available_modes = u.modes
+          elseif u.sessionUpdate == "current_mode_update" and u.currentModeId then
+            stub.current_mode = u.currentModeId
           end
         end)
 
@@ -151,10 +157,24 @@ function M.close(key)
   end
 end
 
+function M.set_mode(key, mode_id)
+  local s = sessions[key]
+  if not s or s.state ~= "ready" then return end
+  s.rpc:notify("session/set_mode", { sessionId = s.session_id, modeId = mode_id })
+  s.current_mode = mode_id
+end
+
 function M.active()
   local out = {}
   for key, s in pairs(sessions) do
-    table.insert(out, { key = key, cwd = s.cwd, state = s.state, session_id = s.session_id })
+    table.insert(out, {
+      key = key,
+      cwd = s.cwd,
+      state = s.state,
+      session_id = s.session_id,
+      modes = s.available_modes,
+      current_mode = s.current_mode
+    })
   end
   return out
 end
