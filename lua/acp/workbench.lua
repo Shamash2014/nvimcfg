@@ -38,7 +38,7 @@ function M.new_file(cwd, title)
   return nowork_dir(cwd) .. "/" .. os.time() .. "-" .. slug .. ".md"
 end
 
-function M.log_path(p) return p:gsub("%.md$", ".log.md") end
+function M.log_path(p) return (p:gsub("%.md$", ".log.md")) end
 
 function M.log(path, line)
   if not path then return end
@@ -66,11 +66,20 @@ function M.set(cwd)
   cwd = cwd or vim.fn.getcwd()
   require("acp.float").open_composer_float("New Work Item", {
     on_submit = function(text)
-      local first = vim.trim((vim.split(text, "\n", { plain = true })[1] or ""))
-      local title = first ~= "" and first or "untitled"
+      if vim.trim(text) == "" then return end
+      local lines = vim.split(text, "\n", { plain = true })
+      local first = vim.trim(lines[1] or "")
+      -- Strip markdown header prefix for slug
+      local title_clean = first:gsub("^#+%s*", "")
+      local title = title_clean ~= "" and (title_clean:len() > 30 and title_clean:sub(1, 30) or title_clean) or "untitled"
       local path  = M.new_file(cwd, title)
       local f     = io.open(path, "w")
-      if f then f:write(text); f:close() end
+      if f then
+        f:write(text)
+        if not text:match("\n$") then f:write("\n") end
+        f:close()
+      end
+      vim.notify("Starting: " .. title, vim.log.levels.INFO, {title="acp"})
       M.run(cwd, path)
     end,
   })
@@ -91,7 +100,7 @@ function M.run(cwd, path)
   local prompt = M.drain_context()
   table.insert(prompt, { type = "text", text = "Complete the following work item:\n\n" .. text })
 
-  require("acp.session").get_or_create(cwd, function(err, sess)
+  require("acp.session").get_or_create({ key = path, cwd = cwd }, function(err, sess)
     if err then
       vim.notify("ACP: " .. err, vim.log.levels.ERROR, { title = "acp" }); return
     end
@@ -159,7 +168,7 @@ function M.check_left(cwd)
   local text = M.load_file(path)
   if not text then vim.notify("No work item.", vim.log.levels.WARN, { title = "acp" }); return end
 
-  require("acp.session").get_or_create(cwd, function(err, sess)
+  require("acp.session").get_or_create({ key = cwd .. ":left", cwd = cwd }, function(err, sess)
     if err then vim.notify(err, vim.log.levels.ERROR, { title = "acp" }); return end
     local result = ""
     sess.rpc:subscribe(sess.session_id, function(notif)
@@ -405,6 +414,7 @@ function M.render()
   _view          = "index"
   local cwd      = vim.fn.getcwd()
   local sb_buf   = get_or_create_sb_buf()
+  M._install_keymaps(sb_buf)
   local agents   = require("acp.session").active()
   local pending  = require("acp.mailbox").pending_count()
   local work_files  = M.list(cwd)
@@ -504,6 +514,18 @@ function M.render()
     sect("agents", "Active Agents", items)
   end
 
+  -- Pipelines
+  do
+    local runs = require("acp.pipeline").list_runs(cwd, 5)
+    local items = {}
+    for _, r in ipairs(runs) do
+      local icon = (r.status == "in_progress" and "⟳ ") or (r.status == "queued" and "· ") or (r.conclusion == "success" and "✓ ") or (r.conclusion == "failure" and "✗ ") or "· "
+      local hl = (r.status == "in_progress" and "AcpPipeRunning") or (r.status == "queued" and "AcpPipePend") or (r.conclusion == "success" and "AcpPipeOk") or (r.conclusion == "failure" and "AcpPipeFail") or "Comment"
+      table.insert(items, { icon .. (r.displayTitle or "?"):sub(1,30), hl, { kind = "pipeline", id = r.databaseId } })
+    end
+    sect("pipelines", "Pipelines", items)
+  end
+
   -- Changed Files
   do
     local STATUS_WORDS = { A = "A ", M = "M ", D = "D " }
@@ -533,8 +555,9 @@ function M.render()
       local hl     = t.resolved and "AcpWorkDone" or "AcpThreadOpen"
       local fname  = vim.fn.fnamemodify(entry.file, ":t")
       local prompt = t.prompt:sub(1, 28) .. (t.prompt:len() > 28 and "…" or "")
+      local label  = fname .. (entry.row >= 0 and (":" .. entry.row) or " (chat)") .. "  " .. prompt
       table.insert(items, {
-        status .. " " .. fname .. ":" .. entry.row .. "  " .. prompt,
+        status .. " " .. label,
         hl,
         { kind = "thread", file = entry.file, row = entry.row },
       })
@@ -601,6 +624,16 @@ function M.show_help()
   end
 end
 
+function M.close()
+  for _, win in ipairs({ _sb_win, _main_win }) do
+    if win and vim.api.nvim_win_is_valid(win) then
+      pcall(function() vim.wo[win].winbar = "" end)
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+  _sb_win = nil; _main_win = nil
+end
+
 function M._install_keymaps(buf)
   local function km(lhs, fn, desc)
     vim.keymap.set("n", lhs, fn,
@@ -615,7 +648,9 @@ function M._install_keymaps(buf)
     local meta = meta_at_cursor()
     if not meta then return end
     if meta.kind == "work" and vim.fn.filereadable(meta.path) == 1 then
-      M.run(vim.fn.getcwd(), meta.path)
+      vim.api.nvim_set_current_win(_main_win)
+      vim.cmd("edit " .. vim.fn.fnameescape(meta.path))
+      require("acp.diff").attach(vim.api.nvim_get_current_buf(), meta.path)
     elseif meta.kind == "diff" then
       require("acp.diff").show_file(meta.path, _main_win, _main_buf,
         function(t) set_winbar(_main_win, t) end)
@@ -631,13 +666,25 @@ function M._install_keymaps(buf)
         M.render()
         vim.notify("Switched to worktree: " .. meta.path, vim.log.levels.INFO, {title="acp"})
       end
+    elseif meta.kind == "pipeline" then
+      require("acp.pipeline").open(vim.fn.getcwd(), _main_win, _main_buf,
+        function(t) set_winbar(_main_win, t) end)
     end
-  end, "Run / open diff")
+  end, "Open / edit")
+
+  km("r", function()
+    local meta = meta_at_cursor()
+    if meta and meta.kind == "work" then
+      M.run(vim.fn.getcwd(), meta.path)
+    end
+  end, "Run plan")
 
   km("o", function()
     local meta = meta_at_cursor()
     if meta and meta.kind == "work" then
+      vim.api.nvim_set_current_win(_main_win)
       vim.cmd("edit " .. vim.fn.fnameescape(meta.path))
+      require("acp.diff").attach(vim.api.nvim_get_current_buf(), meta.path)
     end
   end, "Edit goal")
 
@@ -683,15 +730,7 @@ function M._install_keymaps(buf)
     if _view == "log" and _log_path then M.show_log(_log_path) else M.render() end
   end, "Refresh")
 
-  km("q", function()
-    for _, win in ipairs({ _sb_win, _main_win }) do
-      if win and vim.api.nvim_win_is_valid(win) then
-        pcall(function() vim.wo[win].winbar = "" end)
-        pcall(vim.api.nvim_win_close, win, true)
-      end
-    end
-    _sb_win = nil; _main_win = nil
-  end, "Close")
+  km("q", M.close, "Close")
 end
 
 function M.open()

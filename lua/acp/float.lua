@@ -193,7 +193,7 @@ function M.open_composer_float(title, opts)
   vim.bo[buf].filetype  = "markdown"
 
   local init_lines = (opts.prefill and opts.prefill ~= "") and
-    vim.split(opts.prefill, "\n", { plain = true }) or { "# " }
+    vim.split(opts.prefill, "\n", { plain = true }) or { "" }
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, init_lines)
 
   local max_h  = math.floor(vim.o.lines * 0.72)

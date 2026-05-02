@@ -19,26 +19,29 @@ local function notify(msg, level)
 end
 
 -- callback: fn(err: string|nil, session: table|nil)
-function M.get_or_create(cwd, callback)
-  local s = sessions[cwd]
+function M.get_or_create(cwd_or_opts, callback)
+  local cwd = type(cwd_or_opts) == "string" and cwd_or_opts or cwd_or_opts.cwd
+  local key = type(cwd_or_opts) == "string" and cwd_or_opts or cwd_or_opts.key or cwd
+
+  local s = sessions[key]
   if s then
     if s.state == "ready" then
       callback(nil, s)
     elseif s.state == "initializing" then
       table.insert(s.queue, callback)
     else  -- dead
-      sessions[cwd] = nil
-      M.get_or_create(cwd, callback)
+      sessions[key] = nil
+      M.get_or_create(cwd_or_opts, callback)
     end
     return
   end
 
-  local stub = { state = "initializing", cwd = cwd, queue = {}, rpc = nil, config_options = {} }
-  sessions[cwd] = stub
+  local stub = { state = "initializing", cwd = cwd, key = key, queue = {}, rpc = nil, config_options = {} }
+  sessions[key] = stub
 
   local function on_exit(code)
-    if sessions[cwd] then sessions[cwd].state = "dead" end
-    sessions[cwd] = nil
+    if sessions[key] then sessions[key].state = "dead" end
+    sessions[key] = nil
     if code ~= 0 then
       notify("ACP server exited (code " .. code .. ")", vim.log.levels.WARN)
     end
@@ -46,7 +49,7 @@ function M.get_or_create(cwd, callback)
 
   require("acp.agents").resolve(cwd, function(a_err, provider)
     if a_err then
-      sessions[cwd] = nil
+      sessions[key] = nil
       callback("provider error: " .. a_err, nil)
       return
     end
@@ -57,7 +60,7 @@ function M.get_or_create(cwd, callback)
     end, on_exit)
 
     if not th then
-      sessions[cwd] = nil
+      sessions[key] = nil
       callback("spawn failed: " .. (spawn_err or ""), nil)
       return
     end
@@ -67,7 +70,7 @@ function M.get_or_create(cwd, callback)
 
     stub.rpc:request("initialize", INIT_PARAMS, function(e, _)
       if e then
-        sessions[cwd] = nil
+        sessions[key] = nil
         transport.close(th)
         callback("initialize failed: " .. vim.inspect(e), nil)
         return
@@ -75,7 +78,7 @@ function M.get_or_create(cwd, callback)
 
       stub.rpc:request("session/new", { cwd = cwd, mcpServers = {} }, function(e2, res)
         if e2 or not res then
-          sessions[cwd] = nil
+          sessions[key] = nil
           transport.close(th)
           callback("session/new failed: " .. vim.inspect(e2), nil)
           return
@@ -105,20 +108,20 @@ function M.get_or_create(cwd, callback)
 end
 
 -- Returns configOptions array for the active session, or {}
-function M.get_config_options(cwd)
-  local s = sessions[cwd]
+function M.get_config_options(key)
+  local s = sessions[key]
   return (s and s.config_options) or {}
 end
 
 -- Returns available slash commands for the active session, or {}
-function M.get_commands(cwd)
-  local s = sessions[cwd]
+function M.get_commands(key)
+  local s = sessions[key]
   return (s and s.available_commands) or {}
 end
 
 -- Send session/set_config_option; callback(err, updated_config_options)
-function M.set_config_option(cwd, config_id, value, callback)
-  local s = sessions[cwd]
+function M.set_config_option(key, config_id, value, callback)
+  local s = sessions[key]
   if not s or s.state ~= "ready" then
     if callback then callback("no active session") end
     return
@@ -135,10 +138,10 @@ function M.set_config_option(cwd, config_id, value, callback)
   end)
 end
 
-function M.close(cwd)
-  local s = sessions[cwd]
+function M.close(key)
+  local s = sessions[key]
   if not s then return end
-  sessions[cwd] = nil
+  sessions[key] = nil
   if s.transport then
     if s.session_id then
       require("acp.mailbox").cancel_for_session(s.session_id)
@@ -150,8 +153,8 @@ end
 
 function M.active()
   local out = {}
-  for cwd, s in pairs(sessions) do
-    table.insert(out, { cwd = cwd, state = s.state, session_id = s.session_id })
+  for key, s in pairs(sessions) do
+    table.insert(out, { key = key, cwd = s.cwd, state = s.state, session_id = s.session_id })
   end
   return out
 end

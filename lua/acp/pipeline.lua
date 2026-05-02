@@ -100,6 +100,16 @@ function M._install_keymaps(buf)
   end, "Close")
 end
 
+function M.list_runs(cwd, limit)
+  if vim.fn.executable("gh") == 0 then return {} end
+  limit = limit or 5
+  local raw = vim.fn.system(
+    "gh run list --json databaseId,displayTitle,status,conclusion,startedAt -L " .. limit .. " 2>/dev/null")
+  if vim.v.shell_error ~= 0 then return {} end
+  local ok, data = pcall(vim.fn.json_decode, raw)
+  return (ok and type(data)=="table") and data or {}
+end
+
 function M.open(cwd, main_win, main_buf, on_winbar)
   _state.buf = main_buf; _state.win = main_win
   _state.on_winbar = on_winbar; _state.cwd = cwd
@@ -114,20 +124,7 @@ function M.open(cwd, main_win, main_buf, on_winbar)
   end
 
   if on_winbar then on_winbar("pipeline ⟳") end
-
-  local raw = vim.fn.system(
-    "gh run list --json databaseId,displayTitle,status,conclusion,startedAt -L 20 2>&1")
-  if vim.v.shell_error ~= 0 then
-    vim.bo[main_buf].modifiable = true
-    vim.api.nvim_buf_set_lines(main_buf, 0, -1, false,
-      {"  gh run list failed:", "", "  " .. raw:gsub("\n"," "):sub(1,120)})
-    vim.bo[main_buf].modifiable = false
-    if on_winbar then on_winbar("pipeline") end
-    return
-  end
-
-  local ok, data = pcall(vim.fn.json_decode, raw)
-  _runs = (ok and type(data)=="table") and data or {}
+  _runs = M.list_runs(cwd, 20)
   M._render(main_buf)
   M._install_keymaps(main_buf)
   if on_winbar then on_winbar("pipeline") end
