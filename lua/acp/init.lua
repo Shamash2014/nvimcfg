@@ -97,7 +97,9 @@ function M.cycle_model(cwd)
   local next_opt = options[(cur_idx % #options) + 1]
 
   require("acp.session").set_config_option(cwd, target_opt.id, next_opt.value, function(err)
-    if err then return end
+    if err then
+      vim.notify("set model failed: " .. vim.inspect(err), vim.log.levels.ERROR, { title = "acp" }); return
+    end
     local provider = require("acp.agents").provider_label(cwd)
     vim.notify(provider .. "/" .. (next_opt.name or next_opt.value), vim.log.levels.INFO, { title = "acp" })
   end)
@@ -126,7 +128,9 @@ function M.pick_model(cwd)
       if not idx then return end
       local item = items[idx]
       require("acp.session").set_config_option(cwd, item.opt_id, item.value, function(err)
-        if err then return end
+        if err then
+          vim.notify("set model failed: " .. vim.inspect(err), vim.log.levels.ERROR, { title = "acp" }); return
+        end
         local provider = require("acp.agents").provider_label(cwd)
         vim.notify(provider .. "/" .. (item.value), vim.log.levels.INFO, { title = "acp" })
       end)

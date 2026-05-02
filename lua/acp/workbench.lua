@@ -128,7 +128,12 @@ function M.run(cwd, path)
     return
   end
 
-  M.log(path, "--- start ---")
+  local diff = require("acp.diff")
+  diff.upsert_thread(cwd, path, -1, {
+    prompt   = text,
+    messages = {{ role = "user", text = text }},
+  })
+
   local prompt = M.drain_context()
   table.insert(prompt, { type = "text", text = "Complete the following work item:\n\n" .. text })
 
@@ -138,56 +143,16 @@ function M.run(cwd, path)
     end
     vim.notify("ACP work started", vim.log.levels.INFO, { title = "acp" })
     M.show_log(path)
-
-    sess.rpc:subscribe(sess.session_id, function(notif)
-      local update = (notif.params or {}).update or {}
-      local su     = update.sessionUpdate
-
-      if su == "tool_call" then
-        local line = "tool: " .. (update.kind or "?") .. " — " .. (update.title or "")
-        M.log(path, line)
-        vim.schedule(function() M.on_event(path, line) end)
-      elseif su == "tool_call_update" and update.status then
-        local line = "  " .. update.status
-        M.log(path, line)
-        vim.schedule(function() M.on_event(path, line) end)
-      elseif su == "text" and update.text then
-        local f = io.open(M.log_path(path), "a")
-        if f then f:write(update.text); f:close() end
-        vim.schedule(function() M.on_event(path, update.text) end)
-      elseif su == "plan" and update.entries then
-        local icons = { pending = "·", in_progress = "▸", completed = "✓" }
-        local parts = { "--- plan ---" }
-        for _, e in ipairs(update.entries) do
-          table.insert(parts, (icons[e.status] or "·") .. " " .. e.content)
-        end
-        local line = table.concat(parts, "\n")
-        M.log(path, line)
-        vim.schedule(function() M.on_event(path, line) end)
-      elseif su == "agent_thought_chunk" and update.text then
-        local line = "> " .. update.text
-        M.log(path, line)
-        vim.schedule(function() M.on_event(path, line) end)
-      elseif su == "agent_message_chunk" and update.text then
-        local f = io.open(M.log_path(path), "a")
-        if f then f:write(update.text); f:close() end
-        vim.schedule(function() M.on_event(path, update.text) end)
-      elseif su == "activity" and update.activity then
-        local line = "  ~ " .. update.activity
-        M.log(path, line)
-        vim.schedule(function() M.on_event(path, line) end)
-      end
-    end)
+    diff.subscribe_to_thread(sess, cwd, path, -1)
 
     sess.rpc:request("session/prompt", {
       sessionId = sess.session_id,
       prompt    = prompt,
     }, function(req_err, res)
       local reason = (res and res.stopReason) or (req_err and "error") or "unknown"
-      local line = "--- stop: " .. reason .. " ---"
-      M.log(path, line)
+      diff.append_thread_msg(cwd, path, -1, { role = "agent", type = "info", text = "stop: " .. reason })
       vim.schedule(function()
-        M.on_event(path, line)
+        M.on_event(path)
         vim.notify("ACP done (" .. reason .. ")", vim.log.levels.INFO, { title = "acp" })
       end)
     end)
@@ -379,6 +344,13 @@ local function setup_hl()
   hl("AcpPipeRunning",     { link = "DiagnosticInfo",  default = true })
   hl("AcpWinbarText",      { link = "WinBar",          default = true })
   hl("AcpHelpKey",         { link = "Special",         default = true })
+  hl("AcpSectionHeader",   { link = "Title",           bold = true })
+  hl("AcpThreadPrefix",    { link = "Comment",         default = true })
+  hl("AcpThreadAgent",     { link = "Function",        default = true })
+  hl("AcpThreadUser",      { link = "AcpSectionHeader", default = true })
+  hl("AcpThreadThought",   { link = "Comment",         italic = true })
+  hl("AcpThreadAction",    { link = "Special",         bold = true })
+  hl("AcpThreadResult",    { link = "String",          default = true })
   vim.fn.sign_define("AcpThreadOpen",     { text = "▍ ", texthl = "AcpThreadOpen"    })
   vim.fn.sign_define("AcpThreadResolved", { text = "▍ ", texthl = "AcpThreadResolved"})
   vim.fn.sign_define("AcpAgentSign",      { text = "● ", texthl = "AcpAgentOk"       })
@@ -502,6 +474,7 @@ function M.render()
   async(function()
     _view          = "index"
     local cwd      = vim.fn.getcwd()
+    require("acp.diff").reload_threads(cwd)
     local sb_buf   = get_or_create_sb_buf()
     M._install_keymaps(sb_buf)
     local agents   = require("acp.session").active()
@@ -573,17 +546,6 @@ function M.render()
       table.insert(items, { kind .. " " .. (c._label or "context"), "AcpContextItem" })
     end
     sect("context", "Context", items)
-  end
-
-  -- Agents (active sessions)
-  do
-    local items = {}
-    for _, s in ipairs(agents) do
-      local label = (require("acp.agents").get(s.key) or {}).display or s.key
-      local mode = s.current_mode and (" (" .. s.current_mode .. ")") or ""
-      table.insert(items, { "● " .. label .. mode, "AcpAgentReady", { kind = "agent", key = s.key } })
-    end
-    sect("agents", "Agents", items)
   end
 
   -- Worktrees
@@ -678,7 +640,8 @@ function M.render()
 
       local model  = require("acp.agents").current_model_label(cwd)
       local prompt = t.prompt:sub(1, 20) .. (t.prompt:len() > 20 and "…" or "")
-      local loc    = entry.row >= 0 and (":" .. (entry.row + 1)) or " (chat)"
+      local row    = tonumber(entry.row)
+      local loc    = (row and row >= 0) and (":" .. (row + 1)) or " (chat)"
       local label  = display_name .. loc .. " [" .. model .. "] " .. prompt
       
       table.insert(items, {
@@ -722,6 +685,12 @@ function M.show_help()
         { "gL", "worklog" }, { "gt", "global chat" }, { "s", "send" }, { "n", "new work" },
         { "m", "mode" }, { "M", "model" }, { "]c", "next hunk" }, { "[c", "prev hunk" },
         { "R", "refresh" },
+      },
+    },
+    {
+      title = "Thread View",
+      keys = {
+        { "<CR>", "reply" }, { "R", "restart" }, { "q", "close" },
       },
     },
   }
@@ -813,7 +782,7 @@ function M.pick_project()
           vim.schedule(function()
             if _main_win and vim.api.nvim_win_is_valid(_main_win) then
                vim.api.nvim_win_set_cursor(_main_win, { item.row + 1, 0 })
-               require("acp.diff").open_thread_view(item.row)
+               require("acp.diff").open_thread_view(item.row, _main_win)
             end
           end)
         else
@@ -851,12 +820,14 @@ function M.pick_mode(key)
 
   local labels = {}
   for _, m in ipairs(s.modes) do
-    table.insert(labels, m.name .. (m.description and (" — " .. m.description) or ""))
+    local cur = (m.id or m.modeId) == s.current_mode and " ✓" or ""
+    table.insert(labels, (m.name or m.id or "?") .. (m.description and (" — " .. m.description) or "") .. cur)
   end
 
   vim.ui.select(labels, { prompt = "Set mode for " .. (s.key or "agent") .. ":" }, function(_, idx)
     if not idx then return end
-    require("acp.session").set_mode(s.key, s.modes[idx].modeId)
+    local mode_id = s.modes[idx].id or s.modes[idx].modeId
+    require("acp.session").set_mode(s.key, mode_id)
     M.render()
   end)
 end
@@ -892,10 +863,11 @@ function M._install_keymaps(buf)
           function(t) set_winbar(_main_win, t) end)
         vim.api.nvim_set_current_win(_main_win)
       end
-      if meta.row >= 0 then
-        vim.api.nvim_win_set_cursor(_main_win, { meta.row + 1, 0 })
+      local row = tonumber(meta.row)
+      if row and row >= 0 then
+        vim.api.nvim_win_set_cursor(_main_win, { math.floor(row) + 1, 0 })
       end
-      require("acp.diff").open_thread_view(meta.row)
+      require("acp.diff").open_thread_view(row, _main_win)
     elseif meta.kind == "worktree" then
       if meta.path ~= vim.fn.getcwd() then
         vim.cmd("cd " .. vim.fn.fnameescape(meta.path))
@@ -932,14 +904,11 @@ function M._install_keymaps(buf)
   km("gL", M.show_comm_log, "Comm log")
   
   km("m", function()
-    local meta = meta_at_cursor()
-    M.pick_mode(meta and meta.kind == "agent" and meta.key or nil)
+    M.pick_mode(nil)
   end, "Set mode")
 
   km("M", function()
-    local meta = meta_at_cursor()
-    local cwd = (meta and meta.kind == "agent") and meta.cwd or (_cur_cwd or vim.fn.getcwd())
-    require("acp").pick_model(cwd)
+    require("acp").pick_model(_cur_cwd or vim.fn.getcwd())
   end, "Set model")
 
   km("n", function()
@@ -991,7 +960,7 @@ end
 
 function M.open()
   local cwd = vim.fn.getcwd()
-  require("acp.diff").load_threads(cwd)
+  require("acp.diff").reload_threads(cwd)
   M._open_panels()
   M.render()
   local df  = require("acp.diff").list_files(cwd)
@@ -1022,18 +991,12 @@ function M.show_log(work_path)
   _view     = "log"
   _log_path = work_path
   M._open_panels()
+  local cwd = vim.fn.getcwd()
   local buf = get_or_create_main_buf()
-  local log = M.log_path(work_path)
-  local ls  = { "# " .. vim.fn.fnamemodify(work_path, ":t:r"), "", "  i=index  R=refresh", "" }
-  if vim.fn.filereadable(log) == 1 then
-    vim.list_extend(ls, vim.fn.readfile(log))
-  else
-    table.insert(ls, "  (no log yet)")
-  end
-  vim.bo[buf].modifiable = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, ls)
-  vim.bo[buf].modifiable = false
-  set_winbar(_main_win, vim.fn.fnamemodify(work_path, ":t:r"))
+  require("acp.diff").render_thread_view(buf, cwd, work_path, -1)
+  vim.api.nvim_win_set_buf(_main_win, buf)
+  local title = vim.fn.fnamemodify(work_path, ":t:r"):gsub("^%d+%-", "", 1)
+  set_winbar(_main_win, title)
   local function km(lhs, fn)
     vim.keymap.set("n", lhs, fn,
       { buffer = buf, nowait = true, noremap = true, silent = true })
@@ -1044,14 +1007,15 @@ function M.show_log(work_path)
   km("g?", M.show_help)
 end
 
-function M.on_event(work_path, line)
+function M.on_event(work_path, t_live)
   if _view == "log" and _log_path == work_path then
+    local cwd = vim.fn.getcwd()
     local buf = get_or_create_main_buf()
-    vim.bo[buf].modifiable = true
-    vim.api.nvim_buf_set_lines(buf, -1, -1, false, { line })
-    vim.bo[buf].modifiable = false
-    if _main_win and vim.api.nvim_win_is_valid(_main_win) then
-      vim.api.nvim_win_set_cursor(_main_win, { vim.api.nvim_buf_line_count(buf), 0 })
+    require("acp.diff").render_thread_view(buf, cwd, work_path, -1, t_live)
+    if _main_win and vim.api.nvim_win_is_valid(_main_win)
+        and vim.api.nvim_win_get_buf(_main_win) == buf then
+      local lc = vim.api.nvim_buf_line_count(buf)
+      pcall(vim.api.nvim_win_set_cursor, _main_win, { math.max(1, lc), 0 })
     end
   elseif _view == "index" then
     M.render()

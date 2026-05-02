@@ -15,16 +15,16 @@ function M.spawn(cmd, on_line, on_exit, cwd)
   local handle = { buf = "" }
 
   local job_id = vim.fn.jobstart(cmd, {
-    pty = true,
+    pty = false,
     cwd = cwd,
+    env = {
+      IS_AI_TERMINAL = "1",
+      NODE_NO_WARNINGS = "1",
+    },
     on_stdout = function(_, data)
       if not data then return end
-      -- Use a more efficient way to accumulate and split lines
       local chunk = table.concat(data, "\n")
       handle.buf = handle.buf .. chunk
-      
-      -- If buffer is getting too huge without a newline/CR, truncate it
-      if #handle.buf > 100000 then handle.buf = handle.buf:sub(-10000) end
 
       while true do
         local nl = handle.buf:find("[\n\r]")
@@ -36,12 +36,11 @@ function M.spawn(cmd, on_line, on_exit, cwd)
         if line ~= "" then
           local clean = line:gsub("\x1b%[[0-9;]*[a-zA-Z]", "")
                             :gsub("\x1b%]0;[^\x07]*\x07", "")
-          
           if clean:match("%S") then
             if clean:match("^{") then
               debug_log("IN: ", clean)
               vim.schedule(function() on_line(clean) end)
-            elseif #clean < 500 then -- Don't log massive RAW chunks
+            elseif #clean < 500 then
               debug_log("RAW:", clean)
             end
           end

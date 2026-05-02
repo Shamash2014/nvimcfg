@@ -39,8 +39,17 @@ function M.get_or_create(cwd_or_opts, callback)
   local stub = { state = "initializing", cwd = cwd, key = key, queue = {}, rpc = nil, config_options = {} }
   sessions[key] = stub
 
+  function stub.set_state(new_state)
+    stub.state = new_state
+    if new_state == "dead" and stub.rpc then
+      stub.rpc:drain_callbacks("session died")
+    end
+  end
+
   local function on_exit(code)
-    if sessions[key] then sessions[key].state = "dead" end
+    if sessions[key] and sessions[key].state ~= "dead" then
+      stub.set_state("dead")
+    end
     sessions[key] = nil
     if code ~= 0 then
       notify("ACP server exited (code " .. code .. ")", vim.log.levels.WARN)
@@ -68,9 +77,11 @@ function M.get_or_create(cwd_or_opts, callback)
     stub.transport = th
     stub.rpc = rpc_mod.new(th)
 
-    stub.rpc:request("initialize", INIT_PARAMS, function(e, _)
+    stub.set_state("initializing")
+
+    stub.rpc:request("initialize", INIT_PARAMS, function(e, init_res)
       if e then
-        sessions[key] = nil
+        stub.set_state("dead")
         transport.close(th)
         callback("initialize failed: " .. vim.inspect(e), nil)
         return
@@ -78,18 +89,25 @@ function M.get_or_create(cwd_or_opts, callback)
 
       stub.rpc:request("session/new", { cwd = cwd, mcpServers = {} }, function(e2, res)
         if e2 or not res then
-          sessions[key] = nil
+          stub.set_state("dead")
           transport.close(th)
           callback("session/new failed: " .. vim.inspect(e2), nil)
           return
         end
 
-        stub.session_id        = res.sessionId
-        stub.config_options    = res.configOptions or {}
-        stub.available_modes   = res.modes or {}
-        stub.current_mode      = res.currentModeId
+        stub.session_id         = res.sessionId
+        stub.config_options     = res.configOptions or {}
+        -- Normalize modes: opencode sends { currentModeId, availableModes }
+        local raw_modes = res.modes or {}
+        if raw_modes.availableModes then
+          stub.available_modes = raw_modes.availableModes
+          stub.current_mode    = raw_modes.currentModeId or res.currentModeId
+        else
+          stub.available_modes = raw_modes
+          stub.current_mode    = res.currentModeId
+        end
         stub.available_commands = {}
-        stub.state             = "ready"
+        stub.set_state("ready")
 
         -- Keep session state fresh from server-pushed notifications
         stub.rpc:subscribe(stub.session_id, function(notif)
@@ -114,6 +132,11 @@ function M.get_or_create(cwd_or_opts, callback)
 end
 
 -- Returns configOptions array for the active session, or {}
+function M.get(key)
+  local s = sessions[key]
+  return (s and s.state == "ready") and s or nil
+end
+
 function M.get_config_options(key)
   local s = sessions[key]
   return (s and s.config_options) or {}
@@ -137,8 +160,14 @@ function M.set_config_option(key, config_id, value, callback)
     configId  = config_id,
     value     = value,
   }, function(err, res)
-    if not err and res and res.configOptions then
-      s.config_options = res.configOptions
+    if not err then
+      if res and res.configOptions then
+        s.config_options = res.configOptions
+      else
+        for _, opt in ipairs(s.config_options) do
+          if opt.id == config_id then opt.currentValue = value; break end
+        end
+      end
     end
     if callback then callback(err, s.config_options) end
   end)

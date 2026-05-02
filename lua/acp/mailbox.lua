@@ -13,6 +13,16 @@ local function snacks_notify(msg, level)
   end
 end
 
+function M._open_or_refresh()
+  for _, e in ipairs(queue) do
+    if e.state == "pending" then
+      M.open_permission_float(e)
+      return
+    end
+  end
+  vim.notify("No pending permissions", vim.log.levels.INFO, { title = "acp" })
+end
+
 
 -- Count pending (unanswered) permissions — used by workbench render.
 function M.pending_count()

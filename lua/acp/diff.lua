@@ -10,31 +10,123 @@ local STATUS_WORDS = { A = "new file  ", M = "modified  ", D = "deleted   " }
 
 local _threads = {}
 
-local function threads_path(cwd) return cwd .. "/.nowork/threads.json" end
+local function thread_dir(cwd) return cwd .. "/.nowork/threads" end
 
-local function save_threads(cwd)
+local function thread_path(cwd, file, row)
+  local safe = (file:gsub("[/\\:*?\"<>|%s]", "_"))
+  return thread_dir(cwd) .. "/" .. safe .. "@" .. tostring(row) .. ".jsonl"
+end
+
+local function save_thread(cwd, file, row)
   if not cwd then return end
-  vim.fn.mkdir(cwd .. "/.nowork", "p")
-  local f = io.open(threads_path(cwd), "w")
-  if f then
-    f:write(vim.json.encode(_threads[cwd] or {}))
-    f:close()
+  local t = ((_threads[cwd] or {})[file] or {})[row]
+  if type(t) ~= "table" then return end
+  vim.fn.mkdir(thread_dir(cwd), "p")
+  local f = io.open(thread_path(cwd, file, row), "w")
+  if not f then return end
+  local meta = { type = "meta", prompt = t.prompt, file = file, row = row }
+  for k, v in pairs(t) do
+    if k ~= "messages" and type(v) ~= "function" and not k:match("^_") then
+      meta[k] = v
+    end
   end
+  f:write(vim.json.encode(meta) .. "\n")
+  for _, msg in ipairs(t.messages or {}) do
+    local cm = {}
+    for k, v in pairs(msg) do if type(v) ~= "function" then cm[k] = v end end
+    f:write(vim.json.encode(cm) .. "\n")
+  end
+  f:close()
 end
 
 local function load_threads(cwd)
   if not cwd then return end
-  local f = io.open(threads_path(cwd), "r")
-  if f then
-    local content = f:read("*a")
-    f:close()
-    if content ~= "" then
-      local ok, data = pcall(vim.json.decode, content)
-      if ok then _threads[cwd] = data end
+  if _threads[cwd] then return end
+  _threads[cwd] = {}
+  local paths = vim.fn.glob(thread_dir(cwd) .. "/*.jsonl", false, true)
+  for _, path in ipairs(paths) do
+    local f = io.open(path, "r")
+    if f then
+      local first = f:read("*l")
+      local ok, meta = pcall(vim.json.decode, first or "")
+      if ok and type(meta) == "table" and meta.type == "meta" then
+        local tf, tr = meta.file, tonumber(meta.row)
+        if tf and tr ~= nil then
+          local msgs = {}
+          for line in f:lines() do
+            if line ~= "" then
+              local ok2, msg = pcall(vim.json.decode, line)
+              if ok2 and type(msg) == "table" then table.insert(msgs, msg) end
+            end
+          end
+          local t = {}
+          for k, v in pairs(meta) do
+            if k ~= "type" and k ~= "file" and k ~= "row" then t[k] = v end
+          end
+          t.messages = msgs
+          _threads[cwd][tf] = _threads[cwd][tf] or {}
+          _threads[cwd][tf][tr] = t
+        end
+      end
+      f:close()
+    end
+  end
+  -- Migrate from legacy threads.json
+  if vim.tbl_isempty(_threads[cwd]) then
+    local lp = cwd .. "/.nowork/threads.json"
+    local lf = io.open(lp, "r")
+    if lf then
+      local content = lf:read("*a"); lf:close()
+      if content ~= "" then
+        local ok, data = pcall(vim.json.decode, content)
+        if ok and type(data) == "table" then
+          for lfile, rows in pairs(data) do
+            for row_str, t in pairs(rows) do
+              local rn = tonumber(row_str)
+              if rn ~= nil and type(t) == "table" then
+                _threads[cwd][lfile] = _threads[cwd][lfile] or {}
+                _threads[cwd][lfile][rn] = t
+                save_thread(cwd, lfile, rn)
+              end
+            end
+          end
+        end
+      end
     end
   end
 end
 M.load_threads = load_threads
+
+local function reload_threads(cwd)
+  _threads[cwd] = nil
+  load_threads(cwd)
+end
+M.reload_threads = reload_threads
+
+function M.upsert_thread(cwd, file, row, t)
+  load_threads(cwd)
+  _threads[cwd] = _threads[cwd] or {}
+  _threads[cwd][file] = _threads[cwd][file] or {}
+  _threads[cwd][file][row] = t
+  save_thread(cwd, file, row)
+end
+
+function M.append_thread_msg(cwd, file, row, msg)
+  load_threads(cwd)
+  local t = ((_threads[cwd] or {})[file] or {})[row]
+  if type(t) ~= "table" then return end
+  t.messages = t.messages or {}
+  if msg.type == "text" or msg.type == "thought" then
+    local last = t.messages[#t.messages]
+    if last and last.role == "agent" and last.type == msg.type then
+      last.text = (last.text or "") .. (msg.text or "")
+      save_thread(cwd, file, row)
+      return
+    end
+  end
+  table.insert(t.messages, msg)
+  save_thread(cwd, file, row)
+end
 
 local _cur = {
   cwd           = nil,
@@ -88,14 +180,22 @@ M.apply_line_hl = apply_line_hl
 
 local function format_agent_msg(msg)
   if msg.type == "info" then
-    return "ℹ " .. (msg.text or "")
+    return (msg.text or "")
+  elseif msg.type == "thought" then
+    return (msg.text or "")
+  elseif msg.call or msg.type == "tool_call" then
+    local call = msg.call or msg
+    local args = call.arguments and vim.json.encode(call.arguments) or "{}"
+    if #args > 200 then args = args:sub(1, 200) .. "..." end
+    return "Tool: " .. (call.name or "?") .. "\nArgs: " .. args
+  elseif msg.result or msg.type == "tool_result" then
+    local res = msg.result or msg
+    local out = res.content and res.content[1] and res.content[1].text or ""
+    if #out > 1000 then out = out:sub(1, 1000) .. "..." end
+    local status = res.isError and "ERROR" or "OK"
+    return status .. " — " .. out
   elseif msg.text then
     return msg.text
-  elseif msg.call then
-    return "Call: " .. (msg.call.name or "?")
-  elseif msg.result then
-    local out = msg.result.content and msg.result.content[1] and msg.result.content[1].text or ""
-    return "Result: " .. (msg.result.isError and "ERROR" or "OK") .. " — " .. out
   end
   return ""
 end
@@ -132,9 +232,20 @@ local function thread_virt(t)
   return virt
 end
 
+local function buf_is_visible(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return false end
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(w) == buf then return true end
+  end
+  return false
+end
+
 local function redraw_thread(row)
+  row = tonumber(row)
+  if not row or row < 0 then return end
+  row = math.floor(row)
   local buf = _cur.main_buf
-  if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
+  if not buf_is_visible(buf) then return end
   local cwd  = _cur.cwd or vim.fn.getcwd()
   local file = _cur.sel_file
   local marks = vim.api.nvim_buf_get_extmarks(buf, NS_THREAD, {row,0}, {row,-1}, {})
@@ -272,11 +383,13 @@ subscribe_to_thread = function(sess, cwd, file, row)
     t = ((_threads[cwd] or {})[file] or {})[tostring(row)]
   end
   if type(t) ~= "table" then return end
+  t.messages = t.messages or {}
   if t._unsub then t._unsub() end
   t._subscribed = true
 
   t._unsub = sess.rpc:subscribe(sess.session_id, function(notif)
     if not t._subscribed then return end
+    t.messages = t.messages or {}
     local u = (notif.params or {}).update or {}
     if (u.sessionUpdate == "text" and u.text) or (u.sessionUpdate == "agent_message_chunk" and u.content) then
       local text = u.text or (u.content and u.content.text) or ""
@@ -298,23 +411,33 @@ subscribe_to_thread = function(sess, cwd, file, row)
       table.insert(t.messages, { role="agent", type="tool_call", call=u.toolCall })
     elseif u.sessionUpdate == "tool_result" and u.toolResult then
       table.insert(t.messages, { role="agent", type="tool_result", result=u.toolResult })
+    elseif u.sessionUpdate == "output" and u.output then
+      table.insert(t.messages, { role="agent", type="output", text=tostring(u.output) })
+    elseif u.sessionUpdate == "error" and u.error then
+      table.insert(t.messages, { role="agent", type="error", text=tostring(u.error) })
+    elseif u.sessionUpdate == "turn_complete" or u.sessionUpdate == "session_complete" then
+      local reason = u.stopReason or u.reason or "done"
+      table.insert(t.messages, { role="agent", type="info", text="Turn ended: " .. reason })
     elseif u.sessionUpdate == "session_info_update" and u.title then
       t._title = u.title
     end
     vim.schedule(function()
+      save_thread(cwd, file, row)
       redraw_thread(row)
-      save_threads(cwd)
-      -- If thread view is open for this thread, refresh it
+      require("acp.workbench").on_event(file, t)
       local bufname = string.format("acp-thread-%s-%s", file, row)
       for _, b in ipairs(vim.api.nvim_list_bufs()) do
-        local bname = vim.api.nvim_buf_get_name(b)
-        if bname:find(bufname, 1, true) then
-          M.render_thread_view(b, t)
+        if buf_is_visible(b) then
+          local bname = vim.api.nvim_buf_get_name(b)
+          if bname:find(bufname, 1, true) then
+            M.render_thread_view(b, cwd, file, row, t)
+          end
         end
       end
     end)
   end)
 end
+M.subscribe_to_thread = subscribe_to_thread
 
 function M.add_comment(file, row, visual)
   local cwd  = _cur.cwd or vim.fn.getcwd()
@@ -348,10 +471,11 @@ function M.add_comment(file, row, visual)
           resolved = false,
         }
         _threads[cwd][file][row] = thread
-        save_threads(cwd)
+        save_thread(cwd, file, row)
         if row >= 0 then
           vim.schedule(function() redraw_thread(row) end)
         end
+        vim.schedule(function() require("acp.workbench").render() end)
 
         local thread_key = cwd .. ":thread:" .. file .. ":" .. row
         local prompt_text = "General comment"
@@ -378,7 +502,8 @@ function M.add_comment(file, row, visual)
             sessionId = sess.session_id, prompt = prompt_items,
           }, function(e, res)
             if res and res.stopReason then
-              table.insert(t.messages, { role="agent", type="info", text="Turn ended: " .. res.stopReason })
+              thread.messages = thread.messages or {}
+              table.insert(thread.messages, { role="agent", type="info", text="Turn ended: " .. res.stopReason })
               vim.schedule(function() redraw_thread(row) end)
             end
           end)
@@ -388,43 +513,123 @@ function M.add_comment(file, row, visual)
   )
 end
 
-function M.render_thread_view(buf, t)
+function M.render_thread_view(buf, cwd, file, row, t_live)
   local lines = {}
   local hls   = {}
   local function add(s, hl)
     table.insert(lines, s or "")
     if hl then table.insert(hls, { #lines - 1, hl }) end
   end
+  local SEP = string.rep("─", 48)
 
-  local model = require("acp.agents").current_model_label(_cur.cwd)
-  add("Thread: " .. (t.prompt or "Untitled") .. "  [" .. model .. "]", "AcpSectionHeader")
-  add("")
-
-  for _, msg in ipairs(t.messages) do
-    if msg.role == "user" then
-      add("─ User ──────────────────────────────────", "Comment")
-      for _, l in ipairs(vim.split(msg.text or "", "\n")) do add(l) end
+  local meta, msgs = {}, {}
+  if type(t_live) == "table" then
+    -- Fast path during streaming: use in-memory table directly
+    meta = { prompt = t_live.prompt, _title = t_live._title }
+    msgs = t_live.messages or {}
+  else
+    -- Read from JSONL file (open_thread_view / restart)
+    local path = thread_path(cwd, file, row)
+    local f = io.open(path, "r")
+    if f then
+      local first = f:read("*l")
+      local ok, m = pcall(vim.json.decode, first or "")
+      if ok and type(m) == "table" then meta = m end
+      for line in f:lines() do
+        if line ~= "" then
+          local ok2, msg = pcall(vim.json.decode, line)
+          if ok2 and type(msg) == "table" then table.insert(msgs, msg) end
+        end
+      end
+      f:close()
     else
-      local title = "─ Agent (" .. (msg.type or "text") .. ") ──────────────"
-      local hl    = msg.type == "thought" and "Comment" or msg.type == "tool_call" and "Special" or "Function"
-      add(title, hl)
-      local text = format_agent_msg(msg)
-      for _, l in ipairs(vim.split(text, "\n")) do add(l) end
+      local t = ((_threads[cwd] or {})[file] or {})[row]
+      if type(t) == "table" then meta = { prompt = t.prompt }; msgs = t.messages or {} end
     end
-    add("")
   end
 
+  local model = require("acp.agents").current_model_label(cwd)
+  local fname = vim.fn.fnamemodify(file or "", ":t")
+  local loc   = (type(row) == "number" and row >= 0) and (fname .. ":" .. (row + 1)) or fname
+
+  local title_raw = meta._title or meta.prompt or "Untitled"
+  local title = (title_raw:match("([^\n]+)") or "Untitled"):sub(1, 80)
+
+  add(SEP, "AcpThreadPrefix")
+  add("  " .. title, "AcpSectionHeader")
+  add("  " .. model .. "  ·  " .. loc, "Comment")
+  add(SEP, "AcpThreadPrefix")
+  add("")
+
+  local turn = 0
+  for _, msg in ipairs(msgs) do
+    if msg.role == "user" then
+      turn = turn + 1
+      add("User  (turn " .. turn .. ")", "AcpSectionHeader")
+      for _, l in ipairs(vim.split(msg.text or "", "\n")) do add("  " .. l) end
+      add("")
+    elseif msg.type == "thought" then
+      local tlines = vim.split(msg.text or "", "\n")
+      local show = math.min(#tlines, 3)
+      add("  💭 " .. (tlines[1] or ""):sub(1, 80), "AcpThreadThought")
+      for i = 2, show do add("     " .. tlines[i]:sub(1, 80), "AcpThreadThought") end
+      if #tlines > show then add("     … (" .. #tlines .. " lines)", "Comment") end
+    elseif msg.type == "tool_call" then
+      local call = msg.call or {}
+      local args = call.arguments and vim.json.encode(call.arguments) or "{}"
+      if #args > 100 then args = args:sub(1, 100) .. "…" end
+      add("  ⚙ " .. (call.name or "?") .. "  " .. args, "AcpThreadAction")
+    elseif msg.type == "tool_result" then
+      local res = msg.result or {}
+      local is_err = res.isError
+      local out = res.content and res.content[1] and res.content[1].text or ""
+      local rlines = vim.split(out, "\n")
+      local show = math.min(#rlines, 4)
+      local hl = is_err and "Error" or "AcpThreadResult"
+      add("  " .. (is_err and "✗" or "✓") .. "  " .. (rlines[1] or ""):sub(1, 100), hl)
+      for i = 2, show do add("     " .. rlines[i]:sub(1, 100), hl) end
+      if #rlines > show then add("     … (" .. #rlines .. " lines)", "Comment") end
+    elseif msg.type == "info" then
+      add("  ·  " .. (msg.text or ""), "DiagnosticInfo")
+    elseif msg.type == "error" then
+      add("  ✗  " .. (msg.text or ""), "Error")
+    elseif msg.role == "agent" then
+      for _, l in ipairs(vim.split(msg.text or "", "\n")) do add("  " .. l) end
+      add("")
+    end
+  end
+
+  if #msgs == 0 then add("  (no messages yet)", "Comment"); add("") end
+
   vim.bo[buf].modifiable = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false,
+    vim.tbl_map(function(l) return (l:gsub("\n", " ")) end, lines))
   vim.bo[buf].modifiable = false
   for _, h in ipairs(hls) do
     vim.api.nvim_buf_add_highlight(buf, -1, h[2], h[1], 0, -1)
   end
+
+  local ns_footer = vim.api.nvim_create_namespace("acp_thread_footer")
+  vim.api.nvim_buf_clear_namespace(buf, ns_footer, 0, -1)
+  vim.api.nvim_buf_set_extmark(buf, ns_footer, math.max(0, #lines - 1), 0, {
+    virt_lines = {
+      { { "" } },
+      {
+        { " <CR>", "AcpHelpKey" }, { " reply  ", "Comment" },
+        { "R", "AcpHelpKey" }, { " restart  ", "Comment" },
+        { "<S-Tab>", "AcpHelpKey" }, { " mode  ", "Comment" },
+        { "M", "AcpHelpKey" }, { " model  ", "Comment" },
+        { "q", "AcpHelpKey" }, { " close", "Comment" },
+      },
+    },
+  })
 end
 
-function M.open_thread_view(row)
+
+function M.open_thread_view(row, target_win)
   local cwd  = _cur.cwd or vim.fn.getcwd()
   local file = _cur.sel_file
+  reload_threads(cwd)
   local t    = ((_threads[cwd] or {})[file] or {})[row]
   if (not t or type(t) == "userdata") and type(row) == "number" then
     t = ((_threads[cwd] or {})[file] or {})[tostring(row)]
@@ -444,11 +649,81 @@ function M.open_thread_view(row)
     vim.bo[buf].filetype = "markdown"
   end
 
-  M.render_thread_view(buf, t)
-  vim.keymap.set("n", "<CR>", function() M.reply_at(row, file) end,
-    { buffer = buf, nowait = true, silent = true, desc = "Reply" })
-  vim.cmd("botright vsplit")
-  vim.api.nvim_set_current_buf(buf)
+  M.render_thread_view(buf, cwd, file, row)
+
+  local thread_key = cwd .. ":thread:" .. file .. ":" .. row
+
+  local active_sess = require("acp.session").get(thread_key)
+  if active_sess then
+    subscribe_to_thread(active_sess, cwd, file, row)
+  end
+
+  local function km(lhs, fn, desc)
+    vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true, desc = desc })
+  end
+
+  km("<CR>", function() M.reply_at(row, file) end, "Reply")
+  km("R",   function() M.restart_thread(row, file) end, "Restart thread")
+  km("q",   function() vim.api.nvim_win_close(0, true) end, "Close")
+  km("m",   function()
+    require("acp.workbench").pick_mode(thread_key)
+  end, "Pick mode")
+  km("M",   function()
+    require("acp").pick_model(cwd)
+  end, "Pick model")
+  km("<S-Tab>", function()
+    require("acp.workbench").pick_mode(thread_key)
+  end, "Switch mode")
+
+  local existing_win = nil
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(w) == buf then
+      existing_win = w; break
+    end
+  end
+  if existing_win then
+    vim.api.nvim_set_current_win(existing_win)
+  elseif target_win and vim.api.nvim_win_is_valid(target_win) then
+    vim.api.nvim_win_set_buf(target_win, buf)
+    vim.api.nvim_set_current_win(target_win)
+  else
+    vim.cmd("botright vsplit")
+    vim.api.nvim_set_current_buf(buf)
+  end
+end
+
+function M.restart_thread(row, file)
+  local cwd  = _cur.cwd or vim.fn.getcwd()
+  file = file or _cur.sel_file
+  local t    = ((_threads[cwd] or {})[file] or {})[row]
+  if (not t or type(t) == "userdata") and type(row) == "number" then
+    t = ((_threads[cwd] or {})[file] or {})[tostring(row)]
+  end
+  if type(t) ~= "table" then return end
+
+  local thread_key = cwd .. ":thread:" .. file .. ":" .. row
+  require("acp.session").close(thread_key) -- Kill old session
+
+  t.messages = {{ role = "user", text = t.prompt }}
+  save_thread(cwd, file, row)
+  redraw_thread(row)
+
+  -- Refresh the thread view buffer if visible
+  local bufname = string.format("acp-thread-%s-%s", file, row)
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_get_name(b):find(bufname, 1, true) then
+      M.render_thread_view(b, cwd, file, row)
+      break
+    end
+  end
+
+  require("acp.session").get_or_create({ key = thread_key, cwd = cwd }, function(err, sess)
+    if err then return end
+    subscribe_to_thread(sess, cwd, file, row)
+    sess.rpc:request("session/prompt", {
+      sessionId = sess.session_id, prompt = {{type="text", text=t.prompt}},
+    }, function() end)
+  end)
 end
 
 function M.reply_at(row, file)
@@ -509,7 +784,7 @@ function M.delete_thread(file, row)
     local thread_key = cwd .. ":thread:" .. file .. ":" .. row
     require("acp.session").close(thread_key)
     _threads[cwd][file][row] = nil
-    save_threads(cwd)
+    os.remove(thread_path(cwd, file, row))
   end
   if file == _cur.sel_file then redraw_thread(row) end
   require("acp.workbench").render()
@@ -594,6 +869,7 @@ function M._install_main_keymaps(buf)
   km("s",  M.send,            "Send diff to ACP")
   km("n",  function() require("acp.workbench").set(_cur.cwd) end, "New work item")
   km("m", function() require("acp.workbench").pick_mode() end, "Pick mode")
+  km("<S-Tab>", function() require("acp.workbench").pick_mode() end, "Switch mode")
   km("M", function() require("acp").pick_model() end,         "Pick model")
   km("?",  function() require("acp.workbench").show_help() end, "Help")
   km("g?", function() require("acp.workbench").show_help() end, "Help")

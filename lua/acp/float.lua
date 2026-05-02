@@ -73,6 +73,7 @@ function M.open_comment_float(title, opts)
     vim.split(opts.prefill, "\n", { plain = true }) or { "" }
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, init_lines)
 
+  if not vim.api.nvim_win_is_valid(opts.win_id) then return end
   local ref_height  = vim.api.nvim_win_get_height(opts.win_id)
   local total_h     = M.compute_height(#init_lines, 0, ref_height)
   local anchor_0    = opts.anchor_line - 1

@@ -52,11 +52,14 @@ function M.new(transport_handle)
     require("acp.transport").write(self._t, payload)
   end
 
-  function rpc:respond(id, result)
-    local payload = vim.json.encode({
-      jsonrpc = "2.0", id = id, result = result,
-    })
-    require("acp.transport").write(self._t, payload)
+  function rpc:respond(id, result, err)
+    local payload = { jsonrpc = "2.0", id = id }
+    if err then
+      payload.error = err
+    else
+      payload.result = result == nil and vim.NIL or result
+    end
+    require("acp.transport").write(self._t, vim.json.encode(payload))
   end
 
   function rpc:subscribe(session_id, fn)
