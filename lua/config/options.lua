@@ -28,6 +28,7 @@ local base = {
   swapfile = false,
   backup = false,
   undofile = true,
+  confirm = true,
   clipboard = "unnamedplus",
   mouse = "a",
   list = true,
@@ -67,11 +68,12 @@ function M.apply()
 
   vim.diagnostic.config({
     virtual_text = true,
+    virtual_lines = false,
     signs = true,
-    underline = true,
+    underline = { severity = { min = vim.diagnostic.severity.WARN } },
     update_in_insert = false,
     severity_sort = true,
-    float = { border = "rounded" },
+    float = { border = "rounded", source = "if_many" },
   })
 end
 
