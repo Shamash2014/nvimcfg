@@ -7,8 +7,9 @@ local sessions = {}  -- [cwd] -> session
 local INIT_PARAMS = {
   protocolVersion = 1,
   clientCapabilities = {
-    fs       = { readTextFile = true, writeTextFile = false },
-    terminal = false,
+    fs               = { readTextFile = false, writeTextFile = false },
+    terminal         = true,
+    promptCapabilities = { audio = false, embeddedContext = true, image = true },
   },
   clientInfo = { name = "nvim-acp", version = "0.1.0" },
 }
@@ -18,7 +19,6 @@ local function notify(msg, level)
 end
 
 -- callback: fn(err: string|nil, session: table|nil)
--- Provider resolved dynamically via agents.resolve(cwd) — no agent_cfg param.
 function M.get_or_create(cwd, callback)
   local s = sessions[cwd]
   if s then
@@ -33,7 +33,7 @@ function M.get_or_create(cwd, callback)
     return
   end
 
-  local stub = { state = "initializing", cwd = cwd, queue = {}, rpc = nil }
+  local stub = { state = "initializing", cwd = cwd, queue = {}, rpc = nil, config_options = {} }
   sessions[cwd] = stub
 
   local function on_exit(code)
@@ -44,7 +44,6 @@ function M.get_or_create(cwd, callback)
     end
   end
 
-  -- Dynamic provider resolution — picker shown here if needed
   require("acp.agents").resolve(cwd, function(a_err, provider)
     if a_err then
       sessions[cwd] = nil
@@ -82,10 +81,22 @@ function M.get_or_create(cwd, callback)
           return
         end
 
-        stub.session_id = res.sessionId
-        stub.state = "ready"
-        callback(nil, stub)
+        stub.session_id        = res.sessionId
+        stub.config_options    = res.configOptions or {}
+        stub.available_commands = {}
+        stub.state             = "ready"
 
+        -- Keep session state fresh from server-pushed notifications
+        stub.rpc:subscribe(stub.session_id, function(notif)
+          local u = (notif.params or {}).update or {}
+          if u.sessionUpdate == "config_option_update" and u.configOptions then
+            stub.config_options = u.configOptions
+          elseif u.sessionUpdate == "available_commands_update" and u.availableCommands then
+            stub.available_commands = u.availableCommands
+          end
+        end)
+
+        callback(nil, stub)
         for _, cb in ipairs(stub.queue) do cb(nil, stub) end
         stub.queue = {}
       end)
@@ -93,11 +104,47 @@ function M.get_or_create(cwd, callback)
   end)
 end
 
+-- Returns configOptions array for the active session, or {}
+function M.get_config_options(cwd)
+  local s = sessions[cwd]
+  return (s and s.config_options) or {}
+end
+
+-- Returns available slash commands for the active session, or {}
+function M.get_commands(cwd)
+  local s = sessions[cwd]
+  return (s and s.available_commands) or {}
+end
+
+-- Send session/set_config_option; callback(err, updated_config_options)
+function M.set_config_option(cwd, config_id, value, callback)
+  local s = sessions[cwd]
+  if not s or s.state ~= "ready" then
+    if callback then callback("no active session") end
+    return
+  end
+  s.rpc:request("session/set_config_option", {
+    sessionId = s.session_id,
+    configId  = config_id,
+    value     = value,
+  }, function(err, res)
+    if not err and res and res.configOptions then
+      s.config_options = res.configOptions
+    end
+    if callback then callback(err, s.config_options) end
+  end)
+end
+
 function M.close(cwd)
   local s = sessions[cwd]
-  if s and s.transport then
+  if not s then return end
+  sessions[cwd] = nil
+  if s.transport then
+    if s.session_id then
+      require("acp.mailbox").cancel_for_session(s.session_id)
+      s.rpc:notify("session/cancel", { sessionId = s.session_id })
+    end
     transport.close(s.transport)
-    sessions[cwd] = nil
   end
 end
 

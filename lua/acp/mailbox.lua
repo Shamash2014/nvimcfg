@@ -93,6 +93,17 @@ function M._entry_at_cursor()
   return nil
 end
 
+-- Respond to all pending permissions for a session with cancelled (used on session/cancel).
+function M.cancel_for_session(session_id)
+  for _, e in ipairs(queue) do
+    if e.state == "pending" and e.session_id == session_id then
+      e.rpc:respond(e.msg_id, { outcome = { outcome = "cancelled" } })
+      e.state = "rejected"
+    end
+  end
+  M._open_or_refresh()
+end
+
 function M.respond(id, kind)
   for _, e in ipairs(queue) do
     if e.id == id and e.state == "pending" then
@@ -101,7 +112,7 @@ function M.respond(id, kind)
       for _, o in ipairs(e.options or {}) do
         if o.kind == kind then option_id = o.optionId; break end
       end
-      e.rpc:respond(e.msg_id, { optionId = option_id })
+      e.rpc:respond(e.msg_id, { outcome = { outcome = "selected", optionId = option_id } })
       e.state = kind:find("allow") and "approved" or "rejected"
       snacks_notify((e.state == "approved" and "✓" or "✗") .. " " .. e.tool_title)
       M._open_or_refresh()

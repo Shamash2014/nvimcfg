@@ -22,12 +22,14 @@ return {
               keys = {
                 ["<C-j>"] = { "list_down", mode = { "i", "n" } },
                 ["<C-k>"] = { "list_up", mode = { "i", "n" } },
+                ["<C-q>"] = { "qf", mode = { "i", "n" } },
               },
             },
             list = {
               keys = {
                 ["<C-j>"] = "list_down",
                 ["<C-k>"] = "list_up",
+                ["<C-q>"] = "qf",
               },
             },
           },

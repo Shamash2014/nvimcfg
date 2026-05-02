@@ -1,0 +1,277 @@
+local M = {}
+
+local MIN_HEIGHT = 3
+local NS = vim.api.nvim_create_namespace("acp_float")
+
+function M.compute_height(content_lines, header_lines, ref_height)
+  local max_h = math.floor((ref_height or vim.o.lines) * 0.8)
+  return math.max(MIN_HEIGHT, math.min(max_h, content_lines + header_lines))
+end
+
+function M.reserve_space(diff_buf, anchor_line, line_count, above)
+  local virt = {}
+  for _ = 1, line_count do table.insert(virt, { { "", "" } }) end
+  return vim.api.nvim_buf_set_extmark(diff_buf, NS, anchor_line, 0, {
+    virt_lines = virt, virt_lines_above = above or false,
+  })
+end
+
+function M.update_space(diff_buf, extmark_id, anchor_line, line_count, above)
+  local virt = {}
+  for _ = 1, line_count do table.insert(virt, { { "", "" } }) end
+  vim.api.nvim_buf_set_extmark(diff_buf, NS, anchor_line, 0, {
+    id = extmark_id, virt_lines = virt, virt_lines_above = above or false,
+  })
+end
+
+function M.clear_space(diff_buf, extmark_id)
+  pcall(vim.api.nvim_buf_del_extmark, diff_buf, NS, extmark_id)
+end
+
+function M.border()
+  local hl = "AcpCommentBorder"
+  return {
+    { "┏", hl }, { "━", hl }, { "┓", hl }, { "┃", hl },
+    { "┛", hl }, { "━", hl }, { "┗", hl }, { "┃", hl },
+  }
+end
+
+function M.title(text)
+  return { { " " .. text .. " ", "AcpFloatTitle" } }
+end
+
+function M.footer()
+  return {
+    { " ", "AcpFloatFooterText" },
+    { "<C-s>", "AcpFloatFooterKey" },
+    { " submit  ", "AcpFloatFooterText" },
+    { "q", "AcpFloatFooterKey" },
+    { " cancel ", "AcpFloatFooterText" },
+  }
+end
+
+function M.highlight_lines(diff_buf, start_line, end_line)
+  local ids = {}
+  for row = start_line - 1, end_line - 1 do
+    table.insert(ids, vim.api.nvim_buf_set_extmark(diff_buf, NS, row, 0, {
+      line_hl_group = "AcpCommentContext", priority = 4097,
+    }))
+  end
+  return ids
+end
+
+function M.clear_line_hl(diff_buf, ids)
+  for _, id in ipairs(ids) do pcall(vim.api.nvim_buf_del_extmark, diff_buf, NS, id) end
+end
+
+function M.open_comment_float(title, opts)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].filetype  = "markdown"
+
+  local init_lines = (opts.prefill and opts.prefill ~= "") and
+    vim.split(opts.prefill, "\n", { plain = true }) or { "" }
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, init_lines)
+
+  local ref_height  = vim.api.nvim_win_get_height(opts.win_id)
+  local total_h     = M.compute_height(#init_lines, 0, ref_height)
+  local anchor_0    = opts.anchor_line - 1
+  local win_w       = vim.api.nvim_win_get_width(opts.win_id)
+  local float_w     = math.min(win_w - 4, 88)
+
+  local handle = {
+    buf = buf, win = nil, closed = false,
+    extmark_id = nil, line_hl_ids = {},
+  }
+
+  handle.line_hl_ids  = M.highlight_lines(opts.diff_buf, opts.anchor_line, opts.anchor_line)
+  handle.extmark_id   = M.reserve_space(opts.diff_buf, anchor_0, total_h + 2, false)
+
+  local heal_pending = false
+  vim.api.nvim_buf_attach(opts.diff_buf, false, {
+    on_lines = function()
+      if handle.closed then return true end
+      if heal_pending then return end
+      heal_pending = true
+      vim.schedule(function()
+        heal_pending = false
+        if handle.closed or not vim.api.nvim_buf_is_valid(opts.diff_buf) then return end
+        local cur_h = vim.api.nvim_win_is_valid(handle.win) and
+          vim.api.nvim_win_get_height(handle.win) or total_h
+        handle.extmark_id = M.reserve_space(opts.diff_buf, anchor_0, cur_h + 2, false)
+        if #handle.line_hl_ids > 0 then
+          M.clear_line_hl(opts.diff_buf, handle.line_hl_ids)
+          handle.line_hl_ids = M.highlight_lines(opts.diff_buf, opts.anchor_line, opts.anchor_line)
+        end
+      end)
+    end,
+  })
+
+  handle.win = vim.api.nvim_open_win(buf, true, {
+    relative    = "win",
+    win         = opts.win_id,
+    bufpos      = { anchor_0, 0 },
+    width       = float_w,
+    height      = total_h,
+    row         = 1,
+    col         = 3,
+    style       = "minimal",
+    border      = M.border(),
+    title       = M.title(title),
+    title_pos   = "center",
+    footer      = M.footer(),
+    footer_pos  = "center",
+    noautocmd   = true,
+  })
+
+  vim.wo[handle.win].winblend     = 0
+  vim.wo[handle.win].winhighlight = "NormalFloat:Normal"
+  vim.wo[handle.win].wrap         = true
+
+  function handle.close()
+    if handle.closed then return end
+    handle.closed = true
+    vim.cmd("stopinsert")
+    pcall(vim.api.nvim_win_close, handle.win, true)
+    if handle.extmark_id then M.clear_space(opts.diff_buf, handle.extmark_id) end
+    if #handle.line_hl_ids > 0 then M.clear_line_hl(opts.diff_buf, handle.line_hl_ids) end
+    if opts.on_close then opts.on_close() end
+  end
+
+  function handle.get_text()
+    local ok, lines = pcall(vim.api.nvim_buf_get_lines, buf, 0, -1, false)
+    return ok and vim.trim(table.concat(lines, "\n")) or ""
+  end
+
+  local resize_timer = nil
+  vim.api.nvim_buf_attach(buf, false, {
+    on_lines = function()
+      if handle.closed then return true end
+      if resize_timer then vim.fn.timer_stop(resize_timer) end
+      resize_timer = vim.fn.timer_start(15, function()
+        resize_timer = nil
+        if handle.closed or not vim.api.nvim_buf_is_valid(buf) then return end
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        local new_h = M.compute_height(#lines, 0, ref_height)
+        if vim.api.nvim_win_is_valid(handle.win) then
+          vim.api.nvim_win_set_height(handle.win, new_h)
+        end
+        if handle.extmark_id then
+          M.update_space(opts.diff_buf, handle.extmark_id, anchor_0, new_h + 2, false)
+        end
+      end)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(handle.win), once = true,
+    callback = function() handle.close() end,
+  })
+
+  local function km(lhs, fn)
+    vim.keymap.set({"n","i"}, lhs, fn,
+      { buffer = buf, nowait = true, noremap = true, silent = true })
+  end
+  km("<C-s>", function()
+    local text = handle.get_text()
+    handle.close()
+    if text ~= "" and opts.on_submit then opts.on_submit(text) end
+  end)
+  km("q", function() handle.close() end)
+
+  vim.cmd("startinsert")
+  return handle
+end
+
+--- Open a large centered composer float (no diff buffer anchor).
+--- @param title string  Float title bar text
+--- @param opts { on_submit: fun(text: string), on_close?: fun(), prefill?: string }
+--- @return table handle { buf, win, close, get_text, closed }
+function M.open_composer_float(title, opts)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].filetype  = "markdown"
+
+  local init_lines = (opts.prefill and opts.prefill ~= "") and
+    vim.split(opts.prefill, "\n", { plain = true }) or { "# " }
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, init_lines)
+
+  local max_h  = math.floor(vim.o.lines * 0.72)
+  local float_h = math.max(MIN_HEIGHT, math.min(max_h, math.max(#init_lines, 20)))
+  local float_w = math.min(vim.o.columns - 8, 120)
+  local row     = math.floor((vim.o.lines  - float_h) / 2)
+  local col     = math.floor((vim.o.columns - float_w) / 2)
+
+  local handle = { buf = buf, win = nil, closed = false }
+
+  handle.win = vim.api.nvim_open_win(buf, true, {
+    relative  = "editor",
+    width     = float_w,
+    height    = float_h,
+    row       = row,
+    col       = col,
+    style     = "minimal",
+    border    = M.border(),
+    title     = M.title(title),
+    title_pos = "center",
+    footer    = M.footer(),
+    footer_pos = "center",
+    noautocmd = true,
+  })
+
+  vim.wo[handle.win].winblend     = 0
+  vim.wo[handle.win].winhighlight = "NormalFloat:Normal"
+  vim.wo[handle.win].wrap         = true
+
+  function handle.close()
+    if handle.closed then return end
+    handle.closed = true
+    vim.cmd("stopinsert")
+    pcall(vim.api.nvim_win_close, handle.win, true)
+    if opts.on_close then opts.on_close() end
+  end
+
+  function handle.get_text()
+    local ok, lines = pcall(vim.api.nvim_buf_get_lines, buf, 0, -1, false)
+    return ok and vim.trim(table.concat(lines, "\n")) or ""
+  end
+
+  local resize_timer = nil
+  vim.api.nvim_buf_attach(buf, false, {
+    on_lines = function()
+      if handle.closed then return true end
+      if resize_timer then vim.fn.timer_stop(resize_timer) end
+      resize_timer = vim.fn.timer_start(15, function()
+        resize_timer = nil
+        if handle.closed or not vim.api.nvim_buf_is_valid(buf) then return end
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        local new_h = math.max(MIN_HEIGHT, math.min(max_h, #lines))
+        if vim.api.nvim_win_is_valid(handle.win) then
+          vim.api.nvim_win_set_height(handle.win, new_h)
+        end
+      end)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(handle.win), once = true,
+    callback = function() handle.close() end,
+  })
+
+  local function km(lhs, fn)
+    vim.keymap.set({ "n", "i" }, lhs, fn,
+      { buffer = buf, nowait = true, noremap = true, silent = true })
+  end
+  km("<C-s>", function()
+    local text = handle.get_text()
+    handle.close()
+    if text ~= "" and opts.on_submit then opts.on_submit(text) end
+  end)
+  km("q", function() handle.close() end)
+
+  vim.api.nvim_win_set_cursor(handle.win, { 1, 2 })
+  vim.cmd("startinsert!")
+  return handle
+end
+
+return M
