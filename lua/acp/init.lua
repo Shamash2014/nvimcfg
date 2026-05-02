@@ -4,11 +4,16 @@ local _config = {}
 
 function M.setup(opts)
   opts = opts or {}
-  -- Register any user-supplied custom providers
   for _, p in ipairs(opts.providers or {}) do
     require("acp.agents").register(p)
   end
   _config = opts
+
+  vim.keymap.set("n", "<C-c>", function()
+    if #require("acp.session").active() > 0 then
+      M.cancel()
+    end
+  end, { desc = "Cancel ACP work" })
 end
 
 -- Work mode

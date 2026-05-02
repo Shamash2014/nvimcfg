@@ -37,7 +37,7 @@ function M.enqueue_permission(entry)
   entry.state = "pending"
   table.insert(queue, entry)
   M._open_or_refresh()
-  snacks_notify("ACP permission: " .. entry.tool_title, "warn")
+  vim.notify("ACP permission request: " .. entry.tool_title, vim.log.levels.WARN, { title = "acp" })
 end
 
 -- Open the permission loclist and install <CR> bindings.
