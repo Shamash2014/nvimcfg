@@ -1,68 +1,78 @@
 local uv = vim.uv or vim.loop
 local M = {}
 
--- Spawns an ACP server process. Returns a handle or nil+err.
--- on_line(line: string) called per complete JSON line from stdout.
--- on_exit(code: integer) called when process exits.
-function M.spawn(cmd, on_line, on_exit)
-  local stdin  = uv.new_pipe(false)
-  local stdout = uv.new_pipe(false)
-  local stderr = uv.new_pipe(false)
-
-  if not stdin or not stdout or not stderr then
-    return nil, "failed to create pipes"
+local LOG_FILE = vim.fn.stdpath("cache") .. "/acp.log"
+local function debug_log(prefix, data)
+  local f = io.open(LOG_FILE, "a")
+  if f then
+    f:write(string.format("[%s] %s %s\n", os.date("%H:%M:%S"), prefix, data))
+    f:close()
   end
+end
 
-  local handle = { stdin = stdin, stdout = stdout, stderr = stderr, buf = "" }
+-- Spawns an ACP server process using jobstart with PTY.
+function M.spawn(cmd, on_line, on_exit, cwd)
+  local handle = { buf = "" }
 
-  local proc, err = uv.spawn(cmd[1], {
-    args  = vim.list_slice(cmd, 2),
-    stdio = { stdin, stdout, stderr },
-    env   = vim.tbl_map(function(k) return k .. "=" .. vim.env[k] end,
-              vim.tbl_keys(vim.fn.environ())),
-  }, function(code)
-    vim.schedule(function() on_exit(code) end)
-  end)
+  local job_id = vim.fn.jobstart(cmd, {
+    pty = true,
+    cwd = cwd,
+    on_stdout = function(_, data)
+      if not data then return end
+      -- Use a more efficient way to accumulate and split lines
+      local chunk = table.concat(data, "\n")
+      handle.buf = handle.buf .. chunk
+      
+      -- If buffer is getting too huge without a newline/CR, truncate it
+      if #handle.buf > 100000 then handle.buf = handle.buf:sub(-10000) end
 
-  if not proc then
-    return nil, err
-  end
+      while true do
+        local nl = handle.buf:find("[\n\r]")
+        if not nl then break end
+        
+        local line = handle.buf:sub(1, nl - 1)
+        handle.buf = handle.buf:sub(nl + 1)
 
-  handle.proc = proc
-
-  stdout:read_start(function(err2, chunk)
-    if err2 or not chunk then return end
-    handle.buf = handle.buf .. chunk
-    local tail = handle.buf
-    for line in tail:gmatch("([^\n]*)\n") do
-      if line ~= "" then
-        vim.schedule(function() on_line(line) end)
+        if line ~= "" then
+          local clean = line:gsub("\x1b%[[0-9;]*[a-zA-Z]", "")
+                            :gsub("\x1b%]0;[^\x07]*\x07", "")
+          
+          if clean:match("%S") then
+            if clean:match("^{") then
+              debug_log("IN: ", clean)
+              vim.schedule(function() on_line(clean) end)
+            elseif #clean < 500 then -- Don't log massive RAW chunks
+              debug_log("RAW:", clean)
+            end
+          end
+        end
       end
-    end
-    handle.buf = tail:match("[^\n]*$") or ""
-  end)
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function() on_exit(code) end)
+    end,
+  })
 
-  stderr:read_start(function(_, _) end)  -- drain stderr silently
+  if job_id <= 0 then
+    return nil, "failed to start job: " .. job_id
+  end
 
+  handle.job_id = job_id
   return handle, nil
 end
 
 function M.write(handle, data)
-  if handle.stdin and not handle.stdin:is_closing() then
-    handle.stdin:write(data .. "\n")
+  if handle.job_id then
+    debug_log("OUT:", data)
+    vim.fn.chansend(handle.job_id, data .. "\n")
     return true
   end
   return false
 end
 
 function M.close(handle)
-  if handle.stdin and not handle.stdin:is_closing() then
-    handle.stdin:shutdown(function()
-      handle.stdin:close()
-    end)
-  end
-  if handle.proc and not handle.proc:is_closing() then
-    handle.proc:close()
+  if handle.job_id then
+    vim.fn.jobstop(handle.job_id)
   end
 end
 

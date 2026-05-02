@@ -8,7 +8,7 @@ local INIT_PARAMS = {
   protocolVersion = 1,
   clientCapabilities = {
     fs               = { readTextFile = false, writeTextFile = false },
-    terminal         = true,
+    terminal         = false,
     promptCapabilities = { audio = false, embeddedContext = true, image = true },
   },
   clientInfo = { name = "nvim-acp", version = "0.1.0" },
@@ -57,7 +57,7 @@ function M.get_or_create(cwd_or_opts, callback)
     local cmd = require("acp.agents").cmd(provider)
     local th, spawn_err = transport.spawn(cmd, function(line)
       if stub.rpc then stub.rpc:_dispatch(line) end
-    end, on_exit)
+    end, on_exit, cwd)
 
     if not th then
       sessions[key] = nil

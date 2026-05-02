@@ -2,10 +2,10 @@ local M = {}
 
 local _providers = {
   {
-    name    = "claude_code",
+    name    = "claude",
     display = "claude",
-    cmd     = "claude",
-    args    = { "acp" },
+    cmd     = "claude-agent-acp",
+    args    = {},
   },
   {
     name    = "opencode",

@@ -8,6 +8,32 @@ local STATUS_WORDS = { A = "new file  ", M = "modified  ", D = "deleted   " }
 
 local _threads = {}
 
+local function threads_path(cwd) return cwd .. "/.nowork/threads.json" end
+
+local function save_threads(cwd)
+  if not cwd then return end
+  vim.fn.mkdir(cwd .. "/.nowork", "p")
+  local f = io.open(threads_path(cwd), "w")
+  if f then
+    f:write(vim.json.encode(_threads[cwd] or {}))
+    f:close()
+  end
+end
+
+local function load_threads(cwd)
+  if not cwd then return end
+  local f = io.open(threads_path(cwd), "r")
+  if f then
+    local content = f:read("*a")
+    f:close()
+    if content ~= "" then
+      local ok, data = pcall(vim.json.decode, content)
+      if ok then _threads[cwd] = data end
+    end
+  end
+end
+M.load_threads = load_threads
+
 local _cur = {
   cwd           = nil,
   files         = {},
@@ -58,7 +84,20 @@ local function apply_line_hl(buf, row, hl_group)
 end
 M.apply_line_hl = apply_line_hl
 
+local function format_agent_msg(msg)
+  if msg.text then
+    return msg.text
+  elseif msg.call then
+    return "Call: " .. (msg.call.name or "?")
+  elseif msg.result then
+    local out = msg.result.content and msg.result.content[1] and msg.result.content[1].text or ""
+    return "Result: " .. (msg.result.isError and "ERROR" or "OK") .. " — " .. out
+  end
+  return ""
+end
+
 local function thread_virt(t)
+  if type(t) ~= "table" then return {} end
   local u_hl = t.resolved and "AcpThreadResolved" or "AcpThreadOpen"
   local virt = {
     {
@@ -67,11 +106,13 @@ local function thread_virt(t)
       { t.prompt, u_hl },
     },
   }
-  for i = #t.messages, 1, -1 do
-    local msg = t.messages[i]
+  local msgs = t.messages or {}
+  for i = #msgs, 1, -1 do
+    local msg = msgs[i]
     if msg.role == "agent" then
-      local text = msg.text:gsub("\n", " "):sub(1, 80)
-      if #msg.text > 80 then text = text .. "…" end
+      local raw  = format_agent_msg(msg)
+      local text = raw:gsub("\n", " "):sub(1, 80)
+      if #raw > 80 then text = text .. "…" end
       table.insert(virt, {
         { "  │  ", "AcpThreadPrefix" },
         { text,    "AcpThreadAgent"  },
@@ -96,7 +137,7 @@ local function redraw_thread(row)
   for _, m in ipairs(marks) do vim.api.nvim_buf_del_extmark(buf, NS_THREAD, m[1]) end
   vim.fn.sign_unplace("acp_threads", { buffer = buf, id = row + 1 })
   local t = ((_threads[cwd] or {})[file] or {})[row]
-  if not t then return end
+  if type(t) ~= "table" then return end
   vim.api.nvim_buf_set_extmark(buf, NS_THREAD, row, 0, { virt_lines = thread_virt(t) })
   local sign = t.resolved and "AcpThreadResolved" or "AcpThreadOpen"
   vim.fn.sign_place(row + 1, "acp_threads", sign, buf, { lnum = row + 1 })
@@ -118,15 +159,34 @@ function M.attach(buf, file_path, cwd)
   _cur.main_buf = buf
   _cur.sel_file = file_path
   _cur.cwd      = cwd or _cur.cwd or vim.fn.getcwd()
+  load_threads(_cur.cwd)
   M._install_main_keymaps(buf)
   
-  -- Redraw any existing threads for this file
+  -- Redraw and subscribe to existing threads for this file
   local cwd_t = _cur.cwd
   if _threads[cwd_t] and _threads[cwd_t][file_path] then
     for row, _ in pairs(_threads[cwd_t][file_path]) do
       redraw_thread(row)
     end
+    -- Try to subscribe if session is already active
+    require("acp.session").get_or_create(cwd_t, function(err, sess)
+      if not err and sess then
+        for row, _ in pairs(_threads[cwd_t][file_path]) do
+          subscribe_to_thread(sess, cwd_t, file_path, row)
+        end
+      end
+    end)
   end
+
+  -- Add footer via virt_lines at the end
+  vim.api.nvim_buf_clear_namespace(buf, NS_SEP, 0, -1)
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  vim.api.nvim_buf_set_extmark(buf, NS_SEP, line_count - 1, 0, {
+    virt_lines = {
+      { { "" } },
+      { { "  <CR> open/jump  a comment  s send  ]c next  [c prev  R refresh", "AcpFooter" } },
+    }
+  })
 end
 
 function M.show_file(file_path, main_win, main_buf, on_winbar)
@@ -136,6 +196,7 @@ function M.show_file(file_path, main_win, main_buf, on_winbar)
   _cur.sel_file      = file_path
   _cur.buf_line_meta = {}
   _cur.cwd           = _cur.cwd or vim.fn.getcwd()
+  load_threads(_cur.cwd)
   if #_cur.files == 0 then _cur.files = M.list_files(_cur.cwd) end
 
   if main_win and vim.api.nvim_win_is_valid(main_win) then
@@ -178,8 +239,6 @@ function M.show_file(file_path, main_win, main_buf, on_winbar)
     end
     addh("")
   end
-  addh("  a new comment  s send to ACP  ]c/[c hunk  R refresh", "AcpDiffHunk")
-
   vim.bo[main_buf].modifiable = true
   vim.api.nvim_buf_set_lines(main_buf, 0, -1, false, ls)
   vim.bo[main_buf].modifiable = false
@@ -200,6 +259,35 @@ function M.show_file(file_path, main_win, main_buf, on_winbar)
 
   M.attach(main_buf, file_path, _cur.cwd)
   if on_winbar then on_winbar(file_path) end
+end
+
+local function subscribe_to_thread(sess, cwd, file, row)
+  local t = ((_threads[cwd] or {})[file] or {})[row]
+  if not t then return end
+  sess.rpc:subscribe(sess.session_id, function(notif)
+    local u = (notif.params or {}).update or {}
+    if u.sessionUpdate == "text" and u.text then
+      table.insert(t.messages, { role="agent", type="text", text=u.text })
+    elseif u.sessionUpdate == "thought" and u.thought then
+      table.insert(t.messages, { role="agent", type="thought", text=u.thought })
+    elseif u.sessionUpdate == "tool_call" and u.toolCall then
+      table.insert(t.messages, { role="agent", type="tool_call", call=u.toolCall })
+    elseif u.sessionUpdate == "tool_result" and u.toolResult then
+      table.insert(t.messages, { role="agent", type="tool_result", result=u.toolResult })
+    end
+    vim.schedule(function()
+      redraw_thread(row)
+      save_threads(cwd)
+      -- If thread view is open for this thread, refresh it
+      local bufname = string.format("acp-thread-%s-%s", file, row)
+      for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        local bname = vim.api.nvim_buf_get_name(b)
+        if bname:find(bufname, 1, true) then
+          M.render_thread_view(b, t)
+        end
+      end
+    end)
+  end)
 end
 
 function M.add_comment(file, row, visual)
@@ -234,6 +322,7 @@ function M.add_comment(file, row, visual)
           resolved = false,
         }
         _threads[cwd][file][row] = thread
+        save_threads(cwd)
         if row >= 0 then
           vim.schedule(function() redraw_thread(row) end)
         end
@@ -258,15 +347,7 @@ function M.add_comment(file, row, visual)
           if err then
             vim.notify("ACP: "..err, vim.log.levels.ERROR, {title="acp"}); return
           end
-          sess.rpc:subscribe(sess.session_id, function(notif)
-            local u = (notif.params or {}).update or {}
-            if u.sessionUpdate == "text" and u.text then
-              thread.messages[#thread.messages+1] = {role="agent", text=u.text}
-              if row >= 0 then
-                vim.schedule(function() redraw_thread(row) end)
-              end
-            end
-          end)
+          subscribe_to_thread(sess, cwd, file, row)
           sess.rpc:request("session/prompt", {
             sessionId = sess.session_id, prompt = prompt_items,
           }, function() end)
@@ -276,40 +357,87 @@ function M.add_comment(file, row, visual)
   )
 end
 
-function M.reply_at(row)
+function M.render_thread_view(buf, t)
+  local lines = {}
+  local hls   = {}
+  local function add(s, hl)
+    table.insert(lines, s or "")
+    if hl then table.insert(hls, { #lines - 1, hl }) end
+  end
+
+  add("Thread: " .. t.prompt, "AcpSectionHeader")
+  add("")
+
+  for _, msg in ipairs(t.messages) do
+    if msg.role == "user" then
+      add("─ User ──────────────────────────────────", "Comment")
+      for _, l in ipairs(vim.split(msg.text or "", "\n")) do add(l) end
+    else
+      local title = "─ Agent (" .. (msg.type or "text") .. ") ──────────────"
+      local hl    = msg.type == "thought" and "Comment" or msg.type == "tool_call" and "Special" or "Function"
+      add(title, hl)
+      local text = format_agent_msg(msg)
+      for _, l in ipairs(vim.split(text, "\n")) do add(l) end
+    end
+    add("")
+  end
+
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  for _, h in ipairs(hls) do
+    vim.api.nvim_buf_add_highlight(buf, -1, h[2], h[1], 0, -1)
+  end
+end
+
+function M.open_thread_view(row)
   local cwd  = _cur.cwd or vim.fn.getcwd()
   local file = _cur.sel_file
+  local t    = ((_threads[cwd] or {})[file] or {})[row]
+  if not t then return end
+
+  local bufname = string.format("acp-thread-%s-%s", file, row)
+  local buf = nil
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    local name = vim.api.nvim_buf_get_name(b)
+    if name:find(bufname, 1, true) then buf = b; break end
+  end
+  if not buf then
+    buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(buf, bufname)
+    vim.bo[buf].buftype = "nofile"
+    vim.bo[buf].filetype = "markdown"
+  end
+
+  M.render_thread_view(buf, t)
+  vim.keymap.set("n", "<CR>", function() M.reply_at(row, file) end,
+    { buffer = buf, nowait = true, silent = true, desc = "Reply" })
+  vim.cmd("botright vsplit")
+  vim.api.nvim_set_current_buf(buf)
+end
+
+function M.reply_at(row, file)
+  local cwd  = _cur.cwd or vim.fn.getcwd()
+  file = file or _cur.sel_file
   local t    = ((_threads[cwd] or {})[file] or {})[row]
   if not t then
     vim.notify("No thread here", vim.log.levels.WARN, {title="acp"}); return
   end
   local thread_key = cwd .. ":thread:" .. file .. ":" .. row
-  require("acp.float").open_comment_float(
-    "Reply",
-    {
-      anchor_line = row + 1,
-      win_id      = _cur.main_win,
-      diff_buf    = _cur.main_buf,
-      on_submit   = function(text)
-        table.insert(t.messages, {role="user", text=text})
-        vim.schedule(function() redraw_thread(row) end)
-        require("acp.session").get_or_create({ key = thread_key, cwd = cwd }, function(err, sess)
-          if err then return end
-          sess.rpc:subscribe(sess.session_id, function(notif)
-            local u = (notif.params or {}).update or {}
-            if u.sessionUpdate == "text" and u.text then
-              t.messages[#t.messages+1] = {role="agent", text=u.text}
-              vim.schedule(function() redraw_thread(row) end)
-            end
-          end)
-          sess.rpc:request("session/prompt", {
-            sessionId = sess.session_id,
-            prompt    = {{type="text", text=text}},
-          }, function() end)
-        end)
-      end,
-    }
-  )
+  require("acp.float").open_comment_float("Reply", {
+    anchor_line = row + 1, win_id = _cur.main_win, diff_buf = _cur.main_buf,
+    on_submit   = function(text)
+      table.insert(t.messages, {role="user", text=text})
+      vim.schedule(function() redraw_thread(row) end)
+      require("acp.session").get_or_create({ key = thread_key, cwd = cwd }, function(err, sess)
+        if err then return end
+        subscribe_to_thread(sess, cwd, file, row)
+        sess.rpc:request("session/prompt", {
+          sessionId = sess.session_id, prompt = {{type="text", text=text}},
+        }, function() end)
+      end)
+    end,
+  })
 end
 
 function M.toggle_resolve()
@@ -335,13 +463,16 @@ function M.get_threads(cwd)
   return result
 end
 
-function M.delete_thread()
-  local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+function M.delete_thread(file, row)
   local cwd = _cur.cwd or vim.fn.getcwd()
-  if (_threads[cwd] or {})[_cur.sel_file] then
-    _threads[cwd][_cur.sel_file][row] = nil
+  file = file or _cur.sel_file
+  row = row or (vim.api.nvim_win_is_valid(0) and vim.api.nvim_win_get_cursor(0)[1] - 1) or -1
+  if (_threads[cwd] or {})[file] then
+    _threads[cwd][file][row] = nil
+    save_threads(cwd)
   end
-  redraw_thread(row)
+  if file == _cur.sel_file then redraw_thread(row) end
+  require("acp.workbench").render()
 end
 
 function M.send()
@@ -397,14 +528,14 @@ function M._install_main_keymaps(buf)
     local meta = _cur.buf_line_meta[row]
     
     if ((_threads[cwd] or {})[file] or {})[row] then
-      M.reply_at(row)
+      M.open_thread_view(row)
     elseif meta and meta.real_line then
       local path = (cwd .. "/" .. file):gsub("//+", "/")
       require("acp.workbench").close()
       vim.cmd("edit " .. vim.fn.fnameescape(path))
       vim.api.nvim_win_set_cursor(0, { meta.real_line, 0 })
     end
-  end, "Open thread or jump to file")
+  end, "Open thread worklog or jump to file")
 
   km("a",  M.add_comment,     "New thread")
   vim.keymap.set("v", "a", function()

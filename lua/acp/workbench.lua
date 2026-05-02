@@ -5,6 +5,38 @@ local _log_path    = nil
 local _context     = {}
 local _folds       = {}
 local _sb_line_meta = {}
+local _title_cache  = {}
+
+local function async(f)
+  local co = coroutine.create(f)
+  local function resume(...)
+    local ok, res = coroutine.resume(co, ...)
+    if not ok then error(debug.traceback(co, res)) end
+    if coroutine.status(co) ~= "dead" and type(res) == "function" then
+      res(resume)
+    end
+  end
+  resume()
+end
+
+local function await(f)
+  return coroutine.yield(f)
+end
+
+local function exec_async(cmd)
+  return await(function(resume)
+    vim.fn.jobstart(cmd, {
+      stdout_buffered = true,
+      on_stdout = function(_, data)
+        local s = table.concat(data, "\n"):gsub("%s+$", "")
+        resume(s)
+      end,
+      on_exit = function(_, code)
+        if code ~= 0 then resume(nil) end
+      end
+    })
+  end)
+end
 
 local function pick(items, labels, prompt, on_choice)
   local ok, snacks = pcall(require, "snacks")
@@ -300,6 +332,7 @@ local function setup_hl()
   hl("AcpPipePend",        { link = "DiagnosticWarn",  default = true })
   hl("AcpPipeRunning",     { link = "DiagnosticInfo",  default = true })
   hl("AcpWinbarText",      { link = "WinBar",          default = true })
+  hl("AcpHelpKey",         { link = "Special",         default = true })
   vim.fn.sign_define("AcpThreadOpen",     { text = "▍ ", texthl = "AcpThreadOpen"    })
   vim.fn.sign_define("AcpThreadResolved", { text = "▍ ", texthl = "AcpThreadResolved"})
   vim.fn.sign_define("AcpAgentSign",      { text = "● ", texthl = "AcpAgentOk"       })
@@ -388,7 +421,16 @@ function M._open_panels()
       local closed_win = tonumber(ev.match)
       local other_win = (closed_win == _sb_win) and _main_win or _sb_win
       if other_win and vim.api.nvim_win_is_valid(other_win) then
-        pcall(vim.api.nvim_win_close, other_win, true)
+        local wins = vim.api.nvim_tabpage_list_wins(0)
+        local normal_wins = 0
+        for _, w in ipairs(wins) do
+          if vim.api.nvim_win_get_config(w).relative == "" then
+            normal_wins = normal_wins + 1
+          end
+        end
+        if normal_wins > 1 then
+          pcall(vim.api.nvim_win_close, other_win, true)
+        end
       end
       if closed_win == _sb_win then _sb_win = nil else _main_win = nil end
     end,
@@ -411,21 +453,23 @@ function M._open_panels()
 end
 
 function M.render()
-  _view          = "index"
-  local cwd      = vim.fn.getcwd()
-  local sb_buf   = get_or_create_sb_buf()
-  M._install_keymaps(sb_buf)
-  local agents   = require("acp.session").active()
-  local pending  = require("acp.mailbox").pending_count()
-  local work_files  = M.list(cwd)
-  local diff_files  = require("acp.diff").list_files(cwd)
-  local ls, hls  = {}, {}
-  _sb_line_meta  = {}
+  async(function()
+    _view          = "index"
+    local cwd      = vim.fn.getcwd()
+    local sb_buf   = get_or_create_sb_buf()
+    M._install_keymaps(sb_buf)
+    local agents   = require("acp.session").active()
+    local pending  = require("acp.mailbox").pending_count()
+    local work_files  = M.list(cwd)
+    local diff_files  = require("acp.diff").list_files(cwd)
+    local ls, hls  = {}, {}
+    _sb_line_meta  = {}
 
-  local function add(s, hl, meta)
+  local function add(s, hl, meta, virt)
     local row = #ls
     table.insert(ls, s or "")
-    if hl   then table.insert(hls, { row, hl }) end
+    if hl   then table.insert(hls, { row = row, hl = hl, virt = virt }) end
+    if not hl and virt then table.insert(hls, { row = row, virt = virt }) end
     if meta then _sb_line_meta[row] = meta end
   end
 
@@ -436,20 +480,23 @@ function M.render()
         { kind = "section", key = key })
     if is_open then
       for _, item in ipairs(items) do
-        add(item[1], item[2], item[3])
+        add(item[1], item[2], item[3], item[4])
       end
     end
     add("")
   end
 
   -- Header (magit-style: project + branch)
-  local branch = vim.trim(vim.fn.system(
-    "git -C " .. vim.fn.shellescape(cwd) .. " branch --show-current 2>/dev/null"))
+  local branch = exec_async("git -C " .. vim.fn.shellescape(cwd) .. " branch --show-current") or ""
   
   if branch ~= "" then
     add("Head: " .. branch, "AcpBranch")
   end
-  add("Path: " .. vim.fn.fnamemodify(cwd, ":~"), "AcpHeader")
+  add("Hint: ", "AcpFooter", nil, {
+    { "?", "AcpHelpKey" }, { " help ", "AcpFooter" },
+    { "n", "AcpHelpKey" }, { " new ", "AcpFooter" },
+    { "p", "AcpHelpKey" }, { " pipeline", "AcpFooter" },
+  })
   add("")
 
   -- Pending notice (not a section — always visible)
@@ -483,8 +530,8 @@ function M.render()
 
   -- Worktrees
   do
-    local wt_json = vim.fn.system("wt list --format=json")
-    if vim.v.shell_error == 0 then
+    local wt_json = exec_async("wt list --format=json")
+    if wt_json then
       local ok, wt_data = pcall(vim.json.decode, wt_json)
       if ok and type(wt_data) == "table" then
         local items = {}
@@ -493,7 +540,13 @@ function M.render()
             local prefix = wt.is_current and "* " or "  "
             local name = wt.branch or "(detached)"
             local hl = wt.is_current and "AcpBranch" or "Comment"
-            table.insert(items, { prefix .. name .. "  " .. wt.path:gsub("^" .. vim.env.HOME, "~"), hl, { kind = "worktree", path = wt.path } })
+            local path_short = wt.path:gsub("^" .. vim.env.HOME, "~")
+            table.insert(items, {
+              prefix .. name,
+              hl,
+              { kind = "worktree", path = wt.path },
+              { { "  " .. path_short, "Comment" } }
+            })
           end
         end
         if #items > 0 then
@@ -521,7 +574,13 @@ function M.render()
     for _, r in ipairs(runs) do
       local icon = (r.status == "in_progress" and "⟳ ") or (r.status == "queued" and "· ") or (r.conclusion == "success" and "✓ ") or (r.conclusion == "failure" and "✗ ") or "· "
       local hl = (r.status == "in_progress" and "AcpPipeRunning") or (r.status == "queued" and "AcpPipePend") or (r.conclusion == "success" and "AcpPipeOk") or (r.conclusion == "failure" and "AcpPipeFail") or "Comment"
-      table.insert(items, { icon .. (r.displayTitle or "?"):sub(1,30), hl, { kind = "pipeline", id = r.databaseId } })
+      local virt = r.conclusion and { { "  " .. r.conclusion, hl } } or nil
+      table.insert(items, {
+        icon .. (r.displayTitle or "?"):sub(1,30),
+        hl,
+        { kind = "pipeline", id = r.databaseId },
+        virt
+      })
     end
     sect("pipelines", "Pipelines", items)
   end
@@ -550,17 +609,35 @@ function M.render()
       table.insert(items, { status .. " " .. name, hl, { kind = "work", path = f } })
     end
     for _, entry in ipairs(require("acp.diff").get_threads(cwd)) do
-      local t      = entry.thread
-      local status = t.resolved and "✔ " or "💬 "
-      local hl     = t.resolved and "AcpWorkDone" or "AcpThreadOpen"
-      local fname  = vim.fn.fnamemodify(entry.file, ":t")
+      local t = entry.thread
+      if type(t) == "table" then
+        local status = t.resolved and "✔ " or "💬 "
+        local hl     = t.resolved and "AcpWorkDone" or "AcpThreadOpen"
+        local fname  = vim.fn.fnamemodify(entry.file, ":t")
+      
+      -- If it's a plan file, try to show the title
+      local display_name = fname
+      if entry.file:match("%.nowork/") then
+        if not _title_cache[entry.file] then
+          local content = M.load_file(entry.file)
+          if content then
+            local first = vim.split(content, "\n")[1] or ""
+            _title_cache[entry.file] = first:gsub("^#+%s*", ""):sub(1, 20)
+          end
+        end
+        display_name = _title_cache[entry.file] or fname
+      end
+
       local prompt = t.prompt:sub(1, 28) .. (t.prompt:len() > 28 and "…" or "")
-      local label  = fname .. (entry.row >= 0 and (":" .. entry.row) or " (chat)") .. "  " .. prompt
+      local loc    = entry.row >= 0 and (":" .. (entry.row + 1)) or " (chat)"
+      local label  = display_name .. loc .. "  " .. prompt
+      
       table.insert(items, {
         status .. " " .. label,
         hl,
         { kind = "thread", file = entry.file, row = entry.row },
       })
+      end
     end
     sect("threads", "Active threads", items)
   end
@@ -571,56 +648,69 @@ function M.render()
   vim.api.nvim_buf_set_lines(sb_buf, 0, -1, false, ls)
   vim.bo[sb_buf].modifiable = false
   vim.api.nvim_buf_clear_namespace(sb_buf, NS, 0, -1)
-  for _, h in ipairs(hls) do
-    vim.api.nvim_buf_set_extmark(sb_buf, NS, h[1], 0, { line_hl_group = h[2] })
-  end
+    for _, h in ipairs(hls) do
+      local opts = {}
+      if h.hl   then opts.line_hl_group = h.hl end
+      if h.virt then opts.virt_text = h.virt; opts.virt_text_pos = "right_align" end
+      vim.api.nvim_buf_set_extmark(sb_buf, NS, h.row, 0, opts)
+    end
+  end)
 end
 
 function M.show_help()
-  local lines = {
-    "  ACP  key bindings",
-    "",
-    "  Sidebar",
-    "  TAB    fold / unfold section",
-    "  <CR>   run work item / open diff",
-    "  n      new work item",
-    "  o      edit work item file",
-    "  L      show work item log",
-    "  p      pipeline view",
-    "  R      refresh",
-    "  q      close",
-    "",
-    "  Diff pane",
-    "  a      new comment thread",
-    "  r      reply to thread",
-    "  x      toggle resolve",
-    "  d      delete thread",
-    "  s      send diff to ACP",
-    "  ]c/[c  next / prev hunk",
+  local sections = {
+    {
+      title = "Sidebar",
+      keys = {
+        { "TAB", "fold/unfold" }, { "<CR>", "run/diff" }, { "n", "new item" }, { "o", "edit file" },
+        { "L", "show log" }, { "gL", "comm log" }, { "p", "pipeline" }, { "R", "refresh" }, { "q", "close" },
+      },
+    },
+    {
+      title = "Diff / Plan",
+      keys = {
+        { "a", "comment" }, { "r", "reply" }, { "x", "resolve" }, { "d", "delete" },
+        { "s", "send" }, { "]c", "next hunk" }, { "[c", "prev hunk" }, { "R", "refresh" },
+      },
+    },
   }
+
+  local lines, hls = {}, {}
+  local ns = vim.api.nvim_create_namespace("acp_help")
+
+  for _, s in ipairs(sections) do
+    table.insert(lines, " " .. s.title)
+    table.insert(hls, { #lines - 1, 0, -1, "AcpSectionHeader" })
+    local row_str = ""
+    for i, k in ipairs(s.keys) do
+      local k_str = string.format(" %-4s %-12s", k[1], k[2])
+      local start_col = #row_str
+      row_str = row_str .. k_str
+      table.insert(hls, { #lines, start_col + 1, start_col + 1 + #k[1], "AcpHelpKey" })
+      if i % 4 == 0 or i == #s.keys then
+        table.insert(lines, row_str)
+        row_str = ""
+      end
+    end
+    table.insert(lines, "")
+  end
+
   local hbuf = vim.api.nvim_create_buf(false, true)
-  vim.bo[hbuf].bufhidden = "wipe"
-  vim.bo[hbuf].filetype  = "acp"
   vim.api.nvim_buf_set_lines(hbuf, 0, -1, false, lines)
-  vim.bo[hbuf].modifiable = false
   local h = #lines
   local hwin = vim.api.nvim_open_win(hbuf, true, {
-    relative  = "editor",
-    width     = 42,
-    height    = h,
-    row       = math.floor((vim.o.lines - h) / 2),
-    col       = math.floor((vim.o.columns - 42) / 2),
-    style     = "minimal",
-    border    = "rounded",
-    title     = " help ",
-    title_pos = "center",
-    noautocmd = true,
+    relative = "editor", width = vim.o.columns, height = h,
+    row = vim.o.lines - h - 2, col = 0, style = "minimal", border = "single",
   })
-  vim.wo[hwin].cursorline = false
+
+  for _, hl in ipairs(hls) do
+    vim.api.nvim_buf_add_highlight(hbuf, ns, hl[4], hl[1], hl[2], hl[3])
+  end
+
+  vim.bo[hbuf].modifiable = false
   local function close() pcall(vim.api.nvim_win_close, hwin, true) end
-  for _, k in ipairs({ "q", "<Esc>", "g?", "?", "<CR>" }) do
-    vim.keymap.set("n", k, close,
-      { buffer = hbuf, nowait = true, noremap = true, silent = true })
+  for _, k in ipairs({ "q", "?", "g?", "<Esc>", "<CR>" }) do
+    vim.keymap.set("n", k, close, { buffer = hbuf, nowait = true })
   end
 end
 
@@ -656,10 +746,19 @@ function M._install_keymaps(buf)
         function(t) set_winbar(_main_win, t) end)
       vim.api.nvim_set_current_win(_main_win)
     elseif meta.kind == "thread" then
-      require("acp.diff").show_file(meta.file, _main_win, _main_buf,
-        function(t) set_winbar(_main_win, t) end)
-      vim.api.nvim_set_current_win(_main_win)
-      vim.api.nvim_win_set_cursor(_main_win, { meta.row + 1, 0 })
+      if meta.file:match("%.nowork/") then
+        vim.api.nvim_set_current_win(_main_win)
+        vim.cmd("edit " .. vim.fn.fnameescape(meta.file))
+        require("acp.diff").attach(vim.api.nvim_get_current_buf(), meta.file)
+      else
+        require("acp.diff").show_file(meta.file, _main_win, _main_buf,
+          function(t) set_winbar(_main_win, t) end)
+        vim.api.nvim_set_current_win(_main_win)
+      end
+      if meta.row >= 0 then
+        vim.api.nvim_win_set_cursor(_main_win, { meta.row + 1, 0 })
+      end
+      require("acp.diff").open_thread_view(meta.row)
     elseif meta.kind == "worktree" then
       if meta.path ~= vim.fn.getcwd() then
         vim.cmd("cd " .. vim.fn.fnameescape(meta.path))
@@ -693,9 +792,18 @@ function M._install_keymaps(buf)
     if meta and meta.kind == "work" then M.show_log(meta.path) end
   end, "Show log")
 
+  km("gL", M.show_comm_log, "Comm log")
+
   km("n", function()
     M.set(vim.fn.getcwd())
   end, "New work item")
+
+  km("d", function()
+    local meta = meta_at_cursor()
+    if meta and meta.kind == "thread" then
+      require("acp.diff").delete_thread(meta.file, meta.row)
+    end
+  end, "Archive thread")
 
   km("p", function()
     require("acp.pipeline").open(vim.fn.getcwd(), _main_win, _main_buf,
@@ -734,9 +842,10 @@ function M._install_keymaps(buf)
 end
 
 function M.open()
+  local cwd = vim.fn.getcwd()
+  require("acp.diff").load_threads(cwd)
   M._open_panels()
   M.render()
-  local cwd = vim.fn.getcwd()
   local df  = require("acp.diff").list_files(cwd)
   if #df > 0 then
     require("acp.diff").show_file(df[1].path, _main_win, _main_buf,
@@ -745,6 +854,20 @@ function M.open()
   if _sb_win and vim.api.nvim_win_is_valid(_sb_win) then
     vim.api.nvim_set_current_win(_sb_win)
   end
+end
+
+function M.show_comm_log()
+  local path = vim.fn.stdpath("cache") .. "/acp.log"
+  local lines = vim.fn.systemlist("tail -n 500 " .. vim.fn.shellescape(path))
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].filetype = "json"
+  vim.bo[buf].readonly = true
+  vim.bo[buf].buftype = "nofile"
+  vim.cmd("botright vsplit")
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_cursor(0, { #lines, 0 })
+  set_winbar(vim.api.nvim_get_current_win(), "comm log (last 500)")
 end
 
 function M.show_log(work_path)
