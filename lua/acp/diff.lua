@@ -267,7 +267,12 @@ end
 
 subscribe_to_thread = function(sess, cwd, file, row)
   local t = ((_threads[cwd] or {})[file] or {})[row]
-  if not t or t._unsub then t._unsub() end
+  if not t and type(row) == "number" then
+    -- Try string key (JSON keys are always strings)
+    t = ((_threads[cwd] or {})[file] or {})[tostring(row)]
+  end
+  if type(t) ~= "table" then return end
+  if t._unsub then t._unsub() end
   t._subscribed = true
 
   t._unsub = sess.rpc:subscribe(sess.session_id, function(notif)
@@ -391,7 +396,8 @@ function M.render_thread_view(buf, t)
     if hl then table.insert(hls, { #lines - 1, hl }) end
   end
 
-  add("Thread: " .. t.prompt, "AcpSectionHeader")
+  local model = require("acp.agents").current_model_label(_cur.cwd)
+  add("Thread: " .. (t.prompt or "Untitled") .. "  [" .. model .. "]", "AcpSectionHeader")
   add("")
 
   for _, msg in ipairs(t.messages) do
@@ -420,7 +426,10 @@ function M.open_thread_view(row)
   local cwd  = _cur.cwd or vim.fn.getcwd()
   local file = _cur.sel_file
   local t    = ((_threads[cwd] or {})[file] or {})[row]
-  if not t then return end
+  if (not t or type(t) == "userdata") and type(row) == "number" then
+    t = ((_threads[cwd] or {})[file] or {})[tostring(row)]
+  end
+  if type(t) ~= "table" then return end
 
   local bufname = string.format("acp-thread-%s-%s", file, row)
   local buf = nil
@@ -576,7 +585,16 @@ function M._install_main_keymaps(buf)
   km("r",  function() M.reply_at(vim.api.nvim_win_get_cursor(0)[1] - 1) end, "Reply")
   km("x",  M.toggle_resolve,  "Toggle resolve")
   km("d",  M.delete_thread,   "Delete thread")
+  km("gL", function()
+    if _cur.sel_file and _cur.sel_file:match("%.nowork/") then
+      require("acp.workbench").show_log(_cur.sel_file)
+    end
+  end, "Show plan worklog")
+  km("gt", function() M.open_thread_view(-1) end, "Open global thread")
   km("s",  M.send,            "Send diff to ACP")
+  km("n",  function() require("acp.workbench").set(_cur.cwd) end, "New work item")
+  km("m", function() require("acp.workbench").pick_mode() end, "Pick mode")
+  km("M", function() require("acp").pick_model() end,         "Pick model")
   km("?",  function() require("acp.workbench").show_help() end, "Help")
   km("g?", function() require("acp.workbench").show_help() end, "Help")
   km("R",  function()

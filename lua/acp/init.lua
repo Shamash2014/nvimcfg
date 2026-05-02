@@ -16,27 +16,14 @@ function M.setup(opts)
       vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.") .. ":" .. s[1] .. "-" .. e[1]
     )
   end
-end
 
--- Returns "provider/model-name" from live session configOptions, or just "provider"
-local function current_label(cwd)
-  local provider = require("acp.agents").provider_label(cwd)
-  local opts     = require("acp.session").get_config_options(cwd)
-  for _, opt in ipairs(opts) do
-    if opt.category == "model" and opt.currentValue then
-      for _, o in ipairs(opt.options or {}) do
-        if o.value == opt.currentValue then
-          return provider .. "/" .. (o.name or opt.currentValue)
-        end
-      end
-      return provider .. "/" .. opt.currentValue
-    end
-  end
-  return provider
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    callback = function() require("acp.session").close_all() end,
+  })
 end
 
 local function acp_prompt(cwd)
-  return "[" .. current_label(cwd) .. "] ACP: "
+  return "[" .. require("acp.agents").current_model_label(cwd) .. "] ACP: "
 end
 
 local function make_prompt(text)

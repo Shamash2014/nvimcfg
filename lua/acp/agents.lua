@@ -85,6 +85,24 @@ function M.provider_label(cwd)
   return p.display
 end
 
+function M.current_model_label(cwd)
+  local provider = M.provider_label(cwd)
+  local ok, session = pcall(require, "acp.session")
+  if not ok then return provider end
+  local opts = session.get_config_options(cwd)
+  for _, opt in ipairs(opts) do
+    if opt.category == "model" and opt.currentValue then
+      for _, o in ipairs(opt.options or {}) do
+        if o.value == opt.currentValue then
+          return provider .. "/" .. (o.name or opt.currentValue)
+        end
+      end
+      return provider .. "/" .. opt.currentValue
+    end
+  end
+  return provider
+end
+
 function M.pick(cwd, callback)
   local avail = M.available()
   if #avail == 0 then

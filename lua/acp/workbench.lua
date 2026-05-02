@@ -2,7 +2,7 @@ local M = {}
 
 local _view        = "index"
 local _log_path    = nil
-local _context     = {}
+local _contexts     = {} -- [cwd] -> context_items[]
 local _folds       = {}
 local _sb_line_meta = {}
 local _title_cache  = {}
@@ -213,8 +213,7 @@ function M.check_left(cwd)
         .. "\n\nList what is still left as bullet points." } },
     }, function(_, res)
       if res then
-        local items = {}
-        for _, l in ipairs(vim.split(result, "\n", { plain = true })) do
+        for _, l in ipairs(vim.split(res.text or "", "\n", { plain = true })) do
           if vim.trim(l) ~= "" then table.insert(items, { text = l, bufnr = 0, lnum = 0 }) end
         end
         vim.fn.setqflist(items, "r", { title = "ACP: What's left?" })
@@ -226,13 +225,17 @@ end
 
 -- ── Push context ──────────────────────────────────────────────
 
-function M.push(label, content)
-  table.insert(_context, { type = "text", text = "--- " .. label .. " ---\n\n" .. content, _label = label })
-  vim.notify("Pinned: " .. label, vim.log.levels.INFO, { title = "acp" })
+function M.push(label, content, cwd)
+  cwd = cwd or _cur_cwd or vim.fn.getcwd()
+  _contexts[cwd] = _contexts[cwd] or {}
+  table.insert(_contexts[cwd], { type = "text", text = label .. "\n\n" .. content, _label = label })
+  vim.notify("Pinned context: " .. label, vim.log.levels.INFO, { title = "acp" })
   if _view == "index" then M.render() end
 end
 
 function M.push_image(path)
+  local cwd = _cur_cwd or vim.fn.getcwd()
+  _contexts[cwd] = _contexts[cwd] or {}
   local f = io.open(path, "rb")
   if not f then
     vim.notify("Cannot read: " .. path, vim.log.levels.WARN, { title = "acp" }); return
@@ -241,31 +244,34 @@ function M.push_image(path)
   local b64  = vim.base64.encode(raw)
   local ext  = (path:match("%.(%w+)$") or "png"):lower()
   local mime = ({ png="image/png", jpg="image/jpeg", jpeg="image/jpeg", gif="image/gif", webp="image/webp" })
-  table.insert(_context, { type = "image", mediaType = mime[ext] or "image/png", data = b64,
-                            _label = vim.fn.fnamemodify(path, ":t") })
+  table.insert(_contexts[cwd], { type = "image", mediaType = mime[ext] or "image/png", data = b64,
+                             _label = vim.fn.fnamemodify(path, ":t") })
   vim.notify("Pinned image: " .. vim.fn.fnamemodify(path, ":t"), vim.log.levels.INFO, { title = "acp" })
   if _view == "index" then M.render() end
 end
 
-function M.drain_context()
+function M.drain_context(cwd)
+  cwd = cwd or _cur_cwd or vim.fn.getcwd()
   local items = {}
-  for _, c in ipairs(_context) do
+  local context = _contexts[cwd] or {}
+  for _, c in ipairs(context) do
     if c.type == "image" then
       table.insert(items, { type = "image", mediaType = c.mediaType, data = c.data })
     else
       table.insert(items, { type = "text", text = c.text })
     end
   end
-  _context = {}
+  _contexts[cwd] = {}
   return items
 end
 
 function M.push_visual()
+  local cwd = vim.fn.getcwd()
   vim.schedule(function()
     local l1 = vim.fn.line("'<"); local l2 = vim.fn.line("'>")
     local lines = vim.api.nvim_buf_get_lines(0, l1 - 1, l2, false)
     M.push(vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.") .. ":" .. l1 .. "-" .. l2,
-           table.concat(lines, "\n"))
+           table.concat(lines, "\n"), cwd)
   end)
 end
 
@@ -287,6 +293,46 @@ function M.push_diagnostics()
   local ls = {}
   for _, d in ipairs(diags) do table.insert(ls, name .. ":" .. (d.lnum + 1) .. ": " .. d.message) end
   M.push("diagnostics: " .. name, table.concat(ls, "\n"))
+end
+
+function M.pick_to_pin()
+  local ok, snacks = pcall(require, "snacks")
+  if not ok or not snacks.picker then
+    vim.notify("Snacks picker not available", vim.log.levels.ERROR); return
+  end
+  snacks.picker.files({
+    prompt = "Pin multiple files:",
+    confirm = function(picker, item)
+      local items = picker:selected()
+      if #items == 0 then items = { item } end
+      for _, it in ipairs(items) do
+        local path = it.file or it.path or it[1]
+        local f = io.open(path, "r")
+        if f then
+          local content = f:read("*a")
+          f:close()
+          M.push("file: " .. vim.fn.fnamemodify(path, ":t"), content)
+        end
+      end
+      picker:close()
+    end
+  })
+end
+
+function M.push_open_buffers()
+  local bufs = vim.api.nvim_list_bufs()
+  local count = 0
+  for _, b in ipairs(bufs) do
+    if vim.api.nvim_buf_is_loaded(b) and vim.bo[b].buftype == "" then
+      local name = vim.api.nvim_buf_get_name(b)
+      if name ~= "" then
+        local lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
+        M.push("file: " .. vim.fn.fnamemodify(name, ":t"), table.concat(lines, "\n"))
+        count = count + 1
+      end
+    end
+  end
+  vim.notify("Pinned " .. count .. " open buffers", vim.log.levels.INFO, { title = "acp" })
 end
 
 -- ── Display layer (codereview.nvim style) ────────────────────
@@ -521,7 +567,8 @@ function M.render()
   -- Context (always visible)
   do
     local items = {}
-    for _, c in ipairs(_context) do
+    local context = _contexts[cwd] or {}
+    for _, c in ipairs(context) do
       local kind = c.type == "image" and "🖼 " or "📝 "
       table.insert(items, { kind .. " " .. (c._label or "context"), "AcpContextItem" })
     end
@@ -567,16 +614,6 @@ function M.render()
     end
   end
 
-  -- Agents (only when active)
-  if #agents > 0 then
-    local items = {}
-    for _, a in ipairs(agents) do
-      local status = a.state == "ready" and "✓ " or "⟳ "
-      local ahl    = a.state == "ready" and "AcpAgentOk" or "AcpAgentBusy"
-      table.insert(items, { status .. " " .. vim.fn.fnamemodify(a.cwd, ":~"), ahl })
-    end
-    sect("agents", "Active Agents", items)
-  end
 
   -- Pipelines
   do
@@ -639,9 +676,10 @@ function M.render()
         display_name = _title_cache[entry.file] or fname
       end
 
-      local prompt = t.prompt:sub(1, 28) .. (t.prompt:len() > 28 and "…" or "")
+      local model  = require("acp.agents").current_model_label(cwd)
+      local prompt = t.prompt:sub(1, 20) .. (t.prompt:len() > 20 and "…" or "")
       local loc    = entry.row >= 0 and (":" .. (entry.row + 1)) or " (chat)"
-      local label  = display_name .. loc .. "  " .. prompt
+      local label  = display_name .. loc .. " [" .. model .. "] " .. prompt
       
       table.insert(items, {
         status .. " " .. label,
@@ -681,7 +719,9 @@ function M.show_help()
       title = "Diff / Plan",
       keys = {
         { "a", "comment" }, { "r", "reply" }, { "x", "resolve" }, { "d", "delete" },
-        { "s", "send" }, { "]c", "next hunk" }, { "[c", "prev hunk" }, { "R", "refresh" },
+        { "gL", "worklog" }, { "gt", "global chat" }, { "s", "send" }, { "n", "new work" },
+        { "m", "mode" }, { "M", "model" }, { "]c", "next hunk" }, { "[c", "prev hunk" },
+        { "R", "refresh" },
       },
     },
   }
@@ -725,6 +765,65 @@ function M.show_help()
   end
 end
 
+function M.pick_project()
+  local sessions = require("acp.session").active()
+  local items = {}
+  local seen = {}
+
+  for _, s in ipairs(sessions) do
+    if not seen[s.cwd] then
+      seen[s.cwd] = true
+      table.insert(items, {
+        text = "📁 " .. vim.fn.fnamemodify(s.cwd, ":t") .. " (" .. vim.fn.fnamemodify(s.cwd, ":~") .. ")",
+        cwd  = s.cwd,
+        kind = "project"
+      })
+      
+      -- Add threads under this project
+      local threads = require("acp.diff").get_threads(s.cwd)
+      for _, t in ipairs(threads) do
+        table.insert(items, {
+          text = "  thread: " .. t.thread.prompt:sub(1, 50),
+          cwd  = s.cwd,
+          file = t.file,
+          row  = t.row,
+          kind = "thread"
+        })
+      end
+    end
+  end
+
+  if #items == 0 then
+    vim.notify("No active projects or threads", vim.log.levels.WARN); return
+  end
+
+  local ok, snacks = pcall(require, "snacks")
+  if ok and snacks.picker then
+    snacks.picker.pick({
+      source = "acp_workbench",
+      items  = items,
+      layout = "select",
+      format = "text",
+      confirm = function(picker, item)
+        picker:close()
+        M.set(item.cwd)
+        if item.kind == "thread" then
+          M.render()
+          require("acp.diff").show_file(item.file, _main_win, _main_buf, function(t) set_winbar(_main_win, t) end)
+          vim.schedule(function()
+            if _main_win and vim.api.nvim_win_is_valid(_main_win) then
+               vim.api.nvim_win_set_cursor(_main_win, { item.row + 1, 0 })
+               require("acp.diff").open_thread_view(item.row)
+            end
+          end)
+        else
+          M.render()
+        end
+      end
+    })
+  end
+end
+
 function M.close()
   for _, win in ipairs({ _sb_win, _main_win }) do
     if win and vim.api.nvim_win_is_valid(win) then
@@ -738,11 +837,16 @@ end
 function M.pick_mode(key)
   local agents = require("acp.session").active()
   local s
-  for _, a in ipairs(agents) do
-    if a.key == key then s = a; break end
+  if key then
+    for _, a in ipairs(agents) do if a.key == key then s = a; break end end
+  else
+    local cwd = _cur_cwd or vim.fn.getcwd()
+    for _, a in ipairs(agents) do if a.cwd == cwd then s = a; break end end
+    if not s then s = agents[1] end
   end
+
   if not s or not s.modes or #s.modes == 0 then
-    vim.notify("No modes available for this agent", vim.log.levels.WARN); return
+    vim.notify("No modes available", vim.log.levels.WARN); return
   end
 
   local labels = {}
@@ -750,9 +854,9 @@ function M.pick_mode(key)
     table.insert(labels, m.name .. (m.description and (" — " .. m.description) or ""))
   end
 
-  vim.ui.select(labels, { prompt = "Set mode for " .. key .. ":" }, function(_, idx)
+  vim.ui.select(labels, { prompt = "Set mode for " .. (s.key or "agent") .. ":" }, function(_, idx)
     if not idx then return end
-    require("acp.session").set_mode(key, s.modes[idx].modeId)
+    require("acp.session").set_mode(s.key, s.modes[idx].modeId)
     M.render()
   end)
 end
@@ -829,10 +933,14 @@ function M._install_keymaps(buf)
   
   km("m", function()
     local meta = meta_at_cursor()
-    if meta and meta.kind == "agent" then
-      M.pick_mode(meta.key)
-    end
-  end, "Set agent mode")
+    M.pick_mode(meta and meta.kind == "agent" and meta.key or nil)
+  end, "Set mode")
+
+  km("M", function()
+    local meta = meta_at_cursor()
+    local cwd = (meta and meta.kind == "agent") and meta.cwd or (_cur_cwd or vim.fn.getcwd())
+    require("acp").pick_model(cwd)
+  end, "Set model")
 
   km("n", function()
     M.set(vim.fn.getcwd())

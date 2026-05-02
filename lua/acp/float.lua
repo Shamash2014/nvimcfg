@@ -196,11 +196,11 @@ function M.open_composer_float(title, opts)
     vim.split(opts.prefill, "\n", { plain = true }) or { "" }
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, init_lines)
 
-  local max_h  = math.floor(vim.o.lines * 0.72)
-  local float_h = math.max(MIN_HEIGHT, math.min(max_h, math.max(#init_lines, 20)))
-  local float_w = math.min(vim.o.columns - 8, 120)
-  local row     = math.floor((vim.o.lines  - float_h) / 2)
-  local col     = math.floor((vim.o.columns - float_w) / 2)
+  local max_h   = 30
+  local float_h = 12
+  local float_w = vim.o.columns
+  local row     = vim.o.lines - float_h - 2
+  local col     = 0
 
   local handle = { buf = buf, win = nil, closed = false }
 
@@ -211,11 +211,9 @@ function M.open_composer_float(title, opts)
     row       = row,
     col       = col,
     style     = "minimal",
-    border    = M.border(),
+    border    = "single",
     title     = M.title(title),
-    title_pos = "center",
-    footer    = M.footer(),
-    footer_pos = "center",
+    title_pos = "left",
     noautocmd = true,
   })
 
@@ -245,9 +243,14 @@ function M.open_composer_float(title, opts)
         resize_timer = nil
         if handle.closed or not vim.api.nvim_buf_is_valid(buf) then return end
         local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-        local new_h = math.max(MIN_HEIGHT, math.min(max_h, #lines))
+        local target_h = math.max(MIN_HEIGHT, math.min(max_h, #lines))
         if vim.api.nvim_win_is_valid(handle.win) then
-          vim.api.nvim_win_set_height(handle.win, new_h)
+          local cur_h = vim.api.nvim_win_get_height(handle.win)
+          local new_h = math.max(cur_h, target_h)
+          if new_h ~= cur_h then
+            vim.api.nvim_win_set_height(handle.win, new_h)
+            vim.api.nvim_win_set_config(handle.win, { relative = "editor", row = vim.o.lines - new_h - 2, col = 0 })
+          end
         end
       end)
     end,

@@ -42,7 +42,18 @@ return {
           },
         },
         sources = {
-          default = { "lsp", "path", "snippets", "buffer" },
+          default = { "lsp", "path", "snippets", "buffer", "acp" },
+          providers = {
+            acp = {
+              name = "ACP",
+              module = "acp.blink",
+              score_offset = 100,
+              trigger_characters = { "/", "@" },
+              enabled = function()
+                return vim.bo.filetype == "markdown"
+              end,
+            },
+          },
         },
       })
     end,

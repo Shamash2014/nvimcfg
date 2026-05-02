@@ -157,6 +157,12 @@ function M.close(key)
   end
 end
 
+function M.close_all()
+  for key, _ in pairs(sessions) do
+    M.close(key)
+  end
+end
+
 function M.set_mode(key, mode_id)
   local s = sessions[key]
   if not s or s.state ~= "ready" then return end
