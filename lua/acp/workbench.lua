@@ -331,11 +331,15 @@ function M._open_panels()
   local main_buf = get_or_create_main_buf()
 
   for _, win in ipairs(vim.api.nvim_list_wins()) do
-    if vim.api.nvim_win_get_buf(win) == sb_buf then _sb_win = win; goto found_sb end
+    if vim.api.nvim_win_get_buf(win) == sb_buf then
+      _sb_win = win
+      vim.api.nvim_set_current_tabpage(vim.api.nvim_win_get_tabpage(win))
+      vim.api.nvim_set_current_win(win)
+      goto found_sb
+    end
   end
   do
-    local main_win_before = vim.api.nvim_get_current_win()
-    vim.cmd("topleft 30vsplit")
+    vim.cmd("tabnew")
     _sb_win = vim.api.nvim_get_current_win()
     vim.api.nvim_win_set_buf(_sb_win, sb_buf)
     vim.wo[_sb_win].number         = false
@@ -345,18 +349,22 @@ function M._open_panels()
     vim.wo[_sb_win].wrap           = false
     vim.wo[_sb_win].cursorline     = true
     M._install_keymaps(sb_buf)
-    vim.api.nvim_set_current_win(main_win_before)
   end
   ::found_sb::
 
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    if vim.api.nvim_win_get_buf(win) == main_buf then _main_win = win; return end
+  local current_tab = vim.api.nvim_get_current_tabpage()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(current_tab)) do
+    if vim.api.nvim_win_get_buf(win) == main_buf then
+      _main_win = win
+      return
+    end
   end
 
   vim.api.nvim_set_current_win(_sb_win)
-  vim.cmd("vsplit")
+  vim.cmd("botright vsplit")
   _main_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(_main_win, main_buf)
+  vim.api.nvim_win_set_width(_sb_win, 40)
   vim.wo[_main_win].number         = false
   vim.wo[_main_win].relativenumber = false
   vim.wo[_main_win].signcolumn     = "yes"
@@ -509,6 +517,54 @@ function M.render()
   end
 end
 
+function M.show_help()
+  local lines = {
+    "  ACP  key bindings",
+    "",
+    "  Sidebar",
+    "  TAB    fold / unfold section",
+    "  <CR>   run work item / open diff",
+    "  n      new work item",
+    "  o      edit work item file",
+    "  L      show work item log",
+    "  p      pipeline view",
+    "  R      refresh",
+    "  q      close",
+    "",
+    "  Diff pane",
+    "  a      new comment thread",
+    "  r      reply to thread",
+    "  x      toggle resolve",
+    "  d      delete thread",
+    "  s      send diff to ACP",
+    "  ]c/[c  next / prev hunk",
+  }
+  local hbuf = vim.api.nvim_create_buf(false, true)
+  vim.bo[hbuf].bufhidden = "wipe"
+  vim.bo[hbuf].filetype  = "acp"
+  vim.api.nvim_buf_set_lines(hbuf, 0, -1, false, lines)
+  vim.bo[hbuf].modifiable = false
+  local h = #lines
+  local hwin = vim.api.nvim_open_win(hbuf, true, {
+    relative  = "editor",
+    width     = 42,
+    height    = h,
+    row       = math.floor((vim.o.lines - h) / 2),
+    col       = math.floor((vim.o.columns - 42) / 2),
+    style     = "minimal",
+    border    = "rounded",
+    title     = " help ",
+    title_pos = "center",
+    noautocmd = true,
+  })
+  vim.wo[hwin].cursorline = false
+  local function close() pcall(vim.api.nvim_win_close, hwin, true) end
+  for _, k in ipairs({ "q", "<Esc>", "g?", "?", "<CR>" }) do
+    vim.keymap.set("n", k, close,
+      { buffer = hbuf, nowait = true, noremap = true, silent = true })
+  end
+end
+
 function M._install_keymaps(buf)
   local function km(lhs, fn, desc)
     vim.keymap.set("n", lhs, fn,
@@ -568,58 +624,17 @@ function M._install_keymaps(buf)
       end
     end
     if section_key then
-      _folds[section_key] = (_folds[section_key] == false) and nil or false
+      if _folds[section_key] == false then
+        _folds[section_key] = nil
+      else
+        _folds[section_key] = false
+      end
       M.render()
     end
   end, "Fold/unfold section")
 
-  km("g?", function()
-    local lines = {
-      "  ACP  key bindings",
-      "",
-      "  Sidebar",
-      "  TAB    fold / unfold section",
-      "  <CR>   run work item / open diff",
-      "  n      new work item",
-      "  o      edit work item file",
-      "  L      show work item log",
-      "  p      pipeline view",
-      "  R      refresh",
-      "  q      close",
-      "",
-      "  Diff pane",
-      "  a      new comment thread",
-      "  r      reply to thread",
-      "  x      toggle resolve",
-      "  d      delete thread",
-      "  s      send diff to ACP",
-      "  ]c/[c  next / prev hunk",
-    }
-    local hbuf = vim.api.nvim_create_buf(false, true)
-    vim.bo[hbuf].bufhidden = "wipe"
-    vim.bo[hbuf].filetype  = "acp"
-    vim.api.nvim_buf_set_lines(hbuf, 0, -1, false, lines)
-    vim.bo[hbuf].modifiable = false
-    local h = #lines
-    local hwin = vim.api.nvim_open_win(hbuf, true, {
-      relative  = "editor",
-      width     = 42,
-      height    = h,
-      row       = math.floor((vim.o.lines - h) / 2),
-      col       = math.floor((vim.o.columns - 42) / 2),
-      style     = "minimal",
-      border    = "rounded",
-      title     = " help ",
-      title_pos = "center",
-      noautocmd = true,
-    })
-    vim.wo[hwin].cursorline = false
-    local function close() pcall(vim.api.nvim_win_close, hwin, true) end
-    for _, k in ipairs({ "q", "<Esc>", "g?", "<CR>" }) do
-      vim.keymap.set("n", k, close,
-        { buffer = hbuf, nowait = true, noremap = true, silent = true })
-    end
-  end, "Help")
+  km("g?", M.show_help, "Help")
+  km("?", M.show_help, "Help")
 
   km("i", M.render, "Index")
   km("R", function()
@@ -673,6 +688,8 @@ function M.show_log(work_path)
   end
   km("i", M.render)
   km("R", function() M.show_log(_log_path) end)
+  km("?", M.show_help)
+  km("g?", M.show_help)
 end
 
 function M.on_event(work_path, line)

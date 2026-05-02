@@ -359,6 +359,8 @@ function M._install_main_keymaps(buf)
   km("x",  M.toggle_resolve,  "Toggle resolve")
   km("d",  M.delete_thread,   "Delete thread")
   km("s",  M.send,            "Send diff to ACP")
+  km("?",  function() require("acp.workbench").show_help() end, "Help")
+  km("g?", function() require("acp.workbench").show_help() end, "Help")
   km("R",  function()
     if _cur.sel_file then
       M.show_file(_cur.sel_file, _cur.main_win, _cur.main_buf, _cur.on_winbar)
