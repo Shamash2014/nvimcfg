@@ -12,6 +12,37 @@ local _uv = vim.uv or vim.loop
 local _registered_autocmd = false
 local unpack = table.unpack or unpack
 
+function M.setup_hl()
+  pcall(vim.cmd, "packadd neogit")
+  local function hl(name, spec) vim.api.nvim_set_hl(0, name, spec) end
+
+  hl("AcpDiffFile",        { link = "NeogitFilePath" })
+  hl("AcpDiffHunk",        { link = "NeogitHunkHeader" })
+  hl("AcpDiffAdd",         { link = "NeogitDiffAdd" })
+  hl("AcpDiffDelete",      { link = "NeogitDiffDelete" })
+
+  hl("AcpSectionHeader",   { link = "NeogitSectionHeader" })
+  hl("AcpThreadPrefix",    { link = "Comment" })
+  hl("AcpThreadAgent",     { link = "Function" })
+  hl("AcpThreadUser",      { link = "Identifier" })
+  hl("AcpThreadAction",    { link = "Statement" })
+  hl("AcpThreadResult",    { link = "String" })
+  hl("AcpThreadThought",   { link = "Comment" })
+  hl("AcpThreadOpen",      { link = "WarningMsg" })
+  hl("AcpWorkDone",        { link = "Comment" })
+
+  hl("AcpBranch",          { link = "Function" })
+  hl("AcpPipeOk",          { link = "DiagnosticOk" })
+  hl("AcpPipeFail",        { link = "DiagnosticError" })
+  hl("AcpPipeRunning",     { link = "DiagnosticInfo" })
+  hl("AcpPipePend",        { link = "Comment" })
+
+  hl("AcpWinbarText",      { link = "WinBar" })
+
+  vim.fn.sign_define("AcpThreadOpen",     { text = "▍ ", texthl = "AcpThreadOpen"     })
+  vim.fn.sign_define("AcpThreadResolved", { text = "▍ ", texthl = "AcpThreadResolved" })
+end
+
 local function set_winbar(win, title, tokens, model)
   if not win or not vim.api.nvim_win_is_valid(win) then return end
   local token_str = (tokens and ("  " .. tokens)) or ""
@@ -86,13 +117,16 @@ end
 
 local function get_thread_items(cwd)
   local workbench = require("acp.workbench")
+  local diff = require("acp.diff")
   local items = workbench.list(cwd)
   local result = {}
   for _, path in ipairs(items) do
     local name = vim.fn.fnamemodify(path, ":t")
+    local t = diff.get_thread(cwd, path, -1)
     table.insert(result, {
       _type = "thread",
       _path = path,
+      _active = diff.is_thread_active(t),
       display = name,
     })
   end
@@ -144,6 +178,7 @@ local function get_comment_items(cwd)
         _file = entry.file,
         _row = entry.row,
         _thread = entry.thread,
+        _active = diff.is_thread_active(entry.thread),
         display = entry.file .. ":" .. entry.row,
       })
     end
@@ -157,9 +192,16 @@ local function create_section(title, items)
 
   local rows = {}
   for _, item in ipairs(items) do
-    table.insert(rows, Ui.row({
-      Ui.text("  " .. item.display),
-    }, {
+    local children
+    if item._active then
+      children = {
+        Ui.text("● ", { highlight = "AcpThreadOpen" }),
+        Ui.text(item.display),
+      }
+    else
+      children = { Ui.text("  " .. item.display) }
+    end
+    table.insert(rows, Ui.row(children, {
       interactive = true,
       context = item,
     }))
@@ -286,6 +328,9 @@ function M.render(buf)
   table.insert(sections, Ui.col({ Ui.row({ Ui.text("") }) }))
 
   local thread_items = get_thread_items(cwd)
+  for _, c in ipairs(get_comment_items(cwd)) do
+    table.insert(thread_items, c)
+  end
   local thread_section = create_section("Threads", thread_items)
   if thread_section then table.insert(sections, thread_section) end
 
@@ -301,22 +346,21 @@ function M.render(buf)
   local pipeline_section = create_section("Pipelines", pipeline_items)
   if pipeline_section then table.insert(sections, pipeline_section) end
 
-  local comment_items = get_comment_items(cwd)
-  local comment_section = create_section("Comments", comment_items)
-  if comment_section then table.insert(sections, comment_section) end
-
   return sections
 end
 
 function M.open(opts)
   local cwd = get_cwd()
+  pcall(function() require("acp.diff").load_threads(cwd) end)
 
   if _buffer and _buffer:is_visible() then
     _buffer:focus()
+    _buffer_win = vim.api.nvim_get_current_win()
     return
   end
 
   pcall(vim.cmd, "packadd neogit")
+  M.setup_hl()
 
   local kind = opts and opts.kind or "tab"
 
@@ -333,6 +377,18 @@ function M.open(opts)
 
   _buffer_win = vim.api.nvim_get_current_win()
   set_winbar(_buffer_win, "ACP workbench", nil, nil)
+
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(_buffer_win), once = true,
+    callback = function()
+      if _diff_win and vim.api.nvim_win_is_valid(_diff_win) then
+        pcall(vim.api.nvim_win_close, _diff_win, true)
+      end
+      _buffer_win = nil
+      _diff_win   = nil
+      _diff_buf   = nil
+    end,
+  })
 
   local workbench_win = _buffer_win
   require("acp.diff").with_files(cwd, function(files)
@@ -372,14 +428,20 @@ function M.show_thread(file, row)
 
   local needle = string.format("acp-thread-%s-%s", file, row)
 
+  local function place(buf)
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_buf(w) == buf then
+        vim.api.nvim_set_current_win(w); return
+      end
+    end
+    vim.cmd("botright vsplit")
+    vim.api.nvim_set_current_buf(buf)
+    set_winbar(0, "thread", nil, nil)
+  end
+
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_get_name(b):find(needle, 1, true) then
-      for _, w in ipairs(vim.api.nvim_list_wins()) do
-        if vim.api.nvim_win_get_buf(w) == b then
-          vim.api.nvim_set_current_win(w); return
-        end
-      end
-      vim.cmd("botright vsplit"); vim.api.nvim_set_current_buf(b); return
+      place(b); return
     end
   end
 
@@ -391,8 +453,7 @@ function M.show_thread(file, row)
 
   diff.render_thread_view(buf, cwd, file, row)
 
-  vim.cmd("botright vsplit")
-  vim.api.nvim_set_current_buf(buf)
+  place(buf)
 
   local key  = diff.thread_session_key(cwd, file, row)
   local sess = require("acp.session").get(key)

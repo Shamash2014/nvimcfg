@@ -53,6 +53,16 @@ function M.title(text)
   return { { " " .. text .. " ", "AcpFloatTitle" } }
 end
 
+local function chipped_title(text, cwd)
+  local ok, agents = pcall(require, "acp.agents")
+  local chip = (ok and cwd) and agents.chip(cwd) or ""
+  if chip == "" then return M.title(text) end
+  return {
+    { " " .. text .. " ", "AcpFloatTitle" },
+    { chip .. " ",        "AcpWinbarText" },
+  }
+end
+
 function M.footer()
   return {
     { " ", "AcpFloatFooterText" },
@@ -60,6 +70,10 @@ function M.footer()
     { "/", "AcpFloatFooterText" },
     { "<C-s>", "AcpFloatFooterKey" },
     { " submit  ", "AcpFloatFooterText" },
+    { "<C-p>", "AcpFloatFooterKey" },
+    { " provider  ", "AcpFloatFooterText" },
+    { "<C-y>", "AcpFloatFooterKey" },
+    { " model  ", "AcpFloatFooterText" },
     { "q", "AcpFloatFooterKey" },
     { " cancel ", "AcpFloatFooterText" },
   }
@@ -128,6 +142,8 @@ function M.open_comment_float(title, opts)
     end,
   })
 
+  local cwd = opts.cwd or vim.fn.getcwd()
+
   handle.win = vim.api.nvim_open_win(buf, true, {
     relative    = "win",
     win         = opts.win_id,
@@ -138,12 +154,17 @@ function M.open_comment_float(title, opts)
     col         = 3,
     style       = "minimal",
     border      = M.border(),
-    title       = M.title(title),
+    title       = chipped_title(title, cwd),
     title_pos   = "center",
     footer      = M.footer(),
     footer_pos  = "center",
     noautocmd   = true,
   })
+
+  local function refresh_title()
+    if handle.closed or not vim.api.nvim_win_is_valid(handle.win) then return end
+    pcall(vim.api.nvim_win_set_config, handle.win, { title = chipped_title(title, cwd) })
+  end
 
   vim.wo[handle.win].winblend     = 0
   vim.wo[handle.win].winhighlight = "NormalFloat:Normal"
@@ -201,6 +222,12 @@ function M.open_comment_float(title, opts)
   km("<C-s>",     submit)
   km("<C-CR>",    submit)
   km("<C-Enter>", submit)
+  km("<C-p>", function()
+    require("acp.agents").choose_provider(cwd, function() vim.schedule(refresh_title) end)
+  end)
+  km("<C-y>", function()
+    require("acp").pick_model(cwd, function() vim.schedule(refresh_title) end)
+  end)
   km("q", function() handle.close() end)
 
   vim.cmd("startinsert")
@@ -228,18 +255,27 @@ function M.open_composer_float(title, opts)
 
   local handle = { buf = buf, win = nil, closed = false }
 
+  local cwd = opts.cwd or vim.fn.getcwd()
+
   handle.win = vim.api.nvim_open_win(buf, true, {
-    relative  = "editor",
-    width     = float_w,
-    height    = float_h,
-    row       = row,
-    col       = col,
-    style     = "minimal",
-    border    = "single",
-    title     = M.title(title),
-    title_pos = "left",
-    noautocmd = true,
+    relative   = "editor",
+    width      = float_w,
+    height     = float_h,
+    row        = row,
+    col        = col,
+    style      = "minimal",
+    border     = "single",
+    title      = chipped_title(title, cwd),
+    title_pos  = "left",
+    footer     = M.footer(),
+    footer_pos = "center",
+    noautocmd  = true,
   })
+
+  local function refresh_title()
+    if handle.closed or not vim.api.nvim_win_is_valid(handle.win) then return end
+    pcall(vim.api.nvim_win_set_config, handle.win, { title = chipped_title(title, cwd) })
+  end
 
   vim.wo[handle.win].winblend     = 0
   vim.wo[handle.win].winhighlight = "NormalFloat:Normal"
@@ -297,6 +333,12 @@ function M.open_composer_float(title, opts)
   km("<C-s>",     submit)
   km("<C-CR>",    submit)
   km("<C-Enter>", submit)
+  km("<C-p>", function()
+    require("acp.agents").choose_provider(cwd, function() vim.schedule(refresh_title) end)
+  end)
+  km("<C-y>", function()
+    require("acp").pick_model(cwd, function() vim.schedule(refresh_title) end)
+  end)
   km("q", function() handle.close() end)
 
   vim.api.nvim_win_set_cursor(handle.win, { 1, 2 })

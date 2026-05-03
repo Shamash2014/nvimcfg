@@ -361,8 +361,6 @@ map("n", "<leader>aq", function() require("acp.workbench").push_quickfix() end, 
 map("n", "<leader>ad", function() require("acp.workbench").push_diagnostics() end, { desc = "ACP pin diagnostics" })
 map("v", "<leader>ay", function() require("acp.workbench").push_visual() end, { desc = "ACP pin visual" })
 
-map("n", "<leader>aM", function() require("acp").pick_model() end,  { desc = "ACP pick model" })
-map("n", "<leader>ap", function() require("acp").pick_provider() end, { desc = "ACP pick provider" })
 map("n", "<S-Tab>",   function() require("acp").cycle_model() end, { desc = "ACP cycle model" })
 
 map("n", "ga",  function() vim.o.operatorfunc = "v:lua._acp_op"; return "g@" end,

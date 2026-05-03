@@ -109,52 +109,59 @@ function M.get_or_create(cwd_or_opts, callback)
         stub.available_commands = {}
         stub.set_state("ready")
 
-        -- Apply persisted model if available
-        local saved_model = require("acp.agents").get_model_for_cwd(cwd)
-        if saved_model then
-          local has_model_opt = false
-          for _, opt in ipairs(stub.config_options) do
-            if opt.id == "model" then has_model_opt = true; break end
-          end
-          if has_model_opt then
-            stub.rpc:request("session/set_config_option", {
-              sessionId = stub.session_id,
-              configId  = "model",
-              value     = saved_model,
-            }, function(set_err)
-              if not set_err then
-                local label = saved_model
-                for _, opt in ipairs(stub.config_options) do
-                  if opt.id == "model" then
-                    for _, o in ipairs(opt.options or {}) do
-                      if o.value == saved_model then label = o.name or saved_model; break end
-                    end
-                    break
-                  end
-                end
-                notify("Model set: " .. label, vim.log.levels.INFO)
-              end
-            end)
-          end
+        local function finalize()
+          stub.rpc:subscribe(stub.session_id, function(notif)
+            local u = (notif.params or {}).update or {}
+            if u.sessionUpdate == "config_option_update" and u.configOptions then
+              stub.config_options = u.configOptions
+            elseif u.sessionUpdate == "available_commands_update" and u.availableCommands then
+              stub.available_commands = u.availableCommands
+            elseif u.sessionUpdate == "modes_update" and u.modes then
+              stub.available_modes = u.modes
+            elseif u.sessionUpdate == "current_mode_update" and u.currentModeId then
+              stub.current_mode = u.currentModeId
+            end
+          end)
+          callback(nil, stub)
+          for _, cb in ipairs(stub.queue) do cb(nil, stub) end
+          stub.queue = {}
         end
 
-        -- Keep session state fresh from server-pushed notifications
-        stub.rpc:subscribe(stub.session_id, function(notif)
-          local u = (notif.params or {}).update or {}
-          if u.sessionUpdate == "config_option_update" and u.configOptions then
-            stub.config_options = u.configOptions
-          elseif u.sessionUpdate == "available_commands_update" and u.availableCommands then
-            stub.available_commands = u.availableCommands
-          elseif u.sessionUpdate == "modes_update" and u.modes then
-            stub.available_modes = u.modes
-          elseif u.sessionUpdate == "current_mode_update" and u.currentModeId then
-            stub.current_mode = u.currentModeId
-          end
-        end)
-
-        callback(nil, stub)
-        for _, cb in ipairs(stub.queue) do cb(nil, stub) end
-        stub.queue = {}
+        local saved_model = require("acp.agents").get_model_for_cwd(cwd)
+        local has_model_opt = false
+        for _, opt in ipairs(stub.config_options) do
+          if opt.id == "model" then has_model_opt = true; break end
+        end
+        if saved_model and has_model_opt then
+          stub.rpc:request("session/set_config_option", {
+            sessionId = stub.session_id,
+            configId  = "model",
+            value     = saved_model,
+          }, function(set_err, res)
+            if not set_err then
+              if res and type(res) == "table" and res.configOptions then
+                stub.config_options = res.configOptions
+              else
+                for _, opt in ipairs(stub.config_options) do
+                  if opt.id == "model" then opt.currentValue = saved_model; break end
+                end
+              end
+              local label = saved_model
+              for _, opt in ipairs(stub.config_options) do
+                if opt.id == "model" then
+                  for _, o in ipairs(opt.options or {}) do
+                    if o.value == saved_model then label = o.name or saved_model; break end
+                  end
+                  break
+                end
+              end
+              notify("Model set: " .. label, vim.log.levels.INFO)
+            end
+            finalize()
+          end)
+        else
+          finalize()
+        end
       end)
     end)
   end)
@@ -267,6 +274,25 @@ end
 function M.close_all()
   for key, _ in pairs(sessions) do
     M.close(key)
+  end
+end
+
+function M.close_for_cwd(cwd)
+  for key, s in pairs(sessions) do
+    if s.cwd == cwd then M.close(key) end
+  end
+end
+
+function M.cancel_turn(key)
+  local s = sessions[key]
+  if not s or not s.session_id then return end
+  pcall(function() require("acp.mailbox").cancel_for_session(s.session_id) end)
+  s.rpc:notify("session/cancel", { sessionId = s.session_id })
+end
+
+function M.cancel_for_cwd(cwd)
+  for key, s in pairs(sessions) do
+    if s.cwd == cwd then M.cancel_turn(key) end
   end
 end
 

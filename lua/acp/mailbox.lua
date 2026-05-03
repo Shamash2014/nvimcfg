@@ -48,6 +48,7 @@ function M.enqueue_permission(entry)
   table.insert(queue, entry)
   M.open_permission_float(entry)
   vim.notify("ACP permission request: " .. entry.tool_title, vim.log.levels.WARN, { title = "acp" })
+  pcall(vim.cmd, "redrawstatus")
 end
 
 function M.open_permission_float(e)
@@ -116,6 +117,7 @@ function M.cancel_for_session(session_id)
     end
   end
   M._open_or_refresh()
+  pcall(vim.cmd, "redrawstatus")
 end
 
 function M.respond(id, kind)
@@ -130,6 +132,7 @@ function M.respond(id, kind)
       e.state = kind:find("allow") and "approved" or "rejected"
       snacks_notify((e.state == "approved" and "✓" or "✗") .. " " .. e.tool_title)
       M._open_or_refresh()
+      pcall(vim.cmd, "redrawstatus")
       return
     end
   end

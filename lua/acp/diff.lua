@@ -271,7 +271,6 @@ local function redraw_thread(row)
   vim.fn.sign_unplace("acp_threads", { buffer = buf, id = row + 1 })
   local t = ((_threads[cwd] or {})[file] or {})[row]
   if type(t) ~= "table" then return end
-  vim.api.nvim_buf_set_extmark(buf, NS_THREAD, row, 0, { virt_lines = thread_virt(t) })
   local sign = t.resolved and "AcpThreadResolved" or "AcpThreadOpen"
   vim.fn.sign_place(row + 1, "acp_threads", sign, buf, { lnum = row + 1 })
 end
@@ -364,6 +363,7 @@ function M.attach(buf, file_path, cwd)
 end
 
 function M.show_file(file_path, main_win, main_buf, on_winbar)
+  pcall(function() require("acp.neogit_workbench").setup_hl() end)
   _cur.main_win      = main_win
   _cur.main_buf      = main_buf
   _cur.on_winbar     = (function(file, tokens)
@@ -473,6 +473,25 @@ local function render_thread_surfaces(cwd, file, row, t)
   end
 end
 
+local function normalize_tool_call(u)
+  if type(u) ~= "table" then return nil end
+  local tc = u.toolCall
+  if type(tc) == "table" then return tc end
+  if u.toolCallId or u.title or u.kind or u.status or u.rawInput or u.rawOutput then
+    return {
+      toolCallId = u.toolCallId,
+      title      = u.title,
+      kind       = u.kind,
+      status     = u.status,
+      content    = u.content,
+      locations  = u.locations,
+      rawInput   = u.rawInput,
+      rawOutput  = u.rawOutput,
+    }
+  end
+  return nil
+end
+
 local function content_block_text(c)
   if type(c) ~= "table" then return "" end
   local t = c.type or "text"
@@ -525,6 +544,8 @@ subscribe_to_thread = function(sess, cwd, file, row)
       end
       if not t._stream_started then
         t._stream_started = true
+        pcall(function() require("acp.neogit_workbench").refresh() end)
+        pcall(vim.cmd, "redrawstatus")
         pcall(function() require("acp.spinner").start(function(frame)
           if _cur.on_winbar and _cur.sel_file == file then
             local label = t._active_tool and (" " .. t._active_tool) or ""
@@ -554,37 +575,44 @@ subscribe_to_thread = function(sess, cwd, file, row)
         if t.messages[i].type == "plan" then table.remove(t.messages, i) end
       end
       table.insert(t.messages, { role="agent", type="plan", entries=u.entries })
-    elseif u.sessionUpdate == "tool_call" and u.toolCall then
-      table.insert(t.messages, { role="agent", type="tool_call", call=u.toolCall })
-      local tool_name = u.toolCall.name or "tool"
-      local args = u.toolCall.arguments and vim.json.encode(u.toolCall.arguments) or ""
-      if #args > 30 then args = args:sub(1, 30) .. "…" end
-      t._active_tool = tool_name .. (args ~= "" and (": " .. args) or "")
-    elseif u.sessionUpdate == "tool_call_update" and u.toolCall then
-      local id = u.toolCall.toolCallId
-      local found
-      if id then
-        for i = #t.messages, 1, -1 do
-          local m = t.messages[i]
-          if m.type == "tool_call" and m.call and m.call.toolCallId == id then
-            found = m; break
+    elseif u.sessionUpdate == "tool_call" then
+      local tc = normalize_tool_call(u)
+      if tc then
+        table.insert(t.messages, { role="agent", type="tool_call", call=tc })
+        local label = tc.title or tc.kind or "tool"
+        local raw   = tc.rawInput
+        local args  = raw and (type(raw) == "string" and raw or vim.json.encode(raw)) or ""
+        if #args > 30 then args = args:sub(1, 30) .. "…" end
+        t._active_tool = label .. (args ~= "" and (": " .. args) or "")
+      end
+    elseif u.sessionUpdate == "tool_call_update" then
+      local tc = normalize_tool_call(u)
+      if tc then
+        local id = tc.toolCallId
+        local found
+        if id then
+          for i = #t.messages, 1, -1 do
+            local m = t.messages[i]
+            if m.type == "tool_call" and m.call and m.call.toolCallId == id then
+              found = m; break
+            end
           end
         end
-      end
-      if found then
-        for k, v in pairs(u.toolCall) do
-          if k == "content" and type(v) == "table" then
-            found.call.content = found.call.content or {}
-            for _, c in ipairs(v) do table.insert(found.call.content, c) end
-          else
-            found.call[k] = v
+        if found then
+          for k, v in pairs(tc) do
+            if k == "content" and type(v) == "table" then
+              found.call.content = found.call.content or {}
+              for _, c in ipairs(v) do table.insert(found.call.content, c) end
+            else
+              found.call[k] = v
+            end
           end
+        else
+          table.insert(t.messages, { role="agent", type="tool_call", call=tc })
         end
-      else
-        table.insert(t.messages, { role="agent", type="tool_call", call=u.toolCall })
-      end
-      if u.toolCall.status == "completed" or u.toolCall.status == "failed" then
-        t._active_tool = nil
+        if tc.status == "completed" or tc.status == "failed" then
+          t._active_tool = nil
+        end
       end
     elseif u.sessionUpdate == "tool_result" and u.toolResult then
       table.insert(t.messages, { role="agent", type="tool_result", result=u.toolResult })
@@ -607,7 +635,13 @@ subscribe_to_thread = function(sess, cwd, file, row)
       end
       terminal = true
       pcall(function() require("acp.spinner").stop() end)
+      if _cur.on_winbar and _cur.sel_file == file then
+        local model = require("acp.agents").current_model_label(cwd)
+        _cur.on_winbar(_cur.sel_file, compute_tokens(t), model)
+      end
       t._stream_started = false
+      pcall(function() require("acp.neogit_workbench").refresh() end)
+      pcall(vim.cmd, "redrawstatus")
       t._stream_offset = nil
       t._stream_parsed = {}
       t._stream_tail = ""
@@ -671,7 +705,10 @@ function M.add_comment(file, row, visual)
         if row >= 0 then
           vim.schedule(function() redraw_thread(row) end)
         end
-        vim.schedule(function() require("acp.workbench").render() end)
+        vim.schedule(function()
+          require("acp.workbench").render()
+          pcall(function() require("acp.neogit_workbench").show_thread(file, row) end)
+        end)
 
         local thread_key = cwd .. ":thread:" .. file .. ":" .. row
         local prompt_text = "General comment"
@@ -712,6 +749,7 @@ function M.add_comment(file, row, visual)
 end
 
 function M.render_thread_view(buf, cwd, file, row, t_live)
+  pcall(function() require("acp.neogit_workbench").setup_hl() end)
   local lines = {}
   local hls   = {}
   local function add(s, hl)
@@ -970,7 +1008,7 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
 end
 
 
-function M.open_thread_view(row, target_win)
+function M.open_thread_view(row, _target_win)
   local cwd  = _cur.cwd or vim.fn.getcwd()
   local file = _cur.sel_file
   reload_threads(cwd)
@@ -979,62 +1017,7 @@ function M.open_thread_view(row, target_win)
     t = ((_threads[cwd] or {})[file] or {})[tostring(row)]
   end
   if type(t) ~= "table" then return end
-
-  local bufname = string.format("acp-thread-%s-%s", file, row)
-  local buf = nil
-  for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    local name = vim.api.nvim_buf_get_name(b)
-    if name:find(bufname, 1, true) then buf = b; break end
-  end
-  if not buf then
-    buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_name(buf, bufname)
-    vim.bo[buf].buftype = "nofile"
-    vim.bo[buf].filetype = "markdown"
-  end
-
-  M.render_thread_view(buf, cwd, file, row)
-
-  local thread_key = cwd .. ":thread:" .. file .. ":" .. row
-
-  local active_sess = require("acp.session").get(thread_key)
-  if active_sess then
-    subscribe_to_thread(active_sess, cwd, file, row)
-  end
-
-  local function km(lhs, fn, desc)
-    vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true, desc = desc })
-  end
-
-  km("<CR>", function() M.reply_at(row, file) end, "Reply")
-  km("R",   function() M.restart_thread(row, file) end, "Restart thread")
-  km("i",   function() require("acp.workbench").render() end, "Index")
-  km("q",   function() vim.api.nvim_win_close(0, true) end, "Close")
-  km("m",   function()
-    require("acp.workbench").pick_mode(thread_key)
-  end, "Pick mode")
-  km("M",   function()
-    require("acp").pick_model(cwd)
-  end, "Pick model")
-  km("<S-Tab>", function()
-    require("acp.workbench").pick_mode(thread_key)
-  end, "Switch mode")
-
-  local existing_win = nil
-  for _, w in ipairs(vim.api.nvim_list_wins()) do
-    if vim.api.nvim_win_get_buf(w) == buf then
-      existing_win = w; break
-    end
-  end
-  if existing_win then
-    vim.api.nvim_set_current_win(existing_win)
-  elseif target_win and vim.api.nvim_win_is_valid(target_win) then
-    vim.api.nvim_win_set_buf(target_win, buf)
-    vim.api.nvim_set_current_win(target_win)
-  else
-    vim.cmd("botright vsplit")
-    vim.api.nvim_set_current_buf(buf)
-  end
+  require("acp.neogit_workbench").show_thread(file, row)
 end
 
 function thread_session_key(cwd, file, row)
@@ -1141,6 +1124,15 @@ function M.toggle_resolve()
   if not t then return end
   t.resolved = not t.resolved
   redraw_thread(row)
+end
+
+function M.get_thread(cwd, file, row)
+  return ((_threads[cwd] or {})[file] or {})[row]
+end
+
+function M.is_thread_active(t)
+  if type(t) ~= "table" or not t._subscribed then return false end
+  return t._stream_started == true or t._active_tool ~= nil
 end
 
 function M.get_threads(cwd)
@@ -1380,6 +1372,20 @@ function M._install_main_keymaps(buf)
       end
     end
   end, "Prev hunk")
+end
+
+function M.refresh_winbar()
+  if _cur and _cur.on_winbar and _cur.sel_file then
+    local cwd = _cur.cwd or vim.fn.getcwd()
+    local rows = (_threads[cwd] or {})[_cur.sel_file] or {}
+    local tokens = ""
+    for _, t in pairs(rows) do
+      tokens = compute_tokens(t) or ""
+      break
+    end
+    local model = require("acp.agents").current_model_label(cwd)
+    _cur.on_winbar(_cur.sel_file, tokens, model)
+  end
 end
 
 function M._stop_all_timers()

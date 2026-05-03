@@ -26,6 +26,21 @@ function M.setup(opts)
       require("acp.session").close_all()
     end,
   })
+
+  pcall(function() require("acp.neogit_workbench").setup_hl() end)
+  vim.api.nvim_create_autocmd("ColorScheme", {
+    callback = function()
+      pcall(function() require("acp.neogit_workbench").setup_hl() end)
+    end,
+  })
+
+  vim.opt.statusline = "%!v:lua.require'acp.statusline'.build()"
+
+  vim.api.nvim_create_user_command("ACPLog", function()
+    vim.cmd("tabnew " .. vim.fn.fnameescape(vim.fn.stdpath("cache") .. "/acp.log"))
+    vim.bo.filetype = "log"
+    vim.cmd("normal! G")
+  end, { desc = "Open ACP log" })
 end
 
 local function acp_prompt(cwd)
@@ -75,14 +90,15 @@ end
 function M.cancel(cwd)
   cwd = cwd or vim.fn.getcwd()
   pcall(function() require("acp.spinner").stop() end)
+  pcall(function() require("acp.diff").refresh_winbar() end)
   local diff = require("acp.diff")
   for _, entry in ipairs(diff.get_threads(cwd)) do
     if entry.thread and entry.thread._subscribed then
       diff.append_thread_msg(cwd, entry.file, entry.row, { role="system", type="info", text="--- canceled ---" })
     end
   end
-  require("acp.session").close(cwd)
-  vim.notify("ACP session closed", vim.log.levels.INFO, { title = "acp" })
+  require("acp.session").cancel_for_cwd(cwd)
+  vim.notify("ACP turn cancelled", vim.log.levels.INFO, { title = "acp" })
 end
 
 function M.cycle_model(cwd)
@@ -126,7 +142,7 @@ function M.cycle_model(cwd)
 end
 
 -- Picker over the live session's model options. If no session exists yet, creates one first.
-function M.pick_model(cwd)
+function M.pick_model(cwd, on_done)
   cwd = cwd or vim.fn.getcwd()
   local function show_picker(config_opts)
     local model_opts = {}
@@ -158,6 +174,7 @@ function M.pick_model(cwd)
         end
         local provider = require("acp.agents").provider_label(cwd)
         vim.notify(provider .. "/" .. (item.value), vim.log.levels.INFO, { title = "acp" })
+        if on_done then on_done() end
       end)
     end
 

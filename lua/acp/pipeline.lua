@@ -96,7 +96,7 @@ function M._install_keymaps(buf)
   end, "Refresh")
 
   km(buf, "q", function()
-    require("acp.workbench").render()
+    require("acp.neogit_workbench").refresh()
   end, "Close")
 end
 
@@ -137,7 +137,7 @@ function M.list_runs(cwd, limit)
   local fresh = entry and (_uv.now() - entry.ts) < RUNS_TTL_MS
   if not fresh then
     async_refresh_runs(cwd, math.max(limit, 20), function()
-      pcall(function() require("acp.workbench").render() end)
+      pcall(function() require("acp.neogit_workbench").refresh() end)
     end)
   end
   local runs = entry and entry.runs or {}

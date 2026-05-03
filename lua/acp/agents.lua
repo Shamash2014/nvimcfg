@@ -35,24 +35,28 @@ local _providers = {
 
 local _available = nil
 
-local _prefs_path = vim.fn.stdpath("data") .. "/acp/cwd_prefs.json"
+local _prefs_path  = vim.fn.stdpath("data") .. "/acp/cwd_prefs.json"
+local _models_path = vim.fn.stdpath("data") .. "/acp/cwd_models.json"
 
-local function load_prefs()
-  local f = io.open(_prefs_path, "r")
+local function load_json(path)
+  local f = io.open(path, "r")
   if not f then return {} end
   local raw = f:read("*a"); f:close()
   local ok, decoded = pcall(vim.json.decode, raw)
   return (ok and type(decoded) == "table") and decoded or {}
 end
 
-local _cwd_prefs = load_prefs()  -- [cwd] -> provider name (persisted)
-local _cwd_models = {}  -- [cwd] -> model value
+local _cwd_prefs  = load_json(_prefs_path)
+local _cwd_models = load_json(_models_path)
 
-local function save_prefs()
-  vim.fn.mkdir(vim.fs.dirname(_prefs_path), "p")
-  local f = io.open(_prefs_path, "w"); if not f then return end
-  f:write(vim.json.encode(_cwd_prefs)); f:close()
+local function save_json(path, tbl)
+  vim.fn.mkdir(vim.fs.dirname(path), "p")
+  local f = io.open(path, "w"); if not f then return end
+  f:write(vim.json.encode(tbl)); f:close()
 end
+
+local function save_prefs()  save_json(_prefs_path,  _cwd_prefs)  end
+local function save_models() save_json(_models_path, _cwd_models) end
 
 function M.available()
   if _available then return _available end
@@ -79,7 +83,7 @@ function M.register(cfg)
 end
 
 function M.set_for_cwd(cwd, name) _cwd_prefs[cwd] = name; save_prefs() end
-function M.set_model_for_cwd(cwd, model) _cwd_models[cwd] = model end
+function M.set_model_for_cwd(cwd, model) _cwd_models[cwd] = model; save_models() end
 function M.get_model_for_cwd(cwd) return _cwd_models[cwd] end
 
 function M.get(name)
@@ -108,20 +112,27 @@ end
 function M.current_model_label(cwd)
   local provider = M.provider_label(cwd)
   local ok, session = pcall(require, "acp.session")
-  if not ok then return provider end
-  local opts = session.get_config_options_for_cwd(cwd)
-  for _, opt in ipairs(opts) do
-    if opt.category == "model" and opt.currentValue then
-      for _, o in ipairs(opt.options or {}) do
-        if o.value == opt.currentValue then
-          return provider .. "/" .. (o.name or opt.currentValue)
+  if ok then
+    local opts = session.get_config_options_for_cwd(cwd)
+    for _, opt in ipairs(opts) do
+      if opt.category == "model" and opt.currentValue then
+        for _, o in ipairs(opt.options or {}) do
+          if o.value == opt.currentValue then
+            return provider .. "/" .. (o.name or opt.currentValue)
+          end
         end
+        return provider .. "/" .. opt.currentValue
       end
-      return provider .. "/" .. opt.currentValue
     end
+  end
+  local stored = _cwd_models[cwd]
+  if stored and stored ~= "" then
+    return provider .. "/" .. stored
   end
   return provider
 end
+
+function M.chip(cwd) return M.current_model_label(cwd or vim.fn.getcwd()) end
 
 function M.pick(cwd, callback)
   local avail = M.available()
