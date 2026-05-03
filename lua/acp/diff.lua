@@ -4,6 +4,27 @@ local _uv = vim.uv or vim.loop
 
 local NS_DIFF    = vim.api.nvim_create_namespace("acp_diff")
 local NS_THREAD  = vim.api.nvim_create_namespace("acp_thread")
+
+local _hls_by_buf = {}
+local _decoration_registered = false
+local function ensure_decoration_provider()
+  if _decoration_registered then return end
+  _decoration_registered = true
+  vim.api.nvim_set_decoration_provider(NS_THREAD, {
+    on_win = function(_, _, buf) return _hls_by_buf[buf] ~= nil end,
+    on_line = function(_, _, buf, row)
+      local hls = _hls_by_buf[buf]
+      if not hls then return end
+      local hl = hls[row]
+      if hl then
+        vim.api.nvim_buf_set_extmark(buf, NS_THREAD, row, 0, {
+          line_hl_group = hl,
+          ephemeral     = true,
+        })
+      end
+    end,
+  })
+end
 local NS_SEP     = vim.api.nvim_create_namespace("acp_sep")
 
 local subscribe_to_thread -- Forward declaration
@@ -750,11 +771,23 @@ end
 
 function M.render_thread_view(buf, cwd, file, row, t_live)
   pcall(function() require("acp.neogit_workbench").setup_hl() end)
+  local MAX_WIDTH = 100
   local lines = {}
   local hls   = {}
-  local function add(s, hl)
-    table.insert(lines, s or "")
+  local function push(line, hl)
+    table.insert(lines, line)
     if hl then table.insert(hls, { #lines - 1, hl }) end
+  end
+  local function add(s, hl)
+    s = s or ""
+    if #s <= MAX_WIDTH then push(s, hl); return end
+    if not s:find("[\128-\255]") then
+      for i = 1, #s, MAX_WIDTH do push(s:sub(i, i + MAX_WIDTH - 1), hl) end
+      return
+    end
+    local total = vim.fn.strchars(s)
+    if total <= MAX_WIDTH then push(s, hl); return end
+    for i = 0, total - 1, MAX_WIDTH do push(vim.fn.strcharpart(s, i, MAX_WIDTH), hl) end
   end
   local SEP = string.rep("─", 48)
 
@@ -937,6 +970,7 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
   local lines_mapped = vim.tbl_map(function(l) return (l:gsub("\n", " ")) end, lines)
   local total_lines = #lines_mapped
 
+  local hl_start = 0
   if t_live and t_live._stream_started then
     if msgs[#msgs] and msgs[#msgs].type == "tool_call" then
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines_mapped)
@@ -976,6 +1010,7 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
         table.insert(suffix_lines, lines_mapped[i])
       end
       vim.api.nvim_buf_set_lines(buf, t_live._stream_offset, -1, false, suffix_lines)
+      hl_start = t_live._stream_offset
     end
   else
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines_mapped)
@@ -986,9 +1021,10 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
   end
 
   vim.bo[buf].modifiable = false
-  for _, h in ipairs(hls) do
-    vim.api.nvim_buf_add_highlight(buf, -1, h[2], h[1], 0, -1)
-  end
+  local hl_map = {}
+  for _, h in ipairs(hls) do hl_map[h[1]] = h[2] end
+  _hls_by_buf[buf] = hl_map
+  ensure_decoration_provider()
 
   local ns_footer = vim.api.nvim_create_namespace("acp_thread_footer")
   vim.api.nvim_buf_clear_namespace(buf, ns_footer, 0, -1)
