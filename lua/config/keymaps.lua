@@ -194,25 +194,35 @@ map("n", "<leader>qc", function()
   require("quicker").collapse()
 end, { desc = "Collapse quickfix" })
 
-map("n", "<leader>ss", function()
+map("n", "<leader>ps", function()
   local name = input("Session save name: ")
   if name then
     resession().save(name, { dir = "dirsession" })
   end
 end, { desc = "Save session" })
-map("n", "<leader>sl", function()
-  local name = input("Session load name: ")
-  if name then
-    resession().load(name, { dir = "dirsession" })
+map("n", "<leader>pl", function()
+  local sessions = resession().list({ dir = "dirsession" })
+  if not sessions or #sessions == 0 then
+    vim.notify("No sessions saved", vim.log.levels.WARN, { title = "session" }); return
+  end
+  local ok, sn = pcall(require, "snacks")
+  if ok and sn.picker then
+    sn.picker.select(sessions, { prompt = "Load session" }, function(name)
+      if name then resession().load(name, { dir = "dirsession" }) end
+    end)
+  else
+    vim.ui.select(sessions, { prompt = "Load session" }, function(name)
+      if name then resession().load(name, { dir = "dirsession" }) end
+    end)
   end
 end, { desc = "Load session" })
-map("n", "<leader>sd", function()
+map("n", "<leader>pd", function()
   local name = input("Session delete name: ")
   if name then
     resession().delete(name, { dir = "dirsession" })
   end
 end, { desc = "Delete session" })
-map("n", "<leader>sr", function()
+map("n", "<leader>pr", function()
   resession().load(vim.fn.getcwd(), { dir = "dirsession", silence_errors = true })
 end, { desc = "Restore cwd session" })
 
@@ -269,7 +279,7 @@ end, { desc = "Sync env" })
 map("n", "<leader>oy", function()
   require("yaml-companion").open_ui_select()
 end, { desc = "YAML schema" })
-map("n", "<leader>oc", "<cmd>ReferencerToggle<CR>", { desc = "Toggle references" })
+map("n", "<leader>oc", function() require("tasks").pick() end, { desc = "Run task" })
 map("n", "<leader>oC", "<cmd>ReferencerUpdate<CR>", { desc = "Refresh references" })
 map("n", "<leader>oR", restart_nvim, { desc = "Restart Neovim" })
 map("n", "<leader>ot", function()

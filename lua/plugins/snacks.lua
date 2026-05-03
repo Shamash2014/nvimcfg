@@ -17,6 +17,11 @@ return {
             preset = "vscode",
             preview = false,
           },
+          formatters = {
+            file = {
+              git_status_hl = false,
+            },
+          },
           win = {
             input = {
               keys = {

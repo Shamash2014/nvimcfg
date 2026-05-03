@@ -100,6 +100,7 @@ function M.cycle_model(cwd)
     if err then
       vim.notify("set model failed: " .. vim.inspect(err), vim.log.levels.ERROR, { title = "acp" }); return
     end
+    require("acp.agents").set_model_for_cwd(cwd, next_opt.value)
     local provider = require("acp.agents").provider_label(cwd)
     vim.notify(provider .. "/" .. (next_opt.name or next_opt.value), vim.log.levels.INFO, { title = "acp" })
   end)
@@ -131,6 +132,7 @@ function M.pick_model(cwd)
         if err then
           vim.notify("set model failed: " .. vim.inspect(err), vim.log.levels.ERROR, { title = "acp" }); return
         end
+        require("acp.agents").set_model_for_cwd(cwd, item.value)
         local provider = require("acp.agents").provider_label(cwd)
         vim.notify(provider .. "/" .. (item.value), vim.log.levels.INFO, { title = "acp" })
       end)

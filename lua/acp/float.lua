@@ -3,23 +3,36 @@ local M = {}
 local MIN_HEIGHT = 3
 local NS = vim.api.nvim_create_namespace("acp_float")
 
+local function clamp_line(buf, line)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return nil end
+  local n = vim.api.nvim_buf_line_count(buf)
+  if n == 0 then return 0 end
+  if line < 0 then return 0 end
+  if line > n - 1 then return n - 1 end
+  return line
+end
+
 function M.compute_height(content_lines, header_lines, ref_height)
   local max_h = math.floor((ref_height or vim.o.lines) * 0.8)
   return math.max(MIN_HEIGHT, math.min(max_h, content_lines + header_lines))
 end
 
 function M.reserve_space(diff_buf, anchor_line, line_count, above)
+  local line = clamp_line(diff_buf, anchor_line)
+  if line == nil then return nil end
   local virt = {}
   for _ = 1, line_count do table.insert(virt, { { "", "" } }) end
-  return vim.api.nvim_buf_set_extmark(diff_buf, NS, anchor_line, 0, {
+  return vim.api.nvim_buf_set_extmark(diff_buf, NS, line, 0, {
     virt_lines = virt, virt_lines_above = above or false,
   })
 end
 
 function M.update_space(diff_buf, extmark_id, anchor_line, line_count, above)
+  local line = clamp_line(diff_buf, anchor_line)
+  if line == nil then return end
   local virt = {}
   for _ = 1, line_count do table.insert(virt, { { "", "" } }) end
-  vim.api.nvim_buf_set_extmark(diff_buf, NS, anchor_line, 0, {
+  vim.api.nvim_buf_set_extmark(diff_buf, NS, line, 0, {
     id = extmark_id, virt_lines = virt, virt_lines_above = above or false,
   })
 end
@@ -52,10 +65,13 @@ end
 
 function M.highlight_lines(diff_buf, start_line, end_line)
   local ids = {}
+  local total_lines = vim.api.nvim_buf_line_count(diff_buf)
   for row = start_line - 1, end_line - 1 do
-    table.insert(ids, vim.api.nvim_buf_set_extmark(diff_buf, NS, row, 0, {
-      line_hl_group = "AcpCommentContext", priority = 4097,
-    }))
+    if row >= 0 and row < total_lines then
+      table.insert(ids, vim.api.nvim_buf_set_extmark(diff_buf, NS, row, 0, {
+        line_hl_group = "AcpCommentContext", priority = 4097,
+      }))
+    end
   end
   return ids
 end
@@ -74,9 +90,11 @@ function M.open_comment_float(title, opts)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, init_lines)
 
   if not vim.api.nvim_win_is_valid(opts.win_id) then return end
+  if not opts.diff_buf or not vim.api.nvim_buf_is_valid(opts.diff_buf) then return end
   local ref_height  = vim.api.nvim_win_get_height(opts.win_id)
   local total_h     = M.compute_height(#init_lines, 0, ref_height)
-  local anchor_0    = opts.anchor_line - 1
+  local anchor_0    = clamp_line(opts.diff_buf, opts.anchor_line - 1) or 0
+  local anchor_1    = anchor_0 + 1
   local win_w       = vim.api.nvim_win_get_width(opts.win_id)
   local float_w     = math.min(win_w - 4, 88)
 
@@ -85,7 +103,7 @@ function M.open_comment_float(title, opts)
     extmark_id = nil, line_hl_ids = {},
   }
 
-  handle.line_hl_ids  = M.highlight_lines(opts.diff_buf, opts.anchor_line, opts.anchor_line)
+  handle.line_hl_ids  = M.highlight_lines(opts.diff_buf, anchor_1, anchor_1)
   handle.extmark_id   = M.reserve_space(opts.diff_buf, anchor_0, total_h + 2, false)
 
   local heal_pending = false
@@ -102,7 +120,7 @@ function M.open_comment_float(title, opts)
         handle.extmark_id = M.reserve_space(opts.diff_buf, anchor_0, cur_h + 2, false)
         if #handle.line_hl_ids > 0 then
           M.clear_line_hl(opts.diff_buf, handle.line_hl_ids)
-          handle.line_hl_ids = M.highlight_lines(opts.diff_buf, opts.anchor_line, opts.anchor_line)
+          handle.line_hl_ids = M.highlight_lines(opts.diff_buf, anchor_1, anchor_1)
         end
       end)
     end,

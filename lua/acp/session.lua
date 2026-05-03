@@ -109,6 +109,35 @@ function M.get_or_create(cwd_or_opts, callback)
         stub.available_commands = {}
         stub.set_state("ready")
 
+        -- Apply persisted model if available
+        local saved_model = require("acp.agents").get_model_for_cwd(cwd)
+        if saved_model then
+          local has_model_opt = false
+          for _, opt in ipairs(stub.config_options) do
+            if opt.id == "model" then has_model_opt = true; break end
+          end
+          if has_model_opt then
+            stub.rpc:request("session/set_config_option", {
+              sessionId = stub.session_id,
+              configId  = "model",
+              value     = saved_model,
+            }, function(set_err)
+              if not set_err then
+                local label = saved_model
+                for _, opt in ipairs(stub.config_options) do
+                  if opt.id == "model" then
+                    for _, o in ipairs(opt.options or {}) do
+                      if o.value == saved_model then label = o.name or saved_model; break end
+                    end
+                    break
+                  end
+                end
+                notify("Model set: " .. label, vim.log.levels.INFO)
+              end
+            end)
+          end
+        end
+
         -- Keep session state fresh from server-pushed notifications
         stub.rpc:subscribe(stub.session_id, function(notif)
           local u = (notif.params or {}).update or {}

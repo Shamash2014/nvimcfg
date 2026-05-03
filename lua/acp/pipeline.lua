@@ -100,14 +100,57 @@ function M._install_keymaps(buf)
   end, "Close")
 end
 
+local _uv          = vim.uv or vim.loop
+local _runs_cache  = {}     -- [cwd] = { runs = {}, ts = 0 }
+local _refreshing  = {}     -- [cwd] = true while in-flight
+local RUNS_TTL_MS  = 30000
+
+local function async_refresh_runs(cwd, limit, on_done)
+  if _refreshing[cwd] then return end
+  _refreshing[cwd] = true
+  local out = {}
+  vim.fn.jobstart({
+    "gh", "run", "list",
+    "--json", "databaseId,displayTitle,status,conclusion,startedAt",
+    "-L", tostring(limit),
+  }, {
+    cwd = cwd,
+    stdout_buffered = true,
+    on_stdout = function(_, data) if data then vim.list_extend(out, data) end end,
+    on_exit = function(_, code)
+      _refreshing[cwd] = nil
+      if code ~= 0 then return end
+      local raw = table.concat(out, "\n")
+      local ok, parsed = pcall(vim.fn.json_decode, raw)
+      if ok and type(parsed) == "table" then
+        _runs_cache[cwd] = { runs = parsed, ts = _uv.now() }
+        if on_done then vim.schedule(on_done) end
+      end
+    end,
+  })
+end
+
 function M.list_runs(cwd, limit)
   if vim.fn.executable("gh") == 0 then return {} end
   limit = limit or 5
-  local raw = vim.fn.system(
-    "gh run list --json databaseId,displayTitle,status,conclusion,startedAt -L " .. limit .. " 2>/dev/null")
-  if vim.v.shell_error ~= 0 then return {} end
-  local ok, data = pcall(vim.fn.json_decode, raw)
-  return (ok and type(data)=="table") and data or {}
+  local entry = _runs_cache[cwd]
+  local fresh = entry and (_uv.now() - entry.ts) < RUNS_TTL_MS
+  if not fresh then
+    async_refresh_runs(cwd, math.max(limit, 20), function()
+      pcall(function() require("acp.workbench").render() end)
+    end)
+  end
+  local runs = entry and entry.runs or {}
+  if limit and #runs > limit then
+    local trimmed = {}
+    for i = 1, limit do trimmed[i] = runs[i] end
+    return trimmed
+  end
+  return runs
+end
+
+function M.invalidate(cwd)
+  _runs_cache[cwd] = nil
 end
 
 function M.open(cwd, main_win, main_buf, on_winbar)
@@ -124,10 +167,20 @@ function M.open(cwd, main_win, main_buf, on_winbar)
   end
 
   if on_winbar then on_winbar("pipeline ⟳") end
-  _runs = M.list_runs(cwd, 20)
+  local entry = _runs_cache[cwd]
+  _runs = entry and entry.runs or {}
   M._render(main_buf)
   M._install_keymaps(main_buf)
   if on_winbar then on_winbar("pipeline") end
+
+  -- Force a fresh fetch on explicit open and re-render when it lands.
+  M.invalidate(cwd)
+  async_refresh_runs(cwd, 20, function()
+    if _state.buf == main_buf and vim.api.nvim_buf_is_valid(main_buf) then
+      _runs = (_runs_cache[cwd] or {}).runs or {}
+      M._render(main_buf)
+    end
+  end)
 end
 
 return M

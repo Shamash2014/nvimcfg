@@ -35,6 +35,7 @@ local _providers = {
 
 local _available = nil
 local _cwd_prefs = {}  -- [cwd] -> provider name
+local _cwd_models = {}  -- [cwd] -> model value
 
 function M.available()
   if _available then return _available end
@@ -61,6 +62,8 @@ function M.register(cfg)
 end
 
 function M.set_for_cwd(cwd, name) _cwd_prefs[cwd] = name end
+function M.set_model_for_cwd(cwd, model) _cwd_models[cwd] = model end
+function M.get_model_for_cwd(cwd) return _cwd_models[cwd] end
 
 function M.get(name)
   for _, p in ipairs(_providers) do
