@@ -168,25 +168,34 @@ end
 
 function M.set(cwd)
   cwd = cwd or vim.fn.getcwd()
-  require("acp.float").open_composer_float("New Work Item", {
-    on_submit = function(text)
-      if vim.trim(text) == "" then return end
-      local lines = vim.split(text, "\n", { plain = true })
-      local first = vim.trim(lines[1] or "")
-      -- Strip markdown header prefix for slug
-      local title_clean = first:gsub("^#+%s*", "")
-      local title = title_clean ~= "" and (title_clean:len() > 30 and title_clean:sub(1, 30) or title_clean) or "untitled"
-      local path  = M.new_file(cwd, title)
-      local f     = io.open(path, "w")
-      if f then
-        f:write(text)
-        if not text:match("\n$") then f:write("\n") end
-        f:close()
-      end
-      vim.notify("Starting: " .. title, vim.log.levels.INFO, {title="acp"})
-      M.run(cwd, path)
-    end,
-  })
+  local agents = require("acp.agents")
+  local function compose()
+    local title_bar = "New Work Item [" .. agents.provider_label(cwd) .. "]"
+    require("acp.float").open_composer_float(title_bar, {
+      on_submit = function(text)
+        if vim.trim(text) == "" then return end
+        local lines = vim.split(text, "\n", { plain = true })
+        local first = vim.trim(lines[1] or "")
+        local title_clean = first:gsub("^#+%s*", "")
+        local title = title_clean ~= "" and (title_clean:len() > 30 and title_clean:sub(1, 30) or title_clean) or "untitled"
+        local path  = M.new_file(cwd, title)
+        local f     = io.open(path, "w")
+        if f then
+          f:write(text)
+          if not text:match("\n$") then f:write("\n") end
+          f:close()
+        end
+        vim.notify("Starting: " .. title, vim.log.levels.INFO, {title="acp"})
+        M.run(cwd, path)
+      end,
+    })
+  end
+  agents.resolve(cwd, function(err)
+    if err then
+      vim.notify("ACP: " .. err, vim.log.levels.WARN, { title = "acp" }); return
+    end
+    vim.schedule(compose)
+  end)
 end
 
 -- ── Run ──────────────────────────────────────────────────────
@@ -200,14 +209,22 @@ function M.run(cwd, path)
     return
   end
 
+  local mentions = require("acp.mentions")
+  local cleaned_text = text
+  local function add_mention_context(item)
+    table.insert(_contexts[cwd] or {}, item)
+  end
+  _contexts[cwd] = _contexts[cwd] or {}
+  cleaned_text = mentions.parse_and_inject(text, cwd, add_mention_context)
+
   local diff = require("acp.diff")
   diff.upsert_thread(cwd, path, -1, {
-    prompt   = text,
-    messages = {{ role = "user", text = text }},
+    prompt   = cleaned_text,
+    messages = {{ role = "user", text = cleaned_text }},
   })
 
   local prompt = M.drain_context()
-  table.insert(prompt, { type = "text", text = "Complete the following work item:\n\n" .. text })
+  table.insert(prompt, { type = "text", text = "Complete the following work item:\n\n" .. cleaned_text })
 
   local key = diff.thread_session_key(cwd, path, -1)
   require("acp.session").get_or_create({ key = key, cwd = cwd }, function(err, sess)
@@ -394,10 +411,10 @@ local function setup_hl()
   hl("AcpContextItem",     { link = "Special",         default = true })
   hl("AcpWorkDone",        { link = "DiagnosticOk",    default = true })
   hl("AcpFooter",          { link = "Comment",         default = true })
-  hl("AcpDiffAdd",         { link = "DiffAdd",         default = true })
-  hl("AcpDiffDelete",      { link = "DiffDelete",      default = true })
-  hl("AcpDiffHunk",        { link = "Comment",         default = true })
-  hl("AcpDiffFile",        { link = "Title",           default = true })
+  hl("AcpDiffAdd",         { link = "NeogitDiffAdd",         default = true })
+  hl("AcpDiffDelete",      { link = "NeogitDiffDelete",      default = true })
+  hl("AcpDiffHunk",        { link = "NeogitHunkHeader",      default = true })
+  hl("AcpDiffFile",        { link = "NeogitFilePath",        default = true })
   hl("AcpDiffFileM",       { link = "Changed",         default = true })
   hl("AcpDiffFileA",       { link = "Added",           default = true })
   hl("AcpDiffFileD",       { link = "Removed",         default = true })
@@ -453,9 +470,11 @@ local function get_or_create_main_buf()
   return _main_buf
 end
 
-local function set_winbar(win, title)
+local function set_winbar(win, title, tokens, model)
   if not win or not vim.api.nvim_win_is_valid(win) then return end
-  vim.wo[win].winbar = "%#AcpWinbarText#  " .. title .. "  %*"
+  local token_str = (tokens and ("  " .. tokens)) or ""
+  local model_str = (model and ("  " .. model)) or ""
+  vim.wo[win].winbar = "%#AcpWinbarText#  " .. title .. token_str .. model_str .. "  %*"
 end
 
 function M._open_panels()
@@ -713,8 +732,7 @@ function M._render_sidebar(cwd)
 end
 
 function M.render()
-  _view = "index"
-  M._render_sidebar(vim.fn.getcwd())
+  require("acp.neogit_workbench").refresh()
 end
 
 function M.show_help()
@@ -827,7 +845,7 @@ function M.pick_project()
         M.set(item.cwd)
         if item.kind == "thread" then
           M.render()
-          require("acp.diff").show_file(item.file, _main_win, _main_buf, function(t) set_winbar(_main_win, t) end)
+          require("acp.diff").show_file(item.file, _main_win, _main_buf, function(t, tokens) set_winbar(_main_win, t, tokens) end)
           vim.schedule(function()
             if _main_win and vim.api.nvim_win_is_valid(_main_win) then
                vim.api.nvim_win_set_cursor(_main_win, { item.row + 1, 0 })
@@ -843,13 +861,10 @@ function M.pick_project()
 end
 
 function M.close()
-  for _, win in ipairs({ _sb_win, _main_win }) do
-    if win and vim.api.nvim_win_is_valid(win) then
-      pcall(function() vim.wo[win].winbar = "" end)
-      pcall(vim.api.nvim_win_close, win, true)
-    end
+  local buf = require("acp.neogit_workbench")._buffer
+  if buf then
+    pcall(function() buf:close() end)
   end
-  _sb_win = nil; _main_win = nil
 end
 
 function M.pick_mode(key)
@@ -896,7 +911,7 @@ function M._install_keymaps(buf)
     if not meta then return end
     if meta.kind == "diff" then
       require("acp.diff").show_file(meta.path, _main_win, _main_buf,
-        function(t) set_winbar(_main_win, t) end)
+        function(t, tokens) set_winbar(_main_win, t, tokens) end)
       vim.api.nvim_set_current_win(_main_win)
     elseif meta.kind == "thread" then
       local row = tonumber(meta.row) or -1
@@ -904,7 +919,7 @@ function M._install_keymaps(buf)
         M.show_thread(meta.file, row)
       else
         require("acp.diff").show_file(meta.file, _main_win, _main_buf,
-          function(t) set_winbar(_main_win, t) end)
+          function(t, tokens) set_winbar(_main_win, t, tokens) end)
         vim.api.nvim_set_current_win(_main_win)
         if row >= 0 then
           vim.api.nvim_win_set_cursor(_main_win, { math.floor(row) + 1, 0 })
@@ -1007,20 +1022,7 @@ function M._install_keymaps(buf)
 end
 
 function M.open()
-  local cwd  = vim.fn.getcwd()
-  local diff = require("acp.diff")
-  diff.load_threads(cwd)
-  M._open_panels()
-  M.render()
-  diff.with_files(cwd, function(files)
-    if #files > 0 and _main_win and vim.api.nvim_win_is_valid(_main_win) then
-      diff.show_file(files[1].path, _main_win, _main_buf,
-        function(t) set_winbar(_main_win, t) end)
-    end
-  end)
-  if _sb_win and vim.api.nvim_win_is_valid(_sb_win) then
-    vim.api.nvim_set_current_win(_sb_win)
-  end
+  require("acp.neogit_workbench").open()
 end
 
 function M.show_comm_log()
@@ -1039,60 +1041,24 @@ end
 
 function M.show_thread(file, row)
   row = row or -1
-  _view        = "thread"
-  _thread_path = file
-  _thread_row  = row
-  M._open_panels()
-  local cwd  = vim.fn.getcwd()
-  M._render_sidebar(cwd)
-  local buf  = get_or_create_main_buf()
-  local diff = require("acp.diff")
-  diff.render_thread_view(buf, cwd, file, row)
-  vim.api.nvim_win_set_buf(_main_win, buf)
-  local title = vim.fn.fnamemodify(file, ":t:r"):gsub("^%d+%-", "", 1)
-  set_winbar(_main_win, title)
-
-  local key = diff.thread_session_key(cwd, file, row)
-  local active = require("acp.session").get(key)
-  if active then diff.subscribe_to_thread(active, cwd, file, row) end
-
-  local function km(lhs, fn)
-    vim.keymap.set("n", lhs, fn,
-      { buffer = buf, nowait = true, noremap = true, silent = true })
-  end
-  km("?", M.show_help)
-  km("g?", M.show_help)
-  km("i", M.render)
-  km("<CR>", function() diff.reply_at(row, _thread_path) end)
-  km("R",   function() diff.restart_thread(row, _thread_path) end)
-  km("m",   function() M.pick_mode(key) end)
-  km("<S-Tab>", function() M.pick_mode(key) end)
-  km("M",   function() require("acp").pick_model(cwd) end)
-  km("q",   M.close)
+  require("acp.neogit_workbench").show_thread(file, row)
 end
 
-local debounced_index_render = debounced_render
-
 function M.on_event(file, t_live)
-  if _view == "thread" and _thread_path == file then
-    local cwd = vim.fn.getcwd()
-    local buf = get_or_create_main_buf()
-    local win = (_main_win and vim.api.nvim_win_is_valid(_main_win)
-                 and vim.api.nvim_win_get_buf(_main_win) == buf) and _main_win or nil
-    local prev_lc, cur_row
-    if win then
-      prev_lc = vim.api.nvim_buf_line_count(buf)
-      cur_row = vim.api.nvim_win_get_cursor(win)[1]
-    end
-    require("acp.diff").render_thread_view(buf, cwd, file, _thread_row, t_live)
-    if win then
-      local new_lc = vim.api.nvim_buf_line_count(buf)
-      if cur_row and prev_lc and cur_row >= prev_lc - 2 then
-        pcall(vim.api.nvim_win_set_cursor, win, { math.max(1, new_lc), 0 })
-      end
-    end
-  elseif _view == "index" then
-    debounced_index_render()
+  require("acp.neogit_workbench").refresh()
+end
+
+function M._cached_branch(cwd)
+  return cached_branch(cwd)
+end
+
+function M._stop_all_timers()
+  if _index_render_timer then
+    pcall(function()
+      _index_render_timer:stop()
+      if not _index_render_timer:is_closing() then _index_render_timer:close() end
+    end)
+    _index_render_timer = nil
   end
 end
 

@@ -34,8 +34,25 @@ local _providers = {
 }
 
 local _available = nil
-local _cwd_prefs = {}  -- [cwd] -> provider name
+
+local _prefs_path = vim.fn.stdpath("data") .. "/acp/cwd_prefs.json"
+
+local function load_prefs()
+  local f = io.open(_prefs_path, "r")
+  if not f then return {} end
+  local raw = f:read("*a"); f:close()
+  local ok, decoded = pcall(vim.json.decode, raw)
+  return (ok and type(decoded) == "table") and decoded or {}
+end
+
+local _cwd_prefs = load_prefs()  -- [cwd] -> provider name (persisted)
 local _cwd_models = {}  -- [cwd] -> model value
+
+local function save_prefs()
+  vim.fn.mkdir(vim.fs.dirname(_prefs_path), "p")
+  local f = io.open(_prefs_path, "w"); if not f then return end
+  f:write(vim.json.encode(_cwd_prefs)); f:close()
+end
 
 function M.available()
   if _available then return _available end
@@ -61,7 +78,7 @@ function M.register(cfg)
   _available = nil
 end
 
-function M.set_for_cwd(cwd, name) _cwd_prefs[cwd] = name end
+function M.set_for_cwd(cwd, name) _cwd_prefs[cwd] = name; save_prefs() end
 function M.set_model_for_cwd(cwd, model) _cwd_models[cwd] = model end
 function M.get_model_for_cwd(cwd) return _cwd_models[cwd] end
 
@@ -92,7 +109,7 @@ function M.current_model_label(cwd)
   local provider = M.provider_label(cwd)
   local ok, session = pcall(require, "acp.session")
   if not ok then return provider end
-  local opts = session.get_config_options(cwd)
+  local opts = session.get_config_options_for_cwd(cwd)
   for _, opt in ipairs(opts) do
     if opt.category == "model" and opt.currentValue then
       for _, o in ipairs(opt.options or {}) do
@@ -116,7 +133,40 @@ function M.pick(cwd, callback)
     function(_, idx)
       if not idx then callback("cancelled", nil); return end
       _cwd_prefs[cwd] = avail[idx].name
+      save_prefs()
       callback(nil, avail[idx])
+    end)
+end
+
+function M.choose_provider(cwd, callback)
+  cwd = cwd or vim.fn.getcwd()
+  M.probe()
+  local avail = M.available()
+  if #avail == 0 then
+    vim.notify("No ACP providers on PATH", vim.log.levels.WARN, { title = "acp" })
+    if callback then callback("none") end
+    return
+  end
+  local labels = {}
+  for _, p in ipairs(avail) do
+    local mark = (_cwd_prefs[cwd] == p.name) and "  ✓" or ""
+    table.insert(labels, p.display .. mark)
+  end
+  vim.ui.select(labels, { prompt = "ACP provider for " .. vim.fn.fnamemodify(cwd, ":~") .. ": " },
+    function(_, idx)
+      if not idx then if callback then callback("cancelled") end; return end
+      local picked = avail[idx]
+      local prev = _cwd_prefs[cwd]
+      _cwd_prefs[cwd] = picked.name
+      save_prefs()
+      if prev ~= picked.name then
+        local session = require("acp.session")
+        for _, s in ipairs(session.active()) do
+          if s.cwd == cwd then session.close(s.key) end
+        end
+      end
+      vim.notify("ACP provider: " .. picked.display, vim.log.levels.INFO, { title = "acp" })
+      if callback then callback(nil, picked) end
     end)
 end
 
@@ -129,10 +179,14 @@ function M.resolve(cwd, callback)
   if pref_name then
     local p = M.get(pref_name)
     if p and vim.fn.exepath(p.cmd) ~= "" then callback(nil, p); return end
+    vim.notify("ACP provider '" .. pref_name .. "' not on PATH — picking again",
+               vim.log.levels.WARN, { title = "acp" })
     _cwd_prefs[cwd] = nil
+    save_prefs()
   end
   if #avail == 1 then
     _cwd_prefs[cwd] = avail[1].name
+    save_prefs()
     callback(nil, avail[1])
   else
     M.pick(cwd, callback)

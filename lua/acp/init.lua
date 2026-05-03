@@ -18,7 +18,13 @@ function M.setup(opts)
   end
 
   vim.api.nvim_create_autocmd("VimLeavePre", {
-    callback = function() require("acp.session").close_all() end,
+    callback = function()
+      pcall(function() require("acp.spinner").stop() end)
+      pcall(function() require("acp.diff")._stop_all_timers() end)
+      pcall(function() require("acp.workbench")._stop_all_timers() end)
+      pcall(function() require("acp.neogit_workbench")._stop_all_timers() end)
+      require("acp.session").close_all()
+    end,
   })
 end
 
@@ -62,16 +68,26 @@ function M.work_set()  require("acp.workbench").set() end
 function M.workbench() require("acp.workbench").open() end
 function M.mailbox()   require("acp.mailbox").open() end
 
+function M.pick_provider(cwd)
+  require("acp.agents").choose_provider(cwd or vim.fn.getcwd())
+end
+
 function M.cancel(cwd)
-  require("acp.session").close(cwd or vim.fn.getcwd())
+  cwd = cwd or vim.fn.getcwd()
+  pcall(function() require("acp.spinner").stop() end)
+  local diff = require("acp.diff")
+  for _, entry in ipairs(diff.get_threads(cwd)) do
+    if entry.thread and entry.thread._subscribed then
+      diff.append_thread_msg(cwd, entry.file, entry.row, { role="system", type="info", text="--- canceled ---" })
+    end
+  end
+  require("acp.session").close(cwd)
   vim.notify("ACP session closed", vim.log.levels.INFO, { title = "acp" })
 end
 
--- Cycle to next value of the model config option on the live session.
--- Falls through to mode option if no model option exists.
 function M.cycle_model(cwd)
   cwd = cwd or vim.fn.getcwd()
-  local sess_opts = require("acp.session").get_config_options(cwd)
+  local sess_opts = require("acp.session").get_config_options_for_cwd(cwd)
 
   local target_opt
   for _, opt in ipairs(sess_opts) do
@@ -96,43 +112,50 @@ function M.cycle_model(cwd)
   end
   local next_opt = options[(cur_idx % #options) + 1]
 
-  require("acp.session").set_config_option(cwd, target_opt.id, next_opt.value, function(err)
+  require("acp.session").set_config_option_for_cwd(cwd, target_opt.id, next_opt.value, function(err)
     if err then
       vim.notify("set model failed: " .. vim.inspect(err), vim.log.levels.ERROR, { title = "acp" }); return
     end
     require("acp.agents").set_model_for_cwd(cwd, next_opt.value)
     local provider = require("acp.agents").provider_label(cwd)
     vim.notify(provider .. "/" .. (next_opt.name or next_opt.value), vim.log.levels.INFO, { title = "acp" })
+    vim.schedule(function()
+      require("acp.workbench").render()
+    end)
   end)
 end
 
--- Full picker over all configOptions (model, mode, thought_level, other) for the live session.
--- If no session exists yet, creates one first.
+-- Picker over the live session's model options. If no session exists yet, creates one first.
 function M.pick_model(cwd)
   cwd = cwd or vim.fn.getcwd()
   local function show_picker(config_opts)
-    if #config_opts == 0 then
-      vim.notify("No config options from this provider", vim.log.levels.WARN, { title = "acp" }); return
+    local model_opts = {}
+    for _, opt in ipairs(config_opts) do
+      if opt.category == "model" or opt.id == "model" then
+        table.insert(model_opts, opt)
+      end
+    end
+    if #model_opts == 0 then
+      vim.notify("No model options from this provider", vim.log.levels.WARN, { title = "acp" }); return
     end
 
     local items, labels = {}, {}
-    for _, opt in ipairs(config_opts) do
+    for _, opt in ipairs(model_opts) do
       for _, o in ipairs(opt.options or {}) do
         local is_current = o.value == opt.currentValue
         table.insert(items,  { opt_id = opt.id, value = o.value, opt_name = opt.name })
-        table.insert(labels, (opt.name or opt.id) .. "  /  " .. (o.name or o.value)
-                             .. (is_current and "  ✓" or ""))
+        table.insert(labels, (o.name or o.value) .. (is_current and "  ✓" or ""))
       end
     end
 
     local function on_choice(_, idx)
       if not idx then return end
       local item = items[idx]
-      require("acp.session").set_config_option(cwd, item.opt_id, item.value, function(err)
+      require("acp.agents").set_model_for_cwd(cwd, item.value)
+      require("acp.session").set_config_option_for_cwd(cwd, item.opt_id, item.value, function(err)
         if err then
           vim.notify("set model failed: " .. vim.inspect(err), vim.log.levels.ERROR, { title = "acp" }); return
         end
-        require("acp.agents").set_model_for_cwd(cwd, item.value)
         local provider = require("acp.agents").provider_label(cwd)
         vim.notify(provider .. "/" .. (item.value), vim.log.levels.INFO, { title = "acp" })
       end)
@@ -140,17 +163,16 @@ function M.pick_model(cwd)
 
     local ok, snacks = pcall(require, "snacks")
     if ok and snacks.picker then
-      snacks.picker.select(labels, { prompt = "ACP config:" }, on_choice)
+      snacks.picker.select(labels, { prompt = "ACP model:" }, on_choice)
     else
-      vim.ui.select(labels, { prompt = "ACP config: " }, on_choice)
+      vim.ui.select(labels, { prompt = "ACP model: " }, on_choice)
     end
   end
 
-  local existing = require("acp.session").get_config_options(cwd)
+  local existing = require("acp.session").get_config_options_for_cwd(cwd)
   if #existing > 0 then
     show_picker(existing)
   else
-    -- No session yet — create one to discover options
     require("acp.session").get_or_create(cwd, function(err, sess)
       if err then vim.notify(err, vim.log.levels.ERROR, { title = "acp" }); return end
       show_picker(sess.config_options or {})

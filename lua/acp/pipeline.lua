@@ -166,19 +166,23 @@ function M.open(cwd, main_win, main_buf, on_winbar)
     return
   end
 
-  if on_winbar then on_winbar("pipeline ⟳") end
   local entry = _runs_cache[cwd]
   _runs = entry and entry.runs or {}
   M._render(main_buf)
   M._install_keymaps(main_buf)
   if on_winbar then on_winbar("pipeline") end
 
-  -- Force a fresh fetch on explicit open and re-render when it lands.
+  require("acp.spinner").start(function(frame)
+    if on_winbar then on_winbar("pipeline " .. frame) end
+  end)
+
   M.invalidate(cwd)
   async_refresh_runs(cwd, 20, function()
     if _state.buf == main_buf and vim.api.nvim_buf_is_valid(main_buf) then
       _runs = (_runs_cache[cwd] or {}).runs or {}
       M._render(main_buf)
+      require("acp.spinner").stop()
+      if on_winbar then on_winbar("pipeline") end
     end
   end)
 end

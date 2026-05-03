@@ -56,6 +56,8 @@ end
 function M.footer()
   return {
     { " ", "AcpFloatFooterText" },
+    { "<C-CR>", "AcpFloatFooterKey" },
+    { "/", "AcpFloatFooterText" },
     { "<C-s>", "AcpFloatFooterKey" },
     { " submit  ", "AcpFloatFooterText" },
     { "q", "AcpFloatFooterKey" },
@@ -191,11 +193,14 @@ function M.open_comment_float(title, opts)
     vim.keymap.set({"n","i"}, lhs, fn,
       { buffer = buf, nowait = true, noremap = true, silent = true })
   end
-  km("<C-s>", function()
+  local function submit()
     local text = handle.get_text()
     handle.close()
     if text ~= "" and opts.on_submit then opts.on_submit(text) end
-  end)
+  end
+  km("<C-s>",     submit)
+  km("<C-CR>",    submit)
+  km("<C-Enter>", submit)
   km("q", function() handle.close() end)
 
   vim.cmd("startinsert")
@@ -284,11 +289,14 @@ function M.open_composer_float(title, opts)
     vim.keymap.set({ "n", "i" }, lhs, fn,
       { buffer = buf, nowait = true, noremap = true, silent = true })
   end
-  km("<C-s>", function()
+  local function submit()
     local text = handle.get_text()
     handle.close()
     if text ~= "" and opts.on_submit then opts.on_submit(text) end
-  end)
+  end
+  km("<C-s>",     submit)
+  km("<C-CR>",    submit)
+  km("<C-Enter>", submit)
   km("q", function() handle.close() end)
 
   vim.api.nvim_win_set_cursor(handle.win, { 1, 2 })

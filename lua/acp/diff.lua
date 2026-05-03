@@ -147,7 +147,14 @@ local _cur = {
   main_win      = nil,
   main_buf      = nil,
   on_winbar     = nil,
+  tokens        = nil,
 }
+
+local function compute_tokens(t)
+  if not t or not t.messages then return nil end
+  local tokens = require("acp.tokens")
+  return tokens.format(tokens.estimate(t.messages))
+end
 
 local function parse_diff(raw)
   local files = {}
@@ -359,7 +366,12 @@ end
 function M.show_file(file_path, main_win, main_buf, on_winbar)
   _cur.main_win      = main_win
   _cur.main_buf      = main_buf
-  _cur.on_winbar     = on_winbar
+  _cur.on_winbar     = (function(file, tokens)
+    if on_winbar then
+      local model = require("acp.agents").current_model_label(_cur.cwd)
+      on_winbar(file, tokens, model)
+    end
+  end)
   _cur.sel_file      = file_path
   _cur.buf_line_meta = {}
   _cur.cwd           = _cur.cwd or vim.fn.getcwd()
@@ -409,12 +421,7 @@ function M.show_file(file_path, main_win, main_buf, on_winbar)
   vim.bo[main_buf].modifiable = true
   vim.api.nvim_buf_set_lines(main_buf, 0, -1, false, ls)
   vim.bo[main_buf].modifiable = false
-
-  local ok_diffs, diffs_mod = pcall(require, "diffs")
-  if ok_diffs then
-    diffs_mod.attach(main_buf)
-    diffs_mod.refresh(main_buf)
-  end
+  pcall(function() vim.bo[main_buf].filetype = "NeogitDiffView" end)
 
   vim.api.nvim_buf_clear_namespace(main_buf, NS_DIFF,   0, -1)
   vim.api.nvim_buf_clear_namespace(main_buf, NS_THREAD, 0, -1)
@@ -466,6 +473,20 @@ local function render_thread_surfaces(cwd, file, row, t)
   end
 end
 
+local function content_block_text(c)
+  if type(c) ~= "table" then return "" end
+  local t = c.type or "text"
+  if t == "text"          then return c.text or ""
+  elseif t == "image"     then return "[image" .. (c.mimeType and (" " .. c.mimeType) or "") .. "]"
+  elseif t == "audio"     then return "[audio" .. (c.mimeType and (" " .. c.mimeType) or "") .. "]"
+  elseif t == "resource_link" then return c.uri or c.name or "[resource_link]"
+  elseif t == "resource"  then
+    local r = c.resource or {}
+    return r.text or ("[resource " .. (r.uri or "") .. "]")
+  end
+  return c.text or ""
+end
+
 subscribe_to_thread = function(sess, cwd, file, row)
   local t = ((_threads[cwd] or {})[file] or {})[row]
   if not t and type(row) == "number" then
@@ -476,29 +497,69 @@ subscribe_to_thread = function(sess, cwd, file, row)
   t.messages = t.messages or {}
   if t._unsub then t._unsub() end
   t._subscribed = true
+  t._stream_offset = nil
+  t._stream_parsed = {}
+  t._stream_tail = ""
+  t._last_token_ts = 0
+  t._active_tool = nil
 
   t._unsub = sess.rpc:subscribe(sess.session_id, function(notif)
     if not t._subscribed then return end
     t.messages = t.messages or {}
     local u = (notif.params or {}).update or {}
+    local is_text_update = false
     if (u.sessionUpdate == "text" and u.text) or (u.sessionUpdate == "agent_message_chunk" and u.content) then
-      local text = u.text or (u.content and u.content.text) or ""
+      is_text_update = true
+      local text = u.text or content_block_text(u.content)
       local last = t.messages[#t.messages]
       if last and last.role == "agent" and last.type == "text" then
         last.text = last.text .. text
       else
         table.insert(t.messages, { role="agent", type="text", text=text })
       end
+      local now = vim.uv.now()
+      if (now - t._last_token_ts) >= 200 and _cur.on_winbar and _cur.sel_file == file then
+        t._last_token_ts = now
+        local model = require("acp.agents").current_model_label(cwd)
+        _cur.on_winbar(_cur.sel_file, compute_tokens(t), model)
+      end
+      if not t._stream_started then
+        t._stream_started = true
+        pcall(function() require("acp.spinner").start(function(frame)
+          if _cur.on_winbar and _cur.sel_file == file then
+            local label = t._active_tool and (" " .. t._active_tool) or ""
+            local model = require("acp.agents").current_model_label(cwd)
+            _cur.on_winbar(_cur.sel_file, (compute_tokens(t) or "") .. "  " .. frame .. label, model)
+          end
+        end) end)
+      end
     elseif (u.sessionUpdate == "thought" and u.thought) or (u.sessionUpdate == "agent_thought_chunk" and u.content) then
-      local text = u.thought or (u.content and u.content.text) or ""
+      local text = u.thought or content_block_text(u.content)
       local last = t.messages[#t.messages]
       if last and last.role == "agent" and last.type == "thought" then
         last.text = last.text .. text
       else
         table.insert(t.messages, { role="agent", type="thought", text=text })
       end
+    elseif u.sessionUpdate == "user_message_chunk" and u.content then
+      local text = content_block_text(u.content)
+      local last = t.messages[#t.messages]
+      if last and last.role == "user" and last._streaming then
+        last.text = (last.text or "") .. text
+      else
+        table.insert(t.messages, { role="user", text=text, _streaming=true })
+      end
+    elseif u.sessionUpdate == "plan" and u.entries then
+      for i = #t.messages, 1, -1 do
+        if t.messages[i].type == "plan" then table.remove(t.messages, i) end
+      end
+      table.insert(t.messages, { role="agent", type="plan", entries=u.entries })
     elseif u.sessionUpdate == "tool_call" and u.toolCall then
       table.insert(t.messages, { role="agent", type="tool_call", call=u.toolCall })
+      local tool_name = u.toolCall.name or "tool"
+      local args = u.toolCall.arguments and vim.json.encode(u.toolCall.arguments) or ""
+      if #args > 30 then args = args:sub(1, 30) .. "…" end
+      t._active_tool = tool_name .. (args ~= "" and (": " .. args) or "")
     elseif u.sessionUpdate == "tool_call_update" and u.toolCall then
       local id = u.toolCall.toolCallId
       local found
@@ -522,8 +583,12 @@ subscribe_to_thread = function(sess, cwd, file, row)
       else
         table.insert(t.messages, { role="agent", type="tool_call", call=u.toolCall })
       end
+      if u.toolCall.status == "completed" or u.toolCall.status == "failed" then
+        t._active_tool = nil
+      end
     elseif u.sessionUpdate == "tool_result" and u.toolResult then
       table.insert(t.messages, { role="agent", type="tool_result", result=u.toolResult })
+      t._active_tool = nil
     elseif u.sessionUpdate == "output" and u.output then
       table.insert(t.messages, { role="agent", type="output", text=tostring(u.output) })
     elseif u.sessionUpdate == "error" and u.error then
@@ -533,8 +598,20 @@ subscribe_to_thread = function(sess, cwd, file, row)
     local terminal = false
     if u.sessionUpdate == "turn_complete" or u.sessionUpdate == "session_complete" then
       local reason = u.stopReason or u.reason or "done"
-      table.insert(t.messages, { role="agent", type="info", text="Turn ended: " .. reason })
+      if reason == "refusal" then
+        table.insert(t.messages, { role="system", type="info", text="--- refused ---" })
+      elseif reason == "max_tokens" then
+        table.insert(t.messages, { role="system", type="info", text="--- max tokens ---" })
+      else
+        table.insert(t.messages, { role="agent", type="info", text="Turn ended: " .. reason })
+      end
       terminal = true
+      pcall(function() require("acp.spinner").stop() end)
+      t._stream_started = false
+      t._stream_offset = nil
+      t._stream_parsed = {}
+      t._stream_tail = ""
+      t._active_tool = nil
     elseif u.sessionUpdate == "session_info_update" and u.title then
       t._title = u.title
     end
@@ -549,7 +626,7 @@ subscribe_to_thread = function(sess, cwd, file, row)
       end)
     else
       debounce(_save_timers, key, 500, function() save_thread(cwd, file, row) end)
-      debounce(_render_timers, key, 50, function()
+      debounce(_render_timers, key, 16, function()
         render_thread_surfaces(cwd, file, row, t)
       end)
     end
@@ -581,11 +658,12 @@ function M.add_comment(file, row, visual)
       win_id      = _cur.main_win or 0,
       diff_buf    = _cur.main_buf or 0,
       on_submit   = function(text)
+        local cleaned_text, mention_blocks = require("acp.mentions").parse(text, cwd)
         _threads[cwd] = _threads[cwd] or {}
         _threads[cwd][file] = _threads[cwd][file] or {}
         local thread = {
-          prompt   = text,
-          messages = {{ role = "user", text = text }},
+          prompt   = cleaned_text,
+          messages = {{ role = "user", text = cleaned_text }},
           resolved = false,
         }
         _threads[cwd][file][row] = thread
@@ -606,11 +684,13 @@ function M.add_comment(file, row, visual)
             .. line_text
         end
 
-        local prompt_items = {{ type="text", text =
+        local prompt_items = {}
+        for _, b in ipairs(mention_blocks) do table.insert(prompt_items, b) end
+        table.insert(prompt_items, { type="text", text =
           "Discussion agent. Context: " .. file .. "\n\n"
-          .. prompt_text .. "\n\nComment: " .. text
+          .. prompt_text .. "\n\nComment: " .. cleaned_text
           .. "\n\nRespond concisely."
-        }}
+        })
         require("acp.session").get_or_create({ key = thread_key, cwd = cwd }, function(err, sess)
           if err then
             vim.notify("ACP: "..err, vim.log.levels.ERROR, {title="acp"}); return
@@ -700,10 +780,8 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
     elseif msg.type == "thought" then
       ensure_role("agent")
       local tlines = vim.split(msg.text or "", "\n")
-      local show = math.min(#tlines, 3)
-      add("  💭 " .. (tlines[1] or ""):sub(1, 80), "AcpThreadThought")
-      for i = 2, show do add("     " .. tlines[i]:sub(1, 80), "AcpThreadThought") end
-      if #tlines > show then add("     … (" .. #tlines .. " lines)", "Comment") end
+      add("  💭 " .. (tlines[1] or ""), "AcpThreadThought")
+      for i = 2, #tlines do add("     " .. tlines[i], "AcpThreadThought") end
     elseif msg.type == "tool_call" then
       ensure_role("agent")
       local call   = msg.call or {}
@@ -713,11 +791,23 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
       local hl     = (call.status == "failed") and "Error" or "AcpThreadAction"
       add("  ⚙ " .. kind .. title .. status, hl)
 
+      if type(call.locations) == "table" then
+        for _, loc in ipairs(call.locations) do
+          if loc.path then
+            local line_suffix = loc.line and (":" .. loc.line) or ""
+            add("    @ " .. loc.path .. line_suffix, "Comment")
+          end
+        end
+      end
+
       local raw = call.rawInput or call.arguments
       if raw then
         local args = (type(raw) == "string") and raw or vim.json.encode(raw)
-        if #args > 200 then args = args:sub(1, 200) .. "…" end
-        add("    in: " .. args, "Comment")
+        local input_lines = vim.split(args, "\n")
+        for i, line in ipairs(input_lines) do
+          local prefix = i == 1 and "    in: " or "        "
+          add(prefix .. line, "Comment")
+        end
       end
 
       local content = call.content or {}
@@ -727,9 +817,7 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
           local inner = c.content
           if inner.type == "text" and inner.text then
             local rlines = vim.split(inner.text, "\n")
-            local show = math.min(#rlines, 8)
-            for i = 1, show do add("    " .. rlines[i]:sub(1, 160), "AcpThreadResult") end
-            if #rlines > show then add("    … (" .. #rlines .. " lines)", "Comment") end
+            for i = 1, #rlines do add("    " .. rlines[i], "AcpThreadResult") end
           elseif inner.type == "image" then
             add("    [image]", "AcpThreadResult")
           elseif inner.type == "resource_link" and inner.uri then
@@ -745,21 +833,52 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
       if (#content == 0) and call.rawOutput then
         local out = (type(call.rawOutput) == "string") and call.rawOutput or vim.json.encode(call.rawOutput)
         local rlines = vim.split(out, "\n")
-        local show = math.min(#rlines, 6)
-        for i = 1, show do add("    " .. rlines[i]:sub(1, 160), "AcpThreadResult") end
-        if #rlines > show then add("    … (" .. #rlines .. " lines)", "Comment") end
+        for i = 1, #rlines do add("    " .. rlines[i], "AcpThreadResult") end
       end
     elseif msg.type == "tool_result" then
       ensure_role("agent")
       local res = msg.result or {}
       local is_err = res.isError
-      local out = res.content and res.content[1] and res.content[1].text or ""
-      local rlines = vim.split(out, "\n")
-      local show = math.min(#rlines, 4)
       local hl = is_err and "Error" or "AcpThreadResult"
-      add("  " .. (is_err and "✗" or "✓") .. "  " .. (rlines[1] or ""):sub(1, 100), hl)
-      for i = 2, show do add("     " .. rlines[i]:sub(1, 100), hl) end
-      if #rlines > show then add("     … (" .. #rlines .. " lines)", "Comment") end
+      local first_line_shown = false
+      for _, entry in ipairs(res.content or {}) do
+        if entry.type == "text" and entry.text then
+          local rlines = vim.split(entry.text, "\n")
+          for i = 1, #rlines do
+            if not first_line_shown then
+              add("  " .. (is_err and "✗" or "✓") .. "  " .. rlines[i], hl)
+              first_line_shown = true
+            else
+              add("     " .. rlines[i], hl)
+            end
+          end
+        elseif entry.type == "image" then
+          if not first_line_shown then
+            add("  " .. (is_err and "✗" or "✓") .. "  [image]", hl)
+            first_line_shown = true
+          else
+            add("     [image]", hl)
+          end
+        elseif entry.type == "resource_link" and entry.uri then
+          if not first_line_shown then
+            add("  " .. (is_err and "✗" or "✓") .. "  " .. entry.uri, hl)
+            first_line_shown = true
+          else
+            add("     " .. entry.uri, hl)
+          end
+        end
+      end
+      if not first_line_shown then
+        add("  " .. (is_err and "✗" or "✓") .. "  (no content)", hl)
+      end
+    elseif msg.type == "plan" then
+      ensure_role("agent")
+      add("  ▣ Plan", "AcpSectionHeader")
+      for _, e in ipairs(msg.entries or {}) do
+        local mark = ({ pending = "○", in_progress = "◐", completed = "●" })[e.status or "pending"] or "○"
+        local prio = e.priority and (" [" .. e.priority .. "]") or ""
+        add("    " .. mark .. " " .. (e.content or "") .. prio, "AcpThreadAction")
+      end
     elseif msg.type == "info" then
       ensure_role("agent")
       add("  ·  " .. (msg.text or ""), "DiagnosticInfo")
@@ -776,8 +895,58 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
   if #msgs == 0 then add("  (no messages yet)", "Comment"); add("") end
 
   vim.bo[buf].modifiable = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false,
-    vim.tbl_map(function(l) return (l:gsub("\n", " ")) end, lines))
+
+  local lines_mapped = vim.tbl_map(function(l) return (l:gsub("\n", " ")) end, lines)
+  local total_lines = #lines_mapped
+
+  if t_live and t_live._stream_started then
+    if msgs[#msgs] and msgs[#msgs].type == "tool_call" then
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines_mapped)
+      t_live._stream_offset = nil
+    elseif t_live._stream_offset == nil then
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines_mapped)
+      local msg_count = #msgs
+      local last_msg_idx = msg_count
+      local trailing_lines = 0
+      if msg_count > 0 then
+        local last_msg = msgs[msg_count]
+        local last_msg_text = ""
+        if last_msg.type == "thought" then
+          last_msg_text = last_msg.text or ""
+        elseif last_msg.type == "tool_call" then
+          last_msg_text = ""
+        elseif last_msg.type == "tool_result" then
+          last_msg_text = ""
+        elseif last_msg.type == "info" or last_msg.type == "error" then
+          last_msg_text = last_msg.text or ""
+        elseif last_msg.role == "agent" then
+          last_msg_text = last_msg.text or ""
+        end
+        trailing_lines = #vim.split(last_msg_text, "\n")
+      end
+      if trailing_lines > 0 then
+        t_live._stream_offset = total_lines - trailing_lines
+      else
+        t_live._stream_offset = total_lines
+      end
+    elseif t_live._stream_offset > total_lines or t_live._stream_offset < 0 then
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines_mapped)
+      t_live._stream_offset = nil
+    else
+      local suffix_lines = {}
+      for i = t_live._stream_offset + 1, total_lines do
+        table.insert(suffix_lines, lines_mapped[i])
+      end
+      vim.api.nvim_buf_set_lines(buf, t_live._stream_offset, -1, false, suffix_lines)
+    end
+  else
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines_mapped)
+    if t_live then
+      t_live._stream_offset = nil
+      t_live._stream_tail = ""
+    end
+  end
+
   vim.bo[buf].modifiable = false
   for _, h in ipairs(hls) do
     vim.api.nvim_buf_add_highlight(buf, -1, h[2], h[1], 0, -1)
@@ -920,8 +1089,36 @@ function M.reply_at(row, file)
   end
   local thread_key = thread_session_key(cwd, file, row)
 
-  local target_buf = (_cur.main_win and vim.api.nvim_win_is_valid(_cur.main_win))
-                       and vim.api.nvim_win_get_buf(_cur.main_win) or _cur.main_buf
+  local function on_submit(text)
+    if vim.trim(text) == "" then return end
+    local cleaned_text, mention_blocks = require("acp.mentions").parse(text, cwd)
+    table.insert(t.messages, {role="user", text=cleaned_text})
+    save_thread(cwd, file, row)
+    vim.schedule(function() notify_thread_surfaces(cwd, file, row, t) end)
+    require("acp.session").get_or_create({ key = thread_key, cwd = cwd }, function(err, sess)
+      if err then
+        vim.notify("ACP: " .. err, vim.log.levels.ERROR, { title = "acp" }); return
+      end
+      subscribe_to_thread(sess, cwd, file, row)
+      local prompt_items = {}
+      for _, b in ipairs(mention_blocks) do table.insert(prompt_items, b) end
+      table.insert(prompt_items, {type="text", text=cleaned_text})
+      sess.rpc:request("session/prompt", {
+        sessionId = sess.session_id, prompt = prompt_items,
+      }, function() end)
+    end)
+  end
+
+  local has_diff_anchor = _cur.main_win
+    and type(_cur.main_win) == "number"
+    and vim.api.nvim_win_is_valid(_cur.main_win)
+
+  if not has_diff_anchor then
+    require("acp.float").open_composer_float("Reply", { on_submit = on_submit })
+    return
+  end
+
+  local target_buf = vim.api.nvim_win_get_buf(_cur.main_win)
   local anchor
   if row >= 0 then
     anchor = row + 1
@@ -933,21 +1130,7 @@ function M.reply_at(row, file)
 
   require("acp.float").open_comment_float("Reply", {
     anchor_line = anchor, win_id = _cur.main_win, diff_buf = target_buf,
-    on_submit   = function(text)
-      if vim.trim(text) == "" then return end
-      table.insert(t.messages, {role="user", text=text})
-      save_thread(cwd, file, row)
-      vim.schedule(function() notify_thread_surfaces(cwd, file, row, t) end)
-      require("acp.session").get_or_create({ key = thread_key, cwd = cwd }, function(err, sess)
-        if err then
-          vim.notify("ACP: " .. err, vim.log.levels.ERROR, { title = "acp" }); return
-        end
-        subscribe_to_thread(sess, cwd, file, row)
-        sess.rpc:request("session/prompt", {
-          sessionId = sess.session_id, prompt = {{type="text", text=text}},
-        }, function() end)
-      end)
-    end,
+    on_submit   = on_submit,
   })
 end
 
@@ -1065,7 +1248,7 @@ function M._install_main_keymaps(buf)
     vim.schedule(function() M.add_comment(nil, nil, true) end)
   end, {buffer=buf, nowait=true, noremap=true, silent=true, desc="New thread (visual)"})
   km("r",  function() M.reply_at(vim.api.nvim_win_get_cursor(0)[1] - 1) end, "Reply")
-  km("x",  M.toggle_resolve,  "Toggle resolve")
+  km("gx", M.toggle_resolve,  "Toggle resolve")
   km("d",  M.delete_thread,   "Delete thread")
   km("gL", function()
     if _cur.sel_file and _cur.sel_file:match("%.nowork/") then
@@ -1073,7 +1256,7 @@ function M._install_main_keymaps(buf)
     end
   end, "Show thread")
   km("gt", function() M.open_thread_view(-1) end, "Open global thread")
-  km("s",  M.send,            "Send diff to ACP")
+  km("gs", M.send,            "Send diff to ACP")
   km("n",  function() require("acp.workbench").set(_cur.cwd) end, "New thread")
   km("m", function() require("acp.workbench").pick_mode() end, "Pick mode")
   km("<S-Tab>", function() require("acp.workbench").pick_mode() end, "Switch mode")
@@ -1085,6 +1268,100 @@ function M._install_main_keymaps(buf)
       M.show_file(_cur.sel_file, _cur.main_win, _cur.main_buf, _cur.on_winbar)
     end
   end, "Refresh")
+
+  local function neogit_op(fn, label)
+    pcall(vim.cmd, "packadd neogit")
+    local ok, idx = pcall(require, "neogit.lib.git.index")
+    if not ok then
+      vim.notify("Neogit not available", vim.log.levels.WARN, { title = "acp" }); return
+    end
+    local res_ok, err = pcall(fn, idx)
+    if not res_ok then
+      vim.notify("git " .. label .. " failed: " .. tostring(err), vim.log.levels.WARN, { title = "acp" }); return
+    end
+    M.invalidate_files(_cur.cwd or vim.fn.getcwd())
+    if _cur.sel_file then
+      M.show_file(_cur.sel_file, _cur.main_win, _cur.main_buf, _cur.on_winbar)
+    end
+    pcall(function() require("acp.neogit_workbench").refresh() end)
+  end
+
+  km("S", function()
+    if _cur.sel_file then
+      neogit_op(function(idx) idx.add({ _cur.sel_file }) end, "stage")
+    end
+  end, "Stage file")
+  km("U", function()
+    if _cur.sel_file then
+      neogit_op(function(idx) idx.reset({ _cur.sel_file }) end, "unstage")
+    end
+  end, "Unstage file")
+  km("X", function()
+    local file = _cur.sel_file
+    if not file then return end
+    local choice = vim.fn.confirm("Discard changes to " .. file .. "?", "&Yes\n&No", 2)
+    if choice == 1 then
+      neogit_op(function(idx) idx.checkout({ file }) end, "discard")
+    end
+  end, "Discard file")
+
+  local function hunk_at_cursor()
+    local row  = vim.api.nvim_win_get_cursor(0)[1] - 1
+    local file = _cur.sel_file
+    if not file then return end
+    local target_header
+    for r = row, 0, -1 do
+      local meta = _cur.buf_line_meta[r]
+      if meta and meta.hunk_header then target_header = meta.hunk_header; break end
+    end
+    if not target_header then return end
+    for _, f in ipairs(_cur.files or {}) do
+      if f.path == file then
+        for _, h in ipairs(f.hunks or {}) do
+          if h.header == target_header then return f, h end
+        end
+      end
+    end
+  end
+
+  local function build_patch(file, hunk)
+    local parts = {
+      "diff --git a/" .. file .. " b/" .. file,
+      "--- a/" .. file,
+      "+++ b/" .. file,
+      hunk.header,
+    }
+    for _, l in ipairs(hunk.lines) do
+      local p = l.type == "add" and "+" or l.type == "del" and "-" or " "
+      table.insert(parts, p .. l.text)
+    end
+    return table.concat(parts, "\n") .. "\n"
+  end
+
+  km("s", function()
+    local f, h = hunk_at_cursor(); if not f or not h then return end
+    local patch = build_patch(f.path, h)
+    neogit_op(function(idx) idx.apply(patch, { cached = true }) end, "stage hunk")
+  end, "Stage hunk")
+
+  km("u", function()
+    local f, h = hunk_at_cursor(); if not f or not h then return end
+    local patch = build_patch(f.path, h)
+    neogit_op(function(idx) idx.apply(patch, { cached = true, reverse = true }) end, "unstage hunk")
+  end, "Unstage hunk")
+
+  km("x", function()
+    local f, h = hunk_at_cursor(); if not f or not h then return end
+    local choice = vim.fn.confirm("Discard hunk?", "&Yes\n&No", 2)
+    if choice == 1 then
+      local patch = build_patch(f.path, h)
+      neogit_op(function(idx) idx.apply(patch, { reverse = true }) end, "discard hunk")
+    end
+  end, "Discard hunk")
+
+  km("<BS>", function()
+    require("acp.git").open_neogit({ kind = "replace" })
+  end, "Back to Neogit")
 
   km("]c", function()
     local row = vim.api.nvim_win_get_cursor(0)[1]
@@ -1103,6 +1380,21 @@ function M._install_main_keymaps(buf)
       end
     end
   end, "Prev hunk")
+end
+
+function M._stop_all_timers()
+  for k, t in pairs(_save_timers) do
+    pcall(function()
+      if t then t:stop(); if not t:is_closing() then t:close() end end
+    end)
+    _save_timers[k] = nil
+  end
+  for k, t in pairs(_render_timers) do
+    pcall(function()
+      if t then t:stop(); if not t:is_closing() then t:close() end end
+    end)
+    _render_timers[k] = nil
+  end
 end
 
 return M

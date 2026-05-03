@@ -1,21 +1,5 @@
 return {
   {
-    src = "https://github.com/barrettruth/diffs.nvim",
-    priority = 1000,
-    lazy = false,
-    init = function()
-      vim.g.diffs = {
-        integrations = {
-          neogit = true,
-        },
-        highlights = {
-          gutter = true,
-          intra = { enabled = true },
-        },
-      }
-    end,
-  },
-  {
     src = "https://github.com/NeogitOrg/neogit",
     cmd = "Neogit",
     dependencies = {
@@ -24,7 +8,15 @@ return {
       },
     },
     config = function()
-      require("neogit").setup({})
+      require("neogit").setup({
+        mappings = {
+          status = {
+            ["W"] = function()
+              require("acp.neogit_workbench").open({ kind = "replace" })
+            end,
+          },
+        },
+      })
     end,
   },
   {

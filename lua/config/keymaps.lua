@@ -351,7 +351,6 @@ map("n", "<leader>dr", function()
 end, { desc = "DAP restart" })
 
 -- ACP
-map("n", "<leader>ao", function() require("acp").workbench() end,    { desc = "ACP workbench" })
 map("n", "<leader>aw", function() require("acp.workbench").pick_project() end, { desc = "ACP pick project/thread" })
 map("n", "<leader>ak", function() require("acp").cancel() end,    { desc = "ACP kill session" })
 map("n", "<leader>am", function() require("acp").mailbox() end,   { desc = "ACP mailbox" })
@@ -363,6 +362,7 @@ map("n", "<leader>ad", function() require("acp.workbench").push_diagnostics() en
 map("v", "<leader>ay", function() require("acp.workbench").push_visual() end, { desc = "ACP pin visual" })
 
 map("n", "<leader>aM", function() require("acp").pick_model() end,  { desc = "ACP pick model" })
+map("n", "<leader>ap", function() require("acp").pick_provider() end, { desc = "ACP pick provider" })
 map("n", "<S-Tab>",   function() require("acp").cycle_model() end, { desc = "ACP cycle model" })
 
 map("n", "ga",  function() vim.o.operatorfunc = "v:lua._acp_op"; return "g@" end,

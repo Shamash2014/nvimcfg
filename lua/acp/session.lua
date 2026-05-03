@@ -202,6 +202,55 @@ function M.set_config_option(key, config_id, value, callback)
   end)
 end
 
+function M.find_ready_for_cwd(cwd)
+  local s = sessions[cwd]
+  if s and s.state == "ready" then return s end
+  for _, sess in pairs(sessions) do
+    if sess.cwd == cwd and sess.state == "ready" then return sess end
+  end
+  return nil
+end
+
+function M.get_config_options_for_cwd(cwd)
+  local s = M.find_ready_for_cwd(cwd)
+  return (s and s.config_options) or {}
+end
+
+function M.set_config_option_for_cwd(cwd, config_id, value, callback)
+  local targets = {}
+  for _, s in pairs(sessions) do
+    if s.cwd == cwd and s.state == "ready" then table.insert(targets, s) end
+  end
+  if #targets == 0 then
+    if callback then callback("no active session") end
+    return
+  end
+  local pending, err_seen = #targets, nil
+  local last_opts = {}
+  for _, s in ipairs(targets) do
+    s.rpc:request("session/set_config_option", {
+      sessionId = s.session_id,
+      configId  = config_id,
+      value     = value,
+    }, function(err, res)
+      if not err then
+        if res and res.configOptions then
+          s.config_options = res.configOptions
+        else
+          for _, opt in ipairs(s.config_options) do
+            if opt.id == config_id then opt.currentValue = value; break end
+          end
+        end
+        last_opts = s.config_options
+      else
+        err_seen = err
+      end
+      pending = pending - 1
+      if pending == 0 and callback then callback(err_seen, last_opts) end
+    end)
+  end
+end
+
 function M.close(key)
   local s = sessions[key]
   if not s then return end
