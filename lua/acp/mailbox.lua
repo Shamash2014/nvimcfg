@@ -64,7 +64,7 @@ function M.open_permission_float(e)
   vim.list_extend(lines, vim.split(input_str, "\n", { plain = true }))
   table.insert(lines, "```")
   table.insert(lines, "")
-  table.insert(lines, "  <CR> allow once  a allow always  <BS> reject")
+  table.insert(lines, "  <CR> allow once  a allow always  <BS> reject once  R reject always")
 
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -90,6 +90,7 @@ function M.open_permission_float(e)
   vim.keymap.set("n", "<CR>", function() respond("allow_once") end, { buffer = buf })
   vim.keymap.set("n", "a",    function() respond("allow_always") end, { buffer = buf })
   vim.keymap.set("n", "<BS>", function() respond("reject_once") end, { buffer = buf })
+  vim.keymap.set("n", "R",    function() respond("reject_always") end, { buffer = buf })
   vim.keymap.set("n", "q",    function() pcall(vim.api.nvim_win_close, win, true) end, { buffer = buf })
 end
 

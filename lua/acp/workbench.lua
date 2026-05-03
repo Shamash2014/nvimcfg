@@ -297,7 +297,7 @@ function M.push_image(path)
   local b64  = vim.base64.encode(raw)
   local ext  = (path:match("%.(%w+)$") or "png"):lower()
   local mime = ({ png="image/png", jpg="image/jpeg", jpeg="image/jpeg", gif="image/gif", webp="image/webp" })
-  table.insert(_contexts[cwd], { type = "image", mediaType = mime[ext] or "image/png", data = b64,
+  table.insert(_contexts[cwd], { type = "image", mimeType = mime[ext] or "image/png", data = b64,
                              _label = vim.fn.fnamemodify(path, ":t") })
   vim.notify("Pinned image: " .. vim.fn.fnamemodify(path, ":t"), vim.log.levels.INFO, { title = "acp" })
   if _view == "index" then M.render() end
@@ -307,12 +307,23 @@ function M.drain_context(cwd)
   cwd = cwd or _cur_cwd or vim.fn.getcwd()
   local items = {}
   local context = _contexts[cwd] or {}
+  local sess = require("acp.session").find_ready_for_cwd(cwd)
+  local caps = (sess and sess.agent_capabilities and sess.agent_capabilities.promptCapabilities) or {}
+  local dropped = 0
   for _, c in ipairs(context) do
     if c.type == "image" then
-      table.insert(items, { type = "image", mediaType = c.mediaType, data = c.data })
+      if caps.image then
+        table.insert(items, { type = "image", mimeType = c.mimeType, data = c.data })
+      else
+        dropped = dropped + 1
+      end
     else
       table.insert(items, { type = "text", text = c.text })
     end
+  end
+  if dropped > 0 then
+    vim.notify("Dropped " .. dropped .. " image block(s) — agent lacks image capability",
+               vim.log.levels.WARN, { title = "acp" })
   end
   _contexts[cwd] = {}
   return items

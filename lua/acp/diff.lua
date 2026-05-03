@@ -650,7 +650,13 @@ subscribe_to_thread = function(sess, cwd, file, row)
       if reason == "refusal" then
         table.insert(t.messages, { role="system", type="info", text="--- refused ---" })
       elseif reason == "max_tokens" then
-        table.insert(t.messages, { role="system", type="info", text="--- max tokens ---" })
+        table.insert(t.messages, { role="system", type="info", text="--- max tokens reached ---" })
+      elseif reason == "max_turn_requests" then
+        table.insert(t.messages, { role="system", type="info", text="--- max turn requests reached ---" })
+      elseif reason == "cancelled" then
+        table.insert(t.messages, { role="system", type="info", text="--- cancelled ---" })
+      elseif reason == "end_turn" then
+        -- normal end, no banner
       else
         table.insert(t.messages, { role="agent", type="info", text="Turn ended: " .. reason })
       end
@@ -667,8 +673,9 @@ subscribe_to_thread = function(sess, cwd, file, row)
       t._stream_parsed = {}
       t._stream_tail = ""
       t._active_tool = nil
-    elseif u.sessionUpdate == "session_info_update" and u.title then
-      t._title = u.title
+    elseif u.sessionUpdate == "session_info_update" then
+      if u.title      then t._title      = u.title      end
+      if u.updatedAt  then t._updated_at = u.updatedAt  end
     end
 
     local key = thread_session_key(cwd, file, row)
@@ -855,29 +862,50 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
       for i = 2, #tlines do add("     " .. tlines[i], "AcpThreadThought") end
     elseif msg.type == "tool_call" then
       ensure_role("agent")
-      local call   = msg.call or {}
-      local title  = call.title or call.name or call.kind or "tool"
-      local kind   = call.kind   and ("[" .. call.kind .. "] ") or ""
-      local status = call.status and ("  · " .. call.status)   or ""
-      local hl     = (call.status == "failed") and "Error" or "AcpThreadAction"
-      add("  ⚙ " .. kind .. title .. status, hl)
+      local call    = msg.call or {}
+      local tname   = call.title or call.name or call.kind or "tool"
+      local status  = call.status or "pending"
+      local KIND    = {
+        read = "👁", edit = "✎", delete = "✗", move = "→", search = "🔍",
+        execute = "▶", think = "💭", fetch = "⤓", switch_mode = "⇄", other = "⚙",
+      }
+      local STATUS  = { pending = "○", in_progress = "◐", completed = "●", failed = "✗" }
+      local glyph   = KIND[call.kind or ""] or STATUS[status] or "○"
+      local hl      = ({
+        failed      = "Error",
+        completed   = "AcpThreadResult",
+        in_progress = "AcpThreadAction",
+        pending     = "Comment",
+      })[status] or "AcpThreadAction"
+
+      local raw = call.rawInput or call.arguments
+      local brief = ""
+      if type(raw) == "table" then
+        local parts = {}
+        for k, v in pairs(raw) do
+          local s = (type(v) == "string") and v or vim.json.encode(v)
+          s = s:gsub("[\r\n]+", " ")
+          if #s > 60 then s = s:sub(1, 60) .. "…" end
+          table.insert(parts, k .. "=" .. s)
+        end
+        brief = table.concat(parts, ", ")
+        if #brief > 100 then brief = brief:sub(1, 100) .. "…" end
+      elseif type(raw) == "string" then
+        brief = raw:gsub("[\r\n]+", " ")
+        if #brief > 100 then brief = brief:sub(1, 100) .. "…" end
+      end
+
+      local s_mark = STATUS[status] or "○"
+      local header = "  " .. glyph .. " " .. s_mark .. "  " .. tname
+      if brief ~= "" then header = header .. "(" .. brief .. ")" end
+      add(header, hl)
 
       if type(call.locations) == "table" then
         for _, loc in ipairs(call.locations) do
           if loc.path then
             local line_suffix = loc.line and (":" .. loc.line) or ""
-            add("    @ " .. loc.path .. line_suffix, "Comment")
+            add("     @ " .. loc.path .. line_suffix, "Comment")
           end
-        end
-      end
-
-      local raw = call.rawInput or call.arguments
-      if raw then
-        local args = (type(raw) == "string") and raw or vim.json.encode(raw)
-        local input_lines = vim.split(args, "\n")
-        for i, line in ipairs(input_lines) do
-          local prefix = i == 1 and "    in: " or "        "
-          add(prefix .. line, "Comment")
         end
       end
 
@@ -887,24 +915,54 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
         if ctype == "content" and c.content then
           local inner = c.content
           if inner.type == "text" and inner.text then
-            local rlines = vim.split(inner.text, "\n")
-            for i = 1, #rlines do add("    " .. rlines[i], "AcpThreadResult") end
+            for _, l in ipairs(vim.split(inner.text, "\n")) do
+              add("     " .. l, "AcpThreadResult")
+            end
           elseif inner.type == "image" then
-            add("    [image]", "AcpThreadResult")
+            add("     [image" .. (inner.mimeType and (" " .. inner.mimeType) or "") .. "]", "AcpThreadResult")
+          elseif inner.type == "audio" then
+            add("     [audio" .. (inner.mimeType and (" " .. inner.mimeType) or "") .. "]", "AcpThreadResult")
           elseif inner.type == "resource_link" and inner.uri then
-            add("    " .. inner.uri, "AcpThreadResult")
+            add("     " .. inner.uri, "AcpThreadResult")
+          elseif inner.type == "resource" and inner.resource then
+            local r = inner.resource
+            if r.text and r.text ~= "" then
+              for _, l in ipairs(vim.split(r.text, "\n")) do
+                add("     " .. l, "AcpThreadResult")
+              end
+            else
+              add("     " .. (r.uri or "[resource]"), "AcpThreadResult")
+            end
           end
         elseif ctype == "diff" and c.path then
-          add("    diff: " .. c.path, "AcpThreadResult")
+          add("     ⟶ " .. c.path, "AcpThreadAction")
+          if c.oldText and c.oldText ~= "" then
+            for _, l in ipairs(vim.split(c.oldText, "\n")) do
+              add("     - " .. l, "AcpDiffDelete")
+            end
+          end
+          if c.newText and c.newText ~= "" then
+            for _, l in ipairs(vim.split(c.newText, "\n")) do
+              add("     + " .. l, "AcpDiffAdd")
+            end
+          end
         elseif ctype == "terminal" and c.terminalId then
-          add("    terminal: " .. c.terminalId, "AcpThreadResult")
+          local out = c.output or c.text
+          if out and out ~= "" then
+            for _, l in ipairs(vim.split(out, "\n")) do
+              add("     " .. l, "AcpThreadResult")
+            end
+          else
+            add("     $ terminal " .. c.terminalId, "Comment")
+          end
         end
       end
 
       if (#content == 0) and call.rawOutput then
         local out = (type(call.rawOutput) == "string") and call.rawOutput or vim.json.encode(call.rawOutput)
-        local rlines = vim.split(out, "\n")
-        for i = 1, #rlines do add("    " .. rlines[i], "AcpThreadResult") end
+        for _, l in ipairs(vim.split(out, "\n")) do
+          add("     " .. l, "AcpThreadResult")
+        end
       end
     elseif msg.type == "tool_result" then
       ensure_role("agent")

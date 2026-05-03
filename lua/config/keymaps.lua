@@ -173,7 +173,7 @@ map("n", "<leader>to", "<cmd>tabonly<CR>", { desc = "Close other tabs" })
 
 map("n", "<leader>qq", "<cmd>qa<CR>", { desc = "Quit all" })
 map("n", "<leader>bb", function()
-  snacks().picker.buffers({ hidden = true })
+  snacks().picker.buffers({ hidden = true, unloaded = true, nofile = true, current = true })
 end, { desc = "Switch buffer" })
 map("n", "<leader>bd", "<cmd>bdelete<CR>", { desc = "Kill buffer" })
 map("n", "<leader>bD", function()
@@ -282,8 +282,13 @@ end, { desc = "YAML schema" })
 map("n", "<leader>oc", function() require("tasks").pick() end, { desc = "Run task" })
 map("n", "<leader>oC", "<cmd>ReferencerUpdate<CR>", { desc = "Refresh references" })
 map("n", "<leader>oR", restart_nvim, { desc = "Restart Neovim" })
+local _term_seq = 0
 map("n", "<leader>ot", function()
-  snacks().terminal(nil, { win = { position = "right" } })
+  _term_seq = _term_seq + 1
+  local term = snacks().terminal.open(nil, { win = { position = "right" } })
+  if term and term.buf and vim.api.nvim_buf_is_valid(term.buf) then
+    pcall(vim.api.nvim_buf_set_name, term.buf, "term://term-" .. _term_seq .. "#" .. term.buf)
+  end
 end, { desc = "Open vsplit terminal" })
 map("n", "<leader>oT", function()
   local cmd = vim.fn.input("Command: ")

@@ -4,12 +4,13 @@ local rpc_mod   = require("acp.rpc")
 
 local sessions = {}  -- [cwd] -> session
 
+local PROTOCOL_VERSION = 1
+
 local INIT_PARAMS = {
-  protocolVersion = 1,
+  protocolVersion = PROTOCOL_VERSION,
   clientCapabilities = {
-    fs               = { readTextFile = false, writeTextFile = false },
-    terminal         = false,
-    promptCapabilities = { audio = false, embeddedContext = true, image = true },
+    fs       = { readTextFile = false, writeTextFile = false },
+    terminal = false,
   },
   clientInfo = { name = "nvim-acp", version = "0.1.0" },
 }
@@ -85,6 +86,17 @@ function M.get_or_create(cwd_or_opts, callback)
         transport.close(th)
         callback("initialize failed: " .. vim.inspect(e), nil)
         return
+      end
+
+      init_res = init_res or {}
+      stub.protocol_version  = init_res.protocolVersion
+      stub.agent_capabilities = init_res.agentCapabilities or {}
+      stub.agent_info         = init_res.agentInfo
+      stub.auth_methods       = init_res.authMethods or {}
+
+      if stub.protocol_version and stub.protocol_version ~= PROTOCOL_VERSION then
+        notify("ACP: agent protocolVersion " .. tostring(stub.protocol_version)
+               .. " differs from client " .. PROTOCOL_VERSION, vim.log.levels.WARN)
       end
 
       stub.rpc:request("session/new", { cwd = cwd, mcpServers = {} }, function(e2, res)
