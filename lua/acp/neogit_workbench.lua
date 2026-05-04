@@ -469,7 +469,7 @@ function M.show_thread(file, row)
 
   vim.api.nvim_create_autocmd("BufReadCmd", {
     buffer = buf,
-    callback = refresh_thread,
+    callback = function() vim.schedule(refresh_thread) end,
   })
 
   place(buf)
@@ -500,7 +500,7 @@ function M.show_thread(file, row)
     local lnum = diff.find_line_for_call(buf, id)
     if lnum then pcall(vim.api.nvim_win_set_cursor, 0, { lnum, 0 }) end
   end)
-  km("R",       function() diff.restart_thread(row, file) end)
+  km("R",       function() diff.restart_thread(row, file, cwd) end)
   km("m",       function() require("acp.workbench").pick_mode(key) end)
   km("<S-Tab>", function() require("acp.workbench").pick_mode(key) end)
   km("M",       function() require("acp").pick_model(cwd) end)

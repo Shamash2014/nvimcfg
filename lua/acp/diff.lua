@@ -1187,8 +1187,8 @@ local function notify_thread_surfaces(cwd, file, row, t)
   pcall(function() require("acp.workbench").on_event(file, t) end)
 end
 
-function M.restart_thread(row, file)
-  local cwd  = _cur.cwd or vim.fn.getcwd()
+function M.restart_thread(row, file, explicit_cwd)
+  local cwd  = explicit_cwd or _cur.cwd or vim.fn.getcwd()
   file = file or _cur.sel_file
   local t    = ((_threads[cwd] or {})[file] or {})[row]
   if (not t or type(t) == "userdata") and type(row) == "number" then

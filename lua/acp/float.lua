@@ -228,7 +228,10 @@ function M.open_comment_float(title, opts)
   km("<C-y>", function()
     require("acp").pick_model(cwd, function() vim.schedule(refresh_title) end)
   end)
-  km("q", function() handle.close() end)
+  vim.keymap.set("n", "q", function() handle.close() end,
+    { buffer = buf, nowait = true, noremap = true, silent = true })
+  vim.keymap.set("i", "<Esc>", function() handle.close() end,
+    { buffer = buf, nowait = true, noremap = true, silent = true })
 
   vim.cmd("startinsert")
   return handle
@@ -339,7 +342,10 @@ function M.open_composer_float(title, opts)
   km("<C-y>", function()
     require("acp").pick_model(cwd, function() vim.schedule(refresh_title) end)
   end)
-  km("q", function() handle.close() end)
+  vim.keymap.set("n", "q", function() handle.close() end,
+    { buffer = buf, nowait = true, noremap = true, silent = true })
+  vim.keymap.set("i", "<Esc>", function() handle.close() end,
+    { buffer = buf, nowait = true, noremap = true, silent = true })
 
   vim.api.nvim_win_set_cursor(handle.win, { 1, 2 })
   vim.cmd("startinsert!")
