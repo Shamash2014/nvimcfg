@@ -719,9 +719,15 @@ function M.add_comment(file, row, visual)
 
   local visual_text = ""
   if visual then
-    local l1 = vim.fn.line("'<"); local l2 = vim.fn.line("'>")
-    local lines = vim.api.nvim_buf_get_lines(0, l1 - 1, l2, false)
-    visual_text = table.concat(lines, "\n")
+    local pending = vim.g._acp_visual_text
+    if pending then
+      visual_text = pending
+      vim.g._acp_visual_text = nil
+    else
+      local l1 = vim.fn.line("'<"); local l2 = vim.fn.line("'>")
+      local lines = vim.api.nvim_buf_get_lines(0, l1 - 1, l2, false)
+      visual_text = table.concat(lines, "\n")
+    end
   end
 
   require("acp.float").open_comment_float(
@@ -1395,6 +1401,20 @@ function M._install_main_keymaps(buf)
   km("gt", function() M.open_thread_view(-1) end, "Open global thread")
   km("gs", M.send,            "Send diff to ACP")
   km("n",  function() require("acp.workbench").set(_cur.cwd) end, "New thread")
+  vim.keymap.set("n", "ga", "", { buffer = buf, nowait = false, silent = true })
+  km("gan", function()
+    local mode = vim.api.nvim_get_mode().mode
+    local in_visual = vim.fn.visualmode() ~= "" or mode:find("v") or mode:find("s")
+    if in_visual then
+      local l1 = vim.fn.line("'<"); local l2 = vim.fn.line("'>")
+      local lines = vim.api.nvim_buf_get_lines(0, math.min(l1, l2) - 1, math.max(l1, l2), false)
+      vim.g._acp_visual_text = table.concat(lines, "\n")
+      vim.api.nvim_input("<Esc>")
+      vim.schedule(function() M.add_comment(nil, nil, true) end)
+    else
+      M.add_comment()
+    end
+  end, "New thread (with selection)")
   km("m", function() require("acp.workbench").pick_mode() end, "Pick mode")
   km("<S-Tab>", function() require("acp.workbench").pick_mode() end, "Switch mode")
   km("M", function() require("acp").pick_model() end,         "Pick model")

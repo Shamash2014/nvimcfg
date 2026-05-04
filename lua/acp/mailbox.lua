@@ -46,8 +46,7 @@ function M.enqueue_permission(entry)
   entry.id    = id_seq
   entry.state = "pending"
   table.insert(queue, entry)
-  M.open_permission_float(entry)
-  vim.notify("ACP permission request: " .. entry.tool_title, vim.log.levels.WARN, { title = "acp" })
+  snacks_notify("Permission pending: " .. entry.tool_title .. " — open mailbox to respond", "warn")
   pcall(vim.cmd, "redrawstatus")
 end
 
@@ -124,8 +123,7 @@ end
 function M.respond(id, kind)
   for _, e in ipairs(queue) do
     if e.id == id and e.state == "pending" then
-      -- Find the optionId matching the requested kind
-      local option_id = kind  -- fallback: use kind directly
+      local option_id = kind
       for _, o in ipairs(e.options or {}) do
         if o.kind == kind then option_id = o.optionId; break end
       end
