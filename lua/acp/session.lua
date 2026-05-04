@@ -57,7 +57,7 @@ function M.get_or_create(cwd_or_opts, callback)
     end
   end
 
-  require("acp.agents").resolve(cwd, function(a_err, provider)
+  require("acp.agents").resolve({ cwd = cwd, key = key }, function(a_err, provider)
     if a_err then
       sessions[key] = nil
       callback("provider error: " .. a_err, nil)

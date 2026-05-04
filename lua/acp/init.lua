@@ -84,7 +84,9 @@ function M.workbench() require("acp.workbench").open() end
 function M.mailbox()   require("acp.mailbox").open() end
 
 function M.pick_provider(cwd)
-  require("acp.agents").choose_provider(cwd or vim.fn.getcwd())
+  cwd = cwd or vim.fn.getcwd()
+  local sess = require("acp.session").find_ready_for_cwd(cwd)
+  require("acp.agents").choose_provider(cwd, nil, sess and { key = sess.key } or nil)
 end
 
 function M.cancel(cwd)
