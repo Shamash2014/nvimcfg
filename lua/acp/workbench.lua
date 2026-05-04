@@ -583,6 +583,47 @@ local function _wait_for_worktrees(cwds, timeout_ms)
   end
 end
 
+local _root_lookup_cache = {}  -- [dir] = root | false
+local function _git_root(file)
+  if not file or file == "" then return nil end
+  local dir = vim.fn.fnamemodify(file, ":p:h")
+  if _root_lookup_cache[dir] ~= nil then return _root_lookup_cache[dir] or nil end
+  local cur = dir
+  while cur and cur ~= "/" and cur ~= "" do
+    if vim.fn.isdirectory(cur .. "/.git") == 1 or vim.fn.filereadable(cur .. "/.git") == 1 then
+      _root_lookup_cache[dir] = cur
+      return cur
+    end
+    local parent = vim.fn.fnamemodify(cur, ":h")
+    if not parent or parent == cur then break end
+    cur = parent
+  end
+  _root_lookup_cache[dir] = false
+  return nil
+end
+
+local _oldfile_roots_cache = nil
+local function _oldfile_project_roots()
+  if _oldfile_roots_cache then return _oldfile_roots_cache end
+  local seen, list = {}, {}
+  for _, f in ipairs(vim.v.oldfiles or {}) do
+    local root = _git_root(f)
+    if root and not seen[root] and vim.fn.isdirectory(root) == 1 then
+      seen[root] = true
+      table.insert(list, root)
+      if #list >= 200 then break end
+    end
+  end
+  _oldfile_roots_cache = list
+  return list
+end
+
+function M.invalidate_project_cache()
+  _oldfile_roots_cache = nil
+  _root_lookup_cache   = {}
+  _wt_pcache           = {}
+end
+
 local function _collect_projects()
   local diff = require("acp.diff")
   local seen, candidates = {}, {}
@@ -598,6 +639,7 @@ local function _collect_projects()
     if s and s.cwd then add(s.cwd) end
   end
   for _, p in ipairs(_projects) do add(p) end
+  for _, r in ipairs(_oldfile_project_roots()) do add(r) end
 
   _wait_for_worktrees(candidates, 800)
 
@@ -625,7 +667,7 @@ local function _open_thread(cwd, file, row)
     pcall(nwb.close)
     vim.cmd("tcd " .. vim.fn.fnameescape(cwd))
   end
-  nwb.open({ kind = "vsplit" })
+  nwb.open({ kind = "vsplit", skip_diff = true })
   nwb.show_thread(file, tonumber(row) or -1)
 end
 

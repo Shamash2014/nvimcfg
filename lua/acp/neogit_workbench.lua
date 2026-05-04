@@ -392,18 +392,20 @@ function M.open(opts)
   })
 
   local workbench_win = _buffer_win
-  require("acp.diff").with_files(cwd, function(files)
-    if #files > 0 then
-      local win, buf = ensure_diff_pane(workbench_win)
-      require("acp.diff").show_file(files[1].path, win, buf, function(file, tokens, model)
-        set_winbar(win, file, tokens, model)
-        set_winbar(_buffer_win, "ACP workbench", tokens, model)
-      end)
-      if vim.api.nvim_win_is_valid(workbench_win) then
-        vim.api.nvim_set_current_win(workbench_win)
+  if not (opts and opts.skip_diff) then
+    require("acp.diff").with_files(cwd, function(files)
+      if #files > 0 then
+        local win, buf = ensure_diff_pane(workbench_win)
+        require("acp.diff").show_file(files[1].path, win, buf, function(file, tokens, model)
+          set_winbar(win, file, tokens, model)
+          set_winbar(_buffer_win, "ACP workbench", tokens, model)
+        end)
+        if vim.api.nvim_win_is_valid(workbench_win) then
+          vim.api.nvim_set_current_win(workbench_win)
+        end
       end
-    end
-  end)
+    end)
+  end
 
   if not _registered_autocmd then
     _registered_autocmd = true

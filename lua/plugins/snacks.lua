@@ -22,12 +22,24 @@ return {
               git_status_hl = false,
             },
           },
+          actions = {
+            loclist = function(picker)
+              local items = vim.tbl_map(
+                function(it) return it.qf or it end,
+                picker:selected({ fallback = true })
+              )
+              picker:close()
+              vim.fn.setloclist(0, items)
+              vim.cmd("lopen")
+            end,
+          },
           win = {
             input = {
               keys = {
                 ["<C-j>"] = { "list_down", mode = { "i", "n" } },
-                ["<C-k>"] = { "list_up", mode = { "i", "n" } },
-                ["<C-q>"] = { "qf", mode = { "i", "n" } },
+                ["<C-k>"] = { "list_up",   mode = { "i", "n" } },
+                ["<C-q>"] = { "qf",        mode = { "i", "n" } },
+                ["<C-l>"] = { "loclist",   mode = { "i", "n" } },
               },
             },
             list = {
@@ -35,6 +47,7 @@ return {
                 ["<C-j>"] = "list_down",
                 ["<C-k>"] = "list_up",
                 ["<C-q>"] = "qf",
+                ["<C-l>"] = "loclist",
               },
             },
           },

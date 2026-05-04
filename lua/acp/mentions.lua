@@ -40,13 +40,26 @@ local function format_qf_items(items)
   if not items or #items == 0 then return nil end
   local lines = {}
   for _, item in ipairs(items) do
-    local fname = (item.bufnr and item.bufnr ~= 0)
-      and vim.fn.fnamemodify(vim.api.nvim_buf_get_name(item.bufnr), ":.")
-      or (item.filename or "?")
+    local fname = "?"
+    if item.bufnr and item.bufnr ~= 0 and vim.api.nvim_buf_is_valid(item.bufnr) then
+      local name = vim.api.nvim_buf_get_name(item.bufnr)
+      if name ~= "" then fname = vim.fn.fnamemodify(name, ":.") end
+    end
+    if fname == "?" and item.filename and item.filename ~= "" then
+      fname = vim.fn.fnamemodify(item.filename, ":.")
+    end
     table.insert(lines, ("%s:%d:%d %s"):format(
       fname, item.lnum or 0, item.col or 0, (item.text or ""):gsub("\n", " ")))
   end
   return table.concat(lines, "\n")
+end
+
+local function find_loclist_items()
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local list = vim.fn.getloclist(w)
+    if list and #list > 0 then return list end
+  end
+  return nil
 end
 
 local function format_diagnostics()
@@ -68,13 +81,24 @@ local function resolve_hash_token(tag)
     if not out then vim.notify("No diagnostics for #{diag}", vim.log.levels.INFO, { title = "acp" }) end
     return out
   elseif tag == "qflist" then
-    local out = format_qf_items(vim.fn.getqflist())
-    if not out then vim.notify("Quickfix empty for #{qflist}", vim.log.levels.INFO, { title = "acp" }) end
+    local items = vim.fn.getqflist()
+    local out = format_qf_items(items)
+    if out then
+      vim.notify(("#{qflist}: %d entr%s"):format(#items, #items == 1 and "y" or "ies"),
+        vim.log.levels.INFO, { title = "acp" })
+    else
+      vim.notify("Quickfix empty for #{qflist}", vim.log.levels.INFO, { title = "acp" })
+    end
     return out
   elseif tag == "loclist" then
-    local win = vim.api.nvim_get_current_win()
-    local out = format_qf_items(vim.fn.getloclist(win))
-    if not out then vim.notify("Loclist empty for #{loclist}", vim.log.levels.INFO, { title = "acp" }) end
+    local items = find_loclist_items()
+    local out = format_qf_items(items)
+    if out then
+      vim.notify(("#{loclist}: %d entr%s"):format(#items, #items == 1 and "y" or "ies"),
+        vim.log.levels.INFO, { title = "acp" })
+    else
+      vim.notify("Loclist empty for #{loclist} in this tab", vim.log.levels.INFO, { title = "acp" })
+    end
     return out
   end
   return nil

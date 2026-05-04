@@ -14,6 +14,8 @@ return {
       require("blink.cmp").setup({
         keymap = {
           preset = "default",
+          ["<C-j>"] = { "select_next", "fallback" },
+          ["<C-k>"] = { "select_prev", "fallback" },
         },
         snippets = {
           preset = "luasnip",
