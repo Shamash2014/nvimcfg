@@ -26,6 +26,20 @@ return {
     end,
   },
   {
+    src = "https://github.com/akinsho/git-conflict.nvim",
+    lazy = false,
+    config = function()
+      require("git-conflict").setup()
+    end,
+  },
+  {
+    src = "https://github.com/FabijanZulj/blame.nvim",
+    cmd = { "BlameToggle" },
+    config = function()
+      require("blame").setup()
+    end,
+  },
+  {
     src = "https://github.com/sindrets/diffview.nvim",
     cmd = {
       "DiffviewOpen",
