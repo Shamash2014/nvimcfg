@@ -35,6 +35,7 @@ return {
       vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost", "InsertLeave" }, {
         group = vim.api.nvim_create_augroup("nvim2-lint", { clear = true }),
         callback = function()
+          if vim.bo.buftype == "nofile" then return end
           lint.try_lint()
         end,
       })

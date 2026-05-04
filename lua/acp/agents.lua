@@ -35,8 +35,9 @@ local _providers = {
 
 local _available = nil
 
-local _prefs_path  = vim.fn.stdpath("data") .. "/acp/cwd_prefs.json"
-local _models_path = vim.fn.stdpath("data") .. "/acp/cwd_models.json"
+local _prefs_path      = vim.fn.stdpath("data") .. "/acp/cwd_prefs.json"
+local _models_path     = vim.fn.stdpath("data") .. "/acp/cwd_models.json"
+local _key_models_path = vim.fn.stdpath("data") .. "/acp/key_models.json"
 
 local function load_json(path)
   local f = io.open(path, "r")
@@ -48,6 +49,7 @@ end
 
 local _cwd_prefs  = load_json(_prefs_path)
 local _cwd_models = load_json(_models_path)
+local _key_models = load_json(_key_models_path)
 
 local function save_json(path, tbl)
   vim.fn.mkdir(vim.fs.dirname(path), "p")
@@ -55,8 +57,9 @@ local function save_json(path, tbl)
   f:write(vim.json.encode(tbl)); f:close()
 end
 
-local function save_prefs()  save_json(_prefs_path,  _cwd_prefs)  end
-local function save_models() save_json(_models_path, _cwd_models) end
+local function save_prefs()      save_json(_prefs_path,      _cwd_prefs)  end
+local function save_models()     save_json(_models_path,     _cwd_models) end
+local function save_key_models() save_json(_key_models_path, _key_models) end
 
 function M.available()
   if _available then return _available end
@@ -85,6 +88,8 @@ end
 function M.set_for_cwd(cwd, name) _cwd_prefs[cwd] = name; save_prefs() end
 function M.set_model_for_cwd(cwd, model) _cwd_models[cwd] = model; save_models() end
 function M.get_model_for_cwd(cwd) return _cwd_models[cwd] end
+function M.set_model_for_key(key, model) _key_models[key] = model; save_key_models() end
+function M.get_model_for_key(key) return _key_models[key] end
 
 function M.get(name)
   for _, p in ipairs(_providers) do
@@ -101,6 +106,14 @@ end
 
 -- Display label for the current cwd's provider ("claude", "opencode", etc.)
 function M.provider_label(cwd)
+  local ok, session_mod = pcall(require, "acp.session")
+  if ok then
+    local s = session_mod.find_ready_for_cwd(cwd)
+    if s and s.provider then
+      local p = M.get(s.provider)
+      if p then return p.display end
+    end
+  end
   local p = _cwd_prefs[cwd] and M.get(_cwd_prefs[cwd])
   if not p then
     local avail = M.available()

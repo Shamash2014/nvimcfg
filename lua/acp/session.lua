@@ -64,6 +64,7 @@ function M.get_or_create(cwd_or_opts, callback)
       return
     end
 
+    stub.provider = provider.name
     local cmd = require("acp.agents").cmd(provider)
     local th, spawn_err = transport.spawn(cmd, function(line)
       if stub.rpc then stub.rpc:_dispatch(line) end
@@ -139,7 +140,8 @@ function M.get_or_create(cwd_or_opts, callback)
           stub.queue = {}
         end
 
-        local saved_model = require("acp.agents").get_model_for_cwd(cwd)
+        local saved_model = require("acp.agents").get_model_for_key(key)
+                         or require("acp.agents").get_model_for_cwd(cwd)
         local has_model_opt = false
         for _, opt in ipairs(stub.config_options) do
           if opt.id == "model" then has_model_opt = true; break end
