@@ -686,7 +686,7 @@ function M.pick_project()
     })
     for _, wt in ipairs(p.worktrees) do
       if wt.path ~= p.cwd then
-        local label = wt.branch or vim.fn.fnamemodify(wt.path, ":t")
+        local label = (type(wt.branch) == "string" and wt.branch) or vim.fn.fnamemodify(wt.path, ":t")
         table.insert(items, {
           text = "  |_ " .. label .. "  " .. vim.fn.fnamemodify(wt.path, ":~"),
           path = wt.path,

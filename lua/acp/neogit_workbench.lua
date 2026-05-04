@@ -491,7 +491,7 @@ function M.show_thread(file, row)
   local function km(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true, noremap = true })
   end
-  km("<CR>",    function() diff.reply_at(row, file) end)
+  km("<CR>",    function() diff.reply_at(row, file, cwd) end)
   km("<Tab>",   function()
     local id = diff.toggle_call_at_cursor(buf); if not id then return end
     local t_live = diff.get_thread(cwd, file, row)

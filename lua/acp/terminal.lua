@@ -75,6 +75,19 @@ function M.kill(tid)
   if entry and entry.job_id then vim.fn.jobstop(entry.job_id) end
 end
 
+function M.done(tid, exit_code)
+  local entry = _terminals[tid]
+  if not entry or entry.exit_code ~= nil then return end
+  local code = exit_code or 0
+  entry.exit_code = code
+  local waiters = entry.waiters
+  entry.waiters  = {}
+  for _, w in ipairs(waiters) do
+    vim.schedule(function() w(code) end)
+  end
+  if entry.job_id then vim.fn.jobstop(entry.job_id) end
+end
+
 function M.release(tid)
   local entry = _terminals[tid]
   if not entry then return end

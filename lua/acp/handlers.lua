@@ -7,6 +7,7 @@ function M.dispatch(rpc, msg)
   elseif method == "terminal/wait_for_exit"     then M._handle_term_wait(rpc, msg)
   elseif method == "terminal/output"            then M._handle_term_output(rpc, msg)
   elseif method == "terminal/kill"              then M._handle_term_kill(rpc, msg)
+  elseif method == "terminal/done"              then M._handle_term_done(rpc, msg)
   elseif method == "terminal/release"           then M._handle_term_release(rpc, msg)
   else
     rpc:respond(msg.id, nil, { code = -32601, message = "Method not found: " .. method })
@@ -78,6 +79,16 @@ function M._handle_term_kill(rpc, msg)
   local p = msg.params or {}
   vim.schedule(function()
     if p.terminalId then require("acp.terminal").kill(p.terminalId) end
+    rpc:respond(msg.id, {})
+  end)
+end
+
+function M._handle_term_done(rpc, msg)
+  local p = msg.params or {}
+  vim.schedule(function()
+    if p.terminalId then
+      require("acp.terminal").done(p.terminalId, p.exitCode)
+    end
     rpc:respond(msg.id, {})
   end)
 end

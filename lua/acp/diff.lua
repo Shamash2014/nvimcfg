@@ -1214,8 +1214,8 @@ function M.restart_thread(row, file, explicit_cwd)
   end)
 end
 
-function M.reply_at(row, file)
-  local cwd  = _cur.cwd or vim.fn.getcwd()
+function M.reply_at(row, file, explicit_cwd)
+  local cwd  = explicit_cwd or _cur.cwd or vim.fn.getcwd()
   file = file or _cur.sel_file
   local t    = ((_threads[cwd] or {})[file] or {})[row]
   if not t then
