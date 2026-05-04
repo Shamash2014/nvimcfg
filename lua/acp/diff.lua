@@ -297,6 +297,14 @@ local function redraw_thread(row)
   if type(t) ~= "table" then return end
   local sign = t.resolved and "AcpThreadResolved" or "AcpThreadOpen"
   vim.fn.sign_place(row + 1, "acp_threads", sign, buf, { lnum = row + 1 })
+  local hl = sign
+  local count = type(t.messages) == "table" and #t.messages or 0
+  local label = count > 0 and ("  ▍ thread · " .. count) or "  ▍ thread"
+  pcall(vim.api.nvim_buf_set_extmark, buf, NS_THREAD, row, 0, {
+    virt_text     = { { label, hl } },
+    virt_text_pos = "eol",
+    hl_mode       = "combine",
+  })
 end
 
 local _files_cache  = {}    -- [cwd] = { files = {}, ts = 0 }
@@ -786,12 +794,11 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
   local hls   = {}
   local line_to_id = {}
   _line_to_call_id_by_buf[buf] = line_to_id
-  local function map_id(id)
-    if id then line_to_id[#lines] = id end
-  end
+  local active_id = nil
   local function push(line, hl)
     table.insert(lines, line)
     if hl then table.insert(hls, { #lines - 1, hl }) end
+    if active_id then line_to_id[#lines] = active_id end
   end
   local function add(s, hl)
     s = s or ""
@@ -807,12 +814,13 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
   local SEP = string.rep("─", 48)
 
   local meta, msgs = {}, {}
-  if type(t_live) == "table" then
-    -- Fast path during streaming: use in-memory table directly
+  local has_live = type(t_live) == "table"
+    and type(t_live.messages) == "table"
+    and #t_live.messages > 0
+  if has_live then
     meta = { prompt = t_live.prompt, _title = t_live._title }
-    msgs = t_live.messages or {}
+    msgs = t_live.messages
   else
-    -- Read from JSONL file (open_thread_view / restart)
     local path = thread_path(cwd, file, row)
     local f = io.open(path, "r")
     if f then
@@ -909,14 +917,15 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
       local s_mark   = STATUS[status] or "○"
       local header   = "  " .. arrow .. " " .. glyph .. " " .. s_mark .. "  " .. tname
       if brief ~= "" then header = header .. "(" .. brief .. ")" end
-      add(header, hl); map_id(id)
+      active_id = id
+      add(header, hl)
 
       if expanded then
         if type(call.locations) == "table" then
           for _, loc in ipairs(call.locations) do
             if loc.path then
               local line_suffix = loc.line and (":" .. loc.line) or ""
-              add("     @ " .. loc.path .. line_suffix, "Comment"); map_id(id)
+              add("     @ " .. loc.path .. line_suffix, "Comment")
             end
           end
         end
@@ -928,44 +937,44 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
             local inner = c.content
             if inner.type == "text" and inner.text then
               for _, l in ipairs(vim.split(inner.text, "\n")) do
-                add("     " .. l, "AcpThreadResult"); map_id(id)
+                add("     " .. l, "AcpThreadResult")
               end
             elseif inner.type == "image" then
-              add("     [image" .. (inner.mimeType and (" " .. inner.mimeType) or "") .. "]", "AcpThreadResult"); map_id(id)
+              add("     [image" .. (inner.mimeType and (" " .. inner.mimeType) or "") .. "]", "AcpThreadResult")
             elseif inner.type == "audio" then
-              add("     [audio" .. (inner.mimeType and (" " .. inner.mimeType) or "") .. "]", "AcpThreadResult"); map_id(id)
+              add("     [audio" .. (inner.mimeType and (" " .. inner.mimeType) or "") .. "]", "AcpThreadResult")
             elseif inner.type == "resource_link" and inner.uri then
-              add("     " .. inner.uri, "AcpThreadResult"); map_id(id)
+              add("     " .. inner.uri, "AcpThreadResult")
             elseif inner.type == "resource" and inner.resource then
               local r = inner.resource
               if r.text and r.text ~= "" then
                 for _, l in ipairs(vim.split(r.text, "\n")) do
-                  add("     " .. l, "AcpThreadResult"); map_id(id)
+                  add("     " .. l, "AcpThreadResult")
                 end
               else
-                add("     " .. (r.uri or "[resource]"), "AcpThreadResult"); map_id(id)
+                add("     " .. (r.uri or "[resource]"), "AcpThreadResult")
               end
             end
           elseif ctype == "diff" and c.path then
-            add("     ⟶ " .. c.path, "AcpThreadAction"); map_id(id)
+            add("     ⟶ " .. c.path, "AcpThreadAction")
             if c.oldText and c.oldText ~= "" then
               for _, l in ipairs(vim.split(c.oldText, "\n")) do
-                add("     - " .. l, "AcpDiffDelete"); map_id(id)
+                add("     - " .. l, "AcpDiffDelete")
               end
             end
             if c.newText and c.newText ~= "" then
               for _, l in ipairs(vim.split(c.newText, "\n")) do
-                add("     + " .. l, "AcpDiffAdd"); map_id(id)
+                add("     + " .. l, "AcpDiffAdd")
               end
             end
           elseif ctype == "terminal" and c.terminalId then
             local out = c.output or c.text
             if out and out ~= "" then
               for _, l in ipairs(vim.split(out, "\n")) do
-                add("     " .. l, "AcpThreadResult"); map_id(id)
+                add("     " .. l, "AcpThreadResult")
               end
             else
-              add("     $ terminal " .. c.terminalId, "Comment"); map_id(id)
+              add("     $ terminal " .. c.terminalId, "Comment")
             end
           end
         end
@@ -973,10 +982,11 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
         if (#content == 0) and call.rawOutput then
           local out = (type(call.rawOutput) == "string") and call.rawOutput or vim.json.encode(call.rawOutput)
           for _, l in ipairs(vim.split(out, "\n")) do
-            add("     " .. l, "AcpThreadResult"); map_id(id)
+            add("     " .. l, "AcpThreadResult")
           end
         end
       end
+      active_id = nil
     elseif msg.type == "tool_result" then
       ensure_role("agent")
       local res = msg.result or {}
@@ -984,37 +994,39 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
       local hl = is_err and "Error" or "AcpThreadResult"
       local id = "result:" .. msg_idx
       local expanded = _expanded_calls[id] == true
+      active_id = id
       local first_line_shown = false
       for _, entry in ipairs(res.content or {}) do
         if entry.type == "text" and entry.text then
           local rlines = vim.split(entry.text, "\n")
           for i = 1, #rlines do
             if not first_line_shown then
-              add("  " .. (is_err and "✗" or "✓") .. "  " .. rlines[i], hl); map_id(id)
+              add("  " .. (is_err and "✗" or "✓") .. "  " .. rlines[i], hl)
               first_line_shown = true
             elseif expanded then
-              add("     " .. rlines[i], hl); map_id(id)
+              add("     " .. rlines[i], hl)
             end
           end
         elseif entry.type == "image" then
           if not first_line_shown then
-            add("  " .. (is_err and "✗" or "✓") .. "  [image]", hl); map_id(id)
+            add("  " .. (is_err and "✗" or "✓") .. "  [image]", hl)
             first_line_shown = true
           elseif expanded then
-            add("     [image]", hl); map_id(id)
+            add("     [image]", hl)
           end
         elseif entry.type == "resource_link" and entry.uri then
           if not first_line_shown then
-            add("  " .. (is_err and "✗" or "✓") .. "  " .. entry.uri, hl); map_id(id)
+            add("  " .. (is_err and "✗" or "✓") .. "  " .. entry.uri, hl)
             first_line_shown = true
           elseif expanded then
-            add("     " .. entry.uri, hl); map_id(id)
+            add("     " .. entry.uri, hl)
           end
         end
       end
       if not first_line_shown then
-        add("  " .. (is_err and "✗" or "✓") .. "  (no content)", hl); map_id(id)
+        add("  " .. (is_err and "✗" or "✓") .. "  (no content)", hl)
       end
+      active_id = nil
     elseif msg.type == "plan" then
       ensure_role("agent")
       add("  ▣ Plan", "AcpSectionHeader")
@@ -1120,7 +1132,13 @@ end
 function M.toggle_call_at_cursor(buf)
   local map = _line_to_call_id_by_buf[buf]; if not map then return nil end
   local lnum = vim.api.nvim_win_get_cursor(0)[1]
-  local id = map[lnum]; if not id then return nil end
+  local id = map[lnum]
+  if not id then
+    for n = lnum, 1, -1 do
+      if map[n] then id = map[n]; break end
+    end
+  end
+  if not id then return nil end
   if _expanded_calls[id] then _expanded_calls[id] = nil else _expanded_calls[id] = true end
   return id
 end

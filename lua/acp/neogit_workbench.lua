@@ -444,7 +444,11 @@ function M.show_thread(file, row)
 
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_get_name(b):find(needle, 1, true) then
-      place(b); return
+      local t_live = diff.get_thread(cwd, file, row)
+      if t_live then t_live._stream_offset = nil end
+      diff.render_thread_view(b, cwd, file, row, t_live)
+      place(b)
+      return
     end
   end
 
@@ -454,7 +458,19 @@ function M.show_thread(file, row)
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = "markdown"
 
+  local function refresh_thread()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    local t_live = diff.get_thread(cwd, file, row)
+    if t_live then t_live._stream_offset = nil end
+    diff.render_thread_view(buf, cwd, file, row, t_live)
+  end
+
   diff.render_thread_view(buf, cwd, file, row)
+
+  vim.api.nvim_create_autocmd("BufReadCmd", {
+    buffer = buf,
+    callback = refresh_thread,
+  })
 
   place(buf)
 
@@ -478,7 +494,9 @@ function M.show_thread(file, row)
   km("<CR>",    function() diff.reply_at(row, file) end)
   km("<Tab>",   function()
     local id = diff.toggle_call_at_cursor(buf); if not id then return end
-    diff.render_thread_view(buf, cwd, file, row)
+    local t_live = diff.get_thread(cwd, file, row)
+    if t_live then t_live._stream_offset = nil end
+    diff.render_thread_view(buf, cwd, file, row, t_live)
     local lnum = diff.find_line_for_call(buf, id)
     if lnum then pcall(vim.api.nvim_win_set_cursor, 0, { lnum, 0 }) end
   end)
