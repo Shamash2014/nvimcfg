@@ -7,6 +7,16 @@ vim.api.nvim_create_autocmd("TextYankPost", {
   end,
 })
 
+vim.api.nvim_create_autocmd({ "TermOpen", "BufWinEnter" }, {
+  group = group,
+  callback = function()
+    if vim.bo.buftype == "terminal" then
+      vim.wo.scrolloff = 1000
+      vim.wo.sidescrolloff = 0
+    end
+  end,
+})
+
 vim.api.nvim_create_autocmd("FileType", {
   group = group,
   pattern = {

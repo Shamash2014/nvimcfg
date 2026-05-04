@@ -14,6 +14,12 @@ return {
             ["W"] = function()
               require("acp.neogit_workbench").open({ kind = "replace" })
             end,
+            ["%"] = function()
+              require("config.neogit_worktree").open()
+            end,
+            ["gw"] = function()
+              require("config.neogit_worktree").open()
+            end,
           },
         },
       })

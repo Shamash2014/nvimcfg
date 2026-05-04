@@ -285,9 +285,15 @@ map("n", "<leader>oR", restart_nvim, { desc = "Restart Neovim" })
 local _term_seq = 0
 map("n", "<leader>ot", function()
   _term_seq = _term_seq + 1
+  local n = _term_seq
   local term = snacks().terminal.open(nil, { win = { position = "right" } })
   if term and term.buf and vim.api.nvim_buf_is_valid(term.buf) then
-    pcall(vim.api.nvim_buf_set_name, term.buf, "term://term-" .. _term_seq .. "#" .. term.buf)
+    pcall(vim.api.nvim_buf_set_name, term.buf, "terminal " .. n)
+  end
+  if term and term.win and vim.api.nvim_win_is_valid(term.win) then
+    pcall(function()
+      vim.wo[term.win].winbar = "%#WinBar#  terminal " .. n .. "  %*"
+    end)
   end
 end, { desc = "Open vsplit terminal" })
 map("n", "<leader>oT", function()

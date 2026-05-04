@@ -306,6 +306,8 @@ end
 function M.drain_context(cwd)
   cwd = cwd or _cur_cwd or vim.fn.getcwd()
   local items = {}
+  local skills_block = require("acp.skills").build_prompt_block(cwd)
+  if skills_block then table.insert(items, skills_block) end
   local context = _contexts[cwd] or {}
   local sess = require("acp.session").find_ready_for_cwd(cwd)
   local caps = (sess and sess.agent_capabilities and sess.agent_capabilities.promptCapabilities) or {}

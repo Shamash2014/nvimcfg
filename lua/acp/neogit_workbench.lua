@@ -455,6 +455,16 @@ function M.show_thread(file, row)
 
   place(buf)
 
+  local age = require("acp.commits").thread_age(cwd, file, row)
+  if age.is_past then
+    vim.wo[0].winbar = "%#AcpWinbarText#  thread  %#WarningMsg# from past · " ..
+                       age.n_since .. " commit" ..
+                       (age.n_since == 1 and "" or "s") .. " since  %*"
+    vim.schedule(function()
+      require("acp.commits").open_log(cwd, file, row, { auto = true })
+    end)
+  end
+
   local key  = diff.thread_session_key(cwd, file, row)
   local sess = require("acp.session").get(key)
   if sess then diff.subscribe_to_thread(sess, cwd, file, row) end
