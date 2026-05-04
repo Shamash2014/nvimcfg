@@ -6,6 +6,50 @@ local _thread_row  = -1
 local _contexts     = {} -- [cwd] -> context_items[]
 local _folds       = {}
 
+local _projects_path = vim.fn.stdpath("data") .. "/acp/projects.json"
+
+local function _load_projects()
+  local f = io.open(_projects_path, "r")
+  if not f then return {} end
+  local raw = f:read("*a"); f:close()
+  local ok, decoded = pcall(vim.json.decode, raw)
+  if ok and type(decoded) == "table" then
+    local list = {}
+    for _, v in ipairs(decoded) do
+      if type(v) == "string" then table.insert(list, v) end
+    end
+    return list
+  end
+  return {}
+end
+
+local function _save_projects(list)
+  vim.fn.mkdir(vim.fs.dirname(_projects_path), "p")
+  local f = io.open(_projects_path, "w"); if not f then return end
+  f:write(vim.json.encode(list)); f:close()
+end
+
+local _projects = _load_projects()
+
+function M.register_project(cwd)
+  cwd = cwd or vim.fn.getcwd()
+  if not cwd or cwd == "" then return end
+  for i, p in ipairs(_projects) do
+    if p == cwd then
+      if i == 1 then return end
+      table.remove(_projects, i)
+      break
+    end
+  end
+  table.insert(_projects, 1, cwd)
+  if #_projects > 100 then _projects = vim.list_slice(_projects, 1, 100) end
+  _save_projects(_projects)
+end
+
+function M.known_projects()
+  return vim.deepcopy(_projects)
+end
+
 local function async(f)
   local co = coroutine.create(f)
   local function resume(...)
@@ -489,55 +533,174 @@ function M.show_help()
   end
 end
 
+local WT_PCACHE_TTL_MS = 30000
+local _wt_pcache    = {}  -- [cwd] = { value = list, ts = ms }
+local _wt_pinflight = {}  -- [cwd] = true
+
+local function _parse_wt(stdout)
+  if not stdout or stdout == "" then return {} end
+  local ok, parsed = pcall(vim.json.decode, stdout)
+  if not ok or type(parsed) ~= "table" then return {} end
+  local list = {}
+  for _, w in ipairs(parsed) do
+    if type(w) == "table" and w.path then
+      table.insert(list, { path = w.path, branch = w.branch, is_main = w.is_main })
+    end
+  end
+  return list
+end
+
+local function _kickoff_wt(cwd, on_done)
+  if _wt_pinflight[cwd] then
+    if on_done then on_done() end; return
+  end
+  if vim.fn.executable("wt") == 0 then
+    _wt_pcache[cwd] = { value = {}, ts = _uv.now() }
+    if on_done then on_done() end; return
+  end
+  _wt_pinflight[cwd] = true
+  vim.system({ "wt", "list", "--format=json" }, { cwd = cwd, text = true }, function(res)
+    _wt_pinflight[cwd] = nil
+    local list = (res.code == 0) and _parse_wt(res.stdout) or {}
+    _wt_pcache[cwd] = { value = list, ts = _uv.now() }
+    if on_done then on_done() end
+  end)
+end
+
+local function _wait_for_worktrees(cwds, timeout_ms)
+  local pending = 0
+  local function dec() pending = pending - 1 end
+  for _, cwd in ipairs(cwds) do
+    local entry = _wt_pcache[cwd]
+    local fresh = entry and (_uv.now() - entry.ts) < WT_PCACHE_TTL_MS
+    if not fresh then
+      pending = pending + 1
+      _kickoff_wt(cwd, dec)
+    end
+  end
+  if pending > 0 then
+    vim.wait(timeout_ms or 800, function() return pending <= 0 end, 10)
+  end
+end
+
+local function _collect_projects()
+  local diff = require("acp.diff")
+  local seen, candidates = {}, {}
+
+  local function add(c)
+    if c and c ~= "" and not seen[c] and vim.fn.isdirectory(c) == 1 then
+      seen[c] = true
+      table.insert(candidates, c)
+    end
+  end
+  add(vim.fn.getcwd())
+  for _, s in ipairs(require("acp.session").active() or {}) do
+    if s and s.cwd then add(s.cwd) end
+  end
+  for _, p in ipairs(_projects) do add(p) end
+
+  _wait_for_worktrees(candidates, 800)
+
+  local result = {}
+  for _, cwd in ipairs(candidates) do
+    pcall(diff.load_threads, cwd)
+    local threads = diff.get_threads(cwd) or {}
+    local entry   = _wt_pcache[cwd]
+    local worktrees = (entry and entry.value) or {}
+    table.insert(result, { cwd = cwd, threads = threads, worktrees = worktrees })
+  end
+  return result
+end
+
+local function _open_oil(path)
+  if path and path ~= "" and path ~= vim.fn.getcwd() then
+    vim.cmd("tcd " .. vim.fn.fnameescape(path))
+  end
+  vim.cmd("Oil " .. vim.fn.fnameescape(path))
+end
+
+local function _open_thread(cwd, file, row)
+  local nwb = require("acp.neogit_workbench")
+  if cwd and cwd ~= vim.fn.getcwd() then
+    pcall(nwb.close)
+    vim.cmd("tcd " .. vim.fn.fnameescape(cwd))
+  end
+  nwb.open({ kind = "vsplit" })
+  nwb.show_thread(file, tonumber(row) or -1)
+end
+
 function M.pick_project()
-  local sessions = require("acp.session").active()
-  local items = {}
-  local seen = {}
+  local diff     = require("acp.diff")
+  local projects = _collect_projects()
+  local items    = {}
 
-  for _, s in ipairs(sessions) do
-    if not seen[s.cwd] then
-      seen[s.cwd] = true
-      table.insert(items, {
-        text = "📁 " .. vim.fn.fnamemodify(s.cwd, ":t") .. " (" .. vim.fn.fnamemodify(s.cwd, ":~") .. ")",
-        cwd  = s.cwd,
-        kind = "project"
-      })
-
-      local threads = require("acp.diff").get_threads(s.cwd)
-      for _, t in ipairs(threads) do
+  for _, p in ipairs(projects) do
+    table.insert(items, {
+      text = string.format("📁 %s (%s)",
+        vim.fn.fnamemodify(p.cwd, ":t"),
+        vim.fn.fnamemodify(p.cwd, ":~")),
+      cwd  = p.cwd,
+      kind = "project",
+    })
+    for _, wt in ipairs(p.worktrees) do
+      if wt.path ~= p.cwd then
+        local label = wt.branch or vim.fn.fnamemodify(wt.path, ":t")
         table.insert(items, {
-          text = "  thread: " .. t.thread.prompt:sub(1, 50),
-          cwd  = s.cwd,
-          file = t.file,
-          row  = t.row,
-          kind = "thread"
+          text = "  |_ " .. label .. "  " .. vim.fn.fnamemodify(wt.path, ":~"),
+          path = wt.path,
+          kind = "worktree",
         })
       end
+    end
+    if #p.threads > 0 then
+      table.insert(items, { text = "  ---", kind = "sep" })
+    end
+    for _, t in ipairs(p.threads) do
+      local title  = (t.thread and (t.thread._title or t.thread.prompt)) or "(empty)"
+      title        = tostring(title):gsub("[\r\n]+", " "):sub(1, 80)
+      local marker = diff.is_thread_active(t.thread) and "●" or "·"
+      table.insert(items, {
+        text = "  " .. marker .. " " .. title,
+        cwd  = p.cwd,
+        file = t.file,
+        row  = t.row,
+        kind = "thread",
+      })
     end
   end
 
   if #items == 0 then
-    vim.notify("No active projects or threads", vim.log.levels.WARN); return
+    vim.notify("No ACP projects yet.", vim.log.levels.WARN, { title = "acp" }); return
+  end
+
+  local function on_pick(item)
+    if not item or item.kind == "sep" then return end
+    if item.kind == "thread" then
+      _open_thread(item.cwd, item.file, item.row)
+    elseif item.kind == "worktree" then
+      _open_oil(item.path)
+    else
+      _open_oil(item.cwd)
+    end
   end
 
   local ok, snacks = pcall(require, "snacks")
   if ok and snacks.picker then
     snacks.picker.pick({
-      source = "acp_workbench",
-      items  = items,
-      layout = "select",
-      format = "text",
+      source  = "acp_projects",
+      items   = items,
+      layout  = "select",
+      format  = "text",
       confirm = function(picker, item)
         picker:close()
-        M.set(item.cwd)
-        if item.kind == "thread" then
-          require("acp.neogit_workbench").open()
-          require("acp.neogit_workbench").show_thread(item.file, tonumber(item.row) or -1)
-        else
-          M.render()
-        end
-      end
+        on_pick(item)
+      end,
     })
+  else
+    vim.ui.select(items, {
+      prompt      = "ACP projects",
+      format_item = function(it) return it.text end,
+    }, on_pick)
   end
 end
 

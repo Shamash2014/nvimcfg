@@ -352,6 +352,7 @@ end
 function M.open(opts)
   local cwd = get_cwd()
   pcall(function() require("acp.diff").load_threads(cwd) end)
+  pcall(function() require("acp.workbench").register_project(cwd) end)
 
   if _buffer and _buffer:is_visible() then
     _buffer:focus()
@@ -473,6 +474,12 @@ function M.show_thread(file, row)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true, noremap = true })
   end
   km("<CR>",    function() diff.reply_at(row, file) end)
+  km("<Tab>",   function()
+    local id = diff.toggle_call_at_cursor(buf); if not id then return end
+    diff.render_thread_view(buf, cwd, file, row)
+    local lnum = diff.find_line_for_call(buf, id)
+    if lnum then pcall(vim.api.nvim_win_set_cursor, 0, { lnum, 0 }) end
+  end)
   km("R",       function() diff.restart_thread(row, file) end)
   km("m",       function() require("acp.workbench").pick_mode(key) end)
   km("<S-Tab>", function() require("acp.workbench").pick_mode(key) end)
@@ -489,6 +496,19 @@ function M.show_thread(file, row)
     vim.notify("ACP turn canceled", vim.log.levels.INFO, { title = "acp" })
   end)
   km("q",       function() pcall(vim.api.nvim_win_close, 0, true) end)
+end
+
+function M.close()
+  if _buffer then
+    pcall(function() _buffer:close() end)
+    _buffer = nil
+  end
+  if _diff_win and vim.api.nvim_win_is_valid(_diff_win) then
+    pcall(vim.api.nvim_win_close, _diff_win, true)
+  end
+  _buffer_win = nil
+  _diff_win   = nil
+  _diff_buf   = nil
 end
 
 function M._stop_all_timers()
