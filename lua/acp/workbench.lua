@@ -668,7 +668,7 @@ local function _open_thread(cwd, file, row)
     vim.cmd("tcd " .. vim.fn.fnameescape(cwd))
   end
   nwb.open({ kind = "vsplit", skip_diff = true })
-  nwb.show_thread(file, tonumber(row) or -1)
+  nwb.show_thread(file, tonumber(row) or -1, cwd)
 end
 
 function M.pick_project()

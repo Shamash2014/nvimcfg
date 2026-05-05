@@ -752,7 +752,7 @@ function M.add_comment(file, row, visual)
         end
         vim.schedule(function()
           require("acp.workbench").render()
-          pcall(function() require("acp.neogit_workbench").show_thread(file, row) end)
+          pcall(function() require("acp.neogit_workbench").show_thread(file, row, cwd) end)
         end)
 
         local thread_key = cwd .. ":thread:" .. file .. ":" .. row
@@ -1168,7 +1168,7 @@ function M.open_thread_view(row, _target_win)
     t = ((_threads[cwd] or {})[file] or {})[tostring(row)]
   end
   if type(t) ~= "table" then return end
-  require("acp.neogit_workbench").show_thread(file, row)
+  require("acp.neogit_workbench").show_thread(file, row, cwd)
 end
 
 function thread_session_key(cwd, file, row)

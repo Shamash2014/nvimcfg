@@ -125,6 +125,7 @@ local function get_thread_items(cwd)
     local t = diff.get_thread(cwd, path, -1)
     table.insert(result, {
       _type = "thread",
+      _cwd  = cwd,
       _path = path,
       _active = diff.is_thread_active(t),
       display = name,
@@ -224,7 +225,7 @@ local function create_section(title, items)
 end
 
 local function handle_thread_cr(item)
-  M.show_thread(item._path, -1)
+  M.show_thread(item._path, -1, item._cwd)
 end
 
 local function handle_diff_cr(item, workbench_win)
@@ -424,9 +425,9 @@ function M.refresh()
   end
 end
 
-function M.show_thread(file, row)
+function M.show_thread(file, row, cwd)
   row = row or -1
-  local cwd  = vim.fn.getcwd()
+  cwd = cwd or vim.fn.getcwd()
   local diff = require("acp.diff")
 
   local needle = string.format("acp-thread-%s-%s", file, row)
