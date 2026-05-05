@@ -232,6 +232,16 @@ function M.find_ready_for_cwd(cwd)
   return nil
 end
 
+function M.find_all_ready_for_cwd(cwd)
+  local out = {}
+  for _, sess in pairs(sessions) do
+    if sess.cwd == cwd and sess.state == "ready" then
+      table.insert(out, sess)
+    end
+  end
+  return out
+end
+
 function M.get_config_options_for_cwd(cwd)
   local s = M.find_ready_for_cwd(cwd)
   return (s and s.config_options) or {}

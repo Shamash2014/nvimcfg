@@ -347,13 +347,13 @@ function M.push_image(path)
   if _view == "index" then M.render() end
 end
 
-function M.drain_context(cwd)
+function M.drain_context(cwd, opts)
   cwd = cwd or _cur_cwd or vim.fn.getcwd()
   local items = {}
   local skills_block = require("acp.skills").build_prompt_block(cwd)
   if skills_block then table.insert(items, skills_block) end
   local context = _contexts[cwd] or {}
-  local sess = require("acp.session").find_ready_for_cwd(cwd)
+  local sess = opts and opts.sess or require("acp.session").find_ready_for_cwd(cwd)
   local caps = (sess and sess.agent_capabilities and sess.agent_capabilities.promptCapabilities) or {}
   local dropped = 0
   for _, c in ipairs(context) do

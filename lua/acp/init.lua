@@ -1,4 +1,6 @@
 local M = {}
+local _active_key     = {}
+local _session_counter = 0
 
 function M.setup(opts)
   opts = opts or {}
@@ -43,34 +45,74 @@ function M.setup(opts)
   end, { desc = "Open ACP log" })
 end
 
-local function acp_prompt(cwd)
-  return "[" .. require("acp.agents").current_model_label(cwd) .. "] ACP: "
+local function sess_label(sess)
+  if not sess then return "acp" end
+  local provider = sess.provider or "acp"
+  for _, opt in ipairs(sess.config_options or {}) do
+    if (opt.category == "model" or opt.id == "model") and opt.currentValue then
+      for _, o in ipairs(opt.options or {}) do
+        if o.value == opt.currentValue then
+          return provider .. "/" .. (o.name or opt.currentValue)
+        end
+      end
+      return provider .. "/" .. opt.currentValue
+    end
+  end
+  return provider
 end
 
-local function make_prompt(text)
-  local items = require("acp.workbench").drain_context()
+local function active_session_for(cwd)
+  local session_mod = require("acp.session")
+  local key = _active_key[cwd]
+  if key then
+    local s = session_mod.get(key)
+    if s then return s end
+    _active_key[cwd] = nil
+  end
+  local s = session_mod.find_ready_for_cwd(cwd)
+  if s then _active_key[cwd] = s.key end
+  return s
+end
+
+local function acp_prompt(cwd)
+  return "[" .. sess_label(active_session_for(cwd)) .. "] ACP: "
+end
+
+local function make_prompt(cwd, text)
+  local sess = active_session_for(cwd)
+  local items = require("acp.workbench").drain_context(cwd, { sess = sess })
   table.insert(items, { type = "text", text = text })
   return items
 end
 
-local function send(cwd, prompt)
-  require("acp.session").get_or_create(cwd, function(err, sess)
-    if err then vim.notify(err, vim.log.levels.ERROR, { title = "acp" }); return end
-    sess.rpc:request("session/prompt", {
-      sessionId = sess.session_id,
-      prompt    = prompt,
-    }, function(req_err, res)
-      if req_err then
-        vim.schedule(function()
-          vim.notify("ACP: " .. vim.inspect(req_err), vim.log.levels.ERROR, { title = "acp" })
-        end)
-      elseif res and res.stopReason and res.stopReason ~= "end_turn" then
-        vim.schedule(function()
-          vim.notify("ACP: " .. res.stopReason, vim.log.levels.WARN, { title = "acp" })
-        end)
-      end
-    end)
+local function dispatch_prompt(sess, prompt)
+  sess.rpc:request("session/prompt", {
+    sessionId = sess.session_id,
+    prompt    = prompt,
+  }, function(req_err, res)
+    if req_err then
+      vim.schedule(function()
+        vim.notify("ACP: " .. vim.inspect(req_err), vim.log.levels.ERROR, { title = "acp" })
+      end)
+    elseif res and res.stopReason and res.stopReason ~= "end_turn" then
+      vim.schedule(function()
+        vim.notify("ACP: " .. res.stopReason, vim.log.levels.WARN, { title = "acp" })
+      end)
+    end
   end)
+end
+
+local function send(cwd, prompt)
+  local sess = active_session_for(cwd)
+  if sess then
+    dispatch_prompt(sess, prompt)
+  else
+    require("acp.session").get_or_create(cwd, function(err, new_sess)
+      if err then vim.notify(err, vim.log.levels.ERROR, { title = "acp" }); return end
+      _active_key[cwd] = new_sess.key
+      dispatch_prompt(new_sess, prompt)
+    end)
+  end
 end
 
 local function snacks_input(prompt, on_confirm)
@@ -85,8 +127,12 @@ function M.mailbox()   require("acp.mailbox").open() end
 
 function M.pick_provider(cwd)
   cwd = cwd or vim.fn.getcwd()
-  local sess = require("acp.session").find_ready_for_cwd(cwd)
-  require("acp.agents").choose_provider(cwd, nil, sess and { key = sess.key } or nil)
+  local sess = active_session_for(cwd)
+  require("acp.agents").choose_provider(cwd, function(err, picked)
+    if err or not picked then return end
+    _active_key[cwd] = nil
+    M.pick_model(cwd)
+  end, sess and { key = sess.key } or nil)
 end
 
 function M.cancel(cwd)
@@ -105,7 +151,7 @@ end
 
 function M.cycle_model(cwd)
   cwd = cwd or vim.fn.getcwd()
-  local sess = require("acp.session").find_ready_for_cwd(cwd)
+  local sess = active_session_for(cwd)
   if not sess then
     vim.notify("No active session — send a prompt first", vim.log.levels.WARN, { title = "acp" }); return
   end
@@ -138,67 +184,113 @@ function M.cycle_model(cwd)
       vim.notify("set model failed: " .. vim.inspect(err), vim.log.levels.ERROR, { title = "acp" }); return
     end
     require("acp.agents").set_model_for_key(sess.key, next_opt.value)
-    local provider = require("acp.agents").provider_label(cwd)
-    vim.notify(provider .. "/" .. (next_opt.name or next_opt.value), vim.log.levels.INFO, { title = "acp" })
+    require("acp.agents").set_model_for_cwd(cwd, next_opt.value)
+    vim.notify(sess_label(sess), vim.log.levels.INFO, { title = "acp" })
     vim.schedule(function()
       require("acp.workbench").render()
     end)
   end)
 end
 
--- Picker over the live session's model options. If no session exists yet, creates one first.
-function M.pick_model(cwd, on_done)
-  cwd = cwd or vim.fn.getcwd()
-  local function show_picker(sess)
-    local model_opts = {}
-    for _, opt in ipairs(sess.config_options or {}) do
-      if opt.category == "model" or opt.id == "model" then
-        table.insert(model_opts, opt)
-      end
+local function show_model_picker(sess, on_done)
+  local model_opts = {}
+  for _, opt in ipairs(sess.config_options or {}) do
+    if opt.category == "model" or opt.id == "model" then
+      table.insert(model_opts, opt)
     end
-    if #model_opts == 0 then
-      vim.notify("No model options from this provider", vim.log.levels.WARN, { title = "acp" }); return
-    end
+  end
+  if #model_opts == 0 then
+    vim.notify("No model options from this provider", vim.log.levels.WARN, { title = "acp" }); return
+  end
 
-    local items, labels = {}, {}
-    for _, opt in ipairs(model_opts) do
-      for _, o in ipairs(opt.options or {}) do
-        local is_current = o.value == opt.currentValue
-        table.insert(items,  { opt_id = opt.id, value = o.value, opt_name = opt.name })
-        table.insert(labels, (o.name or o.value) .. (is_current and "  ✓" or ""))
-      end
-    end
-
-    local function on_choice(_, idx)
-      if not idx then return end
-      local item = items[idx]
-      require("acp.agents").set_model_for_key(sess.key, item.value)
-      require("acp.session").set_config_option(sess.key, item.opt_id, item.value, function(err)
-        if err then
-          vim.notify("set model failed: " .. vim.inspect(err), vim.log.levels.ERROR, { title = "acp" }); return
-        end
-        local provider = require("acp.agents").provider_label(cwd)
-        vim.notify(provider .. "/" .. item.value, vim.log.levels.INFO, { title = "acp" })
-        if on_done then on_done() end
-      end)
-    end
-
-    local ok, snacks = pcall(require, "snacks")
-    if ok and snacks.picker then
-      snacks.picker.select(labels, { prompt = "ACP model:" }, on_choice)
-    else
-      vim.ui.select(labels, { prompt = "ACP model: " }, on_choice)
+  local items, labels = {}, {}
+  for _, opt in ipairs(model_opts) do
+    for _, o in ipairs(opt.options or {}) do
+      local is_current = o.value == opt.currentValue
+      table.insert(items,  { opt_id = opt.id, value = o.value })
+      table.insert(labels, (o.name or o.value) .. (is_current and "  ✓" or ""))
     end
   end
 
-  local existing = require("acp.session").find_ready_for_cwd(cwd)
+  local function on_choice(_, idx)
+    if not idx then return end
+    local item = items[idx]
+    require("acp.agents").set_model_for_key(sess.key, item.value)
+    if sess.cwd then require("acp.agents").set_model_for_cwd(sess.cwd, item.value) end
+    require("acp.session").set_config_option(sess.key, item.opt_id, item.value, function(err)
+      if err then
+        vim.notify("set model failed: " .. vim.inspect(err), vim.log.levels.ERROR, { title = "acp" }); return
+      end
+      vim.notify(sess_label(sess), vim.log.levels.INFO, { title = "acp" })
+      if on_done then on_done() end
+    end)
+  end
+
+  local ok, snacks = pcall(require, "snacks")
+  if ok and snacks.picker then
+    snacks.picker.select(labels, { prompt = "ACP model:" }, on_choice)
+  else
+    vim.ui.select(labels, { prompt = "ACP model: " }, on_choice)
+  end
+end
+
+-- Picker over the live session's model options. If no session exists yet, creates one first.
+function M.pick_model(cwd, on_done)
+  cwd = cwd or vim.fn.getcwd()
+  local existing = active_session_for(cwd)
   if existing then
-    show_picker(existing)
+    show_model_picker(existing, on_done)
   else
     require("acp.session").get_or_create(cwd, function(err, sess)
       if err then vim.notify(err, vim.log.levels.ERROR, { title = "acp" }); return end
-      show_picker(sess)
+      _active_key[cwd] = sess.key
+      show_model_picker(sess, on_done)
     end)
+  end
+end
+
+function M.add_session(cwd)
+  cwd = cwd or vim.fn.getcwd()
+  _session_counter = _session_counter + 1
+  local key = cwd .. "::s" .. _session_counter
+  require("acp.agents").choose_provider(cwd, function(err, picked)
+    if err or not picked then return end
+    require("acp.session").get_or_create({ cwd = cwd, key = key }, function(sess_err, sess)
+      if sess_err then
+        vim.notify(sess_err, vim.log.levels.ERROR, { title = "acp" }); return
+      end
+      _active_key[cwd] = sess.key
+      show_model_picker(sess, nil)
+    end)
+  end, { key = key })
+end
+
+function M.select_session(cwd)
+  cwd = cwd or vim.fn.getcwd()
+  local all = require("acp.session").find_all_ready_for_cwd(cwd)
+  if #all == 0 then
+    vim.notify("No active sessions", vim.log.levels.WARN, { title = "acp" }); return
+  end
+  if #all == 1 then
+    _active_key[cwd] = all[1].key
+    vim.notify("Active: " .. sess_label(all[1]), vim.log.levels.INFO, { title = "acp" }); return
+  end
+  local labels = {}
+  for _, s in ipairs(all) do
+    local mark = (_active_key[cwd] == s.key) and "  ✓" or ""
+    table.insert(labels, sess_label(s) .. mark)
+  end
+  local function on_choice(_, idx)
+    if not idx then return end
+    _active_key[cwd] = all[idx].key
+    vim.notify("Active: " .. sess_label(all[idx]), vim.log.levels.INFO, { title = "acp" })
+    vim.schedule(function() require("acp.workbench").render() end)
+  end
+  local ok, snacks = pcall(require, "snacks")
+  if ok and snacks.picker then
+    snacks.picker.select(labels, { prompt = "Active session:" }, on_choice)
+  else
+    vim.ui.select(labels, { prompt = "Active session: " }, on_choice)
   end
 end
 
@@ -206,7 +298,7 @@ function M.trigger_op(lines, source)
   local cwd = vim.fn.getcwd()
   snacks_input(acp_prompt(cwd), function(instruction)
     if not instruction or instruction == "" then return end
-    send(cwd, make_prompt(source .. "\n\n" .. table.concat(lines, "\n")
+    send(cwd, make_prompt(cwd, source .. "\n\n" .. table.concat(lines, "\n")
                           .. "\n\nInstruction: " .. instruction))
   end)
 end
@@ -225,7 +317,7 @@ function M.trigger_codebase()
   local cwd = vim.fn.getcwd()
   snacks_input(acp_prompt(cwd), function(instruction)
     if not instruction or instruction == "" then return end
-    send(cwd, make_prompt("cwd: " .. cwd .. "\n\nInstruction: " .. instruction
+    send(cwd, make_prompt(cwd, "cwd: " .. cwd .. "\n\nInstruction: " .. instruction
       .. "\n\nExplore the codebase using your tools."))
   end)
 end

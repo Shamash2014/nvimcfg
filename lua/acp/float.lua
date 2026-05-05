@@ -74,6 +74,8 @@ function M.footer()
     { " provider  ", "AcpFloatFooterText" },
     { "<C-y>", "AcpFloatFooterKey" },
     { " model  ", "AcpFloatFooterText" },
+    { "<S-Tab>", "AcpFloatFooterKey" },
+    { " mode  ", "AcpFloatFooterText" },
     { "q", "AcpFloatFooterKey" },
     { " cancel ", "AcpFloatFooterText" },
   }
@@ -228,6 +230,7 @@ function M.open_comment_float(title, opts)
   km("<C-y>", function()
     require("acp").pick_model(cwd, function() vim.schedule(refresh_title) end)
   end)
+  km("<S-Tab>", function() require("acp.workbench").pick_mode() end)
   vim.keymap.set("n", "q", function() handle.close() end,
     { buffer = buf, nowait = true, noremap = true, silent = true })
   vim.keymap.set("i", "<Esc>", function() handle.close() end,
@@ -342,6 +345,7 @@ function M.open_composer_float(title, opts)
   km("<C-y>", function()
     require("acp").pick_model(cwd, function() vim.schedule(refresh_title) end)
   end)
+  km("<S-Tab>", function() require("acp.workbench").pick_mode() end)
   vim.keymap.set("n", "q", function() handle.close() end,
     { buffer = buf, nowait = true, noremap = true, silent = true })
   vim.keymap.set("i", "<Esc>", function() handle.close() end,

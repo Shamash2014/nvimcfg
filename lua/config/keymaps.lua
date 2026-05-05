@@ -167,13 +167,28 @@ map("n", "<leader>wJ", "<C-w>-", { desc = "Decrease height" })
 map("n", "<leader>wK", "<C-w>+", { desc = "Increase height" })
 map("n", "[t", "<cmd>tabprevious<CR>", { desc = "Previous tab" })
 map("n", "]t", "<cmd>tabnext<CR>", { desc = "Next tab" })
-map("n", "<leader>tn", "<cmd>tabnew<CR>", { desc = "New tab" })
+map("n", "<leader>tt", "<cmd>tabnew<CR>", { desc = "New tab" })
 map("n", "<leader>tk", "<cmd>tabclose<CR>", { desc = "Kill tab" })
 map("n", "<leader>to", "<cmd>tabonly<CR>", { desc = "Close other tabs" })
 
 map("n", "<leader>qq", "<cmd>qa<CR>", { desc = "Quit all" })
 map("n", "<leader>bb", function()
-  snacks().picker.buffers({ hidden = true, unloaded = true, nofile = true, current = true })
+  local tab_bufs = {}
+  for t = 1, vim.fn.tabpagenr("$") do
+    for _, b in ipairs(vim.fn.tabpagebuflist(t)) do
+      tab_bufs[b] = true
+    end
+  end
+  snacks().picker.buffers({
+    hidden = true, unloaded = true, nofile = true, current = true,
+    format = function(item, picker)
+      local chunks = require("snacks.picker.format").buffer(item, picker)
+      if item.buf and tab_bufs[item.buf] then
+        table.insert(chunks, 1, { " T ", "TabLineSel" })
+      end
+      return chunks
+    end,
+  })
 end, { desc = "Switch buffer" })
 map("n", "<leader>bd", "<cmd>bdelete<CR>", { desc = "Kill buffer" })
 map("n", "<leader>bD", function()
