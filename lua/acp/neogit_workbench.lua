@@ -117,18 +117,33 @@ end
 
 local function get_thread_items(cwd)
   local workbench = require("acp.workbench")
-  local diff = require("acp.diff")
-  local items = workbench.list(cwd)
+  local diff   = require("acp.diff")
+  local sess   = require("acp.session")
+  local agents = require("acp.agents")
+  local items  = workbench.list(cwd)
   local result = {}
+
   for _, path in ipairs(items) do
-    local name = vim.fn.fnamemodify(path, ":t")
-    local t = diff.get_thread(cwd, path, -1)
+    local name     = vim.fn.fnamemodify(path, ":t")
+    local t        = diff.get_thread(cwd, path, -1)
+    local key      = diff.thread_session_key(cwd, path, -1)
+    local active_s = sess.get(key) or {}
+
+    local prefix = ""
+    if active_s.provider and (active_s.current_mode or "") ~= "" then
+      prefix = agents.get(active_s.provider) and
+        string.format("(%s:%s) ", agents.get(active_s.provider).display, active_s.current_mode) or ""
+    elseif active_s.provider then
+      local p = agents.get(active_s.provider)
+      if p then prefix = "(" .. p.display .. ") " end
+    end
+
     table.insert(result, {
-      _type = "thread",
-      _cwd  = cwd,
-      _path = path,
+      _type   = "thread",
+      _cwd    = cwd,
+      _path   = path,
       _active = diff.is_thread_active(t),
-      display = name,
+      display = prefix .. name,
     })
   end
   return result
@@ -431,6 +446,19 @@ function M.show_thread(file, row, cwd)
   local diff = require("acp.diff")
 
   local needle = string.format("acp-thread-%s-%s", file, row)
+  local key    = diff.thread_session_key(cwd, file, row)
+
+  local function thread_agent_mode(k)
+    local s = require("acp.session").get(key)
+    if not s then return nil, nil end
+    local p = require("acp.agents").get(s.provider or "")
+    local mode_name = require("acp.agents").mode_name_from_session(s)
+    local label = p and p.display .. "/" .. mode_name or mode_name
+    return label, nil
+  end
+
+  -- Resolve once; pass value to set_winbar so Neovim doesn't re-evaluate on each render.
+  local agent_mode_val = thread_agent_mode(key)
 
   local function place(buf)
     for _, w in ipairs(vim.api.nvim_list_wins()) do
@@ -440,7 +468,6 @@ function M.show_thread(file, row, cwd)
     end
     vim.cmd("botright vsplit")
     vim.api.nvim_set_current_buf(buf)
-    set_winbar(0, "thread", nil, nil)
   end
 
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
@@ -449,6 +476,7 @@ function M.show_thread(file, row, cwd)
       if t_live then t_live._stream_offset = nil end
       diff.render_thread_view(b, cwd, file, row, t_live)
       place(b)
+      set_winbar(0, "thread", nil, agent_mode_val)
       return
     end
   end
@@ -477,7 +505,7 @@ function M.show_thread(file, row, cwd)
 
   local age = require("acp.commits").thread_age(cwd, file, row)
   if age.is_past then
-    vim.wo[0].winbar = "%#AcpWinbarText#  thread  %#WarningMsg# from past · " ..
+    vim.wo[0].winbar = "%#AcpWinbarText#  thread ·" .. (agent_mode_val and (" " .. agent_mode_val) or "") .. " %#WarningMsg# from past · " ..
                        age.n_since .. " commit" ..
                        (age.n_since == 1 and "" or "s") .. " since  %*"
     vim.schedule(function()
@@ -485,13 +513,13 @@ function M.show_thread(file, row, cwd)
     end)
   end
 
-  local key  = diff.thread_session_key(cwd, file, row)
   local sess = require("acp.session").get(key)
   if sess then diff.subscribe_to_thread(sess, cwd, file, row) end
 
   local function km(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true, noremap = true })
   end
+  km("R",       function() diff.restart_thread(row, file, cwd) end)
   km("<CR>",    function() diff.reply_at(row, file, cwd) end)
   km("<Tab>",   function()
     local id = diff.toggle_call_at_cursor(buf); if not id then return end
@@ -501,7 +529,6 @@ function M.show_thread(file, row, cwd)
     local lnum = diff.find_line_for_call(buf, id)
     if lnum then pcall(vim.api.nvim_win_set_cursor, 0, { lnum, 0 }) end
   end)
-  km("R",       function() diff.restart_thread(row, file, cwd) end)
   km("m",       function() require("acp.workbench").pick_mode(key) end)
   km("<S-Tab>", function() require("acp.workbench").pick_mode(key) end)
   km("M",       function() require("acp").pick_model(cwd) end)

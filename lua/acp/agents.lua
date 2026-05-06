@@ -159,6 +159,18 @@ function M.current_model_label(cwd)
   return provider
 end
 
+-- Resolve a session's current_mode to its human-readable name from available_modes.
+-- Returns nil if no mode is set; returns the raw current_mode as fallback.
+function M.mode_name_from_session(sess)
+  if not sess or (sess.current_mode or "") == "" then return nil end
+  for _, m in ipairs(sess.available_modes or {}) do
+    if (m.id or m.modeId) == sess.current_mode then
+      return m.name or m.id or sess.current_mode
+    end
+  end
+  return sess.current_mode
+end
+
 function M.chip(cwd) return M.current_model_label(cwd or vim.fn.getcwd()) end
 
 function M.pick(cwd, callback)

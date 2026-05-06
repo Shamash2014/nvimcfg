@@ -846,6 +846,11 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
     end
   end
 
+  local session_mod = require("acp.session")
+  local key = thread_session_key(cwd, file, row)
+  local sess = session_mod.get(key)
+  local mode_label = require("acp.agents").mode_name_from_session(sess)
+
   local model = require("acp.agents").current_model_label(cwd)
   local fname = vim.fn.fnamemodify(file or "", ":t")
   local loc   = (type(row) == "number" and row >= 0) and (fname .. ":" .. (row + 1)) or fname
@@ -853,9 +858,10 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
   local title_raw = meta._title or meta.prompt or "Untitled"
   local title = (title_raw:match("([^\n]+)") or "Untitled"):sub(1, 80)
 
+  local suffix = (mode_label ~= "") and ("  ·  " .. mode_label) or ""
   add(SEP, "AcpThreadPrefix")
   add("  " .. title, "AcpSectionHeader")
-  add("  " .. model .. "  ·  " .. loc, "Comment")
+  add("  " .. model .. "  ·  " .. loc .. suffix, "Comment")
   add(SEP, "AcpThreadPrefix")
   add("")
 
