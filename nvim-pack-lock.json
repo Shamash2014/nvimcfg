@@ -27,10 +27,6 @@
       "src": "https://github.com/joryeugene/dadbod-grip.nvim",
       "version": ">=0.0.0"
     },
-    "diffs.nvim": {
-      "rev": "084c4dc119dee9133fc8b215b308f29aeafb9564",
-      "src": "https://github.com/barrettruth/diffs.nvim"
-    },
     "diffview.nvim": {
       "rev": "4516612fe98ff56ae0415a259ff6361a89419b0a",
       "src": "https://github.com/sindrets/diffview.nvim"
