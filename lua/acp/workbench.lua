@@ -673,6 +673,13 @@ end
 
 function M.pick_project()
   local diff     = require("acp.diff")
+  local cwd      = vim.fn.getcwd()
+
+  -- If there's no active session for the current directory, create one.
+  if not require("acp.session").find_ready_for_cwd(cwd) then
+    M.set(cwd); return
+  end
+
   local projects = _collect_projects()
   local items    = {}
 

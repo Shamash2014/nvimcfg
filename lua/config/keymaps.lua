@@ -377,7 +377,7 @@ map("n", "<leader>dr", function()
 end, { desc = "DAP restart" })
 
 -- ACP
-map("n", "<leader>aw", function() require("acp.workbench").pick_project() end, { desc = "ACP pick project/thread" })
+map("n", "<leader>aw", function() require("acp.workbench").pick_project() end, { desc = "ACP pick project/thread/create new" })
 map("n", "<leader>ak", function() require("acp").cancel() end,    { desc = "ACP kill session" })
 map("n", "<leader>am", function() require("acp").mailbox() end,   { desc = "ACP mailbox" })
 map("n", "<leader>af", function() require("acp.workbench").push("file: " .. vim.fn.expand("%:t"), table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")) end, { desc = "ACP pin file" })
