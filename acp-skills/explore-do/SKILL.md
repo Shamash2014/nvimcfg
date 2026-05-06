@@ -18,6 +18,16 @@ Do NOT skip this phase. Spend most of your effort here. Before any fix:
 5. **Understand the runtime behavior** — inspect data shapes, state transitions, and side effects in the problem area
 6. **Build a mental model** — before moving on, you should be able to explain how this part of the system works as a whole, not just the broken piece
 
+## Phase 1.5 — Root-Cause Analysis
+
+**Before changing any code**, produce a written analysis covering:
+- The exact symptom (what the user sees, not what they think is wrong)
+- Data flow from input to symptom (how does data reach the broken state?)
+- Precise line where invariant breaks (file + line number, what was assumed vs. actual value)
+- Two alternative fix approaches with tradeoffs
+
+Wait for my approval before editing anything.
+
 ## Phase 2 — Diagnose
 
 Based on your gathered experience:

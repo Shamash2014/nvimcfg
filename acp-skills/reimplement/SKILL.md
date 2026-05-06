@@ -7,6 +7,16 @@ description: Explore codebase deeply, gather experience, then fix it
 
 You are tasked with reimplementing or fixing code based on deep codebase exploration. Follow this workflow strictly.
 
+## Phase 0 — Root-Cause Analysis
+
+**Before changing any code**, produce a written analysis covering:
+- The exact symptom (what the user sees, not what they think is wrong)
+- Data flow from input to symptom (how does data reach the broken state?)
+- Precise line where invariant breaks (file + line number, what was assumed vs. actual value)
+- Two alternative fix approaches with tradeoffs
+
+Wait for my approval before editing anything.
+
 ## Phase 1 — Deep Exploration
 
 Before writing ANY code:

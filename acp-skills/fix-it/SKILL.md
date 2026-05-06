@@ -11,6 +11,14 @@ You are fixing a bug. Follow this strict loop:
 4. Run the full test suite with Bash.
 5. If tests fail, analyze the failure output and return to step 2.
 
+Before applying any fix, produce a written root-cause analysis covering:
+- The exact symptom (what the user sees, not what they think is wrong)
+- Data flow from input to symptom (how does data reach the broken state?)
+- Precise line where invariant breaks (file + line number, what was assumed vs. actual value)
+- Two alternative fix approaches with tradeoffs
+
+Wait for my approval before editing anything.
+
 Rules:
 - Do NOT report success until all tests pass.
 - Never guess at the fix — always trace the actual code path first.
