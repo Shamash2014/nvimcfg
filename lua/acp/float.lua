@@ -233,7 +233,8 @@ function M.open_comment_float(title, opts)
   km("<C-CR>",    submit)
   km("<C-Enter>", submit)
 
-  km("i", "<CR>", blink_accept)
+  vim.keymap.set("i", "<CR>", function() blink_accept() end, { buffer = buf })
+
   km("<C-p>", function()
     require("acp.agents").choose_provider(cwd, function() vim.schedule(refresh_title) end)
   end)
@@ -358,7 +359,9 @@ function M.open_composer_float(title, opts)
   km("<C-s>",     submit)
   km("<C-CR>",    submit)
   km("<C-Enter>", submit)
-  km("i", "<CR>", blink_accept)
+
+  vim.keymap.set("i", "<CR>", function() blink_accept() end, { buffer = buf })
+
   km("<C-p>", function()
     require("acp.agents").choose_provider(cwd, function() vim.schedule(refresh_title) end)
   end)
