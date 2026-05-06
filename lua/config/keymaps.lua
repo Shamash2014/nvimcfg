@@ -389,6 +389,7 @@ map("v", "<leader>ay", function() require("acp.workbench").push_visual() end, { 
 
 map("n", "<S-Tab>",   function() require("acp").cycle_model() end, { desc = "ACP cycle model" })
 
+map("n", "gW",  function() require("acp.workbench").open() end, { desc = "ACP workbench" })
 map("n", "ga",  function() vim.o.operatorfunc = "v:lua._acp_op"; return "g@" end,
   { expr = true, desc = "ACP operator" })
 map("n", "gaA", function() require("acp").trigger_codebase() end, { desc = "ACP codebase" })

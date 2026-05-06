@@ -212,10 +212,18 @@ function M.open_comment_float(title, opts)
     callback = function() handle.close() end,
   })
 
+  -- Shared helper: accept blink.cmp completion on <CR>, otherwise insert newline.
   local function km(lhs, fn)
     vim.keymap.set({"n","i"}, lhs, fn,
       { buffer = buf, nowait = true, noremap = true, silent = true })
   end
+
+  local function blink_accept()
+    local ok, blink = pcall(require, "blink.cmp")
+    if ok and blink.is_visible() then blink.accept(); return end
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, true, true), "n", false)
+  end
+
   local function submit()
     local text = handle.get_text()
     handle.close()
@@ -224,6 +232,8 @@ function M.open_comment_float(title, opts)
   km("<C-s>",     submit)
   km("<C-CR>",    submit)
   km("<C-Enter>", submit)
+
+  km("i", "<CR>", blink_accept)
   km("<C-p>", function()
     require("acp.agents").choose_provider(cwd, function() vim.schedule(refresh_title) end)
   end)
@@ -331,6 +341,15 @@ function M.open_composer_float(title, opts)
     vim.keymap.set({ "n", "i" }, lhs, fn,
       { buffer = buf, nowait = true, noremap = true, silent = true })
   end
+
+  -- Shared helper: accept blink.cmp completion on <CR>, otherwise insert newline.
+  local function blink_accept()
+    local ok, blink = pcall(require, "blink.cmp")
+    if ok and blink.is_visible() then blink.accept(); return end
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, true, true), "n", false)
+  end
+
+  -- Keymaps (shared across floats).
   local function submit()
     local text = handle.get_text()
     handle.close()
@@ -339,6 +358,7 @@ function M.open_composer_float(title, opts)
   km("<C-s>",     submit)
   km("<C-CR>",    submit)
   km("<C-Enter>", submit)
+  km("i", "<CR>", blink_accept)
   km("<C-p>", function()
     require("acp.agents").choose_provider(cwd, function() vim.schedule(refresh_title) end)
   end)

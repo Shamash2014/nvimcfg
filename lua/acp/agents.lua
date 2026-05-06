@@ -95,6 +95,15 @@ function M.set_model_for_cwd(cwd, model) _cwd_models[cwd] = model; save_models()
 function M.get_model_for_cwd(cwd) return _cwd_models[cwd] end
 function M.set_model_for_key(key, model) _key_models[key] = model; save_key_models() end
 function M.get_model_for_key(key) return _key_models[key] end
+function M.set_mode_for_key(key, mode) _key_prefs["mode:" .. key] = mode; save_key_prefs() end
+function M.get_mode_for_key(key) return _key_prefs["mode:" .. key] end
+function M.set_mode_for_cwd(cwd, mode) _cwd_prefs["mode:" .. cwd] = mode; save_prefs() end
+function M.get_mode_for_cwd(cwd) return _cwd_prefs["mode:" .. cwd] end
+
+-- Look up a value (pref or model), falling back from key-scoped to cwd-scoped.
+local function _lookup(key_fn, cwd_fn, k, v) return key_fn(k) or cwd_fn(v) end
+M.lookup_mode   = function(key, cwd) return _lookup(M.get_mode_for_key,   M.get_mode_for_cwd,   key, cwd) end
+M.lookup_model  = function(key, cwd) return _lookup(M.get_model_for_key,  M.get_model_for_cwd,  key, cwd) end
 
 function M.get(name)
   for _, p in ipairs(_providers) do

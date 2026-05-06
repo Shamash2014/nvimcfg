@@ -135,13 +135,22 @@ function M.get_or_create(cwd_or_opts, callback)
               stub.current_mode = u.currentModeId
             end
           end)
+          local saved_mode = require("acp.agents").lookup_mode(key, cwd)
+          if saved_mode and stub.available_modes and #stub.available_modes > 0 then
+            for _, m in ipairs(stub.available_modes) do
+              if (m.id or m.modeId) == saved_mode then
+                stub.rpc:notify("session/set_mode", { sessionId = stub.session_id, modeId = saved_mode })
+                stub.current_mode = saved_mode
+                break
+              end
+            end
+          end
           callback(nil, stub)
           for _, cb in ipairs(stub.queue) do cb(nil, stub) end
           stub.queue = {}
         end
 
-        local saved_model = require("acp.agents").get_model_for_key(key)
-                         or require("acp.agents").get_model_for_cwd(cwd)
+        local saved_model = require("acp.agents").lookup_model(key, cwd)
         local has_model_opt = false
         for _, opt in ipairs(stub.config_options) do
           if opt.id == "model" then has_model_opt = true; break end
@@ -325,6 +334,7 @@ function M.set_mode(key, mode_id)
   if not s or s.state ~= "ready" then return end
   s.rpc:notify("session/set_mode", { sessionId = s.session_id, modeId = mode_id })
   s.current_mode = mode_id
+  require("acp.agents").set_mode_for_key(key, mode_id)
 end
 
 function M.active()

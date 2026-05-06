@@ -1,5 +1,7 @@
 local M = {}
 
+-- ── helpers ────────────────────────────────────────────────────
+
 local function find_up(start, names)
   local dir = start or vim.fn.getcwd()
   while dir and dir ~= "/" do
@@ -16,6 +18,38 @@ end
 local function read_file(path)
   local f = io.open(path, "r"); if not f then return nil end
   local s = f:read("*a"); f:close(); return s
+end
+
+-- Build terminal environment with mise-managed tool versions.
+-- Ensures task terminals inherit the same runtimes as the editor.
+local function build_terminal_env()
+  local env = vim.tbl_extend("keep", {
+    ["PATH"]       = (vim.env.PATH or ""),
+    ["SHELL"]      = vim.env.SHELL,
+    ["EDITOR"]     = "nvim",
+    ["VISUAL"]     = "nvim",
+    ["LANG"]       = vim.env.LANG,
+  }, {})
+
+  -- mise-managed runtimes and SDKs
+  local vars = {
+    "NVM_DIR", "PYENV_ROOT", "CARGO_HOME", "RUSTUP_HOME",
+    "GEM_HOME", "GOFLAGS", "GOPATH", "GOROOT", "NODE_MODULES_GLOBAL",
+    "JAVA_HOME", "MIX_ENV",
+  }
+  for _, key in ipairs(vars) do
+    if vim.env[key] then env[key] = vim.env[key] end
+  end
+
+  -- Custom dev vars (e.g. MISE_OVERRIDE_*)
+  local dev_vars = os.getenv("DEV_VARS")
+  if dev_vars and dev_vars ~= "" then
+    for var in string.gmatch(dev_vars, "[^:]+") do
+      env[var:gsub("^%s*", "")] = vim.env[var:gsub("^%s*", "")] or ""
+    end
+  end
+
+  return env
 end
 
 local function attach_overlay(buf, win, task, extra, opts)
@@ -73,7 +107,7 @@ local function open_term(task, extra)
   vim.bo.bufhidden = "wipe"
   local buf = vim.api.nvim_get_current_buf()
   local win = vim.api.nvim_get_current_win()
-  local job = vim.fn.jobstart(cmd, { cwd = task.cwd, term = true })
+  local job = vim.fn.jobstart(cmd, { cwd = task.cwd, term = true, env = build_terminal_env() })
   attach_overlay(buf, win, task, extra, { job_id = job })
 end
 

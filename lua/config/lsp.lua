@@ -353,6 +353,33 @@ else
   end)
 end
 
+vim.diagnostic.config({
+  signs = {
+    text = {
+      [vim.diagnostic.severity.ERROR] = "󰅚 ",
+      [vim.diagnostic.severity.WARN] = "󰀪 ",
+      [vim.diagnostic.severity.INFO] = "󰋽 ",
+      [vim.diagnostic.severity.HINT] = "󰌵 ",
+    },
+    linehl = {
+      [vim.diagnostic.severity.ERROR] = "ErrorMsg",
+    },
+    numhl = {
+      [vim.diagnostic.severity.ERROR] = "ErrorMsg",
+    },
+  },
+  virtual_text = false,
+  severity_sort = true,
+  float = {
+    border = "rounded",
+    source = "always",
+    header = "",
+    prefix = "",
+    focusable = false,
+  },
+  update_in_insert = false,
+})
+
 vim.lsp.enable({
   "lua_ls",
   "ts_ls",
