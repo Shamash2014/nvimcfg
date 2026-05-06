@@ -24,7 +24,16 @@ Output: 2–3 concept blocks with explicit *what gets built* and *where it lives
 - Can you write down ≥3 success criteria, hard constraints, refusals from grilling? If not → return to grilling.
 - Can you name ≥3 files or modules from research, by path? If not → return to research (or do a tight research pass inline if the prior research was light — but never pretend you've read what you haven't).
 
-## 2. Generate 2–3 concepts
+## 2. Explore missing ground before generating concepts
+
+Even with research input, read the actual files that will be touched:
+- Open every file listed in Research by path; note the module's public API shape and conventions
+- Trace one caller → callee chain through each integration point to confirm data flow matches what you'll write into `API:` and `Flow:` fields
+- If a named research file doesn't exist or its signature differs from expected, surface it explicitly
+
+Do not generate concepts until Location + API are grounded in files you've actually read.
+
+## 4. Generate 2–3 concepts
 
 Each concept differs on a **load-bearing axis** — where the new code lives, what existing code it extends, what it depends on, who calls it, when it runs.
 
@@ -37,9 +46,9 @@ A concept is **one coherent shape**: location + API + data flow + lifecycle, all
 - A *different owner* — who calls whom; pull vs. push; sync vs. async
 - A *different fit with constraints* — drop a soft constraint, satisfy a hard one differently
 
-Even if research strongly suggests one direction, render 2–3 to expose *what's being chosen*. Discarding alternatives is a Phase 4 (`Recommend`) decision, not a Phase 3 (`Generate`) decision.
+Even if research strongly suggests one direction, render 2–3 to expose *what's being chosen*. Discarding alternatives is a Phase 5 (`Recommend`) decision, not a Phase 4 (`Generate`) decision.
 
-## 3. Render each concept — **use the block format, not prose**
+## 5. Render each concept — **use the block format, not prose**
 
 The format below IS the answer to "final implementation + location". Every concept gets one block. **No prose substitutes.** Prose lets you handwave the comparison; the block format forces parity across concepts.
 
@@ -56,17 +65,17 @@ Concept «short-name»
 
 Render all concepts in one message, in the same format, so the user sees the comparison side-by-side. If a field is "same as Concept A", say so explicitly — don't drop the field.
 
-## 4. Recommend + confirm
+## 6. Recommend + confirm
 
 - Recommend one concept, tied verbatim to a stated input constraint.
 - **"Which concept?" is the only allowed bundled question** — the alternatives are visible.
 - User rejects all → you missed a constraint or a research gap. Return to grilling or research, not to picking.
 
-## 5. Decisions inside the chosen concept
+## 7. Decisions inside the chosen concept
 
 Naming, surface-level tweaks, anything still ambiguous *inside* the chosen shape → ask **one at a time**.
 
-## 6. Edit + verify
+## 8. Edit + verify
 
 - Implement exactly the chosen concept at the named locations.
 - A new load-bearing decision surfaces during implementation? Pause. If it changes the shape, return to grilling. If it's local, ask one question.
@@ -84,7 +93,7 @@ Naming, surface-level tweaks, anything still ambiguous *inside* the chosen shape
 | "User said keep it simple, so one concept" | "Simple" is a property *of* the chosen concept, not a reason to skip alternatives. |
 | "User is in a hurry, so I'll just pick" | Hurry asks for speed, not silent ambiguity. Comparing 3 concepts is faster than rebuilding the wrong one. |
 | "A single default plan is fine if the user trusts me" | Trust assumes you generated alternatives before recommending. A single plan hides the comparison. |
-| "I'll grill more decisions instead of generating concepts" | Grilling is over. Now compare designs. Don't loop back mid-Phase 3. |
+| "I'll grill more decisions instead of generating concepts" | Grilling is over. Now compare designs. Don't loop back mid-Phase 4. |
 | "Two concepts are close enough" | Close concepts mean you didn't find the load-bearing axis. Keep going. |
 | "Research already pointed at the answer — only one viable design" | Research finds *constraints*; design picks *shapes*. Multiple shapes can satisfy the same constraints. Generate alternatives anyway, even trivial ones. They expose the axis you're choosing on. |
 | "I'll write prose instead of the block format — it's clearer" | Prose lets you handwave the comparison. The block format forces parity. Use it. |
