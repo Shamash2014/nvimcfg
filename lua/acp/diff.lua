@@ -849,7 +849,7 @@ function M.render_thread_view(buf, cwd, file, row, t_live)
   local session_mod = require("acp.session")
   local key = thread_session_key(cwd, file, row)
   local sess = session_mod.get(key)
-  local mode_label = require("acp.agents").mode_name_from_session(sess)
+  local mode_label = (require("acp.agents").mode_name_from_session(sess)) or ""
 
   local model = require("acp.agents").current_model_label(cwd)
   local fname = vim.fn.fnamemodify(file or "", ":t")
