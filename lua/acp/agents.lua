@@ -118,6 +118,62 @@ function M.get(name)
   return nil
 end
 
+function M.model_name_from_session(sess)
+  local models = sess and sess.models
+  if models and models.currentModelId then
+    for _, model in ipairs(models.availableModels or {}) do
+      if model.modelId == models.currentModelId then
+        return model.name or model.modelId
+      end
+    end
+    return models.currentModelId
+  end
+
+  for _, opt in ipairs((sess and sess.config_options) or {}) do
+    if (opt.category == "model" or opt.id == "model") and opt.currentValue then
+      for _, o in ipairs(opt.options or {}) do
+        if o.value == opt.currentValue then
+          return o.name or opt.currentValue
+        end
+      end
+      return opt.currentValue
+    end
+  end
+
+  return nil
+end
+
+function M.model_choices_from_session(sess)
+  local models = sess and sess.models
+  if models and models.availableModels and #models.availableModels > 0 then
+    local items = {}
+    for _, model in ipairs(models.availableModels) do
+      table.insert(items, {
+        value = model.modelId,
+        label = model.name or model.modelId,
+        description = model.description,
+        current = model.modelId == models.currentModelId,
+      })
+    end
+    return items
+  end
+
+  local items = {}
+  for _, opt in ipairs((sess and sess.config_options) or {}) do
+    if opt.category == "model" or opt.id == "model" then
+      for _, o in ipairs(opt.options or {}) do
+        table.insert(items, {
+          opt_id = opt.id,
+          value = o.value,
+          label = o.name or o.value,
+          current = o.value == opt.currentValue,
+        })
+      end
+    end
+  end
+  return items
+end
+
 function M.cmd(provider_spec)
   local t = { provider_spec.cmd }
   for _, a in ipairs(provider_spec.args or {}) do table.insert(t, a) end
@@ -146,16 +202,10 @@ function M.current_model_label(cwd)
   local provider = M.provider_label(cwd)
   local ok, session = pcall(require, "acp.session")
   if ok then
-    local opts = session.get_config_options_for_cwd(cwd)
-    for _, opt in ipairs(opts) do
-      if opt.category == "model" and opt.currentValue then
-        for _, o in ipairs(opt.options or {}) do
-          if o.value == opt.currentValue then
-            return provider .. "/" .. (o.name or opt.currentValue)
-          end
-        end
-        return provider .. "/" .. opt.currentValue
-      end
+    local sess = session.find_ready_for_cwd(cwd)
+    local model = M.model_name_from_session(sess)
+    if model then
+      return provider .. "/" .. model
     end
   end
   local stored = _cwd_models[cwd]

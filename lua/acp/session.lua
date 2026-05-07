@@ -19,6 +19,14 @@ local function notify(msg, level)
   vim.notify(msg, level or vim.log.levels.INFO, { title = "acp" })
 end
 
+local function normalize_models(raw)
+  if type(raw) ~= "table" then return nil end
+  return {
+    availableModels = raw.availableModels or {},
+    currentModelId = raw.currentModelId,
+  }
+end
+
 -- callback: fn(err: string|nil, session: table|nil)
 function M.get_or_create(cwd_or_opts, callback)
   local cwd = type(cwd_or_opts) == "string" and cwd_or_opts or cwd_or_opts.cwd
@@ -110,6 +118,7 @@ function M.get_or_create(cwd_or_opts, callback)
 
         stub.session_id         = res.sessionId
         stub.config_options     = res.configOptions or {}
+        stub.models             = normalize_models(res.models)
         -- Normalize modes: opencode sends { currentModeId, availableModes }
         local raw_modes = res.modes or {}
         if raw_modes.availableModes then
@@ -127,6 +136,8 @@ function M.get_or_create(cwd_or_opts, callback)
             local u = (notif.params or {}).update or {}
             if u.sessionUpdate == "config_option_update" and u.configOptions then
               stub.config_options = u.configOptions
+            elseif u.sessionUpdate == "models_update" and u.models then
+              stub.models = normalize_models(u.models)
             elseif u.sessionUpdate == "available_commands_update" and u.availableCommands then
               stub.available_commands = u.availableCommands
             elseif u.sessionUpdate == "modes_update" and u.modes then
@@ -230,6 +241,29 @@ function M.set_config_option(key, config_id, value, callback)
     end
     if callback then callback(err, s.config_options) end
   end)
+end
+
+function M.set_model(key, model_id, callback)
+  local s = sessions[key]
+  if not s or s.state ~= "ready" then
+    if callback then callback("no active session") end
+    return
+  end
+
+  if s.models and s.models.availableModels and #s.models.availableModels > 0 then
+    s.rpc:request("session/set_model", {
+      sessionId = s.session_id,
+      modelId   = model_id,
+    }, function(err)
+      if not err then
+        s.models.currentModelId = model_id
+      end
+      if callback then callback(err, s.models) end
+    end)
+    return
+  end
+
+  M.set_config_option(key, "model", model_id, callback)
 end
 
 function M.find_ready_for_cwd(cwd)
@@ -345,6 +379,9 @@ function M.active()
       cwd = s.cwd,
       state = s.state,
       session_id = s.session_id,
+      provider = s.provider,
+      config_options = s.config_options,
+      models = s.models,
       modes = s.available_modes,
       current_mode = s.current_mode
     })

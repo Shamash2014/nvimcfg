@@ -654,6 +654,31 @@ local function _collect_projects()
   return result
 end
 
+function M.project_targets()
+  local targets = {}
+  for _, p in ipairs(_collect_projects()) do
+    table.insert(targets, {
+      kind = "project",
+      cwd = p.cwd,
+      label = string.format("📁 %s (%s)",
+        vim.fn.fnamemodify(p.cwd, ":t"),
+        vim.fn.fnamemodify(p.cwd, ":~")),
+    })
+    for _, wt in ipairs(p.worktrees) do
+      if wt.path ~= p.cwd then
+        local branch = (type(wt.branch) == "string" and wt.branch) or vim.fn.fnamemodify(wt.path, ":t")
+        table.insert(targets, {
+          kind = "worktree",
+          cwd = wt.path,
+          branch = wt.branch,
+          label = "  |_ " .. branch .. "  " .. vim.fn.fnamemodify(wt.path, ":~"),
+        })
+      end
+    end
+  end
+  return targets
+end
+
 local function _open_oil(path)
   if path and path ~= "" and path ~= vim.fn.getcwd() then
     vim.cmd("tcd " .. vim.fn.fnameescape(path))
@@ -682,6 +707,15 @@ function M.pick_project()
 
   local projects = _collect_projects()
   local items    = {}
+
+  table.insert(items, {
+    text = string.format("✨ New thread (%s)", vim.fn.fnamemodify(cwd, ":~")),
+    cwd  = cwd,
+    kind = "new_thread",
+  })
+  if #projects > 0 then
+    table.insert(items, { text = "  ---", kind = "sep" })
+  end
 
   for _, p in ipairs(projects) do
     table.insert(items, {
@@ -724,7 +758,9 @@ function M.pick_project()
 
   local function on_pick(item)
     if not item or item.kind == "sep" then return end
-    if item.kind == "thread" then
+    if item.kind == "new_thread" then
+      M.set(item.cwd)
+    elseif item.kind == "thread" then
       _open_thread(item.cwd, item.file, item.row)
     elseif item.kind == "worktree" then
       _open_oil(item.path)

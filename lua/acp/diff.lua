@@ -415,84 +415,169 @@ local function redraw_thread(row)
   })
 end
 
-local _files_cache  = {}    -- [cwd] = { files = {}, ts = 0 }
-local _files_in_flight = {} -- [cwd] = true
+local _files_cache  = {}     -- [cwd] = { files = {}, ts = 0 }
+local _files_in_flight = {}   -- [cwd] = true
 local FILES_TTL_MS  = 5000
+
+local function fetch_head(cwd, path)
+  local raw = vim.fn.system({ "git", "-C", cwd, "show", "HEAD:" .. path })
+  if vim.v.shell_error ~= 0 then return "" end
+  return raw
+end
+
+local function write_temp_file(contents)
+  local path = vim.fn.tempname()
+  local f = io.open(path, "w")
+  if not f then return nil end
+  f:write(contents or "")
+  f:close()
+  return path
+end
+
+local function spawn_difft(cwd, old_path, new_path, on_done)
+  local out = {}
+  vim.fn.jobstart({ "difft", "--display=json", old_path, new_path }, {
+    cwd             = cwd,
+    stdout_buffered = true,
+    on_stdout       = function(_, data) if data then vim.list_extend(out, data) end end,
+    on_stderr       = function() end,
+    on_exit         = function()
+      local raw = table.concat(out):gsub("\n$", "")
+      if on_done then vim.schedule(function() on_done(raw) end) end
+    end,
+  })
+end
 
 local function async_refresh_files(cwd, on_done)
   if _files_in_flight[cwd] then return end
   _files_in_flight[cwd] = true
 
-  local function spawn(args, cb)
-    local out = {}
-    vim.fn.jobstart(args, {
-      cwd = cwd,
-      stdout_buffered = true,
-      on_stdout = function(_, data) if data then vim.list_extend(out, data) end end,
-      stderr_buffered = true,
-      on_stderr = function() end, -- discard stderr (git show errors for deleted files are expected)
-      on_exit = function(_, code) cb(code, out) end,
-    })
-  end
-
-  local all_json = {}
-  local pending = 0
-  local done = false
-  local timer
-
-  local function finish()
-    if done then return end
-    done = true
-    if timer then timer:stop(); timer:close() end
-
-    -- If we got any difft output, use it; otherwise fall back to git diff HEAD
-    if #all_json > 0 then
-      _files_cache[cwd] = { files = parse_diff(all_json), ts = _uv.now() }
-    else
-      spawn({ "git", "diff", "HEAD" }, function(_, raw2)
-        _files_cache[cwd] = { files = (raw2 and #raw2 > 0) and parse_diff(raw2) or {}, ts = _uv.now() }
-      end)
-    end
-
+  local function finish_with(files)
+    _files_cache[cwd] = { files = files or {}, ts = _uv.now() }
     _files_in_flight[cwd] = nil
     if on_done then vim.schedule(on_done) end
   end
 
-  -- Get changed files from git (we use this for the file list only; difft does actual diffing)
-  spawn({ "git", "diff", "--name-only" }, function(_, lines)
-    local names = {}
-    if lines then
-      for _, l in ipairs(lines) do
-        local s = l:match("^%s*(.+)$")
-        if s and #s > 0 then table.insert(names, s) end
-      end
-    end
+  local function fallback_git_diff()
+    local raw = {}
+    vim.fn.jobstart({ "git", "-C", cwd, "diff", "HEAD" }, {
+      cwd             = cwd,
+      stdout_buffered = true,
+      on_stdout       = function(_, data) if data then vim.list_extend(raw, data) end end,
+      on_stderr       = function() end,
+      on_exit         = function()
+        finish_with((#raw > 0) and parse_diff(raw) or {})
+      end,
+    })
+  end
 
-    pending = #names
-    if pending == 0 then finish(); return end
-
-    -- For each changed file, spawn difft using bash process substitution for old version (HEAD)
-    for _, name in ipairs(names) do
-      local cmd = string.format(
-        [[bash -c 'difft --display=json <(git show "HEAD:$1") "$1" -- "$0"' _ ]],
-        name
-      )
-
-      spawn({ "sh", "-c", cmd }, function(code, raw)
-        if #raw > 0 then
-          table.insert(all_json, table.concat(raw))
+  local git_out = {}
+  vim.fn.jobstart({ "git", "-C", cwd, "diff", "--name-status", "--find-renames", "HEAD" }, {
+    cwd             = cwd,
+    stdout_buffered = true,
+    on_stdout       = function(_, data) if data then vim.list_extend(git_out, data) end end,
+    on_stderr       = function() end,
+    on_exit         = function()
+      local changed_files = {}
+      for _, line in ipairs(git_out) do
+        local status, path_a, path_b = line:match("^([A-Z]%d*)\t([^\t]+)\t(.+)$")
+        if status then
+          local code = status:sub(1, 1)
+          table.insert(changed_files, {
+            status = (code == "A" or code == "D") and code or "M",
+            path = (code == "R" or code == "C") and path_b or path_a,
+          })
+        else
+          local simple_status, simple_path = line:match("^([A-Z]%d*)\t(.+)$")
+          if simple_status and simple_path then
+            local code = simple_status:sub(1, 1)
+            table.insert(changed_files, {
+              status = (code == "A" or code == "D") and code or "M",
+              path = simple_path,
+            })
+          end
         end
-        pending = pending - 1
-        if pending <= 0 and not done then finish() end
-      end)
-    end
+      end
 
-    -- Safety timeout: fall back after 2s if we're still waiting
-    timer = _uv.new_timer()
-    timer:start(2000, 1, function()
-      if not done then finish() end
-    end)
-  end)
+      if #changed_files == 0 then
+        finish_with({})
+        return
+      end
+
+      local pending = #changed_files
+      local done = false
+      local need_fallback = false
+      local parsed_files = {}
+      local timer = _uv.new_timer()
+
+      local function finalize_with_difft()
+        if done then return end
+        done = true
+        timer:stop()
+        timer:close()
+        finish_with(parsed_files)
+      end
+
+      local function finalize_with_fallback()
+        if done then return end
+        done = true
+        timer:stop()
+        timer:close()
+        fallback_git_diff()
+      end
+
+      local function on_file_done()
+        pending = pending - 1
+        if pending == 0 then
+          if need_fallback then
+            finalize_with_fallback()
+          else
+            finalize_with_difft()
+          end
+        end
+      end
+
+      timer:start(2000, 0, function()
+        vim.schedule(finalize_with_fallback)
+      end)
+
+      for _, file in ipairs(changed_files) do
+        local cleanup = {}
+        local old_path = write_temp_file(fetch_head(cwd, file.path))
+        if old_path then table.insert(cleanup, old_path) else need_fallback = true end
+
+        local new_path = file.path
+        if file.status == "D" then
+          new_path = write_temp_file("")
+          if new_path then table.insert(cleanup, new_path) else need_fallback = true end
+        end
+
+        if not old_path or not new_path then
+          for _, temp_path in ipairs(cleanup) do pcall(os.remove, temp_path) end
+          on_file_done()
+        else
+          spawn_difft(cwd, old_path, new_path, function(raw)
+            for _, temp_path in ipairs(cleanup) do pcall(os.remove, temp_path) end
+            if raw and #raw > 0 then
+              local parsed = parse_diff({ raw })
+              if #parsed > 0 then
+                for _, entry in ipairs(parsed) do
+                  entry.path = file.path
+                  entry.status = file.status
+                  table.insert(parsed_files, entry)
+                end
+              else
+                need_fallback = true
+              end
+            else
+              need_fallback = true
+            end
+            on_file_done()
+          end)
+        end
+      end
+    end,
+  })
 end
 
 function M.list_files(cwd)
