@@ -51,6 +51,14 @@ local function session_name(cwd)
   return cwd or vim.fn.getcwd()
 end
 
+function M.current_branch(cwd)
+  return current_branch(cwd)
+end
+
+function M.session_name(cwd)
+  return session_name(cwd)
+end
+
 local function save_session(cwd)
   local ok, resession = pcall(require, "resession")
   if not ok then

@@ -31,6 +31,12 @@ local _providers = {
     cmd     = "agent",
     args    = { "acp" },
   },
+  {
+    name    = "pi",
+    display = "pi",
+    cmd     = "pi-acp",
+    args    = {},
+  },
 }
 
 local _available = nil
