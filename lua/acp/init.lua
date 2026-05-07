@@ -73,6 +73,13 @@ local function picker_select(labels, opts, on_choice)
   end
 end
 
+local function switch_project_root(cwd)
+  if not cwd or cwd == "" or cwd == vim.fn.getcwd() then
+    return
+  end
+  vim.cmd("tcd " .. vim.fn.fnameescape(cwd))
+end
+
 local function active_session_for(cwd)
   local session_mod = require("acp.session")
   local key = _active_key[cwd]
@@ -352,6 +359,7 @@ function M.show_sessions()
     if not idx then return end
     local item = items[idx]
     if not item then return end
+    switch_project_root(item.cwd)
     if item.kind == "session" then
       _active_key[item.cwd] = item.key
       vim.notify("Active: " .. item.label:gsub("^%s*(.-)%s*$", "%1"), vim.log.levels.INFO, { title = "acp" })
