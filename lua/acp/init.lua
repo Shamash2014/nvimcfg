@@ -303,23 +303,106 @@ function M.trigger_op(lines, source)
   end)
 end
 
-function M.trigger_visual()
-  vim.schedule(function()
-    local l1 = vim.fn.line("'<"); local l2 = vim.fn.line("'>")
-    M.trigger_op(
-      vim.api.nvim_buf_get_lines(0, l1-1, l2, false),
-      vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.") .. ":" .. l1 .. "-" .. l2
-    )
-  end)
-end
+function M.show_sessions()
+  local all = require("acp.session").active()
+  if #all == 0 then
+    vim.notify("No active sessions", vim.log.levels.WARN, { title = "acp" })
+    return
+  end
 
-function M.trigger_codebase()
-  local cwd = vim.fn.getcwd()
-  snacks_input(acp_prompt(cwd), function(instruction)
-    if not instruction or instruction == "" then return end
-    send(cwd, make_prompt(cwd, "cwd: " .. cwd .. "\n\nInstruction: " .. instruction
-      .. "\n\nExplore the codebase using your tools."))
-  end)
+  -- Try to get worktree info for each cwd
+  local wt_mod = nil
+  do local ok, m = pcall(require, "config.wt") wt_mod = m end
+
+  local items = {}
+  for _, sess in ipairs(all) do
+    local name
+    if wt_mod and wt_mod.available() then
+      name = wt_mod.session_name(sess.cwd)
+    else
+      name = sess_label(sess)
+    end
+
+    local project = vim.fn.fnamemodify(sess.cwd, ":~")
+    local branch = ""
+    if wt_mod and wt_mod.available() then
+      local b = wt_mod.current_branch(sess.cwd)
+      branch = b ~= "" and (" " .. b) or ""
+    end
+
+    local model = ""
+    for _, opt in ipairs(sess.config_options or {}) do
+      if (opt.category == "model" or opt.id == "model") and opt.currentValue then
+        for _, o in ipairs(opt.options or {}) do
+          if o.value == opt.currentValue then
+            model = (" [" .. (o.name or opt.currentValue) .. "]"):gsub("^%s+", "")
+            break
+          end
+        end
+        if model ~= "" then break end
+      end
+    end
+
+    local is_active = (_active_key[sess.cwd] == sess.key)
+    items[#items + 1] = {
+      key   = sess.key,
+      cwd   = sess.cwd,
+      label = (is_active and "✓ " or "") .. name .. branch .. model .. "  |  " .. project,
+    }
+  end
+
+  local function on_choice(_, idx)
+    if not idx then return end
+    _active_key[all[idx].cwd] = all[idx].key
+    vim.notify("Active: " .. items[idx].label:gsub("^%s*(.-)%s*$", "%1"), vim.log.levels.INFO, { title = "acp" })
+    vim.schedule(function() require("acp.workbench").render() end)
+  end
+
+  local labels = {}
+  for _, it in ipairs(items) do table.insert(labels, it.label) end
+
+  if wt_mod and wt_mod.available() then
+    -- Also show available worktrees without active sessions
+    wt_mod.list({ branches = true }, function(entries, err)
+      if not entries then return end
+      local cwds = {}
+      for _, sess in ipairs(all) do cwds[sess.cwd] = true end
+
+      local added = 0
+      for _, e in ipairs(entries) do
+        if e.path and e.kind == "worktree" and not cwds[e.path] then
+          local label = ("wt:" .. (e.branch or "?")) .. "  |  " .. vim.fn.fnamemodify(e.path, ":~")
+          added = added + 1
+          items[#items + 1] = { key = nil, cwd = e.path, label = label, branch = e.branch }
+        end
+      end
+
+      if added > 0 then
+        labels = {}
+        for _, it in ipairs(items) do table.insert(labels, it.label) end
+        local ok2, sn = pcall(require, "snacks")
+        if ok2 and sn.picker then
+          sn.picker.select(labels, { prompt = "ACP AI Sessions (" .. #all .. ")" }, on_choice)
+        else
+          vim.ui.select(labels, { prompt = "ACP AI Sessions" }, on_choice)
+        end
+      else
+        local ok3, sn = pcall(require, "snacks")
+        if ok3 and sn.picker then
+          sn.picker.select(labels, { prompt = "ACP AI Sessions (" .. #all .. ")" }, on_choice)
+        else
+          vim.ui.select(labels, { prompt = "ACP AI Sessions" }, on_choice)
+        end
+      end
+    end)
+  else
+    local ok, sn = pcall(require, "snacks")
+    if ok and sn.picker then
+      sn.picker.select(labels, { prompt = "ACP AI Sessions (" .. #all .. ")" }, on_choice)
+    else
+      vim.ui.select(labels, { prompt = "ACP AI Sessions" }, on_choice)
+    end
+  end
 end
 
 return M

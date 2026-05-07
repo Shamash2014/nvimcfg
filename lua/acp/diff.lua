@@ -180,13 +180,121 @@ local function compute_tokens(t)
   return tokens.format(tokens.estimate(t.messages))
 end
 
+-- Reconstruct unified diff hunks from difft's semantic alignment data
+local function reconstruct_hunks(aligned_lines, chunks)
+  local hunks = {}
+  if not aligned_lines or #aligned_lines == 0 then return hunks end
+  local cur_old, cur_new = 1, 1
+  local hunk_adds, hunk_dels, hunk_ctx = {}, {}, {}
+  local in_hunk = false
+
+  local function flush_hunk()
+    if not in_hunk or (#hunk_adds == 0 and #hunk_dels == 0) then return end
+    -- @@ -old_start,len +new_start,len @@
+    local old_len = (cur_old - 1) - hunk_first_old + 1
+    local new_len = (cur_new - 1) - hunk_first_new + 1
+    table.insert(hunks, {
+      header = string.format("@@ -%d,%d +%d,%d @@",
+        hunk_first_old, old_len, hunk_first_new, new_len),
+      lines = vim.list_extend(vim.deepcopy(hunk_ctx), {}),
+      _adds = vim.deepcopy(hunk_adds),
+      _dels = vim.deepcopy(hunk_dels),
+    })
+  end
+
+  for _, pair in ipairs(aligned_lines) do
+    local old_idx, new_idx = pair[1], pair[2]
+    if old_idx ~= nil and new_idx ~= nil then
+      -- Matched line: context
+      in_hunk = false
+      table.insert(hunk_ctx, { type="ctx", text="" })
+      cur_old, cur_new = cur_old + 1, cur_new + 1
+
+    elseif old_idx == nil then
+      -- New line (insertion)
+      if not in_hunk then flush_hunk(); hunk_first_new = new_idx; in_hunk = true end
+      table.insert(hunk_adds, { type="add", text="" })
+      cur_new = cur_new + 1
+
+    elseif new_idx == nil then
+      -- Removed line (deletion)
+      if not in_hunk then flush_hunk(); hunk_first_old = old_idx; in_hunk = true end
+      table.insert(hunk_dels, { type="del", text="" })
+      cur_old = cur_old + 1
+    end
+  end
+  flush_hunk()
+  return hunks
+end
+
 local function parse_diff(raw)
+  local _, json_start = raw[1]:find("{")
+  if json_start then
+    local ok, data = pcall(vim.json.decode, table.concat(raw))
+    if ok and type(data) == "table" then
+      -- Handle JSON output from difft --display=json
+      local files = {}
+      for _, file_data in ipairs(data) do
+        if type(file_data) == "table" and type(file_data.path) == "string" then
+          local chunks = file_data.chunks or {}
+          local hunks = reconstruct_hunks(file_data.aligned_lines, chunks)
+
+          -- Build hunk lines from aligned data + chunk changes
+          for _, hunk in ipairs(hunks) do
+            hunk.lines = {}
+            local old_idx, new_idx = 1, 1
+            local ci = 1  -- current chunk index
+            local li = 0  -- current line within chunk pair
+
+            while ci <= #chunks or (old_idx < #file_data.aligned_lines and file_data.aligned_lines[ci][1] == nil) do
+              local pair = file_data.aligned_lines[ci] or {nil, nil}
+              if type(pair) ~= "table" then break end
+
+              local old_ln = pair[1]
+              local new_ln = pair[2]
+              local chunk_pair = chunks[ci]
+
+              -- Collect text for context line
+              local lhs_text, rhs_text = "", ""
+              if chunk_pair and type(chunk_pair) == "table" then
+                lhs_text = (chunk_pair.lhs and chunk_pair.lhs.content) or ""
+                rhs_text = (chunk_pair.rhs and chunk_pair.rhs.content) or ""
+              end
+
+              local text = (new_idx ~= nil) and rhs_text or lhs_text
+              if new_idx == nil then
+                table.insert(hunk.lines, { type="add", text=text })
+              elseif old_idx == nil then
+                table.insert(hunk.lines, { type="del", text=text })
+              else
+                table.insert(hunk.lines, { type="ctx", text=text })
+              end
+
+              if old_ln ~= nil and new_ln ~= nil then
+                old_idx, new_idx = old_idx + 1, new_idx + 1
+              elseif old_ln == nil then
+                new_idx = new_idx + 1
+              else
+                old_idx = old_idx + 1
+              end
+
+              ci = ci + 1
+            end
+          end
+
+          table.insert(files, { path=file_data.path, status="M", hunks=hunks })
+        end
+      end
+      return files
+    end
+  end
+  -- Original unified diff parser (for git fallback)
   local files = {}
   local cur_file, cur_hunks, cur_hunk = nil, {}, nil
   local function flush()
     if cur_file and cur_file.path then
       if cur_hunk then table.insert(cur_hunks, cur_hunk) end
-      table.insert(files, { path=cur_file.path, status=cur_file.status, hunks=cur_hunks })
+      table.insert(files, { path=cur_file.path, status=cur_file.status or "M", hunks=cur_hunks })
     end
     cur_hunks, cur_hunk = {}, nil
   end
@@ -321,24 +429,69 @@ local function async_refresh_files(cwd, on_done)
       cwd = cwd,
       stdout_buffered = true,
       on_stdout = function(_, data) if data then vim.list_extend(out, data) end end,
+      stderr_buffered = true,
+      on_stderr = function() end, -- discard stderr (git show errors for deleted files are expected)
       on_exit = function(_, code) cb(code, out) end,
     })
   end
 
-  spawn({ "git", "diff", "HEAD" }, function(code, raw)
-    if code ~= 0 or #raw == 0 then
-      spawn({ "git", "diff" }, function(_, raw2)
-        local files = (#raw2 > 0) and parse_diff(raw2) or {}
-        _files_cache[cwd] = { files = files, ts = _uv.now() }
-        _files_in_flight[cwd] = nil
-        if on_done then vim.schedule(on_done) end
-      end)
+  local all_json = {}
+  local pending = 0
+  local done = false
+  local timer
+
+  local function finish()
+    if done then return end
+    done = true
+    if timer then timer:stop(); timer:close() end
+
+    -- If we got any difft output, use it; otherwise fall back to git diff HEAD
+    if #all_json > 0 then
+      _files_cache[cwd] = { files = parse_diff(all_json), ts = _uv.now() }
     else
-      local files = parse_diff(raw)
-      _files_cache[cwd] = { files = files, ts = _uv.now() }
-      _files_in_flight[cwd] = nil
-      if on_done then vim.schedule(on_done) end
+      spawn({ "git", "diff", "HEAD" }, function(_, raw2)
+        _files_cache[cwd] = { files = (raw2 and #raw2 > 0) and parse_diff(raw2) or {}, ts = _uv.now() }
+      end)
     end
+
+    _files_in_flight[cwd] = nil
+    if on_done then vim.schedule(on_done) end
+  end
+
+  -- Get changed files from git (we use this for the file list only; difft does actual diffing)
+  spawn({ "git", "diff", "--name-only" }, function(_, lines)
+    local names = {}
+    if lines then
+      for _, l in ipairs(lines) do
+        local s = l:match("^%s*(.+)$")
+        if s and #s > 0 then table.insert(names, s) end
+      end
+    end
+
+    pending = #names
+    if pending == 0 then finish(); return end
+
+    -- For each changed file, spawn difft using bash process substitution for old version (HEAD)
+    for _, name in ipairs(names) do
+      local cmd = string.format(
+        [[bash -c 'difft --display=json <(git show "HEAD:$1") "$1" -- "$0"' _ ]],
+        name
+      )
+
+      spawn({ "sh", "-c", cmd }, function(code, raw)
+        if #raw > 0 then
+          table.insert(all_json, table.concat(raw))
+        end
+        pending = pending - 1
+        if pending <= 0 and not done then finish() end
+      end)
+    end
+
+    -- Safety timeout: fall back after 2s if we're still waiting
+    timer = _uv.new_timer()
+    timer:start(2000, 1, function()
+      if not done then finish() end
+    end)
   end)
 end
 
