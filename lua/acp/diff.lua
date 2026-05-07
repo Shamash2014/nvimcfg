@@ -124,6 +124,16 @@ local function load_threads(cwd)
 end
 M.load_threads = load_threads
 
+local function lookup_thread(cwd, file, row)
+  load_threads(cwd)
+  local rows = ((_threads[cwd] or {})[file] or {})
+  local t = rows[row]
+  if (not t or type(t) == "userdata") and type(row) == "number" then
+    t = rows[tostring(row)]
+  end
+  return type(t) == "table" and t or nil
+end
+
 local function reload_threads(cwd)
   _threads[cwd] = nil
   load_threads(cwd)
@@ -1461,7 +1471,7 @@ end
 function M.reply_at(row, file, explicit_cwd)
   local cwd  = explicit_cwd or _cur.cwd or vim.fn.getcwd()
   file = file or _cur.sel_file
-  local t    = ((_threads[cwd] or {})[file] or {})[row]
+  local t    = lookup_thread(cwd, file, row)
   if not t then
     vim.notify("No thread here", vim.log.levels.WARN, {title="acp"}); return
   end
@@ -1522,7 +1532,7 @@ function M.toggle_resolve()
 end
 
 function M.get_thread(cwd, file, row)
-  return ((_threads[cwd] or {})[file] or {})[row]
+  return lookup_thread(cwd, file, row)
 end
 
 function M.is_thread_active(t)

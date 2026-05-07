@@ -5,8 +5,12 @@ local rpc_mod   = require("acp.rpc")
 local sessions = {}  -- [cwd] -> session
 
 local PROTOCOL_VERSION = 1
+local ACP_META = {
+  scope = "nvim",
+}
 
 local INIT_PARAMS = {
+  _meta = ACP_META,
   protocolVersion = PROTOCOL_VERSION,
   clientCapabilities = {
     fs       = { readTextFile = false, writeTextFile = false },
@@ -108,7 +112,11 @@ function M.get_or_create(cwd_or_opts, callback)
                .. " differs from client " .. PROTOCOL_VERSION, vim.log.levels.WARN)
       end
 
-      stub.rpc:request("session/new", { cwd = cwd, mcpServers = {} }, function(e2, res)
+      stub.rpc:request("session/new", {
+        _meta = ACP_META,
+        cwd = cwd,
+        mcpServers = {},
+      }, function(e2, res)
         if e2 or not res then
           stub.set_state("dead")
           transport.close(th)
