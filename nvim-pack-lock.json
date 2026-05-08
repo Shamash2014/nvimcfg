@@ -44,11 +44,11 @@
       "src": "https://github.com/nvim-mini/mini.cursorword"
     },
     "neogit": {
-      "rev": "f8bcc625fe1b9bd55f7853820fddac9b0996f697",
+      "rev": "395ac481e197784e410b59b987fadaf9e7481df1",
       "src": "https://github.com/NeogitOrg/neogit"
     },
     "nvim-autopairs": {
-      "rev": "59bce2eef357189c3305e25bc6dd2d138c1683f5",
+      "rev": "7b9923abad60b903ece7c52940e1321d39eccc79",
       "src": "https://github.com/windwp/nvim-autopairs"
     },
     "nvim-bqf": {
@@ -84,7 +84,7 @@
       "src": "https://github.com/romus204/referencer.nvim"
     },
     "render-markdown.nvim": {
-      "rev": "3f3eea97b80839f629c951ca660ffd125bfa5b34",
+      "rev": "629eb9533ec989d9d5c6cab8f3ad5372422c24e0",
       "src": "https://github.com/MeanderingProgrammer/render-markdown.nvim"
     },
     "resession.nvim": {
@@ -100,7 +100,7 @@
       "src": "https://github.com/folke/snacks.nvim"
     },
     "tree-sitter-manager.nvim": {
-      "rev": "69c48bff61d763280e472a3fe989338f949583e3",
+      "rev": "59e1ba49e33e1b73bef655fd34b5e65e1465053f",
       "src": "https://github.com/romus204/tree-sitter-manager.nvim"
     },
     "vim-repeat": {
@@ -116,7 +116,7 @@
       "src": "https://github.com/mosheavni/yaml-companion.nvim"
     },
     "zpack.nvim": {
-      "rev": "8fffbafdcf24587cad705881ae0900e4df56f95d",
+      "rev": "8d02f50245ec43bd5dc835dc574d460e4c61bcec",
       "src": "git@github.com:zuqini/zpack.nvim"
     }
   }

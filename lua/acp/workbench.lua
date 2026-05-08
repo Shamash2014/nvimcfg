@@ -683,6 +683,9 @@ local function _open_oil(path)
   if path and path ~= "" and path ~= vim.fn.getcwd() then
     vim.cmd("tcd " .. vim.fn.fnameescape(path))
   end
+  local cwd = vim.fn.getcwd()
+  _contexts[cwd] = {}
+  require("acp.workbench").push_open_buffers()
   vim.cmd("Oil " .. vim.fn.fnameescape(path))
 end
 
@@ -692,8 +695,10 @@ local function _open_thread(cwd, file, row)
     pcall(nwb.close)
     vim.cmd("tcd " .. vim.fn.fnameescape(cwd))
   end
+  _contexts[cwd] = {}
   nwb.open({ kind = "vsplit", skip_diff = true })
   nwb.show_thread(file, tonumber(row) or -1, cwd)
+  require("acp.workbench").push_open_buffers()
 end
 
 function M.pick_project()

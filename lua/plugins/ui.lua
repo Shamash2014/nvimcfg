@@ -53,4 +53,9 @@ return {
       })
     end,
   },
+  {
+    src = "https://github.com/echasinski/scope.nvim",
+    event = "BufReadPost",
+    opts = {},
+  },
 }
