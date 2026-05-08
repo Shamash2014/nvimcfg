@@ -54,7 +54,7 @@ return {
     end,
   },
   {
-    src = "https://github.com/echasinski/scope.nvim",
+    src = "https://github.com/tiagovla/scope.nvim",
     event = "BufReadPost",
     opts = {},
   },

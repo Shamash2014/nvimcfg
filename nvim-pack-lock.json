@@ -95,6 +95,10 @@
       "rev": "7825ce662964e8e1aff926b1244faf52ad6bbdbb",
       "src": "https://github.com/lima1909/resty.nvim"
     },
+    "scope.nvim": {
+      "rev": "228aabdb1b9cc74f0c0ccec88e79873857236e49",
+      "src": "https://github.com/tiagovla/scope.nvim"
+    },
     "snacks.nvim": {
       "rev": "ad9ede6a9cddf16cedbd31b8932d6dcdee9b716e",
       "src": "https://github.com/folke/snacks.nvim"
