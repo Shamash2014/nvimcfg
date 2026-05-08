@@ -73,11 +73,80 @@ local function picker_select(labels, opts, on_choice)
   end
 end
 
+local function clear_windows()
+  local scratch = vim.api.nvim_create_buf(true, true)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_set_buf(win, scratch)
+    end
+  end
+end
+
 local function switch_project_root(cwd)
   if not cwd or cwd == "" or cwd == vim.fn.getcwd() then
     return
   end
+
+  local previous_cwd = vim.fn.getcwd()
+
+  -- Save session for old cwd before switching
+  do
+    local ok, resession = pcall(require, "resession")
+    if ok then
+      local branch = nil
+      do
+        local wt_mod
+        local wok, wm = pcall(require, "config.wt")
+        if wok and wm and wm.available() then
+          wt_mod = wm
+        end
+        if wt_mod then
+          local b = wt_mod.current_branch(previous_cwd)
+          branch = (b ~= "" and b) or nil
+        end
+      end
+      pcall(resession.save, branch or previous_cwd, { dir = "dirsession", notify = false })
+    end
+  end
+
+  clear_windows()
   vim.cmd("tcd " .. vim.fn.fnameescape(cwd))
+
+  -- Apply direnv/mise for the new cwd (DirChanged autocmd doesn't fire on tcd)
+  do
+    local ok, env_mod = pcall(require, "config.env")
+    if ok then
+      env_mod.sync()
+    end
+  end
+
+  -- Load session for new cwd
+  do
+    local ok, resession = pcall(require, "resession")
+    if ok then
+      local branch = nil
+      do
+        local wt_mod
+        local wok, wm = pcall(require, "config.wt")
+        if wok and wm and wm.available() then
+          wt_mod = wm
+        end
+        if wt_mod then
+          local b = wt_mod.current_branch(cwd)
+          branch = (b ~= "" and b) or nil
+        end
+      end
+      pcall(resession.load, branch or cwd, { dir = "dirsession", silence_errors = true })
+    end
+  end
+
+  -- Open a file if no buffers are listed
+  local buffers = vim.tbl_filter(function(bufnr)
+    return vim.bo[bufnr].buflisted and vim.api.nvim_buf_get_name(bufnr) ~= ""
+  end, vim.api.nvim_list_bufs())
+  if #buffers == 0 then
+    vim.cmd("edit " .. vim.fn.fnameescape(cwd))
+  end
 end
 
 local function active_session_for(cwd)

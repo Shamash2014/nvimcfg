@@ -1540,6 +1540,13 @@ function M.is_thread_active(t)
   return t._stream_started == true or t._active_tool ~= nil
 end
 
+function M.is_thread_streaming(t)
+  if type(t) ~= "table" or not t._subscribed then return false end
+  if t._stream_started ~= true then return false end
+  if t._active_tool ~= nil then return false end
+  return true
+end
+
 function M.get_threads(cwd)
   local result = {}
   for file, rows in pairs((_threads[cwd] or {})) do

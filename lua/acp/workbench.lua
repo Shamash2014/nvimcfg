@@ -739,9 +739,10 @@ function M.pick_project()
       table.insert(items, { text = "  ---", kind = "sep" })
     end
     for _, t in ipairs(p.threads) do
-      local title  = (t.thread and (t.thread._title or t.thread.prompt)) or "(empty)"
-      title        = tostring(title):gsub("[\r\n]+", " "):sub(1, 80)
-      local marker = diff.is_thread_active(t.thread) and "●" or "·"
+      local title     = (t.thread and (t.thread._title or t.thread.prompt)) or "(empty)"
+      title           = tostring(title):gsub("[\r\n]+", " "):sub(1, 80)
+      local streaming = diff.is_thread_streaming(t.thread)
+      local marker    = streaming and "●" or (diff.is_thread_active(t.thread) and "◉" or "·")
       table.insert(items, {
         text = "  " .. marker .. " " .. title,
         cwd  = p.cwd,

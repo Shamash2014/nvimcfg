@@ -189,12 +189,14 @@ local function get_comment_items(cwd)
 
   for _, entry in ipairs(threads) do
     if entry.file and entry.row and not entry.file:match("%.nowork/") and entry.row >= 0 then
+      local t = entry.thread
       table.insert(result, {
-        _type = "comment",
-        _file = entry.file,
-        _row = entry.row,
-        _thread = entry.thread,
-        _active = diff.is_thread_active(entry.thread),
+        _type   = "comment",
+        _file   = entry.file,
+        _row    = entry.row,
+        _thread = t,
+        _active = diff.is_thread_active(t),
+        _streaming = diff.is_thread_streaming(t) and true or false,
         display = entry.file .. ":" .. entry.row,
       })
     end
@@ -209,13 +211,18 @@ local function create_section(title, items)
   local rows = {}
   for _, item in ipairs(items) do
     local children
-    if item._active then
+    if item._streaming then
+      children = {
+        Ui.text("● ", { highlight = "Success" }),
+        Ui.text(item.display),
+      }
+    elseif item._active then
       children = {
         Ui.text("● ", { highlight = "AcpThreadOpen" }),
         Ui.text(item.display),
       }
     else
-      children = { Ui.text("  " .. item.display) }
+      children = { Ui.text("  · " .. item.display) }
     end
     table.insert(rows, Ui.row(children, {
       interactive = true,

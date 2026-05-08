@@ -101,9 +101,9 @@ function M.set_model_for_cwd(cwd, model) _cwd_models[cwd] = model; save_models()
 function M.get_model_for_cwd(cwd) return _cwd_models[cwd] end
 function M.set_model_for_key(key, model) _key_models[key] = model; save_key_models() end
 function M.get_model_for_key(key) return _key_models[key] end
-function M.set_mode_for_key(key, mode) _key_prefs["mode:" .. key] = mode; save_key_prefs() end
+function M.set_mode_for_key(key, mode) _key_prefs["mode:" .. key] = mode; save_key_prefs(); require("acp.diff").refresh_winbar() end
 function M.get_mode_for_key(key) return _key_prefs["mode:" .. key] end
-function M.set_mode_for_cwd(cwd, mode) _cwd_prefs["mode:" .. cwd] = mode; save_prefs() end
+function M.set_mode_for_cwd(cwd, mode) _cwd_prefs["mode:" .. cwd] = mode; save_prefs(); require("acp.diff").refresh_winbar() end
 function M.get_mode_for_cwd(cwd) return _cwd_prefs["mode:" .. cwd] end
 
 -- Look up a value (pref or model), falling back from key-scoped to cwd-scoped.
