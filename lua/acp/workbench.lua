@@ -629,16 +629,41 @@ local function _collect_projects()
   local seen, candidates = {}, {}
 
   local function add(c)
-    if c and c ~= "" and not seen[c] and vim.fn.isdirectory(c) == 1 then
-      seen[c] = true
-      table.insert(candidates, c)
+    if c and c ~= "" and not seen[c] then
+      if vim.fn.isdirectory(c) == 1 then
+        seen[c] = true
+        table.insert(candidates, c)
+      end
     end
   end
   add(vim.fn.getcwd())
+
+  -- Scan open buffers for git roots so repos with open files appear immediately.
+  local bufnr_list = vim.api.nvim_list_bufs()
+  for _, buf in ipairs(bufnr_list) do
+    if vim.api.nvim_buf_is_valid(buf) and not vim.bo[buf].buflisted then goto continue end
+    local fpath = vim.api.nvim_buf_get_name(buf)
+    if fpath == "" or not pcall(vim.fn.isdirectory, vim.fn.fnamemodify(fpath, ":p:h")) then goto continue end
+    local root = _git_root(fpath)
+    if root then add(root) end
+    ::continue::
+  end
+
   for _, s in ipairs(require("acp.session").active() or {}) do
     if s and s.cwd then add(s.cwd) end
   end
+
+  -- Clean up stale entries from the saved list before adding them.
+  local clean_projects = {}
+  for _, p in ipairs(_projects) do
+    if vim.fn.isdirectory(p) == 1 then table.insert(clean_projects, p) end
+  end
+  _projects = clean_projects
   for _, p in ipairs(_projects) do add(p) end
+
+  -- Re-save after pruning stale entries.
+  _save_projects(_projects)
+
   for _, r in ipairs(_oldfile_project_roots()) do add(r) end
 
   _wait_for_worktrees(candidates, 800)
@@ -684,6 +709,7 @@ local function _open_oil(path)
     vim.cmd("tcd " .. vim.fn.fnameescape(path))
   end
   local cwd = vim.fn.getcwd()
+  M.register_project(cwd)
   _contexts[cwd] = {}
   require("acp.workbench").push_open_buffers()
   vim.cmd("Oil " .. vim.fn.fnameescape(path))
@@ -707,7 +733,7 @@ function M.pick_project()
 
   -- If there's no active session for the current directory, create one.
   if not require("acp.session").find_ready_for_cwd(cwd) then
-    M.set(cwd); return
+    M.register_project(cwd); M.set(cwd); return
   end
 
   local projects = _collect_projects()
@@ -765,6 +791,7 @@ function M.pick_project()
   local function on_pick(item)
     if not item or item.kind == "sep" then return end
     if item.kind == "new_thread" then
+      M.register_project(item.cwd)
       M.set(item.cwd)
     elseif item.kind == "thread" then
       _open_thread(item.cwd, item.file, item.row)
