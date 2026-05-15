@@ -7,7 +7,8 @@ local function default_agent()
 end
 
 local function resolve_cmd(name)
-  local presets = vim.g.nvim3_agent_terms or { claude = "claude", opencode = "opencode", codex = "codex" }
+  local presets = vim.g.nvim3_agent_terms
+    or { claude = "claude", opencode = "opencode", codex = "codex", pi = "pi" }
   return presets[name] or name
 end
 
@@ -123,7 +124,8 @@ function M.spawn(name)
 end
 
 function M.spawn_pick()
-  local presets = vim.g.nvim3_agent_terms or { claude = "claude", opencode = "opencode", codex = "codex" }
+  local presets = vim.g.nvim3_agent_terms
+    or { claude = "claude", opencode = "opencode", codex = "codex", pi = "pi" }
   local names = {}
   for name in pairs(presets) do table.insert(names, name) end
   table.sort(names)
