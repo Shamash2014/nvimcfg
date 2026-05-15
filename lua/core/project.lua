@@ -53,6 +53,21 @@ local function startup_target()
   return vim.fn.getcwd()
 end
 
+local function oil_dir(bufnr)
+  if vim.bo[bufnr].filetype ~= "oil" then
+    return nil
+  end
+
+  local ok, oil = pcall(require, "oil")
+  if ok and oil.get_current_dir then
+    return oil.get_current_dir(bufnr)
+  end
+
+  local bufname = vim.api.nvim_buf_get_name(bufnr)
+  local path = bufname:match("^oil://(.+)$")
+  return path
+end
+
 function M.root(path)
   local start = root_start(path)
   if not start then
@@ -84,6 +99,11 @@ end
 function M.sync_buffer(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) then
     return false
+  end
+
+  local path = oil_dir(bufnr)
+  if path then
+    return M.sync(path)
   end
 
   if vim.bo[bufnr].buftype ~= "" then

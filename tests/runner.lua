@@ -1328,6 +1328,37 @@ local function test_project_setup_updates_tab_cwd_on_bufenter()
   vim.fn.delete(repo, "rf")
 end
 
+local function test_project_setup_updates_tab_cwd_for_directory_buffers()
+  package.loaded["core.project"] = nil
+  local project = require("core.project")
+  local repo = vim.fn.tempname()
+  local nested = repo .. "/apps/mobile"
+  local original = vim.fn.getcwd()
+  local buf = vim.api.nvim_create_buf(false, true)
+
+  vim.fn.mkdir(repo .. "/.git", "p")
+  vim.fn.mkdir(nested, "p")
+  repo = vim.uv.fs_realpath(repo) or repo
+  nested = vim.uv.fs_realpath(nested) or nested
+
+  project.setup()
+  vim.bo[buf].buftype = "acwrite"
+  vim.bo[buf].filetype = "oil"
+  vim.api.nvim_buf_set_name(buf, "oil://" .. nested)
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_exec_autocmds("BufEnter", {
+    buffer = buf,
+    modeline = false,
+  })
+
+  assert_equal(vim.fn.getcwd(), repo, "opening a directory buffer inside a repo should set tab cwd to the repo root")
+
+  vim.cmd.tcd(original)
+  vim.cmd("enew")
+  vim.api.nvim_buf_delete(buf, { force = true })
+  vim.fn.delete(repo, "rf")
+end
+
 function M.run()
   local tests = {
     test_zpack_bootstrap_uses_plugins_import,
@@ -1364,6 +1395,7 @@ function M.run()
     test_sessions_load_picks_from_saved_files,
     test_project_sync_sets_tab_cwd_from_repo_directory,
     test_project_setup_updates_tab_cwd_on_bufenter,
+    test_project_setup_updates_tab_cwd_for_directory_buffers,
   }
 
   for _, test in ipairs(tests) do
