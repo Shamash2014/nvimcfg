@@ -1,0 +1,85 @@
+return {
+  {
+    "folke/which-key.nvim",
+    lazy = false,
+    keys = {
+      {
+        "<leader>?",
+        function()
+          require("which-key").show({ global = false })
+        end,
+        desc = "Buffer local keymaps",
+      },
+    },
+    config = function()
+      local ok, which_key = pcall(require, "which-key")
+      if not ok then
+        return
+      end
+
+      which_key.setup({})
+      which_key.add({
+        { "<leader>a", group = "acp" },
+        { "<leader>b", group = "buffers" },
+        { "<leader>f", group = "files" },
+        { "<leader>g", group = "git" },
+        { "<leader>o", group = "open" },
+        { "<leader>p", group = "session" },
+        { "<leader>q", group = "quickfix" },
+        { "<leader>s", group = "search" },
+        { "<leader>t", group = "tabs" },
+        { "<leader>w", group = "windows" },
+        { "<leader>:", desc = "Command history" },
+        { "<leader>ao", desc = "Open ACP transcript" },
+        { "<leader>aa", desc = "Send to ACP" },
+        { "<leader>aw", desc = "ACP compose buffer" },
+        { "<leader>ap", desc = "Approve ACP request" },
+        { "<leader>ac", desc = "Cancel ACP turn" },
+        { "<leader>aM", desc = "Set ACP model" },
+        { "<leader>am", desc = "Set ACP mode" },
+        { "<S-Tab>", desc = "Cycle ACP mode" },
+        { "<leader>bb", desc = "Switch buffer" },
+        { "<leader>bd", desc = "Kill buffer" },
+        { "<leader>bD", desc = "Force kill buffer" },
+        { "<leader>bn", desc = "Next buffer" },
+        { "<leader>bp", desc = "Previous buffer" },
+        { "<leader>ff", desc = "Find files" },
+        { "<leader>fd", desc = "Explorer" },
+        { "<leader>fD", desc = "Open parent directory" },
+        { "<leader>fj", desc = "Jump to file in explorer" },
+        { "<leader>fr", desc = "Recent files" },
+        { "<leader>fg", desc = "Git files" },
+        { "<leader>gb", desc = "Git branches" },
+        { "<leader>gd", desc = "Diffview open" },
+        { "<leader>gg", desc = "Neogit" },
+        { "<leader>gH", desc = "Diffview history" },
+        { "<leader>gs", desc = "Git status" },
+        { "<leader>ot", desc = "Open terminal" },
+        { "<leader>pl", desc = "Load recent session" },
+        { "<leader>ps", desc = "Save session" },
+        { "<leader>qf", desc = "Toggle quickfix" },
+        { "<leader>ql", desc = "Toggle loclist" },
+        { "<leader>qe", desc = "Expand quickfix" },
+        { "<leader>qc", desc = "Collapse quickfix" },
+        { "<leader>sb", desc = "Buffer lines" },
+        { "<leader>sg", desc = "Grep" },
+        { "<leader>sn", desc = "Notifications" },
+        { "<leader>si", desc = "LSP symbols" },
+        { "<leader>sw", desc = "Grep word" },
+        { "<leader>tt", desc = "New tab" },
+        { "<leader>tk", desc = "Kill tab" },
+        { "<leader>to", desc = "Close other tabs" },
+        { "<leader>wd", desc = "Close window" },
+        { "<leader>wh", desc = "Window left" },
+        { "<leader>wj", desc = "Window down" },
+        { "<leader>wk", desc = "Window up" },
+        { "<leader>wl", desc = "Window right" },
+        { "<leader>wv", desc = "Split vertical" },
+        { "<leader>wH", desc = "Decrease width" },
+        { "<leader>wL", desc = "Increase width" },
+        { "<leader>wJ", desc = "Decrease height" },
+        { "<leader>wK", desc = "Increase height" },
+      })
+    end,
+  },
+}
