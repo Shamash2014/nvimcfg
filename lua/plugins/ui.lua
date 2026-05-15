@@ -13,6 +13,23 @@ return {
         view_options = {
           show_hidden = true,
         },
+        keymaps = {
+          ["!"] = {
+            desc = "Spawn nvim in folder under cursor",
+            callback = function()
+              local entry = oil.get_cursor_entry()
+              local dir = oil.get_current_dir()
+              if entry and entry.type == "directory" and dir then
+                dir = dir .. entry.name
+              end
+              if not dir or dir == "" then
+                vim.notify("oil: no folder under cursor", vim.log.levels.WARN)
+                return
+              end
+              require("core.task_picker").nvim_in(dir)
+            end,
+          },
+        },
       })
     end,
   },

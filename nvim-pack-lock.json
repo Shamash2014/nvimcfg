@@ -1,7 +1,7 @@
 {
   "plugins": {
     "LuaSnip": {
-      "rev": "642b0c595e11608b4c18219e93b88d7637af27bc",
+      "rev": "a62e1083a3cfe8b6b206e7d3d33a51091df25357",
       "src": "git@github.com:L3MON4D3/LuaSnip"
     },
     "blame.nvim": {
@@ -18,7 +18,7 @@
       "src": "git@github.com:barrettruth/canola.nvim"
     },
     "conform.nvim": {
-      "rev": "1c4a1537db60ba05e61360db8b674158c9cf4169",
+      "rev": "18aeab3d63d350dcf44d64c462cc489a3412af40",
       "src": "https://github.com/stevearc/conform.nvim"
     },
     "dadbod-grip.nvim": {
@@ -58,7 +58,7 @@
       "src": "git@github.com:mfussenegger/nvim-dap"
     },
     "nvim-dap-view": {
-      "rev": "3701c85e2a92c56bde09183fe85e0bdc16c02eab",
+      "rev": "b5cc6e1c4cd188478fdad2e0b58dbca08fd6d363",
       "src": "git@github.com:igorlfs/nvim-dap-view"
     },
     "nvim-lint": {
@@ -78,7 +78,7 @@
       "src": "https://github.com/nvim-lua/plenary.nvim"
     },
     "quicker.nvim": {
-      "rev": "063cc44da1eef8681bbd653b29d3bc961780886a",
+      "rev": "1c9322b7e2967472548ba9bccd1ccd40e49d0a49",
       "src": "https://github.com/stevearc/quicker.nvim"
     },
     "referencer.nvim": {

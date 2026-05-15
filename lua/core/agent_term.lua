@@ -7,7 +7,7 @@ local function default_agent()
 end
 
 local function resolve_cmd(name)
-  local presets = vim.g.nvim3_agent_terms or { claude = "claude", opencode = "opencode" }
+  local presets = vim.g.nvim3_agent_terms or { claude = "claude", opencode = "opencode", codex = "codex" }
   return presets[name] or name
 end
 
@@ -112,6 +112,7 @@ function M.spawn(name)
   }
   local tag = is_worktree and ("wt-" .. (branch or "?")) or (branch or vim.fs.basename(project))
   pcall(vim.api.nvim_buf_set_name, buf, string.format("agent://%s/%s/%s", name, vim.fs.basename(project), tag))
+  vim.bo[buf].buflisted = true
   vim.b[buf].agent_term = name
 
   vim.keymap.set("t", "<C-q>", [[<C-\><C-n>]], { buffer = buf, silent = true })
@@ -119,6 +120,53 @@ function M.spawn(name)
 
   vim.cmd("startinsert")
   return buf
+end
+
+function M.spawn_pick()
+  local presets = vim.g.nvim3_agent_terms or { claude = "claude", opencode = "opencode", codex = "codex" }
+  local names = {}
+  for name in pairs(presets) do table.insert(names, name) end
+  table.sort(names)
+  if #names == 0 then
+    vim.notify("agent: no presets in vim.g.nvim3_agent_terms", vim.log.levels.WARN)
+    return
+  end
+  if #names == 1 then
+    M.spawn(names[1])
+    return
+  end
+
+  local ok, snacks = pcall(require, "snacks")
+  if not (ok and snacks and snacks.picker and snacks.picker.pick) then
+    vim.ui.select(names, {
+      prompt = "Agent",
+      format_item = function(n) return string.format("%-10s  %s", n, presets[n]) end,
+    }, function(choice) if choice then M.spawn(choice) end end)
+    return
+  end
+
+  local items = {}
+  for _, n in ipairs(names) do
+    table.insert(items, {
+      text = n .. " " .. presets[n],
+      data = n,
+    })
+  end
+  snacks.picker.pick({
+    source = "agents_spawn",
+    title = "Spawn agent",
+    items = items,
+    format = function(item)
+      return {
+        { string.format("%-10s ", item.data), "Function" },
+        { presets[item.data] or "", "Comment" },
+      }
+    end,
+    confirm = function(picker, item)
+      picker:close()
+      if item and item.data then vim.schedule(function() M.spawn(item.data) end) end
+    end,
+  })
 end
 
 function M.smart_open()
@@ -381,8 +429,14 @@ function M.setup()
   vim.api.nvim_create_user_command("Agents", function() M.pick() end, {})
   vim.api.nvim_create_user_command("AgentList", function() M.list_qf() end, {})
 
-  vim.keymap.set("n", "<leader>aa", function() M.spawn() end,
-    { desc = "Agent: spawn at cwd" })
+  vim.keymap.set("n", "<leader>aa", function() M.spawn_pick() end,
+    { desc = "Agent: pick agent and spawn" })
+  vim.keymap.set("n", "<leader>aA", function() M.spawn() end,
+    { desc = "Agent: spawn default at cwd" })
+
+  vim.keymap.set("n", "<leader>oc", function()
+    require("core.task_picker").pick()
+  end, { desc = "Tasks: pick npm/just task" })
   vim.keymap.set("n", "<leader>ap", function() M.pick() end,
     { desc = "Agent: pick across projects" })
   vim.keymap.set("n", "<leader>al", function() M.list_qf() end,
