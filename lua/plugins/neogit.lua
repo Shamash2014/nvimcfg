@@ -14,6 +14,10 @@ return {
         kind = "split",
         disable_hint = true,
         graph_style = "unicode",
+        diff_viewer = "codediff",
+        integrations = {
+          codediff = true,
+        },
       })
 
       local map = vim.keymap.set
@@ -45,19 +49,12 @@ return {
     end,
   },
   {
-    "sindrets/diffview.nvim",
-    cmd = {
-      "DiffviewOpen",
-      "DiffviewClose",
-      "DiffviewToggleFiles",
-      "DiffviewFocusFiles",
-      "DiffviewRefresh",
-      "DiffviewFileHistory",
-    },
+    "esmuellert/codediff.nvim",
+    cmd = "CodeDiff",
     config = function()
-      local ok, diffview = pcall(require, "diffview")
+      local ok, codediff = pcall(require, "codediff")
       if ok then
-        diffview.setup({})
+        codediff.setup({})
       end
     end,
   },

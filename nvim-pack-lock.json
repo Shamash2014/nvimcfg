@@ -17,6 +17,10 @@
       "rev": "88af183e96724cca98a4602511061662cd5e88f3",
       "src": "git@github.com:barrettruth/canola.nvim"
     },
+    "codediff.nvim": {
+      "rev": "76ff1b13f0bcba655dca85cea1ef0df877a53c0f",
+      "src": "https://github.com/esmuellert/codediff.nvim"
+    },
     "conform.nvim": {
       "rev": "18aeab3d63d350dcf44d64c462cc489a3412af40",
       "src": "https://github.com/stevearc/conform.nvim"
@@ -106,7 +110,7 @@
       "src": "https://github.com/folke/snacks.nvim"
     },
     "tree-sitter-manager.nvim": {
-      "rev": "ae287204a4fe9174e82bad17c102e721e5aa8520",
+      "rev": "9e34b54ac652876953f0e55f879fe5652a6c86dd",
       "src": "https://github.com/romus204/tree-sitter-manager.nvim"
     },
     "vim-repeat": {
