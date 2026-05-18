@@ -164,6 +164,12 @@ digraph gan_process {
 
 **REQUIRED SUB-SKILL:** Use superpowers:brainstorming to explore intent, propose approaches, get user approval, and write design doc.
 
+**Push the design doc to cover:**
+- Be **ambitious about scope** — beyond the obvious MVP; what makes this product actually good
+- Specify WHAT and WHY, not granular HOW — over-specified implementation cascades errors downstream; constrain on deliverables and let Phase 5 subagents find the path
+- Call out where AI-powered features genuinely strengthen the product
+- User stories, key views, data model overview, integration points, success criteria
+
 **Update progress.md:** Record design decisions and approved approach.
 **Update AGENTS.md:** Add links to the design doc and any key architecture decisions made.
 
@@ -252,6 +258,13 @@ ALL coding is done by subagents. The controller NEVER writes implementation code
 - Fresh subagent per task + two-stage review (spec then quality)
 - Each subagent receives the relevant test cases to make pass
 - After each task, run the test suite and report which tests now pass
+- **Atomic commit per feature** — one descriptive commit per feature; clean history enables targeted rollback and per-worktree evaluation
+
+<HARD-GATE>
+Isolation for parallel work: if independent features are dispatched in parallel, each parallel
+feature-subagent runs in its OWN `wt` worktree — a shared working tree lets parallel subagents
+clobber each other's files. Sequential tasks stay in the main tree.
+</HARD-GATE>
 
 **Update progress.md** after each completed task:
 - Task completed
@@ -285,7 +298,7 @@ Provide the evaluator with:
 - The original design doc path
 - The implementation plan path
 - The test suite results
-- The git diff of all changes (`git diff <base>...HEAD`)
+- The git diff of all changes (`git diff <base>...HEAD`; if features were built in parallel `wt` worktrees, the per-worktree diffs)
 - Instructions to test like a real user
 
 ### Grading Rubric
@@ -340,6 +353,8 @@ After evaluator PASS (or user override after escalation):
 5. **Track everything** — progress.md, life.md, and AGENTS.md are living documents updated every phase
 6. **Bounded iteration** — max 2 fix rounds prevents infinite loops
 7. **Fresh eyes for evaluation** — evaluator subagent has zero generation context
+8. **Spec deliverables, not implementation** — WHAT/WHY in the spec; over-specified HOW cascades errors downstream
+9. **Atomic commits per feature** — clean history enables targeted rollback and per-worktree evaluation
 
 ## Red Flags
 

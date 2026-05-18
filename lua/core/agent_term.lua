@@ -75,10 +75,11 @@ local function focus(buf)
   vim.cmd("startinsert")
 end
 
-function M.spawn(name)
+function M.spawn(name, opts)
+  opts = opts or {}
   name = name or default_agent()
   local cmd = resolve_cmd(name)
-  local cwd = vim.uv.cwd()
+  local cwd = opts.cwd or vim.uv.cwd()
   local info = wt_info(cwd)
   local project = info and info.main_repo or git_root(cwd)
   local branch = info and info.branch or nil
@@ -123,6 +124,50 @@ function M.spawn(name)
   return buf
 end
 
+function M.choose_location_and_spawn(name)
+  local ok, wt = pcall(require, "core.wt")
+  if not ok then
+    M.spawn(name)
+    return
+  end
+  local cwd = vim.uv.cwd()
+  local cur = wt.info_for(cwd)
+  local cur_path = cur and cur.path or cwd
+  local choices = { { label = "here   " .. vim.fs.basename(cwd), kind = "cwd" } }
+  for _, e in ipairs(wt.list()) do
+    if e.path ~= cur_path and not e.bare then
+      local b = e.branch or (e.detached and "detached" or "?")
+      table.insert(choices, {
+        label = "wt     " .. b .. "  (" .. vim.fs.basename(e.path) .. ")",
+        kind = "path",
+        path = e.path,
+      })
+    end
+  end
+  table.insert(choices, { label = "+ new worktree…", kind = "new" })
+  if #choices == 1 then
+    M.spawn(name)
+    return
+  end
+  vim.ui.select(choices, {
+    prompt = "Run " .. name .. " in:",
+    format_item = function(c) return c.label end,
+  }, function(c)
+    if not c then return end
+    if c.kind == "cwd" then
+      M.spawn(name)
+    elseif c.kind == "path" then
+      M.spawn(name, { cwd = c.path })
+    elseif c.kind == "new" then
+      vim.ui.input({ prompt = "New worktree branch: " }, function(branch)
+        if branch and branch ~= "" then
+          wt.create_path(branch, function(p) M.spawn(name, { cwd = p }) end)
+        end
+      end)
+    end
+  end)
+end
+
 function M.spawn_pick()
   local presets = vim.g.nvim3_agent_terms
     or { claude = "claude", opencode = "opencode", codex = "codex", pi = "pi" }
@@ -134,7 +179,7 @@ function M.spawn_pick()
     return
   end
   if #names == 1 then
-    M.spawn(names[1])
+    M.choose_location_and_spawn(names[1])
     return
   end
 
@@ -143,7 +188,7 @@ function M.spawn_pick()
     vim.ui.select(names, {
       prompt = "Agent",
       format_item = function(n) return string.format("%-10s  %s", n, presets[n]) end,
-    }, function(choice) if choice then M.spawn(choice) end end)
+    }, function(choice) if choice then M.choose_location_and_spawn(choice) end end)
     return
   end
 
@@ -166,7 +211,7 @@ function M.spawn_pick()
     end,
     confirm = function(picker, item)
       picker:close()
-      if item and item.data then vim.schedule(function() M.spawn(item.data) end) end
+      if item and item.data then vim.schedule(function() M.choose_location_and_spawn(item.data) end) end
     end,
   })
 end

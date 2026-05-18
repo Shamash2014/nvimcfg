@@ -162,6 +162,21 @@ function M.create(branch, opts)
   end)
 end
 
+function M.create_path(branch, cb)
+  if not branch or branch == "" then return end
+  run_wt({ "wt", "switch", "--create", branch, "-y" }, "wt create " .. branch, function()
+    vim.defer_fn(function()
+      for _, e in ipairs(list_sync()) do
+        if e.branch == branch then
+          if cb then cb(e.path) end
+          return
+        end
+      end
+      vim.notify("wt: created but path not found for " .. branch, vim.log.levels.ERROR)
+    end, 150)
+  end)
+end
+
 function M.remove(path)
   path = path or vim.uv.cwd()
   if not path then return end
