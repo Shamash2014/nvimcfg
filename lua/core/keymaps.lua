@@ -198,6 +198,7 @@ function M.setup()
 
   map("n", "<leader>pl", "<cmd>SessionLoad<cr>", { desc = "Load recent session" })
   map("n", "<leader>ps", "<cmd>SessionSave<cr>", { desc = "Save session" })
+  map("n", "<leader>pr", "<cmd>SessionReload<cr>", { desc = "Reload session in new tab" })
 
   map("n", "<leader>ot", function()
     local sn = snacks()
