@@ -16,6 +16,12 @@ local function assert_equal(actual, expected, message)
   end
 end
 
+local function assert_deep_equal(actual, expected, message)
+  if not vim.deep_equal(actual, expected) then
+    fail(string.format("%s\nexpected: %s\nactual: %s", message, vim.inspect(expected), vim.inspect(actual)))
+  end
+end
+
 local function command_exists(name)
   return vim.fn.exists(":" .. name) == 2
 end
@@ -101,6 +107,16 @@ end
 local function write_file(path, lines)
   vim.fn.mkdir(vim.fs.dirname(path), "p")
   vim.fn.writefile(lines, path)
+end
+
+local function with_cwd(dir, fn)
+  local original = vim.fn.getcwd()
+  vim.cmd.tcd(dir)
+  local ok, err = pcall(fn)
+  vim.cmd.tcd(original)
+  if not ok then
+    error(err, 0)
+  end
 end
 
 local function test_zpack_bootstrap_uses_plugins_import()
@@ -1159,6 +1175,66 @@ local function test_leader_ot_opens_terminal()
   )
 end
 
+local function test_tab_cycle_keymaps_exist()
+  local next_tab = vim.fn.maparg("<Tab>", "n", false, true)
+  assert_truthy(next_tab.lhs ~= nil and next_tab.lhs ~= "", "<Tab> should be bound in normal mode")
+  assert_equal(next_tab.rhs, "<cmd>tabnext<cr>", "<Tab> should jump to the next tab")
+  assert_truthy(
+    (next_tab.desc or ""):lower():find("next tab", 1, true) ~= nil,
+    "<Tab> mapping should describe next tab"
+  )
+
+  local previous_tab = vim.fn.maparg("<S-Tab>", "n", false, true)
+  assert_truthy(previous_tab.lhs ~= nil and previous_tab.lhs ~= "", "<S-Tab> should be bound in normal mode")
+  assert_equal(previous_tab.rhs, "<cmd>tabprevious<cr>", "<S-Tab> should jump to the previous tab")
+  assert_truthy(
+    (previous_tab.desc or ""):lower():find("previous tab", 1, true) ~= nil,
+    "<S-Tab> mapping should describe previous tab"
+  )
+end
+
+local function test_agent_term_supports_omlx_opencode_preset()
+  package.loaded["core.agent_term"] = nil
+  local agent_term = require("core.agent_term")
+  local old_jobstart = vim.fn.jobstart
+  local old_system = vim.system
+  local old_preload = package.preload["core.wt"]
+  local started
+
+  package.preload["core.wt"] = function()
+    return {
+      info_for = function()
+        return nil
+      end,
+    }
+  end
+
+  vim.system = function()
+    return {
+      wait = function()
+        return { code = 1, stdout = "", stderr = "" }
+      end,
+    }
+  end
+
+  vim.fn.jobstart = function(cmd, _opts)
+    started = cmd
+    return 51
+  end
+
+  agent_term.spawn("omlx-opencode")
+
+  vim.fn.jobstart = old_jobstart
+  vim.system = old_system
+  package.preload["core.wt"] = old_preload
+
+  assert_deep_equal(
+    started,
+    { "/Applications/oMLX.app/Contents/MacOS/omlx-cli", "launch", "opencode" },
+    "omlx-opencode preset should launch opencode through oMLX"
+  )
+end
+
 local function test_tool_call_status_updates_in_place()
   reset_acp_dir()
   local holder, _, restore = setup_transport_stubs()
@@ -1359,47 +1435,236 @@ local function test_project_setup_updates_tab_cwd_for_directory_buffers()
   vim.fn.delete(repo, "rf")
 end
 
-function M.run()
-  local tests = {
-    test_zpack_bootstrap_uses_plugins_import,
-    test_plugin_specs_exist,
-    test_lsp_attach_sets_buffer_keymaps,
-    test_theme_apply_sets_expected_highlights,
-    test_commands_exist,
-    test_acp_open_creates_transcript_file,
-    test_acp_send_initializes_creates_session_and_prompts,
-    test_permission_request_renders_and_notifies,
-    test_acp_approve_replies_to_request,
-    test_acp_approve_reject_with_feedback_sends_text,
-    test_acp_approve_explicit_query_skips_picker,
-    test_bufreadpost_reattaches_and_resumes,
-    test_acp_send_range_sends_selected_text,
-    test_acp_send_bang_uses_git_diff,
-    test_acp_provider_switch_updates_header,
-    test_acp_health_lists_provider_status,
-    test_acp_provider_picker_filters_missing_providers,
-    test_acp_model_switch_uses_session_config_option,
-    test_acp_mode_switch_uses_legacy_session_set_mode,
-    test_acp_compose_sends_full_buffer,
-    test_compose_buffer_has_insert_send_mapping,
-    test_neogit_filetype_gets_send_mapping,
-    test_tool_call_and_diff_are_rendered,
-    test_streaming_chunks_append_to_single_section,
-    test_tool_call_command_array_renders,
-    test_tool_call_update_uses_level_three_heading,
-    test_tool_call_status_updates_in_place,
-    test_statusline_reports_active_sessions_and_mode,
-    test_env_setup_registers_envsync_command,
-    test_env_sync_applies_direnv_and_mise_values,
-    test_leader_ot_opens_terminal,
-    test_sessions_load_picks_from_saved_files,
-    test_project_sync_sets_tab_cwd_from_repo_directory,
-    test_project_setup_updates_tab_cwd_on_bufenter,
-    test_project_setup_updates_tab_cwd_for_directory_buffers,
-  }
+local function test_task_picker_detects_pnpm_scripts()
+  package.loaded["core.task_picker"] = nil
+  local task_picker = require("core.task_picker")
+  local root = vim.fn.tempname()
 
+  vim.fn.mkdir(root, "p")
+  write_file(root .. "/package.json", {
+    "{",
+    '  "scripts": {',
+    '    "build": "vite build"',
+    "  }",
+    "}",
+  })
+  write_file(root .. "/pnpm-lock.yaml", { "lockfileVersion: '9.0'" })
+
+  local items
+  with_cwd(root, function()
+    items = task_picker.collect()
+  end)
+
+  vim.fn.delete(root, "rf")
+
+  assert_equal(#items, 1, "package scripts should be discovered")
+  assert_equal(items[1].kind, "pnpm", "pnpm projects should use pnpm kind")
+  assert_equal(items[1].name, "build", "package script name should be preserved")
+  assert_deep_equal(items[1].cmd, { "pnpm", "run", "build" }, "pnpm projects should run scripts through pnpm")
+end
+
+local function test_task_picker_detects_mix_aliases()
+  package.loaded["core.task_picker"] = nil
+  local task_picker = require("core.task_picker")
+  local root = vim.fn.tempname()
+
+  vim.fn.mkdir(root, "p")
+  write_file(root .. "/mix.exs", {
+    "defmodule Demo.MixProject do",
+    "  use Mix.Project",
+    "",
+    "  def project do",
+    "    [",
+    "      app: :demo,",
+    "      version: \"0.1.0\",",
+    "      aliases: aliases()",
+    "    ]",
+    "  end",
+    "",
+    "  defp aliases do",
+    "    [",
+    "      setup: [\"deps.get\", \"ecto.setup\"],",
+    "      \"assets.deploy\": [\"cmd npm run deploy --prefix assets\"]",
+    "    ]",
+    "  end",
+    "end",
+  })
+
+  local items
+  with_cwd(root, function()
+    items = task_picker.collect()
+  end)
+
+  vim.fn.delete(root, "rf")
+
+  assert_equal(#items, 2, "mix aliases should be discovered")
+  assert_equal(items[1].kind, "mix", "mix aliases should use mix kind")
+  assert_deep_equal(items[1].cmd, { "mix", "assets.deploy" }, "mix aliases should run through mix")
+  assert_deep_equal(items[2].cmd, { "mix", "setup" }, "mix aliases should run through mix")
+end
+
+local function test_task_picker_detects_flutter_pub_scripts()
+  package.loaded["core.task_picker"] = nil
+  local task_picker = require("core.task_picker")
+  local root = vim.fn.tempname()
+
+  vim.fn.mkdir(root, "p")
+  write_file(root .. "/pubspec.yaml", {
+    "name: demo",
+    "scripts:",
+    "  build_runner: flutter pub run build_runner build --delete-conflicting-outputs",
+    "  analyze: flutter analyze",
+  })
+
+  local items
+  with_cwd(root, function()
+    items = task_picker.collect()
+  end)
+
+  vim.fn.delete(root, "rf")
+
+  assert_equal(#items, 2, "pubspec scripts should be discovered")
+  assert_equal(items[1].kind, "flutter", "pubspec scripts should use flutter kind")
+  assert_deep_equal(items[1].cmd, { vim.o.shell, "-lc", "flutter analyze" }, "pubspec scripts should execute their configured shell command")
+  assert_deep_equal(items[2].cmd, { vim.o.shell, "-lc", "flutter pub run build_runner build --delete-conflicting-outputs" }, "pubspec scripts should preserve their configured command body")
+end
+
+local function test_task_picker_detects_mise_tasks()
+  package.loaded["core.task_picker"] = nil
+  local task_picker = require("core.task_picker")
+  local root = vim.fn.tempname()
+
+  vim.fn.mkdir(root, "p")
+  write_file(root .. "/mise.toml", {
+    "[tasks.lint]",
+    "description = \"Run linters\"",
+    "run = \"mix format --check-formatted\"",
+    "",
+    "[tasks.test]",
+    "run = \"mix test\"",
+  })
+
+  local items
+  with_cwd(root, function()
+    items = task_picker.collect()
+  end)
+
+  vim.fn.delete(root, "rf")
+
+  assert_equal(#items, 2, "mise tasks should be discovered")
+  assert_equal(items[1].kind, "mise", "mise tasks should use mise kind")
+  assert_deep_equal(items[1].cmd, { "mise", "run", "lint" }, "mise tasks should run through mise")
+  assert_equal(items[1].detail, "Run linters", "mise descriptions should be preserved")
+  assert_deep_equal(items[2].cmd, { "mise", "run", "test" }, "second mise task should run through mise")
+end
+
+local function test_task_picker_detects_react_native_defaults()
+  package.loaded["core.task_picker"] = nil
+  local task_picker = require("core.task_picker")
+  local root = vim.fn.tempname()
+
+  vim.fn.mkdir(root, "p")
+  write_file(root .. "/package.json", {
+    "{",
+    '  "dependencies": {',
+    '    "react-native": "0.82.0"',
+    "  }",
+    "}",
+  })
+  write_file(root .. "/pnpm-lock.yaml", { "lockfileVersion: '9.0'" })
+
+  local items
+  with_cwd(root, function()
+    items = task_picker.collect()
+  end)
+
+  vim.fn.delete(root, "rf")
+
+  assert_equal(#items, 3, "react native projects should expose default tasks")
+  assert_equal(items[1].kind, "react-native", "react native defaults should use react-native kind")
+  assert_deep_equal(items[1].cmd, { "pnpm", "exec", "react-native", "run-android" }, "android task should use the local react-native CLI")
+  assert_deep_equal(items[2].cmd, { "pnpm", "exec", "react-native", "run-ios" }, "ios task should use the local react-native CLI")
+  assert_deep_equal(items[3].cmd, { "pnpm", "exec", "react-native", "start" }, "start task should use the local react-native CLI")
+end
+
+local function test_task_picker_detects_go_defaults()
+  package.loaded["core.task_picker"] = nil
+  local task_picker = require("core.task_picker")
+  local root = vim.fn.tempname()
+
+  vim.fn.mkdir(root, "p")
+  write_file(root .. "/go.mod", {
+    "module example.com/demo",
+    "",
+    "go 1.24.0",
+  })
+
+  local items
+  with_cwd(root, function()
+    items = task_picker.collect()
+  end)
+
+  vim.fn.delete(root, "rf")
+
+  assert_equal(#items, 4, "go modules should expose default tasks")
+  assert_equal(items[1].kind, "go", "go defaults should use go kind")
+  assert_deep_equal(items[1].cmd, { "go", "build", "./..." }, "go build task should target all packages")
+  assert_deep_equal(items[2].cmd, { "go", "fmt", "./..." }, "go fmt task should target all packages")
+  assert_deep_equal(items[3].cmd, { "go", "test", "./..." }, "go test task should target all packages")
+  assert_deep_equal(items[4].cmd, { "go", "vet", "./..." }, "go vet task should target all packages")
+end
+
+local tests = {
+  { name = "test_zpack_bootstrap_uses_plugins_import", fn = test_zpack_bootstrap_uses_plugins_import },
+  { name = "test_plugin_specs_exist", fn = test_plugin_specs_exist },
+  { name = "test_lsp_attach_sets_buffer_keymaps", fn = test_lsp_attach_sets_buffer_keymaps },
+  { name = "test_theme_apply_sets_expected_highlights", fn = test_theme_apply_sets_expected_highlights },
+  { name = "test_commands_exist", fn = test_commands_exist },
+  { name = "test_acp_open_creates_transcript_file", fn = test_acp_open_creates_transcript_file },
+  { name = "test_acp_send_initializes_creates_session_and_prompts", fn = test_acp_send_initializes_creates_session_and_prompts },
+  { name = "test_permission_request_renders_and_notifies", fn = test_permission_request_renders_and_notifies },
+  { name = "test_acp_approve_replies_to_request", fn = test_acp_approve_replies_to_request },
+  { name = "test_acp_approve_reject_with_feedback_sends_text", fn = test_acp_approve_reject_with_feedback_sends_text },
+  { name = "test_acp_approve_explicit_query_skips_picker", fn = test_acp_approve_explicit_query_skips_picker },
+  { name = "test_bufreadpost_reattaches_and_resumes", fn = test_bufreadpost_reattaches_and_resumes },
+  { name = "test_acp_send_range_sends_selected_text", fn = test_acp_send_range_sends_selected_text },
+  { name = "test_acp_send_bang_uses_git_diff", fn = test_acp_send_bang_uses_git_diff },
+  { name = "test_acp_provider_switch_updates_header", fn = test_acp_provider_switch_updates_header },
+  { name = "test_acp_health_lists_provider_status", fn = test_acp_health_lists_provider_status },
+  { name = "test_acp_provider_picker_filters_missing_providers", fn = test_acp_provider_picker_filters_missing_providers },
+  { name = "test_acp_model_switch_uses_session_config_option", fn = test_acp_model_switch_uses_session_config_option },
+  { name = "test_acp_mode_switch_uses_legacy_session_set_mode", fn = test_acp_mode_switch_uses_legacy_session_set_mode },
+  { name = "test_acp_compose_sends_full_buffer", fn = test_acp_compose_sends_full_buffer },
+  { name = "test_compose_buffer_has_insert_send_mapping", fn = test_compose_buffer_has_insert_send_mapping },
+  { name = "test_neogit_filetype_gets_send_mapping", fn = test_neogit_filetype_gets_send_mapping },
+  { name = "test_tool_call_and_diff_are_rendered", fn = test_tool_call_and_diff_are_rendered },
+  { name = "test_streaming_chunks_append_to_single_section", fn = test_streaming_chunks_append_to_single_section },
+  { name = "test_tool_call_command_array_renders", fn = test_tool_call_command_array_renders },
+  { name = "test_tool_call_update_uses_level_three_heading", fn = test_tool_call_update_uses_level_three_heading },
+  { name = "test_tool_call_status_updates_in_place", fn = test_tool_call_status_updates_in_place },
+  { name = "test_statusline_reports_active_sessions_and_mode", fn = test_statusline_reports_active_sessions_and_mode },
+  { name = "test_env_setup_registers_envsync_command", fn = test_env_setup_registers_envsync_command },
+  { name = "test_env_sync_applies_direnv_and_mise_values", fn = test_env_sync_applies_direnv_and_mise_values },
+  { name = "test_leader_ot_opens_terminal", fn = test_leader_ot_opens_terminal },
+  { name = "test_tab_cycle_keymaps_exist", fn = test_tab_cycle_keymaps_exist },
+  { name = "test_agent_term_supports_omlx_opencode_preset", fn = test_agent_term_supports_omlx_opencode_preset },
+  { name = "test_sessions_load_picks_from_saved_files", fn = test_sessions_load_picks_from_saved_files },
+  { name = "test_project_sync_sets_tab_cwd_from_repo_directory", fn = test_project_sync_sets_tab_cwd_from_repo_directory },
+  { name = "test_project_setup_updates_tab_cwd_on_bufenter", fn = test_project_setup_updates_tab_cwd_on_bufenter },
+  { name = "test_project_setup_updates_tab_cwd_for_directory_buffers", fn = test_project_setup_updates_tab_cwd_for_directory_buffers },
+  { name = "test_task_picker_detects_pnpm_scripts", fn = test_task_picker_detects_pnpm_scripts },
+  { name = "test_task_picker_detects_mix_aliases", fn = test_task_picker_detects_mix_aliases },
+  { name = "test_task_picker_detects_flutter_pub_scripts", fn = test_task_picker_detects_flutter_pub_scripts },
+  { name = "test_task_picker_detects_mise_tasks", fn = test_task_picker_detects_mise_tasks },
+  { name = "test_task_picker_detects_react_native_defaults", fn = test_task_picker_detects_react_native_defaults },
+  { name = "test_task_picker_detects_go_defaults", fn = test_task_picker_detects_go_defaults },
+}
+
+function M.run(filter)
   for _, test in ipairs(tests) do
-    test()
+    if not filter or test.name == filter then
+      test.fn()
+    end
   end
 
   print("OK")

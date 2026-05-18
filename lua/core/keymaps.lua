@@ -34,6 +34,8 @@ function M.setup()
   map("n", "<leader>wJ", "<C-w>-", { desc = "Decrease height" })
   map("n", "<leader>wK", "<C-w>+", { desc = "Increase height" })
 
+  map("n", "<S-Tab>", "<cmd>tabprevious<cr>", { desc = "Previous tab" })
+  map("n", "<Tab>", "<cmd>tabnext<cr>", { desc = "Next tab" })
   map("n", "[t", "<cmd>tabprevious<cr>", { desc = "Previous tab" })
   map("n", "]t", "<cmd>tabnext<cr>", { desc = "Next tab" })
   map("n", "<leader>tt", "<cmd>tabnew<cr>", { desc = "New tab" })

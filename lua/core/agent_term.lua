@@ -6,10 +6,52 @@ local function default_agent()
   return vim.g.nvim3_agent_default or "claude"
 end
 
-local function resolve_cmd(name)
-  local presets = vim.g.nvim3_agent_terms
-    or { claude = "claude", opencode = "opencode", codex = "codex", pi = "pi" }
-  return presets[name] or name
+local function default_presets()
+  return {
+    claude = "claude",
+    opencode = "opencode",
+    codex = "codex",
+    pi = "pi",
+    ["omlx-opencode"] = {
+      "/Applications/oMLX.app/Contents/MacOS/omlx-cli",
+      "launch",
+      "opencode",
+    },
+  }
+end
+
+local function presets()
+  return vim.g.nvim3_agent_terms or default_presets()
+end
+
+local function normalize_spec(spec)
+  if type(spec) == "table" and type(spec.cmd) == "table" then
+    return {
+      cmd = spec.cmd,
+      display = spec.display or table.concat(spec.cmd, " "),
+    }
+  end
+  if type(spec) == "table" and type(spec.cmd) == "string" then
+    return {
+      cmd = spec.cmd,
+      display = spec.display or spec.cmd,
+    }
+  end
+  if type(spec) == "table" then
+    return {
+      cmd = spec,
+      display = table.concat(spec, " "),
+    }
+  end
+  return {
+    cmd = spec,
+    display = tostring(spec),
+  }
+end
+
+local function resolve_spec(name)
+  local spec = presets()[name] or name
+  return normalize_spec(spec)
 end
 
 local function git_root(path)
@@ -78,7 +120,8 @@ end
 function M.spawn(name, opts)
   opts = opts or {}
   name = name or default_agent()
-  local cmd = resolve_cmd(name)
+  local spec = resolve_spec(name)
+  local cmd = spec.cmd
   local cwd = opts.cwd or vim.uv.cwd()
   local info = wt_info(cwd)
   local project = info and info.main_repo or git_root(cwd)
@@ -98,13 +141,13 @@ function M.spawn(name, opts)
   })
 
   if job <= 0 then
-    vim.notify("agent: failed to start " .. cmd, vim.log.levels.ERROR)
+    vim.notify("agent: failed to start " .. spec.display, vim.log.levels.ERROR)
     return
   end
 
   registry[buf] = {
     name = name,
-    cmd = cmd,
+    cmd = spec.display,
     cwd = cwd,
     project = project,
     branch = branch,
@@ -169,10 +212,9 @@ function M.choose_location_and_spawn(name)
 end
 
 function M.spawn_pick()
-  local presets = vim.g.nvim3_agent_terms
-    or { claude = "claude", opencode = "opencode", codex = "codex", pi = "pi" }
+  local available = presets()
   local names = {}
-  for name in pairs(presets) do table.insert(names, name) end
+  for name in pairs(available) do table.insert(names, name) end
   table.sort(names)
   if #names == 0 then
     vim.notify("agent: no presets in vim.g.nvim3_agent_terms", vim.log.levels.WARN)
@@ -187,7 +229,9 @@ function M.spawn_pick()
   if not (ok and snacks and snacks.picker and snacks.picker.pick) then
     vim.ui.select(names, {
       prompt = "Agent",
-      format_item = function(n) return string.format("%-10s  %s", n, presets[n]) end,
+      format_item = function(n)
+        return string.format("%-14s  %s", n, resolve_spec(n).display)
+      end,
     }, function(choice) if choice then M.choose_location_and_spawn(choice) end end)
     return
   end
@@ -195,7 +239,7 @@ function M.spawn_pick()
   local items = {}
   for _, n in ipairs(names) do
     table.insert(items, {
-      text = n .. " " .. presets[n],
+      text = n .. " " .. resolve_spec(n).display,
       data = n,
     })
   end
@@ -205,8 +249,8 @@ function M.spawn_pick()
     items = items,
     format = function(item)
       return {
-        { string.format("%-10s ", item.data), "Function" },
-        { presets[item.data] or "", "Comment" },
+        { string.format("%-14s ", item.data), "Function" },
+        { resolve_spec(item.data).display, "Comment" },
       }
     end,
     confirm = function(picker, item)
@@ -483,7 +527,7 @@ function M.setup()
 
   vim.keymap.set("n", "<leader>oc", function()
     require("core.task_picker").pick()
-  end, { desc = "Tasks: pick npm/just task" })
+  end, { desc = "Tasks: pick project task" })
   vim.keymap.set("n", "<leader>ap", function() M.pick() end,
     { desc = "Agent: pick across projects" })
   vim.keymap.set("n", "<leader>al", function() M.list_qf() end,
