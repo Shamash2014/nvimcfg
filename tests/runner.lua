@@ -1193,6 +1193,44 @@ local function test_tab_cycle_keymaps_exist()
   )
 end
 
+local function test_agent_term_supports_hermes_preset()
+  package.loaded["core.agent_term"] = nil
+  local agent_term = require("core.agent_term")
+  local old_jobstart = vim.fn.jobstart
+  local old_system = vim.system
+  local old_preload = package.preload["core.wt"]
+  local started
+
+  package.preload["core.wt"] = function()
+    return {
+      info_for = function()
+        return nil
+      end,
+    }
+  end
+
+  vim.system = function()
+    return {
+      wait = function()
+        return { code = 1, stdout = "", stderr = "" }
+      end,
+    }
+  end
+
+  vim.fn.jobstart = function(cmd, _opts)
+    started = cmd
+    return 52
+  end
+
+  agent_term.spawn("hermes")
+
+  vim.fn.jobstart = old_jobstart
+  vim.system = old_system
+  package.preload["core.wt"] = old_preload
+
+  assert_equal(started, "hermes", "hermes preset should launch hermes CLI")
+end
+
 local function test_agent_term_supports_omlx_opencode_preset()
   package.loaded["core.agent_term"] = nil
   local agent_term = require("core.agent_term")
@@ -1647,6 +1685,7 @@ local tests = {
   { name = "test_env_sync_applies_direnv_and_mise_values", fn = test_env_sync_applies_direnv_and_mise_values },
   { name = "test_leader_ot_opens_terminal", fn = test_leader_ot_opens_terminal },
   { name = "test_tab_cycle_keymaps_exist", fn = test_tab_cycle_keymaps_exist },
+  { name = "test_agent_term_supports_hermes_preset", fn = test_agent_term_supports_hermes_preset },
   { name = "test_agent_term_supports_omlx_opencode_preset", fn = test_agent_term_supports_omlx_opencode_preset },
   { name = "test_sessions_load_picks_from_saved_files", fn = test_sessions_load_picks_from_saved_files },
   { name = "test_project_sync_sets_tab_cwd_from_repo_directory", fn = test_project_sync_sets_tab_cwd_from_repo_directory },

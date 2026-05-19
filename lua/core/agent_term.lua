@@ -12,6 +12,7 @@ local function default_presets()
     opencode = "opencode",
     codex = "codex",
     pi = "pi",
+    hermes = "hermes",
     ["omlx-opencode"] = {
       "/Applications/oMLX.app/Contents/MacOS/omlx-cli",
       "launch",
