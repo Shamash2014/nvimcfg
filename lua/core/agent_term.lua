@@ -18,6 +18,11 @@ local function default_presets()
       "launch",
       "opencode",
     },
+    ["omlx-pi"] = {
+      "/Applications/oMLX.app/Contents/MacOS/omlx-cli",
+      "launch",
+      "pi",
+    },
   }
 end
 
