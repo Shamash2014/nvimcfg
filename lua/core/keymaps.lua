@@ -44,18 +44,32 @@ function M.setup()
   map("n", "<leader>qq", "<cmd>qa<cr>", { desc = "Quit all" })
 
   map("n", "<leader>bb", function()
-    local sn = snacks()
-    if sn and sn.picker and sn.picker.buffers then
-      sn.picker.buffers({
-        hidden = true,
-        unloaded = true,
-        nofile = true,
-        current = true,
-      })
+    local bufs = vim.fn.getbufinfo({ buflisted = 1 })
+    if not bufs or #bufs == 0 then
+      vim.notify("No listed buffers", vim.log.levels.WARN, { title = "Buffers" })
       return
     end
 
-    vim.cmd("buffers")
+    table.sort(bufs, function(a, b)
+      return (a.lastused or 0) > (b.lastused or 0)
+    end)
+
+    vim.ui.select(bufs, {
+      prompt = "Buffers",
+      format_item = function(b)
+        local name = b.name ~= "" and vim.fn.fnamemodify(b.name, ":~:.") or "[No Name]"
+        local flags = {}
+        if vim.bo[b.bufnr].modified then table.insert(flags, "+") end
+        if vim.b[b.bufnr].agent_term or vim.b[b.bufnr].task_kind then table.insert(flags, "job") end
+        local suffix = #flags > 0 and (" [" .. table.concat(flags, ",") .. "]") or ""
+        return string.format("%3d %s%s", b.bufnr, name, suffix)
+      end,
+    }, function(choice)
+      if not choice then return end
+      local is_job = vim.b[choice.bufnr].agent_term or vim.b[choice.bufnr].task_kind
+      if is_job then vim.cmd("vsplit") end
+      vim.cmd("buffer " .. choice.bufnr)
+    end)
   end, { desc = "Switch buffer" })
   map("n", "<leader>bd", "<cmd>bdelete<cr>", { desc = "Kill buffer" })
   map("n", "<leader>bD", function()
@@ -134,6 +148,15 @@ function M.setup()
 
     vim.notify("Snacks LSP symbols unavailable", vim.log.levels.WARN, { title = "Search" })
   end, { desc = "LSP symbols" })
+  map("n", "<leader>st", function()
+    local sn = snacks()
+    if sn and sn.picker and sn.picker.treesitter then
+      sn.picker.treesitter()
+      return
+    end
+
+    vim.notify("Snacks tree-sitter symbols unavailable", vim.log.levels.WARN, { title = "Search" })
+  end, { desc = "Tree-sitter symbols" })
   map("n", "<leader>sb", function()
     local sn = snacks()
     if sn and sn.picker and sn.picker.lines then
@@ -211,6 +234,7 @@ function M.setup()
     vim.cmd("botright vsplit | terminal")
     vim.cmd("startinsert")
   end, { desc = "Open terminal" })
+
 end
 
 return M

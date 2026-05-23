@@ -97,6 +97,13 @@ function M.list()
   return out
 end
 
+function M.meta_for_buf(buf)
+  gc()
+  local meta = registry[buf]
+  if not meta then return nil end
+  return vim.tbl_extend("force", { bufnr = buf }, meta)
+end
+
 function M.count_current_project()
   gc()
   local here = current_project()
@@ -549,6 +556,13 @@ function M.setup()
     { desc = "Agent: send git diff (staged)" })
   vim.keymap.set("n", "<leader>ab", function() M.send_buffer() end,
     { desc = "Agent: send whole buffer" })
+
+  vim.keymap.set("n", "<leader>au", function()
+    require("core.findings").update_prompt()
+  end, { desc = "Findings: update" })
+  vim.keymap.set("n", "<leader>aq", function()
+    require("core.findings").qf(true)
+  end, { desc = "Findings: quickfix" })
 
   vim.api.nvim_create_user_command("AgentSend", function(opts)
     if opts.range > 0 then M.send_selection() else M.send_buffer() end

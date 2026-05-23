@@ -1,7 +1,7 @@
 {
   "plugins": {
     "LuaSnip": {
-      "rev": "a62e1083a3cfe8b6b206e7d3d33a51091df25357",
+      "rev": "0abc8f390b278c3b4aabc4c004ac8a088b65cf24",
       "src": "git@github.com:L3MON4D3/LuaSnip"
     },
     "blame.nvim": {
@@ -42,7 +42,7 @@
       "src": "https://codeberg.org/andyg/leap.nvim"
     },
     "mini.cursorword": {
-      "rev": "52eacb10266b8ce07c052e3c80a706d29eb74006",
+      "rev": "a01471856e462144ea53972f22a67e790be68ee6",
       "src": "https://github.com/nvim-mini/mini.cursorword"
     },
     "neogit": {
@@ -58,15 +58,15 @@
       "src": "https://github.com/kevinhwang91/nvim-bqf"
     },
     "nvim-dap": {
-      "rev": "45a69eba683a2c448dd9ecfc4de89511f0646b5f",
+      "rev": "531771530d4f82ad2d21e436e3cc052d68d7aebb",
       "src": "git@github.com:mfussenegger/nvim-dap"
     },
     "nvim-dap-view": {
-      "rev": "b5cc6e1c4cd188478fdad2e0b58dbca08fd6d363",
+      "rev": "2fe10567913fca43f352791ac83d19b9fdeacc95",
       "src": "git@github.com:igorlfs/nvim-dap-view"
     },
     "nvim-lint": {
-      "rev": "665525810630701b84181e4d9eefd24b49845b29",
+      "rev": "d48f3a76189d03b2239f6df1b2f7e3fa8353743b",
       "src": "https://github.com/mfussenegger/nvim-lint"
     },
     "nvim-surround": {
@@ -110,7 +110,7 @@
       "src": "https://github.com/folke/snacks.nvim"
     },
     "tree-sitter-manager.nvim": {
-      "rev": "9e34b54ac652876953f0e55f879fe5652a6c86dd",
+      "rev": "f18e545c6ccbbae9875e63a2a7b8e8a9678a242e",
       "src": "https://github.com/romus204/tree-sitter-manager.nvim"
     },
     "vim-repeat": {
@@ -126,7 +126,7 @@
       "src": "git@github.com:mosheavni/yaml-companion.nvim"
     },
     "zpack.nvim": {
-      "rev": "552ca4431d450a0f027ca8ee6255d4f6d497c92f",
+      "rev": "228f76f686b4d47fab570c0bf4120ce7b6988aaa",
       "src": "git@github.com:zuqini/zpack.nvim"
     }
   }
