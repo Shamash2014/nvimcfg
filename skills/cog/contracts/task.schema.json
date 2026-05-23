@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "task.schema.json",
+  "title": "Task",
+  "type": "object",
+  "required": ["id", "goal", "complexity", "depth"],
+  "properties": {
+    "id": { "type": "string" },
+    "parent_id": { "type": ["string", "null"] },
+    "goal": { "type": "string" },
+    "context": { "type": "object" },
+    "complexity": { "type": "number", "minimum": 0, "maximum": 1 },
+    "depth": { "type": "integer", "minimum": 0, "maximum": 5 },
+    "tier": { "enum": ["trivial", "standard", "complex"] },
+    "domain": { "type": "string" },
+    "children": {
+      "type": "array",
+      "items": { "$ref": "task.schema.json" }
+    },
+    "is_leaf": { "type": "boolean" },
+    "decomposition_reason": { "type": "string" }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "subtask.schema.json",
+  "title": "Subtask",
+  "type": "object",
+  "required": ["id", "goal", "inputs", "solution_corridor", "quality_criteria", "eval_metrics", "output_schema"],
+  "properties": {
+    "id": { "type": "string" },
+    "parent_task_id": { "type": "string" },
+    "goal": { "type": "string", "description": "one sentence" },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "solution_corridor": {
+      "type": "object",
+      "required": ["in_scope", "out_of_scope"],
+      "properties": {
+        "in_scope": { "type": "array", "items": { "type": "string" } },
+        "out_of_scope": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "quality_criteria": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "eval_metrics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "threshold"],
+        "properties": {
+          "name": { "type": "string" },
+          "threshold": { "type": "number" },
+          "direction": { "enum": ["max", "min"] }
+        }
+      }
+    },
+    "output_schema": { "type": "object" },
+    "prompt_version": { "type": "string" },
+    "model_tier": { "enum": ["trivial", "standard", "complex"] }
+  }
+}
