@@ -175,12 +175,20 @@ local function test_plugin_specs_exist()
   local quicker_spec
   local conform_spec
   local lint_spec
+  local kulala_spec
 
-  assert_equal(plugin_source(snacks[1]), "folke/snacks.nvim", "snacks spec should target snacks repo")
+  assert_equal(plugin_source(snacks[1]), "https://www.reddit.com/r/neovim/comments/1tkk1wl/snacksfffnvim_a_snacks_picker_frontend_that_tries/", "snacks spec should target configured source")
   assert_equal(plugin_source(neogit[1]), "NeogitOrg/neogit", "neogit spec should target neogit repo")
   assert_equal(plugin_source(which_key[1]), "folke/which-key.nvim", "which-key spec should target which-key repo")
   assert_equal(plugin_source(treesitter[1]), "romus204/tree-sitter-manager.nvim", "treesitter spec should target tree-sitter-manager")
   assert_equal(plugin_source(editing[1]), "kylechui/nvim-surround", "editing spec should target nvim-surround")
+  for _, spec in ipairs(editing) do
+    if plugin_source(spec) == "https://github.com/mistweaverco/kulala.nvim" then
+      kulala_spec = spec
+      break
+    end
+  end
+  assert_truthy(kulala_spec ~= nil, "editing spec should include kulala.nvim")
   for _, spec in ipairs(ui) do
     if plugin_source(spec) == "stevearc/quicker.nvim" then
       quicker_spec = spec

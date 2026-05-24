@@ -10,6 +10,13 @@ return {
     end,
   },
   {
+    "mistweaverco/kulala.nvim",
+    lazy = false,
+    opts = {
+      global_keymaps_prefix = "<leader>oz",
+    },
+  },
+  {
     src = "https://codeberg.org/andyg/leap.nvim",
     lazy = false,
     dependencies = {
@@ -29,5 +36,9 @@ return {
         })
       end
     end,
+  },
+  {
+    src = "https://github.com/serhez/editr",
+    lazy = false,
   },
 }

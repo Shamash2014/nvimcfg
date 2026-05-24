@@ -22,4 +22,11 @@ return {
       })
     end,
   },
+  {
+    "so1ve/snacks-fff.nvim",
+    lazy = false,
+    dependencies = {
+      "folke/snacks.nvim",
+    },
+  },
 }

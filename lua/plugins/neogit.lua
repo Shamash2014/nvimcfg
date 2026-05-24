@@ -48,22 +48,6 @@ return {
         },
       })
 
-      local map = vim.keymap.set
-      map("n", "<leader>gw", function()
-        require("core.wt").pick({ neogit = true })
-      end, { desc = "wt: pick worktree -> Neogit" })
-      map("n", "<leader>gW", function()
-        local branch = vim.fn.input("wt create branch: ")
-        if branch ~= "" then
-          require("core.wt").create(branch, { neogit = true })
-        end
-      end, { desc = "wt: create worktree -> Neogit" })
-      map("n", "<leader>gx", function()
-        require("core.wt").remove()
-      end, { desc = "wt: remove current worktree" })
-      map("n", "<leader>gm", function()
-        require("core.wt").merge()
-      end, { desc = "wt: merge current branch" })
     end,
   },
   {
