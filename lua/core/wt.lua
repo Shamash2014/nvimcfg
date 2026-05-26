@@ -142,9 +142,11 @@ end
 function M.switch(path, opts)
   opts = opts or {}
   if not path or path == "" then return end
-  vim.cmd("cd " .. vim.fn.fnameescape(path))
-  refresh()
-  if opts.neogit then open_neogit() end
+  run_wt({ "wt", "switch", path, "-y" }, "wt switch " .. path, function()
+    vim.cmd("cd " .. vim.fn.fnameescape(path))
+    refresh()
+    if opts.neogit then open_neogit() end
+  end)
 end
 
 function M.create(branch, opts)

@@ -29,6 +29,9 @@ return {
         },
         mappings = {
           status = {
+            ["w"] = function()
+              require("core.wt").pick({ neogit = true })
+            end,
             ["Ww"] = function()
               require("core.wt").pick({ neogit = true })
             end,
