@@ -42,7 +42,7 @@
       "src": "https://github.com/akinsho/git-conflict.nvim"
     },
     "kulala.nvim": {
-      "rev": "5809fe0b599bba8a125adf02922b535303f78b01",
+      "rev": "87601ddef556f21888c59e0a2713873ad73f9c29",
       "src": "https://github.com/mistweaverco/kulala.nvim"
     },
     "leap.nvim": {
@@ -70,7 +70,7 @@
       "src": "https://github.com/mfussenegger/nvim-dap"
     },
     "nvim-dap-view": {
-      "rev": "df0b12000776d75c8d9518a1ca220377ea69cd7d",
+      "rev": "a03a085b020197f441f6c63383f0cb7321729f6e",
       "src": "https://github.com/igorlfs/nvim-dap-view"
     },
     "nvim-lint": {
@@ -98,7 +98,7 @@
       "src": "https://github.com/romus204/referencer.nvim"
     },
     "render-markdown.nvim": {
-      "rev": "dcb77511efb1665b5073d8396a0033b3e4d680f6",
+      "rev": "5adf0895310c1904e5abfaad40a2baad7fe44a07",
       "src": "https://github.com/MeanderingProgrammer/render-markdown.nvim"
     },
     "resession.nvim": {
@@ -118,7 +118,7 @@
       "src": "https://github.com/so1ve/snacks-fff.nvim"
     },
     "snacks.nvim": {
-      "rev": "0770753c88228f7f15449c6a5b242e3f7cd0d71c",
+      "rev": "882c996cf28183f4d63640de0b4c02ec886d01f2",
       "src": "https://github.com/folke/snacks.nvim"
     },
     "tree-sitter-manager.nvim": {
@@ -138,7 +138,7 @@
       "src": "https://github.com/mosheavni/yaml-companion.nvim"
     },
     "zpack.nvim": {
-      "rev": "9ed473adbf6af59b650ecd716b56bf0ccbf0d7f8",
+      "rev": "d52f0ddf85cf8fe74952f7825d3f9ea5f31b2968",
       "src": "https://github.com/zuqini/zpack.nvim"
     }
   }

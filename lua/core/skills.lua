@@ -9,7 +9,16 @@ local function skills_root()
   return vim.fn.expand("~/.config/nvim/skills")
 end
 
+local function ensure_project_dirs()
+  local ok, at = pcall(require, "core.agent_term")
+  if not (ok and at and at.resolve_agent_dir) then return end
+  for _, kind in ipairs({ "claude", "codex", "hermes" }) do
+    at.resolve_agent_dir(kind)
+  end
+end
+
 local function run_skills(argv, on_done)
+  ensure_project_dirs()
   local cmd = "npx -y skills " .. argv
   vim.system({ vim.o.shell, "-lc", cmd }, { text = true }, function(out)
     vim.schedule(function() on_done(out) end)
@@ -49,7 +58,7 @@ function M.install()
     return
   end
   vim.notify("skills: installing from " .. root, vim.log.levels.INFO)
-  run_skills("add " .. vim.fn.shellescape(root) .. " --all", function(out)
+  run_skills("add " .. vim.fn.shellescape(root) .. " -g --all", function(out)
     if out.code == 0 then
       vim.notify(
         "skills: installed\n" .. ((out.stdout or ""):gsub("%s+$", "")),
@@ -67,7 +76,7 @@ function M.uninstall(name)
     vim.notify("skills: name required", vim.log.levels.WARN)
     return
   end
-  local argv = "remove -s " .. vim.fn.shellescape(name) .. " -a '*' -y"
+  local argv = "remove -g -s " .. vim.fn.shellescape(name) .. " -a '*' -y"
   run_skills(argv, function(out)
     if out.code == 0 then
       vim.notify(

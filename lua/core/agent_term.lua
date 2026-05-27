@@ -74,6 +74,120 @@ local function wt_info(cwd)
   return wt.info_for(cwd)
 end
 
+local function expand_path(p, base)
+  if not p or p == "" then return nil end
+  local out = vim.fn.expand(vim.trim(p))
+  if out == "" then return nil end
+  if out:sub(1, 1) ~= "/" then
+    out = vim.fs.normalize((base or vim.uv.cwd()) .. "/" .. out)
+  end
+  return out
+end
+
+local function read_marker(path)
+  local st = vim.uv.fs_stat(path)
+  if not (st and st.type == "file") then return nil, nil end
+  local lines = vim.fn.readfile(path)
+  if not lines or not lines[1] then return nil, nil end
+  return lines[1], vim.fs.dirname(path)
+end
+
+local AGENT_ENV = {
+  claude = {
+    var = "CLAUDE_CONFIG_DIR", marker = ".claude-config-dir",
+    home = "~/.claude",
+    share = { "skills", "agents", "commands", "plugins", "hooks", "output-styles", "statusline-cache" },
+  },
+  codex = {
+    var = "CODEX_HOME", marker = ".codex-home",
+    home = "~/.codex",
+    share = { "agents", "prompts" },
+  },
+  hermes = {
+    var = "HERMES_HOME", marker = ".hermes-home",
+    home = "~/.hermes",
+    share = { "skills", "plugins", "bundles", "toolsets" },
+  },
+}
+
+local function bootstrap_share(kind, dir)
+  local spec = AGENT_ENV[kind]
+  if not (spec and spec.share and dir) then return end
+  local src_home = expand_path(spec.home)
+  if not src_home then return end
+  vim.fn.mkdir(dir, "p")
+  for _, sub in ipairs(spec.share) do
+    local link = dir .. "/" .. sub
+    if not vim.uv.fs_lstat(link) then
+      local src = src_home .. "/" .. sub
+      if vim.uv.fs_stat(src) then
+        pcall(vim.uv.fs_symlink, src, link, { dir = true })
+      end
+    end
+  end
+end
+
+local function agent_kind(name, cmd)
+  if AGENT_ENV[name] then return name end
+  local exe = type(cmd) == "table" and cmd[1] or cmd
+  local base = vim.fs.basename(tostring(exe or ""))
+  if AGENT_ENV[base] then return base end
+  return nil
+end
+
+local function agents_conf_root()
+  return expand_path(vim.g.nvim3_agents_conf_root or "~/.agents-conf")
+end
+
+function M.resolve_agent_dir(kind, cwd, project)
+  local spec = AGENT_ENV[kind]
+  if not spec then return nil end
+  cwd = cwd or vim.uv.cwd()
+  project = project or git_root(cwd)
+  local info = wt_info(cwd)
+  local repo_home = (info and info.main_repo) or project
+  local is_wt = info and info.is_secondary or false
+  local search = is_wt and { repo_home .. "/" .. spec.marker }
+                  or { cwd .. "/" .. spec.marker, repo_home .. "/" .. spec.marker }
+  for _, p in ipairs(search) do
+    local content, base = read_marker(p)
+    local v = expand_path(content, base)
+    if v then return v end
+  end
+  local all = vim.g.nvim3_agent_dirs or {}
+  local m = all[kind] or {}
+  local key = is_wt and repo_home or (m[cwd] and cwd or repo_home)
+  local v = expand_path(m[key])
+  if v then return v end
+  if kind == "claude" then
+    local legacy = vim.g.nvim3_claude_config_dirs or {}
+    v = expand_path(legacy[is_wt and repo_home or (legacy[cwd] and cwd or repo_home)])
+    if v then return v end
+  end
+  if vim.g.nvim3_agents_conf_root == false then return nil end
+  local root = agents_conf_root()
+  if root then
+    local candidate = root .. "/" .. vim.fs.basename(repo_home) .. "/" .. kind
+    bootstrap_share(kind, candidate)
+    return candidate
+  end
+  return nil
+end
+
+function M.resolve_claude_config_dir(cwd, project)
+  return M.resolve_agent_dir("claude", cwd, project)
+end
+
+function M.project_env(cwd, project)
+  local env = {}
+  for kind, spec in pairs(AGENT_ENV) do
+    local dir = M.resolve_agent_dir(kind, cwd, project)
+    if dir then env[spec.var] = dir end
+  end
+  if next(env) == nil then return nil end
+  return env
+end
+
 local function current_project()
   local info = wt_info()
   if info then return info.main_repo end
@@ -145,9 +259,19 @@ function M.spawn(name, opts)
   vim.cmd("enew")
   local buf = vim.api.nvim_get_current_buf()
 
+  local kind = agent_kind(name, cmd)
+  local env_var, env_dir, env = nil, nil, nil
+  if kind then
+    env_var = AGENT_ENV[kind].var
+    local override = opts.config_dir or opts.claude_config_dir
+    env_dir = (override and expand_path(override)) or M.resolve_agent_dir(kind, cwd, project)
+    if env_dir then env = { [env_var] = env_dir } end
+  end
+
   local job = vim.fn.jobstart(cmd, {
     term = true,
     cwd = cwd,
+    env = env,
     on_exit = function()
       vim.schedule(function() registry[buf] = nil end)
     end,
@@ -167,6 +291,8 @@ function M.spawn(name, opts)
     is_worktree = is_worktree,
     started_at = os.time(),
     job = job,
+    env_var = env_var,
+    env_dir = env_dir,
   }
   local tag = is_worktree and ("wt-" .. (branch or "?")) or (branch or vim.fs.basename(project))
   pcall(vim.api.nvim_buf_set_name, buf, string.format("agent://%s/%s/%s", name, vim.fs.basename(project), tag))
