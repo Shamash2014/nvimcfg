@@ -18,7 +18,7 @@
       "src": "https://github.com/barrettruth/canola.nvim"
     },
     "codediff.nvim": {
-      "rev": "76ff1b13f0bcba655dca85cea1ef0df877a53c0f",
+      "rev": "29b06f37251f2e010f53a0892573b2ec03d165e2",
       "src": "https://github.com/esmuellert/codediff.nvim"
     },
     "conform.nvim": {
@@ -42,7 +42,7 @@
       "src": "https://github.com/akinsho/git-conflict.nvim"
     },
     "kulala.nvim": {
-      "rev": "87601ddef556f21888c59e0a2713873ad73f9c29",
+      "rev": "e43f4d85c9cd57b0638cd557a1cf141fb5ef670b",
       "src": "https://github.com/mistweaverco/kulala.nvim"
     },
     "leap.nvim": {
@@ -122,7 +122,7 @@
       "src": "https://github.com/folke/snacks.nvim"
     },
     "tree-sitter-manager.nvim": {
-      "rev": "8c8b9c5a154e33c565baa2f4562eb50056df8f5b",
+      "rev": "bb66b815aff01e87b2e26be995116be8d2f91474",
       "src": "https://github.com/romus204/tree-sitter-manager.nvim"
     },
     "vim-repeat": {

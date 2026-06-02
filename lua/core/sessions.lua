@@ -21,14 +21,50 @@ function M.save_path()
   return dir() .. "/" .. encode_cwd(vim.fn.getcwd())
 end
 
-local SESSION_OPTS = "buffers,curdir,folds,winsize"
+-- "tabpages" makes mksession persist every space (each space is a tabpage);
+-- the space-tree *shape* is stored alongside in a .spacetree.json sidecar.
+local SESSION_OPTS = "buffers,curdir,folds,winsize,tabpages"
+
+local function sidecar_path(session_path)
+  return (session_path:gsub("%.vim$", "")) .. ".spacetree.json"
+end
+
+local function save_tree(session_path)
+  local ok, st = pcall(require, "core.spacetree")
+  if not ok then
+    return
+  end
+  local data = st.serialize()
+  pcall(vim.fn.writefile, { vim.json.encode(data) }, sidecar_path(session_path))
+end
+
+local function restore_tree(session_path)
+  local path = sidecar_path(session_path)
+  if not vim.uv.fs_stat(path) then
+    return
+  end
+  local ok_read, lines = pcall(vim.fn.readfile, path)
+  if not ok_read or not lines or not lines[1] then
+    return
+  end
+  local ok_decode, data = pcall(vim.json.decode, lines[1])
+  if not ok_decode then
+    return
+  end
+  local ok_st, st = pcall(require, "core.spacetree")
+  if ok_st then
+    st.rebuild(data)
+  end
+end
 
 function M.save()
   ensure_dir()
   local saved = vim.o.sessionoptions
   vim.o.sessionoptions = SESSION_OPTS
-  pcall(vim.cmd, "mksession! " .. vim.fn.fnameescape(M.save_path()))
+  local path = M.save_path()
+  pcall(vim.cmd, "mksession! " .. vim.fn.fnameescape(path))
   vim.o.sessionoptions = saved
+  save_tree(path)
 end
 
 function M.list()
@@ -67,6 +103,11 @@ end
 local function source_in_tab(path)
   vim.cmd("tabnew")
   vim.cmd("source " .. vim.fn.fnameescape(path))
+  -- a tabpages session resets to exactly the saved tabs in order, so the
+  -- tree shape maps back by ordinal; rebuild after the layout is restored
+  vim.schedule(function()
+    restore_tree(path)
+  end)
 end
 
 function M.load()
