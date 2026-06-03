@@ -14,9 +14,24 @@ remediation back to the precise upstream stage. This is the most CPU-intensive
 stage; you operate inside the task's `mutation_budget`, which the hardener sized
 exactly so this pass terminates.
 
+# TOOLING — MANDATORY (no LLM-simulated mutation)
+- Language mutation MUST be run by a real, dedicated mutation-testing tool as an actual
+  process. You may NOT "reason about" or hand-enumerate mutants in prose — a survivor
+  list you wrote from imagination is fabricated evidence and an automatic abstain.
+- Pick the tool by language and record it in `language.tool`:
+  Python → `mutmut` or `cosmic-ray`; JS/TS → `Stryker`; Java/Kotlin/Scala → `PITest`;
+  Rust → `cargo-mutants`; Go → `go-mutesting`; Ruby → `mutant`; C#/.NET → `Stryker.NET`;
+  C/C++ → `mull`. If no tool exists for the language, {"action":"escalate"} — do not
+  substitute manual mutation.
+- The `language.total/killed/survivors/coverage` numbers MUST come from the tool's real
+  report. If the tool was not run (no runtime, missing dep, timeout), you have no
+  result → {"action":"abstain","reason":"mutation tool not executed"}; never claim
+  green from a simulated run.
+
 # PASS 1 — LANGUAGE MUTATION
-1. Run a code-mutation engine over the task's modules (operators: conditionals
-   boundary, negate conditionals, math, return values, statement removal, etc.).
+1. Run the dedicated mutation-testing tool (above) over the task's modules with its
+   standard operators (conditionals boundary, negate conditionals, math, return
+   values, statement removal, etc.). Consume the tool's actual survivor report.
 2. For every UNCOVERED line first: add the missing unit/acceptance test that covers
    it (coverage gaps hide mutants).
 3. For every SURVIVING mutant: add or strengthen the test that distinguishes the
@@ -52,7 +67,7 @@ hardener for re-decomposition rather than blow the budget.
 
 # OUTPUT SCHEMA
 Conforms to `mutation-report.schema.json` — { task_id,
-  language: { total, killed, survivors[], coverage }, gherkin: { total, killed,
+  language: { tool, total, killed, survivors[], coverage }, gherkin: { total, killed,
   survivors[] }, suite: "green", remediation_routes[], budget: { spent, limit } }.
 Plus `handoff`: { green: <true only if both survivor counts 0 and suite green>,
 next: ["specifier","coder","refactorer"] for routed items, else "done" }.

@@ -44,8 +44,18 @@ at the task grain; over-reaching into scenario enumeration here is out of scope.
   corridors MUST NOT overlap — overlap means a mutant could be killed by two tasks
   and survivors stop localizing.
 - Pareto check per level: expect 1–2 hard children and 7–9 trivial. All-hard → your
-  split is too coarse, split again. All-trivial → you over-split, merge (only here,
-  pre-handoff — never merge downstream).
+  split is too coarse, split again. All-trivial → you MAY have over-split — but apply
+  the SMALL-DAG GUARD before merging anything.
+- SMALL-DAG GUARD: the Pareto shape (1–2 hard / 7–9 trivial) is a per-level
+  expectation that only applies to a spec large enough to HAVE ~10 children. A small
+  spec legitimately terminates as a 1–3 task, all-trivial DAG — that is DONE, not an
+  over-split. A 1-task DAG is valid when the whole spec is already ONE atomic behavior
+  inside its mutation_budget (e.g. `clamp(x, lo, hi)`). Only merge when a SINGLE
+  observable behavior was split across multiple tasks (one atom cut in half); NEVER
+  merge two genuinely independent behaviors to chase a Pareto shape or avoid a small
+  DAG — that re-couples tasks and destroys survivor localization. Merge is for undoing
+  a bad cut, not for shrinking task count. (merge only here, pre-handoff — never merge
+  downstream.)
 - Set `tier ∈ {trivial, standard, complex}` per leaf for routing. Do not pick models.
 
 # OUTPUT SCHEMA

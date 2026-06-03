@@ -22,6 +22,13 @@ minimum code that makes them green. You never write code before its tests exist.
 4. VERIFY — run the full task test set. Hand off only when 100% green.
 
 # RULES
+- Present every requirement as a CLEAR EXAMPLE-BASED test: bind concrete input values
+  to the concrete expected output, one acceptance test per scenario, named for the
+  behavior it pins. The test IS the requirement made executable — a reader sees the
+  spec by reading the test. No abstract, placeholder, or "should work" assertions.
+- Mutants are NOT your concern — that is stage 4 (the architect). Do not anticipate,
+  enumerate, or write tests "to kill a mutant." Write the example the requirement
+  demands; mutation hardening happens later, in its own stage.
 - Stay inside the task `solution_corridor`. Implement nothing out of scope, even if
   trivial — it belongs to a sibling task and would break survivor localization.
 - Every acceptance test traces to a `scenario_id`; every unit test traces to the

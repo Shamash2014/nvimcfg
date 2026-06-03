@@ -8,6 +8,34 @@ description: Use when designing or running a spec-to-code agent pipeline that tu
 vendor-agnostic. domain-agnostic. self-improving.
 not a workflow. not LangChain. a controlled phase transition from informal to formal.
 
+## WHEN INVOKED — operating procedure (MANDATORY, not optional)
+
+this skill is not a manual to summarize. invoking `/cog` means you EXECUTE the
+pipeline. you are the orchestrator. walk every stage, in order, on the real input.
+
+1. **get the informal_spec.** if none was supplied, ask for it (or the file path).
+   do not invent one. do not proceed without it.
+2. **run all 5 stages in strict order: 0 → 1 → 2 → 3 → 4.** never skip, reorder,
+   collapse, or merge stages. never jump to code. before acting as a stage, load
+   its prompt from `prompts/NN-*.md` and obey it as your system prompt for that step.
+3. **emit the typed contract at every handoff.** each stage's output MUST be valid
+   JSON against its schema in `contracts/`. validation fails → retry ONCE → then
+   `{"action":"abstain"}` + escalate. never paper over a schema error with prose.
+4. **HALT at every human gate. do not self-approve.** gate 0a (task graph, deep),
+   gate 0b (maximal decomposition, deep), gate 1 (Gherkin, light), gate 2 (code,
+   light). at each gate: present what the human reviews, then STOP and wait for the
+   human's verdict. you are NOT the human. a gate you approved yourself is a
+   corridor violation — the run is invalid.
+5. **green-gate handoff only.** a stage hands off only when its gate is actually
+   green (tests green / CRAP ≤ 6 / 0 survivors). red gate → escalate or abstain,
+   never silent-pass. set `handoff.green = true` only after you verified it.
+6. **survivors route, never reset.** a mutation survivor is handed to the ONE owning
+   task + upstream stage. never restart the whole pipeline.
+
+violating any of these is not "a lighter run" — it produces an artifact that is NOT
+formal and must be rejected. if you cannot complete a stage, abstain and say why;
+do not fake a green gate or skip ahead to look done.
+
 ## core thesis
 
 complexity is NOT solved inside one model context. complexity is **decomposed
@@ -135,6 +163,25 @@ on decomposition, then descends; trust is earned by green-gates, not asserted. s
    failed — fix the earlier stage.
 6. **decomposition is sacred** — never merge tasks to "save orchestration." that
    re-inflates the mutation cost the hardener was built to suppress.
+
+## test-type ownership — one stage, one kind of test
+
+each stage owns exactly one kind of test, and reasons in no other. cross-contaminating
+them is a corridor violation.
+
+- **requirements are always presented clearly as EXAMPLE-BASED tests.** a scenario and
+  its acceptance test bind concrete inputs to a concrete expected output — the test
+  reads as the requirement made executable. no "should work correctly" prose, no
+  abstract assertions. the specifier writes these examples (Gherkin); the coder makes
+  them executable (one acceptance test per scenario). this is how a requirement is
+  stated, full stop.
+- **property tests** belong to the refactorer — invariants the examples only sample.
+- **mutants belong ONLY to mutation testing (stage 4, the architect).** no earlier
+  stage enumerates, anticipates, or makes decisions "because a mutant could survive."
+  the specifier prunes on distinct example coverage (equivalence class / boundary /
+  outcome), not on imagined mutants; the coder writes the example the requirement
+  demands, not a guard against a hypothetical mutant. mutation is a verification gate
+  applied AFTER the code exists — keep it in its stage.
 
 ## the 4 layers (orthogonal, replaceable)
 

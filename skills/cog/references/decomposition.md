@@ -102,8 +102,16 @@ route it to the coder." no global reset, no hunting. the architect's
 
 at each level expect 1–2 hard children and 7–9 trivial ones.
 - all children uniformly hard → split is too coarse → split again.
-- all children uniformly trivial → over-split → merge (ONLY here, before handoff —
-  never merge downstream).
+- all children uniformly trivial → MAYBE over-split → apply the small-DAG guard first.
+
+**small-DAG guard.** the 1–2 hard / 7–9 trivial shape is a per-level expectation, and
+it only applies to a spec large enough to HAVE ~10 children. a small spec legitimately
+terminates as a 1–3 task, all-trivial DAG — that is DONE, not an over-split. a 1-task
+DAG is correct when the whole spec is already one atomic behavior within its
+mutation_budget (e.g. `clamp(x, lo, hi)`). merge ONLY to undo a single behavior that
+was cut across multiple tasks; NEVER merge two genuinely independent behaviors to
+chase the Pareto shape or shrink the task count — that re-couples them and breaks
+survivor localization. merge undoes a bad cut; it is not a task-count target.
 recurse on any child with `complexity > 0.05`, depth cap 5. if a node won't go
 atomic by depth 5, flag it for human triage; do not force a fake leaf.
 

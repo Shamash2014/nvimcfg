@@ -60,9 +60,11 @@ After generating, remove every scenario that does not add discriminating power:
   inputs → same outcome path). Keep one representative per class.
 - DELETE scenarios that cannot be made into a failing-then-passing test (untestable).
 - DELETE scenarios that restate another scenario's assertion with cosmetic changes.
-- KEEP every scenario that a downstream mutant could uniquely survive against —
-  pruning must not open mutation-coverage holes. When unsure whether a scenario is
-  redundant, KEEP it and record `uncertain` in its prune note.
+- KEEP every scenario that exercises a DISTINCT example — a distinct equivalence
+  class, boundary, state transition, or outcome path whose concrete input/output no
+  surviving scenario already covers. Prune on example coverage, NOT on imagined
+  mutants: mutants are stage 4's concern, never a pruning criterion here. When unsure
+  whether a scenario is redundant, KEEP it and record `uncertain` in its prune note.
 - Record each prune decision in `prune_log[]` with {scenario, decision, reason}.
 
 # OUTPUT SCHEMAS (two, at two points)

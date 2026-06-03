@@ -9,8 +9,9 @@
     "task_id": { "type": "string" },
     "language": {
       "type": "object",
-      "required": ["total", "killed", "survivors", "coverage"],
+      "required": ["tool", "total", "killed", "survivors", "coverage"],
       "properties": {
+        "tool": { "type": "string", "minLength": 1, "description": "the dedicated mutation-testing tool actually executed (e.g. mutmut, cosmic-ray, Stryker, PITest, cargo-mutants, go-mutesting, mull). LLM-simulated mutation is not a valid value — the numbers must come from this tool's real run." },
         "total": { "type": "integer", "minimum": 0 },
         "killed": { "type": "integer", "minimum": 0 },
         "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
