@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hard-spec.schema.json",
+  "title": "HardSpec",
+  "description": "The hardener's output: a DAG of atomic, sized, independent tasks derived from an informal spec.",
+  "type": "object",
+  "required": ["source_spec_ref", "tasks", "edges"],
+  "properties": {
+    "source_spec_ref": { "type": "string", "description": "pointer/hash of the informal hand-written spec this was hardened from" },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "task.schema.json" }
+    },
+    "edges": {
+      "type": "array",
+      "description": "dependency DAG edges; MUST be acyclic",
+      "items": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "type": "string", "description": "task id that must complete first" },
+          "to": { "type": "string", "description": "task id that depends on `from`" }
+        }
+      }
+    },
+    "invariants_checked": {
+      "type": "object",
+      "description": "hardener self-check results; all must be true to hand off",
+      "properties": {
+        "all_leaves_atomic": { "type": "boolean" },
+        "all_leaves_independent": { "type": "boolean" },
+        "all_within_mutation_budget": { "type": "boolean" },
+        "no_corridor_overlap": { "type": "boolean" },
+        "edges_acyclic": { "type": "boolean" }
+      }
+    },
+    "total_mutation_budget": { "type": "number", "description": "sum of per-task budgets; the CPU envelope stage 4 schedules within" }
+  }
+}

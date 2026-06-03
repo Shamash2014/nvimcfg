@@ -1,4 +1,4 @@
-# 05 — meta self-learning prompt
+# meta-learning — self-improvement prompt (cross-cutting)
 
 inherits MASTER. proposes candidate prompt variants from eval reports.
 

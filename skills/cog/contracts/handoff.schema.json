@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "handoff.schema.json",
+  "title": "Handoff",
+  "description": "The envelope passed between stages. A stage may only advance when green is true; otherwise it routes or escalates.",
+  "type": "object",
+  "required": ["task_id", "from_stage", "green"],
+  "properties": {
+    "task_id": { "type": "string" },
+    "from_stage": { "enum": ["hardener", "specifier", "coder", "refactorer", "architect"] },
+    "green": {
+      "type": "boolean",
+      "description": "true ONLY when this stage's gate actually passed and was verified (tests green / CRAP <= 6 / survivors == 0). Never assert green you did not run."
+    },
+    "gate_evidence": {
+      "type": "object",
+      "description": "the verified facts behind green; shape depends on stage",
+      "additionalProperties": true
+    },
+    "next": {
+      "description": "where this goes next: a single forward stage, 'done', or a list of routed remediation targets",
+      "oneOf": [
+        { "enum": ["specifier", "coder", "refactorer", "architect", "done"] },
+        { "type": "array", "items": { "enum": ["hardener", "specifier", "coder", "refactorer"] } }
+      ]
+    },
+    "human_gate": {
+      "type": "object",
+      "description": "set on stages that precede a human gate. gate 0 = decomposition review, DEEP, two checkpoints: 0a after hardener (task graph), 0b after specifier PHASE 1 (maximal behavior decomposition, before Gherkin). gate 1 = Gherkin spot-check, LIGHT, after specifier. gate 2 = code spot-check, LIGHT, after architect.",
+      "properties": {
+        "gate": { "enum": ["0a", "0b", "1", "2"] },
+        "depth": { "enum": ["deep", "light"] },
+        "status": { "enum": ["pending", "approved", "rejected"] }
+      }
+    },
+    "routes": {
+      "type": "array",
+      "description": "per-item remediation routing (survivor -> owning stage+task); used instead of a global reset",
+      "items": {
+        "type": "object",
+        "required": ["to", "task_id", "reason"],
+        "properties": {
+          "to": { "enum": ["hardener", "specifier", "coder", "refactorer"] },
+          "task_id": { "type": "string" },
+          "ref": { "type": "string", "description": "scenario_id / line / function the survivor points at" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "action": { "enum": ["answer", "ask", "escalate", "abstain"], "description": "non-green handoffs carry ask/escalate/abstain" }
+  }
+}

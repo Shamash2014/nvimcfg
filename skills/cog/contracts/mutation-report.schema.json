@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mutation-report.schema.json",
+  "title": "MutationReport",
+  "description": "The architect's output for one task: language + Gherkin mutation results, survivors, and per-survivor remediation routes. Green requires both survivor counts at 0 and a green suite.",
+  "type": "object",
+  "required": ["task_id", "language", "gherkin", "suite", "budget"],
+  "properties": {
+    "task_id": { "type": "string" },
+    "language": {
+      "type": "object",
+      "required": ["total", "killed", "survivors", "coverage"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "killed": { "type": "integer", "minimum": 0 },
+        "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "survivors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["mutant", "location"],
+            "properties": {
+              "mutant": { "type": "string", "description": "operator + original->mutated" },
+              "location": { "type": "string", "description": "file:line / function" },
+              "status": { "enum": ["killed", "survived", "routed"] }
+            }
+          }
+        }
+      }
+    },
+    "gherkin": {
+      "type": "object",
+      "required": ["total", "killed", "survivors"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "killed": { "type": "integer", "minimum": 0 },
+        "survivors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["mutation", "scenario_id"],
+            "properties": {
+              "mutation": { "type": "string", "description": "e.g. dropped-Then, flipped-boundary, weakened-precondition" },
+              "scenario_id": { "type": "string" },
+              "status": { "enum": ["killed", "survived", "routed"] }
+            }
+          }
+        }
+      }
+    },
+    "suite": { "enum": ["green", "red"], "description": "full task suite: acceptance + unit + property" },
+    "remediation_routes": {
+      "type": "array",
+      "description": "one route per unresolved survivor; the survivor-route invariant — never a global reset",
+      "items": {
+        "type": "object",
+        "required": ["to", "task_id", "ref", "reason"],
+        "properties": {
+          "to": { "enum": ["specifier", "coder", "refactorer", "hardener"] },
+          "task_id": { "type": "string" },
+          "ref": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "required": ["spent", "limit", "unit"],
+      "properties": {
+        "spent": { "type": "number" },
+        "limit": { "type": "number" },
+        "unit": { "enum": ["mutants", "cpu_seconds"] },
+        "exceeded": { "type": "boolean", "description": "if true, escalate to hardener for re-decomposition rather than blow the budget" }
+      }
+    }
+  }
+}

@@ -1,123 +1,234 @@
 ---
 name: cog
-description: Apply the decomposition-and-contract LLM pipeline pattern — anti-sycophancy master prompt, per-stage prompts (decomposer / md→json converter / focused executor / aggregator / eval / meta self-learning), JSON contracts, and eval framework with gold + synthetic + sycophancy probes. Use when designing or hardening any multi-step LLM or agent system, fighting sycophancy / hallucinations / scope-creep / verbosity, building vendor-agnostic and domain-agnostic AI architectures, or when the user mentions "cog", "cogitate", "anti-sycophancy", "decomposition pipeline", "AI-native OS", "cognitive infrastructure", "self-improving framework", or asks how to make LLM systems stable, testable, and reproducible.
+description: Use when designing or running a spec-to-code agent pipeline that turns informal hand-written specs into tested code; formalizing vague or under-specified requirements; building Gherkin/acceptance/property/mutation test stacks; deciding how finely to decompose tasks so mutation testing fits the CPU budget or the cheapest model can implement each leaf; fighting under-specification, scope creep, hallucination, or sycophancy in a multi-stage LLM system; or when the user mentions cog, spec-to-code, informal to formal, decomposition pipeline, Gherkin, mutation testing, CRAP, or annealing.
 ---
 
 # cog
 
 vendor-agnostic. domain-agnostic. self-improving.
-not a workflow. not LangChain. an engineering discipline.
+not a workflow. not LangChain. a controlled phase transition from informal to formal.
 
-## when to invoke
+## core thesis
 
-- user wants to design a multi-step LLM / agent system
-- user complains: sycophancy, hallucinations, instability, prompt rot, vendor lock-in
-- user asks for a self-improving eval-driven AI architecture
-- user is about to dump a giant monolithic prompt — intercept and decompose
-- user mentions: "decomposition", "contracts between agents", "JSON pipeline", "AI OS", "cognitive layer"
+complexity is NOT solved inside one model context. complexity is **decomposed
+OUT** into atomic, independently-verifiable units joined by strict JSON
+contracts. formality is then created the way metal is annealed: heat the
+material, then lower the temperature through managed stages until it crystallizes
+into a rigid, defect-free lattice.
 
-## core idea
+- **temperature = human involvement.** it falls every stage.
+- **order = formality.** it rises every stage and is never allowed to fall (monotonic formality).
+- the artifact passes through stages, each ending in a typed contract and a hard
+  green-gate. nothing advances on vibes.
 
-complexity is NOT solved inside model context. complexity is decomposed OUT into narrow subtasks with strict JSON contracts. every prompt = data contract (corridor + criteria + metrics + output schema). every output is scored. winning prompt variants get promoted by a meta-learner.
+you start with informal hand-written specs. you end with code whose every line
+is pinned by acceptance tests, unit tests, property tests, and killed mutants.
+human interaction decreases at every stage as automated rigor takes over.
 
-## the 6 stages
+## the prime directive — serious decomposition bounds CPU
+
+> "Raw computer power is the limiting factor. Those mutation tests are CPU intensive."
+
+mutation testing cost scales super-linearly with the size of the unit under
+test. one fat task is a mutation explosion no machine finishes. N small
+independent tasks are N parallel bounded runs whose survivors localize to one
+task.
+
+therefore the **hardener** (stage 0) is the most important stage. its job is not
+"break the work into pieces" — it is to size each piece so that:
+- its mutation run fits a stated `mutation_budget`
+- it is independent enough to schedule in parallel with its siblings
+- a surviving mutant points at exactly one task, one Gherkin feature, one module
+
+bad decomposition is not a style problem here. it is the difference between a
+pipeline that terminates and one that melts the CPU. this is the discipline the
+whole skill is organized around — see [references/decomposition.md](references/decomposition.md).
+
+decomposition happens at TWO levels, by two different stages:
+- **breadth (hardener)** — split the spec into independent, mutation-budgeted
+  *tasks*. coarse. this is the CPU-budget allocation.
+- **depth (specifier)** — take ONE task and *maximally decompose* it into the
+  exhaustive set of atomic behaviors (every equivalence class, boundary, state,
+  error), then prune. fine. a behavior left un-enumerated here is a mutation
+  survivor at stage 4.
+
+maximize first, minimize later: the specifier over-enumerates on purpose, then the
+prune pass removes only the redundant scenarios.
+
+### the stopping rule — decompose until the cheapest model can code it
+
+how deep? **3–5 levels.** the terminal test is not "feels atomic" — it is
+operational: **a leaf is atomic when the cheapest model (haiku-class) can implement
+it correctly in one focused pass, from its Gherkin alone.** if haiku couldn't,
+decompose one more level. this is the definition of atomic everywhere in the
+pipeline; `complexity ≤ 0.05` is just its numeric proxy.
+
+payoff: deep decomposition routes almost every leaf to `tier: trivial` → haiku. you
+trade one expensive monolithic generation for many cheap trivial ones — the
+executor fleet runs cheap and massively parallel, and because each leaf is tiny,
+every stage-4 mutation survivor is trivial to localize and kill. weak models are not
+a constraint; deep decomposition is how you make them sufficient.
+
+## the pipeline
 
 ```
-user_md → [0] decomposer → [1] md→json → [2] executor → [3] aggregator → output
-                                                              │
-                                          [4] eval ←──────────┘
-                                            │
-                                          [5] meta-learner → prompt_version++
+informal_spec
+   │
+ [0] HARDENER ─ decompose → hard_spec (DAG of sized, independent tasks)
+   │
+   ├──────────────── GATE 0a: human reviews task graph (deep) ┐ decomposition
+   │                                                          │ review
+ [1] SPECIFIER ─ PHASE 1: maximally decompose task → behaviors│ (DEEP)
+   │                                                          │
+   ├──────────────── GATE 0b: human reviews decomposition (deep) ┘
+   │
+   │             PHASE 2–3: → Gherkin → prune
+   │
+   ├──────────────── GATE 1: human spot-checks Gherkin (light)
+   │
+ [2] CODER ─ Gherkin → acceptance tests → unit tests → code → all green
+   │
+ [3] REFACTORER ─ CRAP ≤ 6 + kill duplication → property tests → green
+   │
+ [4] ARCHITECT ─ language mutation → cover + kill survivors
+   │             → Gherkin mutation → kill survivors → full suite green
+   │             → fan-out remediation back to [1]/[2]/[3] per survivor
+   │
+   └──────────────── GATE 2: human spot-checks code (light)
+                                  ↓
+                          formal artifact
+
+   [eval] and [meta-learning] run across all stages as the self-improving substrate.
 ```
+
+human-heat schedule: **deep (gate 0) → light → light**. involvement is front-loaded
+on decomposition, then descends; trust is earned by green-gates, not asserted. see
+[references/gates.md](references/gates.md).
+
+## the 5 stages + 3 gates
+
+| stage | transform | input | output | green-gate (must pass to hand off) |
+|---|---|---|---|---|
+| 0 hardener | decompose (breadth) | informal_spec | hard_spec (task DAG) | every leaf atomic + independent + within mutation_budget |
+| — gate 0a | human review (deep) | hard_spec | approved hard_spec | human accepts task graph |
+| 1 specifier · phase 1 | maximally decompose (depth) | task | behaviors[] | exhaustive; every leaf haiku-implementable (min_tier trivial); 3–5 levels |
+| — gate 0b | human review (deep) | behaviors[] | approved decomposition | human accepts maximal decomposition, before Gherkin |
+| 1 specifier · phase 2–3 | formalize + prune | behaviors[] | pruned Gherkin | scenarios testable & non-redundant, every criterion covered |
+| — gate 1 | human spot-check (light) | Gherkin | approved Gherkin | human samples scenarios, no objection |
+| 2 coder | implement | Gherkin | acceptance+unit tests + code | all acceptance + unit tests green |
+| 3 refactorer | reduce | code+tests | refactored code + property tests | CRAP ≤ 6, zero duplication, property tests green |
+| 4 architect | harden | code+tests | mutation-clean artifact | 0 language survivors AND 0 Gherkin survivors AND full suite green |
+| — gate 2 | human spot-check (light) | artifact | accepted artifact | human samples code, no objection |
+
+## invariants (the pipeline refuses to violate these)
+
+1. **monotonic formality** — a stage may add rigor, never remove it. once a
+   scenario is formal Gherkin, no later stage may make it informal again.
+2. **tests before code** — the coder writes acceptance tests, then unit tests,
+   then code. code authored before its tests is a corridor violation.
+3. **green-gate handoff** — no stage hands off until its gate is green. a red
+   gate is escalation, never a silent pass.
+4. **survivors route, they don't reset** — a surviving mutant is handed back to
+   the *specific* upstream stage and task that owns the gap, not a global rerun.
+5. **decreasing human-heat** — gate depth only goes down. deep judgment is spent on
+   decomposition (gate 0); wanting a deep review at gate 2 means an earlier stage
+   failed — fix the earlier stage.
+6. **decomposition is sacred** — never merge tasks to "save orchestration." that
+   re-inflates the mutation cost the hardener was built to suppress.
 
 ## the 4 layers (orthogonal, replaceable)
 
-- **L1 reasoning** — LLM calls. swappable model.
-- **L2 contracts** — JSON schemas. process-free.
-- **L3 control** — orchestration, routing, eval gate.
-- **L4 knowledge** — domain prompts, RAG, KG, datasets. vertical lives here only.
+- **L1 reasoning** — LLM calls. swappable model, routed by task `tier`.
+- **L2 contracts** — JSON schemas between stages. process-free.
+- **L3 control** — orchestration, gates, mutation scheduler, eval gate.
+- **L4 knowledge** — domain prompts, the spec→code stages, test/mutation tooling.
+
+The forge stages live in L4. The anti-sycophancy core, contract discipline, and
+eval/meta loop are the reusable L1–L3 substrate. See [references/layers.md](references/layers.md).
 
 ## how to use this skill
 
 ### 1. drop the master prompt
-Read [prompts/MASTER.md](prompts/MASTER.md). The block between `---` lines is the system prompt for every LLM call in the pipeline. It enforces anti-sycophancy, JSON-only output, scope discipline, calibrated confidence, and abstain-on-uncertainty.
+Read [prompts/MASTER.md](prompts/MASTER.md). The block between `---` lines is the
+system prompt for every stage agent. It enforces anti-sycophancy, JSON-only
+output, scope discipline, calibrated confidence, abstain-on-uncertainty, AND the
+six forge invariants above.
 
-### 2. specialize per stage
+### 2. run the stages in order
 Each stage inherits MASTER and adds narrow rules:
-- [prompts/00-decomposer.md](prompts/00-decomposer.md) — splits task into 5–10 children, recurse until atomic
-- [prompts/01-converter.md](prompts/01-converter.md) — cheap model, md → strict Subtask JSON
-- [prompts/02-executor.md](prompts/02-executor.md) — one atomic subtask, one focused output
-- [prompts/03-aggregator.md](prompts/03-aggregator.md) — merges typed child results, no synthesis
-- [prompts/04-eval.md](prompts/04-eval.md) — judge one (case, response) pair
-- [prompts/05-meta-learning.md](prompts/05-meta-learning.md) — generates candidate prompt variants from regressions
+- [prompts/00-hardener.md](prompts/00-hardener.md) — decompose informal spec into a sized, independent task DAG
+- [prompts/01-specifier.md](prompts/01-specifier.md) — maximally decompose the task into behaviors → Gherkin → prune
+- [prompts/02-coder.md](prompts/02-coder.md) — acceptance tests → unit tests → code, all green
+- [prompts/03-refactorer.md](prompts/03-refactorer.md) — CRAP ≤6, dedup, property tests
+- [prompts/04-architect.md](prompts/04-architect.md) — mutation (language + Gherkin), kill survivors, route remediation
+- [prompts/eval.md](prompts/eval.md) — judge one (case, response) pair (cross-cutting)
+- [prompts/meta-learning.md](prompts/meta-learning.md) — promote prompt variants from regressions (cross-cutting)
 
-### 3. wire the contracts
-Every stage input / output validates against a schema:
-- [contracts/task.schema.json](contracts/task.schema.json) — recursive decomposed task tree
-- [contracts/subtask.schema.json](contracts/subtask.schema.json) — atomic leaf with corridor + criteria + metrics + output_schema
-- [contracts/result.schema.json](contracts/result.schema.json) — execution result with confidence, disagreement, action (`answer | ask | escalate | abstain`), trace
-- [contracts/eval.schema.json](contracts/eval.schema.json) — eval report with deltas, regressions, wins, verdict
+### 3. validate every handoff against a contract
+- [contracts/hard-spec.schema.json](contracts/hard-spec.schema.json) — the task DAG the hardener emits
+- [contracts/task.schema.json](contracts/task.schema.json) — one atomic task: corridor, acceptance, deps, mutation_budget
+- [contracts/decomposition.schema.json](contracts/decomposition.schema.json) — the GATE 0b halt output: behaviors[] + stopping_rule (before any Gherkin)
+- [contracts/gherkin.schema.json](contracts/gherkin.schema.json) — behaviors (carried forward) + feature + scenarios + prune decisions
+- [contracts/handoff.schema.json](contracts/handoff.schema.json) — the stage→stage envelope: gate status, green flags, survivors
+- [contracts/mutation-report.schema.json](contracts/mutation-report.schema.json) — survivors, kills, coverage, remediation routing
+- [contracts/result.schema.json](contracts/result.schema.json) — generic execution result (confidence, action, trace)
+- [contracts/eval.schema.json](contracts/eval.schema.json) — eval report (deltas, regressions, wins, verdict)
 
-Validation failure = retry once, then abstain. Never paper over.
+Validation failure = retry once, then abstain + escalate. Never paper over.
 
-### 4. seed eval
-- 10–15 hand-curated **gold** cases (locked, regression here = block deploy)
-- 200–300 **synthetic** cases (regenerated weekly from real traffic patterns)
-- subset of gold = **sycophancy probes** (engineered to elicit false agreement; correct disagreement = pass)
-- metrics: correctness, faithfulness, sycophancy_resist, calibration_brier, corridor_compliance, cost, latency
-- See [references/eval-framework.md](references/eval-framework.md) for thresholds and the self-learning loop.
+### 4. place the human gates
+Three gates, depth descending. Gate 0 = the deep DECOMPOSITION REVIEW, with two
+checkpoints: 0a (task graph, after hardener) and 0b (maximal behavior decomposition,
+after specifier PHASE 1, before Gherkin). Gate 1 = light Gherkin spot-check. Gate 2 =
+light code spot-check. See [references/gates.md](references/gates.md) for what each
+gate inspects and what auto-escalates a gate back to deep.
 
-### 5. enable meta-learning
-Meta-learner runs in background. Generates ≤5 candidate variants per stage per cycle. Shadow-tests on synthetic. Promotes only if gold pass-rate ≥ baseline AND no metric regresses > 2% AND sycophancy_resist not worse. Keeps last 10 versions for rollback.
+### 5. schedule mutation against the CPU budget
+The architect treats independent tasks as a parallel job pool bounded by total
+CPU. Survivors route back per task, never global reset. See the scheduling
+section in [references/pipeline.md](references/pipeline.md).
+
+### 6. seed eval + enable meta-learning
+- 10–15 hand-curated **gold** cases (locked; regression = block).
+- 200–300 **synthetic** cases (regenerated from real traffic).
+- subset of gold = **sycophancy probes** (correct disagreement = pass).
+- metrics: correctness, faithfulness, sycophancy_resist, calibration_brier,
+  mutants_killed, corridor_compliance, cost, latency.
+- meta-learner promotes a variant only if gold pass-rate ≥ baseline AND no metric
+  regresses >2% AND sycophancy_resist not worse. See [references/eval-framework.md](references/eval-framework.md).
 
 ## anti-sycophancy enforcement
 
-three layers of defense:
+three layers of defense (unchanged from the cog substrate):
+1. **prompt-level** — DISAGREEMENT_POLICY in MASTER forces grounded disagreement;
+   banned-prefix list strips flattery.
+2. **post-processor** — runtime regex rejects banned tokens and reprompts.
+3. **eval-level** — `sycophancy_resist ≥ 0.90`; probes give binary pass/fail.
 
-1. **prompt-level** — DISAGREEMENT_POLICY in MASTER forces grounded disagreement when user assertion contradicts inputs; banned-prefix list strips flattery
-2. **post-processor** — runtime regex rejects responses containing banned tokens and reprompts with the violation in context
-3. **eval-level** — `sycophancy_resist ≥ 0.90` threshold; sycophancy probes give binary pass/fail (no partial credit)
+## what NOT to do
 
-## grill pass (adversarial pressure test)
-
-Before promoting prompt variants, run a dedicated "grill" pass inspired by `grill-me`:
-
-1. pick the weakest stage/output (highest uncertainty, most hand-wavy rationale, or highest failure impact)
-2. ask one hard adversarial question at a time (depth-first), e.g.:
-   - what if this assumption is false?
-   - why not the strongest alternative?
-   - what breaks first at 10x scale / noisy inputs?
-   - what is rollback when this stage fails?
-3. require concrete evidence (tests, traces, citations, contract fields) — vague answers fail
-4. do not move on until branch is resolved or explicitly parked with risk noted
-5. summarize branches as `resolved | parked(risk) | failed`
-
-Minimum grill checklist per candidate variant:
-- failure modes identified for each stage touched
-- contradiction check against contracts and corridor
-- explicit rollback/recovery path
-- at least one adversarial "user is wrong" probe passed
-- no unresolved high-risk parked branches
-
-Promotion gate update:
-- candidate can only promote if it passes existing eval gate **and** grill checklist
-- if grill fails, variant is quarantined with failure notes for next meta-learning cycle
-
-## references
-
-- [references/stages.md](references/stages.md) — full per-stage spec (rules, models, failure modes)
-- [references/layers.md](references/layers.md) — L1–L4 separation of concerns
-- [references/eval-framework.md](references/eval-framework.md) — datasets, metrics, self-learning gate, banned-tokens
-
-## what NOT to do with this pattern
-
-- don't dump everything into one giant prompt — defeats the entire decomposition premise
-- don't skip contracts because "it's just a prototype" — contracts ARE the prototype
-- don't let one model own the pipeline — route by tier so the system stays vendor-swappable
+- don't dump the whole spec into one giant stage — defeats the decomposition premise and melts the CPU at mutation time
+- don't let the coder write code before its acceptance tests — that's the whole bet inverted
+- don't run mutation on a fat task to "save a decomposition pass" — that's the CPU melter
+- don't reset the whole pipeline on one survivor — route it to the one owning task
+- don't add a deep human gate late to compensate for a weak hardener — fix the hardener
+- don't merge tasks for orchestration convenience — re-inflates mutation cost
+- don't let a stage hand off red — escalate or abstain, never silent-pass
+- don't soften Gherkin downstream — monotonic formality is one-directional
 - don't add a "be helpful" instruction anywhere — that's how sycophancy leaks back in
-- don't auto-promote variants without the gate — regressions compound silently
-- don't expose chain-of-thought unless the contract has a `reasoning` field for it
+- don't auto-promote prompt variants without the eval gate — regressions compound silently
 
 ## moat reminder
 
-the model is not the moat. the L2/L3/L4 stack — contracts, eval datasets, feedback loops, accumulated operational knowledge — compounds over years while models commoditize in months.
+the model is not the moat. the L2/L3/L4 stack — contracts, the decomposition
+doctrine, eval datasets, the mutation/feedback loops, accumulated operational
+knowledge — compounds over years while models commoditize in months.
+
+## references
+
+- [references/pipeline.md](references/pipeline.md) — full per-stage spec, models, failure modes, mutation scheduling
+- [references/decomposition.md](references/decomposition.md) — the serious-decomposition doctrine: sizing tasks so mutation fits the CPU
+- [references/gates.md](references/gates.md) — the human-heat schedule and auto-escalation rules
+- [references/layers.md](references/layers.md) — L1–L4 separation of concerns
+- [references/eval-framework.md](references/eval-framework.md) — datasets, metrics (incl. forge metrics), self-learning gate, banned-tokens
+- [references/evals.md](references/evals.md) — how to test this skill: activation evals, pipeline gates, self-audit checklist, end-to-end smoke test

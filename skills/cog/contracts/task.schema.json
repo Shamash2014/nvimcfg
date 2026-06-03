@@ -2,22 +2,56 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "task.schema.json",
   "title": "Task",
+  "description": "One atomic, independently-verifiable unit emitted by the hardener. Task granularity bounds the CPU cost of stage-4 mutation.",
   "type": "object",
-  "required": ["id", "goal", "complexity", "depth"],
+  "required": ["id", "goal", "solution_corridor", "acceptance_criteria", "mutation_budget", "complexity", "depth", "is_leaf"],
   "properties": {
     "id": { "type": "string" },
     "parent_id": { "type": ["string", "null"] },
-    "goal": { "type": "string" },
+    "goal": { "type": "string", "description": "one observable behavior, one sentence" },
     "context": { "type": "object" },
-    "complexity": { "type": "number", "minimum": 0, "maximum": 1 },
+    "complexity": { "type": "number", "minimum": 0, "maximum": 1, "description": "1 = not confident one focused pass solves it; recurse if > 0.05" },
     "depth": { "type": "integer", "minimum": 0, "maximum": 5 },
-    "tier": { "enum": ["trivial", "standard", "complex"] },
-    "domain": { "type": "string" },
-    "children": {
-      "type": "array",
-      "items": { "$ref": "task.schema.json" }
-    },
+    "tier": { "enum": ["trivial", "standard", "complex"], "description": "routing hint; the router picks the model" },
     "is_leaf": { "type": "boolean" },
-    "decomposition_reason": { "type": "string" }
+    "solution_corridor": {
+      "type": "object",
+      "required": ["in_scope", "out_of_scope"],
+      "description": "sibling-leaf corridors MUST NOT overlap, so survivors localize to one task",
+      "properties": {
+        "in_scope": { "type": "array", "items": { "type": "string" } },
+        "out_of_scope": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "description": "informal-but-testable statements; each must be observable and falsifiable; the specifier turns each into Gherkin",
+      "items": {
+        "type": "object",
+        "required": ["id", "statement"],
+        "properties": {
+          "id": { "type": "string" },
+          "statement": { "type": "string" },
+          "kind": { "enum": ["happy", "boundary", "error"] }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "description": "ids of tasks that must complete first; edges must be acyclic across the hard_spec",
+      "items": { "type": "string" }
+    },
+    "mutation_budget": {
+      "type": "object",
+      "required": ["unit"],
+      "description": "the asserted ceiling the stage-4 mutation run for THIS task must fit within; the prime decomposition lever",
+      "properties": {
+        "unit": { "enum": ["mutants", "cpu_seconds"] },
+        "max": { "type": "number", "minimum": 1 },
+        "estimated_mutants": { "type": "number", "description": "hardener's estimate; must be <= max when unit is mutants" }
+      }
+    },
+    "decomposition_reason": { "type": "string", "description": "set only when a node could not be made atomic within depth 5" }
   }
 }

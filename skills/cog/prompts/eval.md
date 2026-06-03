@@ -1,6 +1,6 @@
-# 04 — eval prompt
+# eval — judge prompt (cross-cutting)
 
-inherits MASTER. used when LLM-as-judge is part of scoring (deterministic metrics run in code).
+inherits MASTER. used when LLM-as-judge is part of scoring (deterministic metrics — mutation_score, crap_max, coverage — run in code).
 
 ---
 

@@ -31,6 +31,23 @@
 | cost_per_task       | $ usage                                      | trend ↓   |
 | p95_latency         | ms                                           | trend ↓   |
 
+### forge-specific metrics (spec→code pipeline)
+
+| metric                  | how                                                    | threshold |
+|-------------------------|--------------------------------------------------------|-----------|
+| mutation_score          | language mutants killed / total (stage 4)              | = 1.0     |
+| gherkin_mutation_score  | Gherkin mutants killed / total (stage 4)               | = 1.0     |
+| crap_max                | highest CRAP across functions (stage 3)                | ≤ 6       |
+| duplication_blocks      | copy-paste / duplicate-rule blocks (stage 3)           | = 0       |
+| trivial_leaf_rate       | behaviors with min_tier == trivial / all (stage 1)     | ≥ 0.90    |
+| decomposition_depth     | levels from spec to haiku-implementable leaf           | 3–5       |
+| criterion_coverage      | acceptance_criteria with ≥ 1 scenario (stage 1)        | = 1.0     |
+| green_gate_integrity    | handoffs with green==true that actually verified green | = 1.0     |
+
+mutation_score, gherkin_mutation_score, crap_max, and duplication_blocks are HARD
+gates (a stage cannot hand off green otherwise). trivial_leaf_rate and
+decomposition_depth are the decomposition-quality signal that gate 0b enforces.
+
 ## self-learning loop
 
 ```
@@ -59,7 +76,7 @@ back to eval
 
 ## anti-sycophancy in prompt template
 
-every executor prompt includes:
+every stage prompt includes:
 
 ```
 DISAGREEMENT_POLICY:
@@ -77,3 +94,21 @@ banned tokens checked by post-processor. violation → reject + retry with stric
 - weekly: review regressions, retire dead variants
 - monthly: refresh synthetic from latest traffic
 - quarterly: gold owner reviews gold for drift
+
+## tooling — how to actually run this
+
+match the tool to the layer being evaluated:
+
+- **interactive stage-prompt grading → Anthropic Console Evaluation Tool.** Each
+  stage is a prompt with typed JSON I/O; templatize it with {{variables}}
+  (e.g. {{informal_spec}}, {{task_json}}), load gold/synthetic as test cases, grade
+  1–5, and compare prompt_versions side-by-side. This IS the manual form of the
+  meta-learner's shadow-test-then-promote loop. Good for tuning one stage's prompt.
+- **automated gate regression → SDK + code runner / CI (or Batches API).** The hard
+  gates (mutation_score = 1.0, gherkin_mutation_score = 1.0, crap_max ≤ 6,
+  duplication_blocks = 0, survivors = 0) are CODE assertions, not 1–5 judge calls —
+  the Console tool cannot grade them. Run them deterministically in CI.
+- **skill triggering / discoverability → neither of the above.** Whether `cog` (or any
+  stage agent) activates from its description is a separate concern; tune the
+  description against sample prompts (run each ×3, hold out a test split). See
+  skill-eval-report.md.

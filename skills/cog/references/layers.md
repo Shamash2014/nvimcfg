@@ -14,7 +14,7 @@ four orthogonal axes. each replaceable without touching the others.
 │      • domain heuristics                                    │
 ├─────────────────────────────────────────────────────────────┤
 │  L3  CONTROL LAYER            orchestration. vendor-free.   │
-│      • decomposer / aggregator                              │
+│      • stage orchestration / gates / mutation scheduler    │
 │      • prompt versioning                                    │
 │      • routing (tier → model)                               │
 │      • eval gate / promotion                                │

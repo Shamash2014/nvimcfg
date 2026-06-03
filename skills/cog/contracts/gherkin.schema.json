@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gherkin.schema.json",
+  "title": "GherkinFeature",
+  "description": "The specifier's output: the maximal decomposition of one task into behaviors, formalized into a pruned Gherkin feature with full criterion coverage and a prune log.",
+  "type": "object",
+  "required": ["task_id", "behaviors", "feature", "scenarios", "coverage_map", "prune_log"],
+  "properties": {
+    "task_id": { "type": "string" },
+    "behaviors": {
+      "type": "array",
+      "minItems": 1,
+      "description": "PHASE 1 maximal decomposition: the exhaustive set of atomic, independently-observable behaviors the task can exhibit (equivalence classes, boundaries, state transitions, error paths). Enumerated before any Gherkin; pruning happens later at the scenario level, never here.",
+      "items": {
+        "type": "object",
+        "required": ["id", "statement", "criterion_ids"],
+        "properties": {
+          "id": { "type": "string" },
+          "statement": { "type": "string", "description": "one atomic observable behavior" },
+          "kind": { "enum": ["happy", "boundary", "state-transition", "error"] },
+          "min_tier": { "enum": ["trivial", "standard", "complex"], "description": "cheapest model that can implement this leaf in one pass; STOPPING RULE targets 'trivial' (haiku) — if 'standard'/'complex', decompose one more level" },
+          "criterion_ids": { "type": "array", "items": { "type": "string" }, "description": "acceptance_criteria this behavior traces to; empty => ask (hardener under-specified)" }
+        }
+      }
+    },
+    "feature": {
+      "type": "object",
+      "required": ["title"],
+      "properties": {
+        "title": { "type": "string" },
+        "narrative": { "type": "string", "description": "optional As-a/I-want/So-that" }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "steps"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "kind": { "enum": ["happy", "boundary", "error"] },
+          "outline": { "type": "boolean", "description": "true if a Scenario Outline" },
+          "steps": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": ["keyword", "text"],
+              "properties": {
+                "keyword": { "enum": ["Given", "When", "Then", "And", "But"] },
+                "text": { "type": "string" }
+              }
+            },
+            "description": "exactly one When per scenario"
+          },
+          "examples": {
+            "type": "array",
+            "description": "rows for a Scenario Outline",
+            "items": { "type": "object", "additionalProperties": true }
+          }
+        }
+      }
+    },
+    "coverage_map": {
+      "type": "object",
+      "description": "acceptance_criterion id -> scenario ids that cover it; every criterion MUST map to >= 1 scenario",
+      "additionalProperties": { "type": "array", "items": { "type": "string" } }
+    },
+    "prune_log": {
+      "type": "array",
+      "description": "one entry per scenario considered and removed",
+      "items": {
+        "type": "object",
+        "required": ["scenario", "decision", "reason"],
+        "properties": {
+          "scenario": { "type": "string" },
+          "decision": { "enum": ["kept", "pruned", "uncertain_kept"] },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}
