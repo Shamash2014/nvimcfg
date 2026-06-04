@@ -46,7 +46,7 @@
 
 mutation_score, gherkin_mutation_score, crap_max, and duplication_blocks are HARD
 gates (a stage cannot hand off green otherwise). trivial_leaf_rate and
-decomposition_depth are the decomposition-quality signal that gate 0b enforces.
+decomposition_depth are the decomposition-quality signal the PLAN gate enforces.
 
 ## self-learning loop
 

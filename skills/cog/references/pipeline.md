@@ -1,11 +1,13 @@
 # pipeline — full per-stage spec
 
-informal_spec → [0] hardener → 0a → [1] specifier(phase1) → 0b → (phase2-3) → 1
-→ [2] coder → [3] refactorer → [4] architect → 2 → formal artifact.
+informal_spec → [0] hardener → [1] specifier(phase1→phase2-3) → GATE PLAN
+→ [2] coder → [3] refactorer → [4] architect → GATE 2 → formal artifact.
 eval + meta-learning run across all stages.
 
-human-heat is front-loaded on decomposition (gate 0 deep), then descends to light
-spot-checks (gates 1, 2). formality only rises (monotonic).
+stages 0 and 1 run silently (no halt between them); their outputs are presented
+together at the single deep PLAN gate. human-heat is front-loaded there
+(decomposition + Gherkin), then descends to one light code spot-check (gate 2).
+formality only rises (monotonic).
 
 ## [0] hardener — decompose
 
@@ -23,8 +25,9 @@ model: mid-tier (sonnet-class) — tree shape needs judgment, not raw power.
 failure mode: not atomic by depth 5 → flag for human triage, do not force.
 why it matters most: task size IS the stage-4 CPU allocation. see decomposition.md.
 
-→ **GATE 0a (deep)**: human reviews the task graph (breadth decomposition). part of
-the decomposition review; approval licenses the lighter gates downstream.
+the task graph is NOT reviewed in isolation here — the hardener hands off straight to
+the specifier. its breadth decomposition is reviewed later, at the single PLAN gate,
+together with the specifier's depth decomposition and Gherkin.
 
 ## [1] specifier — formalize
 
@@ -38,11 +41,7 @@ three phases — maximize first, minimize later:
   only sized tasks for breadth. STOPPING RULE: go 3–5 levels deep, stop only when each
   leaf is haiku-implementable in one pass (`min_tier: trivial`); else split deeper.
   over-enumerate; a behavior missed here is a stage-4 survivor. record in `behaviors[]`.
-  then HALT for gate 0b.
-
-→ **GATE 0b (deep)**: human reviews the maximal behavior decomposition, BEFORE any
-Gherkin (so pruning can't hide gaps). part of the decomposition review. approve, or
-send back to decompose further. only then does the specifier continue:
+  emit `decomposition.json`, then continue straight into phase 2–3 (no halt).
 
 - **PHASE 2 formalize**: each behavior → ≥1 scenario; one When per scenario; concrete
   values; stay in corridor (adjacent behavior belongs to a sibling task).
@@ -54,7 +53,12 @@ model: standard-tier for phase 1–2 reasoning; the coder fleet downstream runs 
 because the decomposition made every leaf trivial.
 failure mode: criterion not observable → ask (bad criterion from hardener, surface it).
 
-→ **GATE 1 (light)**: human spot-checks a sample of pruned Gherkin.
+→ **GATE PLAN (deep)**: with stages 0 and 1 complete, present ONE consolidated plan —
+the task DAG (breadth) + `behaviors[]` (depth) + pruned Gherkin + `prune_log` — and
+HALT for a single human verdict before any code. the prune_log is shown beside the full
+behaviors[] so pruning can't hide a gap. approve the plan, or send a specific task back
+to the hardener / specifier-phase-1 / specifier-phase-2-3. no code is written until the
+plan is approved.
 
 ## [2] coder — implement (tests first)
 

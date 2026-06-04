@@ -40,20 +40,20 @@ quality signal: trivial_leaf_rate ≥ 0.90, decomposition_depth ∈ [3,5].
 contracts:
 - [ ] every stage names an input contract and an output contract that exist in contracts/
 - [ ] every JSON schema parses (`python3 -c "import json;json.load(open(f))"`)
-- [ ] the GATE 0b halt validates against decomposition.schema.json (NOT gherkin.schema.json)
-- [ ] handoff.human_gate.gate enum matches the gates the prompts emit (0a, 0b, 1, 2)
+- [ ] the specifier's PHASE-1 decomposition validates against decomposition.schema.json (NOT gherkin.schema.json)
+- [ ] handoff.human_gate.gate enum matches the gates the prompts emit (plan, 2)
 
 invariants (each must be enforced by at least one prompt + checkable by a metric):
 - [ ] monotonic formality — no stage down-converts a formal artifact
 - [ ] tests before code — coder writes acceptance→unit→code; code-first = abstain
 - [ ] green-gate handoff — green==true only when verified (green_gate_integrity = 1.0)
 - [ ] survivors route, not reset — mutation-report.remediation_routes name one task each
-- [ ] decreasing human-heat — gate depth non-increasing (deep 0a,0b → light 1,2)
+- [ ] decreasing human-heat — gate depth non-increasing (deep plan → light 2)
 - [ ] decomposition is sacred — no stage merges tasks; stopping rule = haiku-implementable
 
 cross-references:
 - [ ] no stale stage names (decomposer/converter/executor/aggregator/subtask)
-- [ ] no stale gate labels (GATE A/B/C)
+- [ ] no stale gate labels (GATE A/B/C, gate 0a/0b/1)
 - [ ] SKILL.md links resolve to files that exist
 
 ## 3b. pressure tests (writing-skills RED/GREEN)
@@ -71,8 +71,10 @@ expected pipeline behavior:
 1. hardener → 1 task (atomic already), mutation_budget small, corridor = {in: clamp;
    out: floats, non-integer, range validation}.
 2. specifier PHASE 1 → behaviors: below-lo→lo, above-hi→hi, in-range→unchanged,
-   lo==hi, lo>hi (error path). all min_tier: trivial. HALT → gate 0b.
-3. (after 0b) PHASE 2–3 → 5 scenarios, prune none (all distinct classes).
+   lo==hi, lo>hi (error path). all min_tier: trivial. emit decomposition.json, no halt.
+3. PHASE 2–3 → 5 scenarios, prune none (all distinct classes).
+   → GATE PLAN: present task DAG + behaviors[] + the 5 scenarios + empty prune_log;
+   human approves the whole plan in one verdict. no code until approved.
 4. coder → acceptance test per scenario (red) → unit tests (red) → clamp() → green.
 5. refactorer → crap_max ≤ 6 trivially; property test: result always in [lo,hi]
    when lo≤hi; idempotence clamp(clamp(x))==clamp(x). green.

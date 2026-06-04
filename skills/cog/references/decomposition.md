@@ -54,14 +54,15 @@ the failure this prevents: stopping decomposition at "a smart model could do thi
 that ships a fat leaf to the coder, inflates the stage-4 mutant population, and burns
 opus tokens where haiku would have sufficed had the work been split two more levels.
 
-## the decomposition review (gate 0)
+## the decomposition review (gate plan)
 
 because decomposition decides everything downstream, it is the one place the human
-spends DEEP attention — gate 0, with two checkpoints: 0a reviews the task graph
-(breadth) after the hardener; 0b reviews the maximal behavior decomposition (depth)
-after the specifier's PHASE 1, BEFORE any Gherkin or pruning. reviewing the
-decomposition before pruning is deliberate: pruning after an unreviewed decomposition
-would hide gaps the human never saw. see gates.md.
+spends DEEP attention — the **plan gate**. stages 0 and 1 run silently; then the human
+reviews, in one sitting, the task graph (breadth, from the hardener) AND the maximal
+behavior decomposition (depth, from the specifier's PHASE 1) AND the pruned Gherkin with
+its `prune_log`. there is no separate pre-prune halt: the full `behaviors[]` and the
+prune_log are presented together, so a behavior dropped in pruning stays visible at the
+gate and cannot hide a gap the human never saw. see gates.md.
 
 ## why decomposition is the CPU lever
 
@@ -124,7 +125,7 @@ the merge-for-convenience instinct is exactly what invariant 6 forbids. small,
 independent, budget-fitting tasks are the product of this stage — not a cost to
 minimize.
 
-## checklist (hardener must pass all before gate 0a)
+## checklist (hardener must pass all before the plan gate)
 
 - [ ] every leaf atomic
 - [ ] every leaf independent (no shared mutable state with siblings)

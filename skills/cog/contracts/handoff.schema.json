@@ -26,9 +26,9 @@
     },
     "human_gate": {
       "type": "object",
-      "description": "set on stages that precede a human gate. gate 0 = decomposition review, DEEP, two checkpoints: 0a after hardener (task graph), 0b after specifier PHASE 1 (maximal behavior decomposition, before Gherkin). gate 1 = Gherkin spot-check, LIGHT, after specifier. gate 2 = code spot-check, LIGHT, after architect.",
+      "description": "set on the stage that precedes a human gate. gate 'plan' = the consolidated PLAN review, DEEP, after stages 0+1 run silently — covers task graph (breadth) + maximal behavior decomposition (depth) + pruned Gherkin + prune_log in one verdict, before any code. gate '2' = code spot-check, LIGHT, after architect. only the specifier sets gate 'plan' (it produces the last plan artifact); the hardener hands off straight to the specifier with no gate.",
       "properties": {
-        "gate": { "enum": ["0a", "0b", "1", "2"] },
+        "gate": { "enum": ["plan", "2"] },
         "depth": { "enum": ["deep", "light"] },
         "status": { "enum": ["pending", "approved", "rejected"] }
       }

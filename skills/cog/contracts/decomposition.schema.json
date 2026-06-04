@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "decomposition.schema.json",
   "title": "Decomposition",
-  "description": "The specifier's PHASE-1 output, emitted at the GATE 0b halt BEFORE any Gherkin. It is the maximal decomposition of one task into atomic, haiku-implementable behaviors, reviewed by the human before formalization and pruning.",
+  "description": "The specifier's PHASE-1 output: the maximal decomposition of one task into atomic, haiku-implementable behaviors. Emitted without halting, then carried into the single consolidated PLAN gate where the human reviews it alongside the pruned Gherkin and prune_log.",
   "type": "object",
   "required": ["task_id", "behaviors", "stopping_rule"],
   "properties": {
@@ -10,7 +10,7 @@
     "behaviors": {
       "type": "array",
       "minItems": 1,
-      "description": "the exhaustive set of atomic, independently-observable behaviors; carried forward verbatim into gherkin.json after gate 0b approval",
+      "description": "the exhaustive set of atomic, independently-observable behaviors; carried forward verbatim into gherkin.json and presented together with it at the PLAN gate",
       "items": {
         "type": "object",
         "required": ["id", "statement", "min_tier", "criterion_ids"],
@@ -27,7 +27,7 @@
     "stopping_rule": {
       "type": "object",
       "required": ["all_trivial", "max_depth"],
-      "description": "evidence the STOPPING RULE was applied; all_trivial=false means some leaf is not yet haiku-implementable and must be split further before gate 0b can approve",
+      "description": "evidence the STOPPING RULE was applied; all_trivial=false means some leaf is not yet haiku-implementable and must be split further before the plan gate can approve",
       "properties": {
         "all_trivial": { "type": "boolean", "description": "true iff every behavior.min_tier == 'trivial'" },
         "max_depth": { "type": "integer", "minimum": 1, "maximum": 5 },

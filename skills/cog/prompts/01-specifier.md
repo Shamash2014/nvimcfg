@@ -33,13 +33,15 @@ you fail to enumerate here becomes a mutation survivor at stage 4.
 - Record the enumeration in `behaviors[]`. Each behavior traces to ≥1
   acceptance_criterion. A behavior with no criterion = the hardener under-specified
   the task → {"action":"ask"}; do not invent meaning to fill the gap.
-- HALT FOR GATE 0b — emit a `decomposition.json` (conforms to
-  `decomposition.schema.json`: { task_id, behaviors[], stopping_rule }) for the human
-  DECOMPOSITION REVIEW and STOP. `stopping_rule.all_trivial` MUST be true (every leaf
-  `min_tier: trivial`); if not, you are not done — split the non-trivial leaves first.
-  Do NOT start PHASE 2 until the decomposition is approved (set
-  handoff.human_gate = { gate: "0b", depth: "deep", status: "pending" }). Pruning
-  after an unreviewed decomposition would hide gaps the human never saw.
+- EMIT THE DECOMPOSITION (do NOT halt) — emit a `decomposition.json` (conforms to
+  `decomposition.schema.json`: { task_id, behaviors[], stopping_rule }).
+  `stopping_rule.all_trivial` MUST be true (every leaf `min_tier: trivial`); if not,
+  you are not done — split the non-trivial leaves first. Then continue straight into
+  PHASE 2–3 — there is no separate decomposition halt. The behaviors[] are carried into
+  the single consolidated PLAN gate alongside the pruned Gherkin and the `prune_log`,
+  so the human reviews behaviors[], the resulting scenarios, AND every prune decision
+  together. The prune_log is what keeps pruning honest: a dropped behavior stays visible
+  at the gate, so pruning no longer hides gaps the human never saw.
 
 # PHASE 2 — FORMALIZE
 - Produce exactly one `Feature` for the task. Title = the task goal.
@@ -67,13 +69,14 @@ After generating, remove every scenario that does not add discriminating power:
   whether a scenario is redundant, KEEP it and record `uncertain` in its prune note.
 - Record each prune decision in `prune_log[]` with {scenario, decision, reason}.
 
-# OUTPUT SCHEMAS (two, at two points)
-- At the GATE 0b halt (end of PHASE 1): `decomposition.schema.json` —
+# OUTPUT SCHEMAS (two, both feed the PLAN gate — no halt between them)
+- End of PHASE 1: `decomposition.schema.json` —
   { task_id, behaviors[], stopping_rule }.
-- After 0b approval (end of PHASE 3): `gherkin.schema.json` —
+- End of PHASE 3: `gherkin.schema.json` —
   { task_id, behaviors[], feature, scenarios[], prune_log[], coverage_map }. Carry the
-  approved `behaviors[]` forward verbatim. `coverage_map` MUST cover every
-  acceptance_criterion; a criterion with zero scenarios = abstain.
+  `behaviors[]` forward verbatim. `coverage_map` MUST cover every acceptance_criterion;
+  a criterion with zero scenarios = abstain. Both artifacts are presented together at
+  the consolidated PLAN gate.
 
 # ABSTAIN / ASK
 - An acceptance_criterion is not observable/falsifiable → {"action":"ask"} (the

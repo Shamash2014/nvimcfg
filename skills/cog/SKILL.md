@@ -21,11 +21,15 @@ pipeline. you are the orchestrator. walk every stage, in order, on the real inpu
 3. **emit the typed contract at every handoff.** each stage's output MUST be valid
    JSON against its schema in `contracts/`. validation fails → retry ONCE → then
    `{"action":"abstain"}` + escalate. never paper over a schema error with prose.
-4. **HALT at every human gate. do not self-approve.** gate 0a (task graph, deep),
-   gate 0b (maximal decomposition, deep), gate 1 (Gherkin, light), gate 2 (code,
-   light). at each gate: present what the human reviews, then STOP and wait for the
-   human's verdict. you are NOT the human. a gate you approved yourself is a
-   corridor violation — the run is invalid.
+4. **HALT at every human gate. do not self-approve.** there are TWO gates: **gate
+   plan** (deep) and **gate 2** (code, light). run stages 0 and 1 silently — emit
+   each stage's typed contract, but do NOT stop between them. then at **gate plan**
+   present ONE consolidated plan — task DAG + maximal behavior decomposition + pruned
+   Gherkin + prune_log — and STOP for a single human verdict, before any code. on
+   approval, run stages 2 → 3 → 4 to completion, then HALT at **gate 2** for the light
+   code spot-check. at each gate: present what the human reviews, then STOP and wait.
+   you are NOT the human. a gate you approved yourself is a corridor violation — the
+   run is invalid.
 5. **green-gate handoff only.** a stage hands off only when its gate is actually
    green (tests green / CRAP ≤ 6 / 0 survivors). red gate → escalate or abstain,
    never silent-pass. set `handoff.green = true` only after you verified it.
@@ -102,17 +106,13 @@ a constraint; deep decomposition is how you make them sufficient.
 ```
 informal_spec
    │
- [0] HARDENER ─ decompose → hard_spec (DAG of sized, independent tasks)
+ [0] HARDENER ─ decompose → hard_spec (DAG of sized, independent tasks)   ┐
+   │                                                                       │ run
+ [1] SPECIFIER ─ PHASE 1: maximally decompose task → behaviors            │ silently
+   │             PHASE 2–3: → Gherkin → prune                              ┘ (no halt)
    │
-   ├──────────────── GATE 0a: human reviews task graph (deep) ┐ decomposition
-   │                                                          │ review
- [1] SPECIFIER ─ PHASE 1: maximally decompose task → behaviors│ (DEEP)
-   │                                                          │
-   ├──────────────── GATE 0b: human reviews decomposition (deep) ┘
-   │
-   │             PHASE 2–3: → Gherkin → prune
-   │
-   ├──────────────── GATE 1: human spot-checks Gherkin (light)
+   ├──────────────── GATE PLAN: human reviews task DAG + decomposition + Gherkin (DEEP)
+   │                            ONE consolidated plan, ONE verdict — before any code
    │
  [2] CODER ─ Gherkin → acceptance tests → unit tests → code → all green
    │
@@ -129,20 +129,18 @@ informal_spec
    [eval] and [meta-learning] run across all stages as the self-improving substrate.
 ```
 
-human-heat schedule: **deep (gate 0) → light → light**. involvement is front-loaded
-on decomposition, then descends; trust is earned by green-gates, not asserted. see
-[references/gates.md](references/gates.md).
+human-heat schedule: **deep (gate plan) → light (gate 2)**. involvement is front-loaded
+on the plan (decomposition + Gherkin), then descends; trust is earned by green-gates,
+not asserted. see [references/gates.md](references/gates.md).
 
-## the 5 stages + 3 gates
+## the 5 stages + 2 gates
 
 | stage | transform | input | output | green-gate (must pass to hand off) |
 |---|---|---|---|---|
 | 0 hardener | decompose (breadth) | informal_spec | hard_spec (task DAG) | every leaf atomic + independent + within mutation_budget |
-| — gate 0a | human review (deep) | hard_spec | approved hard_spec | human accepts task graph |
 | 1 specifier · phase 1 | maximally decompose (depth) | task | behaviors[] | exhaustive; every leaf haiku-implementable (min_tier trivial); 3–5 levels |
-| — gate 0b | human review (deep) | behaviors[] | approved decomposition | human accepts maximal decomposition, before Gherkin |
 | 1 specifier · phase 2–3 | formalize + prune | behaviors[] | pruned Gherkin | scenarios testable & non-redundant, every criterion covered |
-| — gate 1 | human spot-check (light) | Gherkin | approved Gherkin | human samples scenarios, no objection |
+| — gate plan | human review (deep) | task DAG + behaviors[] + Gherkin + prune_log | approved plan | human accepts the whole plan in one verdict, before any code |
 | 2 coder | implement | Gherkin | acceptance+unit tests + code | all acceptance + unit tests green |
 | 3 refactorer | reduce | code+tests | refactored code + property tests | CRAP ≤ 6, zero duplication, property tests green |
 | 4 architect | harden | code+tests | mutation-clean artifact | 0 language survivors AND 0 Gherkin survivors AND full suite green |
@@ -158,9 +156,9 @@ on decomposition, then descends; trust is earned by green-gates, not asserted. s
    gate is escalation, never a silent pass.
 4. **survivors route, they don't reset** — a surviving mutant is handed back to
    the *specific* upstream stage and task that owns the gap, not a global rerun.
-5. **decreasing human-heat** — gate depth only goes down. deep judgment is spent on
-   decomposition (gate 0); wanting a deep review at gate 2 means an earlier stage
-   failed — fix the earlier stage.
+5. **decreasing human-heat** — gate depth only goes down. deep judgment is spent once,
+   on the plan (decomposition + Gherkin, gate plan); wanting a deep review at gate 2
+   means an earlier stage failed — fix the earlier stage.
 6. **decomposition is sacred** — never merge tasks to "save orchestration." that
    re-inflates the mutation cost the hardener was built to suppress.
 
@@ -214,7 +212,7 @@ Each stage inherits MASTER and adds narrow rules:
 ### 3. validate every handoff against a contract
 - [contracts/hard-spec.schema.json](contracts/hard-spec.schema.json) — the task DAG the hardener emits
 - [contracts/task.schema.json](contracts/task.schema.json) — one atomic task: corridor, acceptance, deps, mutation_budget
-- [contracts/decomposition.schema.json](contracts/decomposition.schema.json) — the GATE 0b halt output: behaviors[] + stopping_rule (before any Gherkin)
+- [contracts/decomposition.schema.json](contracts/decomposition.schema.json) — behaviors[] + stopping_rule; carried into the consolidated plan, no separate halt
 - [contracts/gherkin.schema.json](contracts/gherkin.schema.json) — behaviors (carried forward) + feature + scenarios + prune decisions
 - [contracts/handoff.schema.json](contracts/handoff.schema.json) — the stage→stage envelope: gate status, green flags, survivors
 - [contracts/mutation-report.schema.json](contracts/mutation-report.schema.json) — survivors, kills, coverage, remediation routing
@@ -224,11 +222,13 @@ Each stage inherits MASTER and adds narrow rules:
 Validation failure = retry once, then abstain + escalate. Never paper over.
 
 ### 4. place the human gates
-Three gates, depth descending. Gate 0 = the deep DECOMPOSITION REVIEW, with two
-checkpoints: 0a (task graph, after hardener) and 0b (maximal behavior decomposition,
-after specifier PHASE 1, before Gherkin). Gate 1 = light Gherkin spot-check. Gate 2 =
-light code spot-check. See [references/gates.md](references/gates.md) for what each
-gate inspects and what auto-escalates a gate back to deep.
+Two gates, depth descending. **Gate plan** = the deep PLAN REVIEW: after stages 0 and
+1 run silently, present ONE consolidated plan — task DAG (breadth) + maximal behavior
+decomposition (depth) + pruned Gherkin + prune_log — and halt for a single verdict
+before any code. The prune_log is shown so the human sees every dropped behavior; that
+is what keeps pruning honest without a separate pre-prune halt. **Gate 2** = light code
+spot-check after the architect. See [references/gates.md](references/gates.md) for what
+each gate inspects and what auto-escalates gate 2 back to deep.
 
 ### 5. schedule mutation against the CPU budget
 The architect treats independent tasks as a parallel job pool bounded by total
@@ -264,6 +264,7 @@ three layers of defense (unchanged from the cog substrate):
 - don't soften Gherkin downstream — monotonic formality is one-directional
 - don't add a "be helpful" instruction anywhere — that's how sycophancy leaks back in
 - don't auto-promote prompt variants without the eval gate — regressions compound silently
+- don't add editor- or tool-specific skills (Neovim/nvim plugins, keymaps, editor config) — cog is domain-agnostic; the target's domain enters ONLY through the informal_spec, never as a bundled skill. running cog inside an nvim config repo does not make nvim part of the pipeline.
 
 ## moat reminder
 
