@@ -176,7 +176,6 @@ function M.setup()
     vim.notify("Snacks command history unavailable", vim.log.levels.WARN, { title = "Search" })
   end, { desc = "Command history" })
 
-  map("n", "<leader>ao", "<cmd>AcpOpen<cr>", { desc = "Open ACP transcript" })
   map("n", "<leader>gb", function()
     local sn = snacks()
     if sn and sn.picker and sn.picker.git_branches then

@@ -19,7 +19,7 @@ return {
 
       which_key.setup({})
       which_key.add({
-        { "<leader>a", group = "acp" },
+        { "<leader>a", group = "agent" },
         { "<leader>b", group = "buffers" },
         { "<leader>f", group = "files" },
         { "<leader>g", group = "git" },
@@ -31,13 +31,6 @@ return {
         { "<leader>w", group = "windows" },
         { "<leader>z", group = "zones (spaces)" },
         { "<leader>:", desc = "Command history" },
-        { "<leader>ao", desc = "Open ACP transcript" },
-        { "<leader>aa", desc = "Send to ACP" },
-        { "<leader>aw", desc = "ACP compose buffer" },
-        { "<leader>ap", desc = "Approve ACP request" },
-        { "<leader>ac", desc = "Cancel ACP turn" },
-        { "<leader>aM", desc = "Set ACP model" },
-        { "<leader>am", desc = "Set ACP mode" },
         { "<Tab>", desc = "Next tab" },
         { "<S-Tab>", desc = "Previous tab" },
         { "<leader>bb", desc = "Switch buffer" },

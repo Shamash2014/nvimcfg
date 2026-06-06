@@ -1,3 +1,11 @@
+# Tests
+
+Headless nvim Lua suite in `tests/runner.lua`. Run via `tests/run.sh`:
+- `bash tests/run.sh` — whole suite (exit 0 pass / 1 fail)
+- `bash tests/run.sh <test_name>` — one test, fast (good for TCR cycles)
+
+Mechanics: `NVIM3_TESTING=1 nvim --headless -u init.lua` (the env flag skips zpack/plugin install so the runner stubs plugins). `/tcr` autodetects this command.
+
 # context-mode — MANDATORY routing rules
 
 You have context-mode MCP tools available. These rules are NOT optional — they protect your context window from flooding. A single unrouted command can dump 56 KB into context and waste the entire session.
