@@ -1408,6 +1408,43 @@ local function test_sessions_load_picks_from_saved_files()
   assert_truthy(sourced ~= nil and sourced:match("proj%-a"), "selected session should be sourced")
 end
 
+-- serialize/rebuild must round-trip the tree faithfully: parent links AND
+-- sibling order. tab ordinal != tree order (`:tabnew` inserts after the
+-- current tab), so rebuild can't infer sibling order from tab position.
+local function test_spacetree_restore_preserves_sibling_order()
+  package.loaded["core.spacetree"] = nil
+  local st = require("core.spacetree")
+  vim.cmd("silent! tabonly")
+  st.setup()
+  st.current().name = "root"
+
+  -- children created A, B, C — but each `:tabnew` lands right after root, so
+  -- the tab ordinal order ends up C, B, A (reverse of sibling order).
+  local a = st.child()
+  a.name = "A"
+  st.up()
+  local b = st.child()
+  b.name = "B"
+  st.up()
+  local c = st.child()
+  c.name = "C"
+  st.up()
+
+  local function lines()
+    local out = {}
+    for _, l in ipairs(st.tree_lines()) do
+      out[#out + 1] = l.text
+    end
+    return out
+  end
+
+  local pre = lines()
+  st.rebuild(st.serialize())
+  assert_deep_equal(lines(), pre, "restored tree should preserve sibling order")
+
+  vim.cmd("silent! tabonly")
+end
+
 local function test_project_sync_sets_tab_cwd_from_repo_directory()
   package.loaded["core.project"] = nil
   local project = require("core.project")
@@ -1696,6 +1733,7 @@ local tests = {
   { name = "test_agent_term_supports_hermes_preset", fn = test_agent_term_supports_hermes_preset },
   { name = "test_agent_term_supports_omlx_opencode_preset", fn = test_agent_term_supports_omlx_opencode_preset },
   { name = "test_sessions_load_picks_from_saved_files", fn = test_sessions_load_picks_from_saved_files },
+  { name = "test_spacetree_restore_preserves_sibling_order", fn = test_spacetree_restore_preserves_sibling_order },
   { name = "test_project_sync_sets_tab_cwd_from_repo_directory", fn = test_project_sync_sets_tab_cwd_from_repo_directory },
   { name = "test_project_setup_updates_tab_cwd_on_bufenter", fn = test_project_setup_updates_tab_cwd_on_bufenter },
   { name = "test_project_setup_updates_tab_cwd_for_directory_buffers", fn = test_project_setup_updates_tab_cwd_for_directory_buffers },

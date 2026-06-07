@@ -429,6 +429,14 @@ end
 -- itself. The tree is serialized by tabpage *ordinal* (1-based position),
 -- because tabpage handles don't survive a restart but mksession restores
 -- tabpages in the same order.
+local function child_index(parent, id)
+  for i, c in ipairs(parent.children) do
+    if c == id then
+      return i
+    end
+  end
+end
+
 function M.serialize()
   local pos_of = {}
   for i, tab in ipairs(vim.api.nvim_list_tabpages()) do
@@ -443,6 +451,9 @@ function M.serialize()
       records[#records + 1] = {
         pos = pos,
         parent = parent and pos_of[parent.tab] or nil,
+        -- sibling rank within the parent: tab ordinal doesn't encode it
+        -- (`:tabnew` inserts after the current tab), so it must be stored.
+        order = parent and child_index(parent, id) or nil,
         name = n.name,
       }
       if id == state.root then
@@ -477,15 +488,34 @@ function M.rebuild(data)
       id_of_pos[rec.pos] = node.id
     end
   end
+  local links = {}
   for _, rec in ipairs(data.nodes) do
     local id = id_of_pos[rec.pos]
     if id then
       local pid = rec.parent and id_of_pos[rec.parent]
       if pid then
         state.nodes[id].parent = pid
-        table.insert(state.nodes[pid].children, id)
-      else
-        state.root = state.root or id
+        -- older sidecars (pre-order field) fall back to tab ordinal
+        links[#links + 1] = { id = id, pid = pid, order = rec.order or rec.pos }
+      elseif rec.pos == data.root then
+        state.root = id
+      end
+    end
+  end
+  -- attach children in their saved sibling order, not tab ordinal, so
+  -- down()/next_sibling()/the tabline match the tree that was saved
+  table.sort(links, function(a, b)
+    return a.order < b.order
+  end)
+  for _, l in ipairs(links) do
+    table.insert(state.nodes[l.pid].children, l.id)
+  end
+  if not state.root then
+    for _, rec in ipairs(data.nodes) do
+      local id = id_of_pos[rec.pos]
+      if id and not state.nodes[id].parent then
+        state.root = id
+        break
       end
     end
   end
