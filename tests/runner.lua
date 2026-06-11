@@ -236,6 +236,40 @@ local function test_lsp_attach_sets_buffer_keymaps()
   assert_truthy(code_action ~= nil, "code action key should be buffer-local after LspAttach")
 end
 
+local function test_dartls_uses_flutter_embedded_sdk_binary()
+  package.loaded["core.lsp"] = nil
+
+  local old_exepath = vim.fn.exepath
+  local old_fs_stat = vim.uv.fs_stat
+  local flutter_dart = "/opt/flutter/bin/dart"
+  local sdk_dart = "/opt/flutter/bin/cache/dart-sdk/bin/dart"
+
+  vim.fn.exepath = function(name)
+    if name == "dart" then
+      return flutter_dart
+    end
+    return old_exepath(name)
+  end
+  vim.uv.fs_stat = function(path)
+    if path == sdk_dart then
+      return { type = "file" }
+    end
+    return old_fs_stat(path)
+  end
+
+  require("core.lsp").setup()
+
+  vim.fn.exepath = old_exepath
+  vim.uv.fs_stat = old_fs_stat
+  package.loaded["core.lsp"] = nil
+
+  assert_deep_equal(
+    vim.lsp.config.dartls.cmd,
+    { sdk_dart, "language-server", "--protocol=lsp" },
+    "dartls should bypass the Flutter launcher and use its embedded Dart SDK"
+  )
+end
+
 local function test_theme_apply_sets_expected_highlights()
   package.loaded["config.theme"] = nil
   require("config.theme").apply()
@@ -1701,6 +1735,7 @@ local tests = {
   { name = "test_zpack_bootstrap_uses_plugins_import", fn = test_zpack_bootstrap_uses_plugins_import },
   { name = "test_plugin_specs_exist", fn = test_plugin_specs_exist },
   { name = "test_lsp_attach_sets_buffer_keymaps", fn = test_lsp_attach_sets_buffer_keymaps },
+  { name = "test_dartls_uses_flutter_embedded_sdk_binary", fn = test_dartls_uses_flutter_embedded_sdk_binary },
   { name = "test_theme_apply_sets_expected_highlights", fn = test_theme_apply_sets_expected_highlights },
   { name = "test_commands_exist", fn = test_commands_exist },
   { name = "test_acp_open_creates_transcript_file", fn = test_acp_open_creates_transcript_file },

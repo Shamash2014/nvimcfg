@@ -14,6 +14,20 @@ local function cmd_or_nil(candidates)
   end
 end
 
+local function dart_cmd()
+  local dart = vim.fn.exepath("dart")
+  if dart == "" then
+    return nil
+  end
+
+  local flutter_sdk_dart = vim.fs.joinpath(vim.fs.dirname(dart), "cache", "dart-sdk", "bin", "dart")
+  if vim.uv.fs_stat(flutter_sdk_dart) then
+    dart = flutter_sdk_dart
+  end
+
+  return { dart, "language-server", "--protocol=lsp" }
+end
+
 local function npm_global_root()
   local env_root = vim.env.NODE_MODULES_GLOBAL
   if env_root and env_root ~= "" and vim.uv.fs_stat(env_root) then
@@ -274,8 +288,7 @@ local function setup_gopls()
 end
 
 local function setup_dartls()
-  configure("dartls", {
-    cmd = { "dart", "language-server", "--protocol=lsp" },
+  configure_optional("dartls", {
     filetypes = { "dart" },
     root_dir = function(bufnr, on_dir)
       local project_root = root(bufnr, { "pubspec.yaml", "analysis_options.yaml", ".git" })
@@ -283,7 +296,7 @@ local function setup_dartls()
         on_dir(project_root)
       end
     end,
-  })
+  }, dart_cmd())
 end
 
 local function setup_astro()

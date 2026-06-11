@@ -231,6 +231,68 @@ local function mise_tasks(config)
   return items
 end
 
+local function flutter_tasks(pubspec)
+  if not pubspec then return {} end
+  local root = vim.fs.dirname(pubspec)
+  local items = {
+    {
+      kind = "flutter",
+      name = "pub get",
+      label = "pub get",
+      detail = "flutter pub get",
+      cwd = root,
+      cmd = { "flutter", "pub", "get" },
+      source = "flutter (" .. vim.fs.basename(root) .. ")",
+    },
+    {
+      kind = "flutter",
+      name = "build",
+      label = "build",
+      detail = "flutter build apk",
+      cwd = root,
+      cmd = { "flutter", "build", "apk" },
+      source = "flutter (" .. vim.fs.basename(root) .. ")",
+    },
+    {
+      kind = "flutter",
+      name = "test",
+      label = "test",
+      detail = "flutter test",
+      cwd = root,
+      cmd = { "flutter", "test" },
+      source = "flutter (" .. vim.fs.basename(root) .. ")",
+    },
+    {
+      kind = "flutter",
+      name = "analyze",
+      label = "analyze",
+      detail = "flutter analyze",
+      cwd = root,
+      cmd = { "flutter", "analyze" },
+      source = "flutter (" .. vim.fs.basename(root) .. ")",
+    },
+    {
+      kind = "flutter",
+      name = "devices",
+      label = "devices",
+      detail = "flutter devices",
+      cwd = root,
+      cmd = { "flutter", "devices" },
+      source = "flutter (" .. vim.fs.basename(root) .. ")",
+    },
+    {
+      kind = "flutter",
+      name = "doctor",
+      label = "doctor",
+      detail = "flutter doctor",
+      cwd = root,
+      cmd = { "flutter", "doctor" },
+      source = "flutter (" .. vim.fs.basename(root) .. ")",
+    },
+  }
+  return items
+end
+
 local function go_tasks(gomod)
   if not gomod then return {} end
   local root = vim.fs.dirname(gomod)
@@ -325,6 +387,7 @@ function M.collect(start)
   for _, it in ipairs(mix_tasks(ctx.mix)) do table.insert(items, it) end
   for _, it in ipairs(flutter_pub_tasks(ctx.pubspec)) do table.insert(items, it) end
   for _, it in ipairs(mise_tasks(ctx.mise)) do table.insert(items, it) end
+  for _, it in ipairs(flutter_tasks(ctx.pubspec)) do table.insert(items, it) end
   for _, it in ipairs(go_tasks(ctx.gomod)) do table.insert(items, it) end
   for _, it in ipairs(justfile_tasks(ctx.justfile)) do table.insert(items, it) end
   return items

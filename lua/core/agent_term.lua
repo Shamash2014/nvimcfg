@@ -35,12 +35,14 @@ local function normalize_spec(spec)
     return {
       cmd = spec.cmd,
       display = spec.display or table.concat(spec.cmd, " "),
+      resume = spec.resume,
     }
   end
   if type(spec) == "table" and type(spec.cmd) == "string" then
     return {
       cmd = spec.cmd,
       display = spec.display or spec.cmd,
+      resume = spec.resume,
     }
   end
   if type(spec) == "table" then
@@ -58,6 +60,22 @@ end
 local function resolve_spec(name)
   local spec = presets()[name] or name
   return normalize_spec(spec)
+end
+
+-- resume args per agent; override per-preset with spec.resume (table or false)
+local RESUME_ARGS = {
+  claude = { "--resume" },
+  codex = { "resume" },
+  opencode = { "--continue" },
+}
+
+local function resume_args(name, kind, spec)
+  if spec and spec.resume ~= nil then
+    if spec.resume == false then return nil end
+    if type(spec.resume) == "string" then return { spec.resume } end
+    return spec.resume
+  end
+  return RESUME_ARGS[name] or (kind and RESUME_ARGS[kind]) or nil
 end
 
 local function git_root(path)
@@ -244,6 +262,16 @@ local function focus(buf)
   vim.cmd("startinsert")
 end
 
+local function with_resume(cmd, args)
+  if not (args and #args > 0) then return cmd end
+  if type(cmd) == "table" then
+    local out = vim.deepcopy(cmd)
+    for _, a in ipairs(args) do table.insert(out, a) end
+    return out
+  end
+  return cmd .. " " .. table.concat(args, " ")
+end
+
 function M.spawn(name, opts)
   opts = opts or {}
   name = name or default_agent()
@@ -260,6 +288,7 @@ function M.spawn(name, opts)
   local buf = vim.api.nvim_get_current_buf()
 
   local kind = agent_kind(name, cmd)
+  if opts.resume then cmd = with_resume(cmd, resume_args(name, kind, spec)) end
   local env_var, env_dir, env = nil, nil, nil
   if kind then
     env_var = AGENT_ENV[kind].var
@@ -306,10 +335,11 @@ function M.spawn(name, opts)
   return buf
 end
 
-function M.choose_location_and_spawn(name)
+function M.choose_location_and_spawn(name, opts)
+  opts = opts or {}
   local ok, wt = pcall(require, "core.wt")
   if not ok then
-    M.spawn(name)
+    M.spawn(name, opts)
     return
   end
   local cwd = vim.uv.cwd()
@@ -328,22 +358,24 @@ function M.choose_location_and_spawn(name)
   end
   table.insert(choices, { label = "+ new worktree…", kind = "new" })
   if #choices == 1 then
-    M.spawn(name)
+    M.spawn(name, opts)
     return
   end
   vim.ui.select(choices, {
-    prompt = "Run " .. name .. " in:",
+    prompt = "Run " .. name .. (opts.resume and " --resume" or "") .. " in:",
     format_item = function(c) return c.label end,
   }, function(c)
     if not c then return end
     if c.kind == "cwd" then
-      M.spawn(name)
+      M.spawn(name, opts)
     elseif c.kind == "path" then
-      M.spawn(name, { cwd = c.path })
+      M.spawn(name, vim.tbl_extend("force", opts, { cwd = c.path }))
     elseif c.kind == "new" then
       vim.ui.input({ prompt = "New worktree branch: " }, function(branch)
         if branch and branch ~= "" then
-          wt.create_path(branch, function(p) M.spawn(name, { cwd = p }) end)
+          wt.create_path(branch, function(p)
+            M.spawn(name, vim.tbl_extend("force", opts, { cwd = p }))
+          end)
         end
       end)
     end
@@ -364,6 +396,11 @@ function M.spawn_pick()
     return
   end
 
+  local function supports_resume(n)
+    local spec = resolve_spec(n)
+    return resume_args(n, agent_kind(n, spec.cmd), spec) ~= nil
+  end
+
   local ok, snacks = pcall(require, "snacks")
   if not (ok and snacks and snacks.picker and snacks.picker.pick) then
     vim.ui.select(names, {
@@ -382,20 +419,37 @@ function M.spawn_pick()
       data = n,
     })
   end
+  local function go(picker, item, resume)
+    picker:close()
+    if item and item.data then
+      vim.schedule(function() M.choose_location_and_spawn(item.data, { resume = resume }) end)
+    end
+  end
   snacks.picker.pick({
     source = "agents_spawn",
-    title = "Spawn agent",
+    title = "Spawn agent  (<c-r> resume)",
     items = items,
     format = function(item)
-      return {
+      local row = {
         { string.format("%-14s ", item.data), "Function" },
         { resolve_spec(item.data).display, "Comment" },
       }
+      if supports_resume(item.data) then
+        table.insert(row, { "  ⟳", "DiagnosticHint" })
+      end
+      return row
     end,
-    confirm = function(picker, item)
-      picker:close()
-      if item and item.data then vim.schedule(function() M.choose_location_and_spawn(item.data) end) end
-    end,
+    confirm = function(picker, item) go(picker, item, false) end,
+    actions = {
+      spawn_resume = function(picker, item) go(picker, item, true) end,
+    },
+    win = {
+      input = {
+        keys = {
+          ["<c-r>"] = { "spawn_resume", mode = { "n", "i" }, desc = "spawn with resume" },
+        },
+      },
+    },
   })
 end
 
