@@ -192,10 +192,51 @@ local function flutter_pub_tasks(pubspec)
   return items
 end
 
-local function mise_tasks(config)
+local function mise_item(name, detail, root)
+  return {
+    kind = "mise",
+    name = name,
+    label = name,
+    detail = detail or "",
+    cwd = root,
+    cmd = { "mise", "run", name },
+    source = "mise (" .. vim.fs.basename(root) .. ")",
+  }
+end
+
+-- Authoritative: mise resolves [tasks.x] headers, the [tasks] inline table,
+-- file tasks (mise-tasks/, .mise/tasks/), and included configs. Hand-parsing
+-- the TOML only sees [tasks.x] headers, so it silently drops the rest.
+local function mise_tasks_cli(root)
+  if vim.fn.executable("mise") ~= 1 then return nil end
+  local ok, res = pcall(function()
+    return vim.system({ "mise", "tasks", "ls", "--json" }, { cwd = root, text = true }):wait()
+  end)
+  if not ok or res.code ~= 0 then return nil end
+  local decoded_ok, decoded = pcall(vim.json.decode, res.stdout or "")
+  if not decoded_ok or type(decoded) ~= "table" then return nil end
+  local items = {}
+  for _, task in ipairs(decoded) do
+    if task.name and not task.hide then
+      local task_root = task.source and vim.fs.dirname(task.source) or root
+      table.insert(items, mise_item(task.name, task.description, task_root))
+    end
+  end
+  table.sort(items, function(a, b) return a.name < b.name end)
+  return items
+end
+
+-- Fallback for untrusted dirs, where `mise tasks ls` returns [] until trusted.
+local function mise_tasks_toml(root)
+  local config
+  for _, name in ipairs({ "mise.toml", ".mise.toml", "mise.local.toml", ".mise.local.toml" }) do
+    if vim.uv.fs_stat(root .. "/" .. name) then
+      config = root .. "/" .. name
+      break
+    end
+  end
   if not config then return {} end
   local data = read_file(config) or ""
-  local root = vim.fs.dirname(config)
   local tasks = {}
   local current
 
@@ -217,18 +258,17 @@ local function mise_tasks(config)
 
   local items = {}
   for _, task in ipairs(tasks) do
-    table.insert(items, {
-      kind = "mise",
-      name = task.name,
-      label = task.name,
-      detail = task.detail,
-      cwd = root,
-      cmd = { "mise", "run", task.name },
-      source = "mise (" .. vim.fs.basename(root) .. ")",
-    })
+    table.insert(items, mise_item(task.name, task.detail, root))
   end
   table.sort(items, function(a, b) return a.name < b.name end)
   return items
+end
+
+local function mise_tasks(root)
+  if not root then return {} end
+  local cli = mise_tasks_cli(root)
+  if cli and #cli > 0 then return cli end
+  return mise_tasks_toml(root)
 end
 
 local function flutter_tasks(pubspec)
@@ -360,6 +400,19 @@ local function justfile_tasks(jf)
   return items
 end
 
+local function find_mise_root(start)
+  local flat = find_up_any({ "mise.toml", ".mise.toml", "mise.local.toml", ".mise.local.toml" }, start)
+  if flat then return vim.fs.dirname(flat) end
+  local nested = vim.fs.find(function(name, path)
+    return name == "config.toml" and path:match("[/\\]%.config[/\\]mise$")
+  end, { upward = true, path = start, type = "file", limit = 1 })[1]
+  if nested then
+    return vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(nested)))
+  end
+  local taskdir = vim.fs.find({ "mise-tasks" }, { upward = true, path = start, type = "directory", limit = 1 })[1]
+  if taskdir then return vim.fs.dirname(taskdir) end
+end
+
 local function build_context(start)
   start = start or vim.uv.cwd()
   local justfile = find_up_any({ "justfile", "Justfile", ".justfile" }, start)
@@ -368,7 +421,7 @@ local function build_context(start)
     package = read_package_json(start),
     mix = find_up("mix.exs", start),
     pubspec = find_up("pubspec.yaml", start),
-    mise = find_up_any({ ".mise.toml", "mise.toml" }, start),
+    mise = find_mise_root(start),
     gomod = find_up("go.mod", start),
     justfile = justfile,
   }
@@ -401,11 +454,22 @@ local function gc()
   end
 end
 
+-- nvim's env is frozen at launch, so a task would inherit a stale mise env.
+-- Run every task through `mise exec` to resolve tools + [env] fresh for its cwd.
+local function with_mise_env(cmd_args)
+  if vim.fn.executable("mise") ~= 1 or cmd_args[1] == "mise" then return cmd_args end
+  local wrapped = { "mise", "exec", "--" }
+  for _, arg in ipairs(cmd_args) do
+    table.insert(wrapped, arg)
+  end
+  return wrapped
+end
+
 local function spawn(kind, name, cmd_args, cwd)
   vim.cmd("botright vsplit")
   vim.cmd("enew")
   local buf = vim.api.nvim_get_current_buf()
-  local job = vim.fn.jobstart(cmd_args, {
+  local job = vim.fn.jobstart(with_mise_env(cmd_args), {
     term = true,
     cwd = cwd,
     on_exit = function(_, code)
