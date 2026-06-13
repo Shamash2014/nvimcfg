@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cog2"
+  short_description: "Socratic spec-to-code with strict TDD"
+  default_prompt: "Use $cog2 to interview me about this plan, inspect the repository, derive Gherkin tasks, and implement them with red-green TDD."

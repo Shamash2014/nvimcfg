@@ -14,11 +14,11 @@
       "version": "1.0.0 - 2.0.0"
     },
     "canola.nvim": {
-      "rev": "88af183e96724cca98a4602511061662cd5e88f3",
+      "rev": "d8566edbde9a20f77098cf7e142011923ebeb0f8",
       "src": "https://github.com/barrettruth/canola.nvim"
     },
     "codediff.nvim": {
-      "rev": "dd2bef7a6f33cabf08b2978c9231b16ec2a6d779",
+      "rev": "7608f3b436ce1f84a4888f75e53079caa981a2e9",
       "src": "https://github.com/esmuellert/codediff.nvim"
     },
     "conform.nvim": {
@@ -42,11 +42,11 @@
       "src": "https://github.com/akinsho/git-conflict.nvim"
     },
     "kulala.nvim": {
-      "rev": "34189185048988248a6a4b78fc35d83a6ac7f343",
+      "rev": "e483050a54eb9d70ef733b06e129a8da8b3f1780",
       "src": "https://github.com/mistweaverco/kulala.nvim"
     },
     "leap.nvim": {
-      "rev": "59d70b1bdf8e76e0637e6ebcc150fb6767f67fc5",
+      "rev": "d7f8ee64155b7790188f17a993390f32577cfb81",
       "src": "https://codeberg.org/andyg/leap.nvim"
     },
     "mini.cursorword": {
@@ -78,7 +78,7 @@
       "src": "https://github.com/mfussenegger/nvim-lint"
     },
     "nvim-surround": {
-      "rev": "2e93e154de9ff326def6480a4358bfc149d5da2c",
+      "rev": "8b47db616ef658b8fc27e61db2896aa2f40134de",
       "src": "https://github.com/kylechui/nvim-surround"
     },
     "oil.nvim": {
@@ -122,7 +122,7 @@
       "src": "https://github.com/folke/snacks.nvim"
     },
     "tree-sitter-manager.nvim": {
-      "rev": "f448f54ece0cdba82a31e41186720f902c91c090",
+      "rev": "c8a7b7b91aa23da24e7d02874f78d4c668a08530",
       "src": "https://github.com/romus204/tree-sitter-manager.nvim"
     },
     "vim-repeat": {
@@ -134,7 +134,7 @@
       "src": "https://github.com/folke/which-key.nvim"
     },
     "yaml-companion.nvim": {
-      "rev": "15af93540ca10bb170dc20df835b76f7baf27a66",
+      "rev": "5cde21cabf0f1fce380939e4cd55eb27baa9187a",
       "src": "https://github.com/mosheavni/yaml-companion.nvim"
     },
     "zpack.nvim": {
