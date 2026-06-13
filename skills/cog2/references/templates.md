@@ -30,25 +30,13 @@ Existing patterns to reuse:
 Constraints and contradictions:
 Baseline verification:
 
-## Gherkin
-
-Feature: <observable capability>
-
-  Scenario: <one behavior>
-    Given <concrete precondition>
-    When <concrete action>
-    Then <observable result>
-
 ## Task Order
 
-1. <task name>
-   Scenario:
-   Dependencies:
-   Files:
-   Red test and expected failure:
-   Minimal green implementation:
-   Verification:
-   Non-goals:
+1. `<NN>-<slug>` depends on `<task ids or none>`
+
+## Task Handoffs
+
+For every task, include one `.feature` preview and one `.md` preview using the templates below. Do not place multiple scenarios in one handoff.
 
 ## Parked Risks
 
@@ -57,13 +45,98 @@ Feature: <observable capability>
 Approve or revise this plan before implementation begins.
 ```
 
+## Focused Gherkin Handoff
+
+Path: `docs/cog2/<plan-slug>/tasks/<NN>-<slug>.feature`
+
+```gherkin
+Feature: <one observable capability>
+
+  Scenario: <one behavior and one outcome shape>
+    Given <concrete precondition>
+    When <one triggering action>
+    Then <observable subject> equals <concrete value>
+```
+
+Use `Scenario Outline` only when all examples follow the same behavior, path, and outcome shape. Otherwise split them into separate handoffs.
+
+## Markdown Task Handoff
+
+Path: `docs/cog2/<plan-slug>/tasks/<NN>-<slug>.md`
+
+```markdown
+# <NN> <Task Name>
+
+Gherkin: `./<NN>-<slug>.feature`
+Required execution skill: `$tdd:test-driven-development`
+Specialist skill: `$<best-matching-skill>` | `none`
+
+## Outcome
+
+<single observable behavior this task delivers>
+
+## Dependencies
+
+- <task id and required green evidence, or none>
+
+## Repository Evidence
+
+- <file, symbol, test, or command that grounds this task>
+
+## Expected Changes
+
+- <files or ownership boundary expected to change>
+
+## Exact Assertions
+
+Use the repository's actual test framework syntax. Every assertion must identify a concrete subject and expected value.
+
+| Subject | Assertion | Expected | Why this proves the scenario |
+|---|---|---|---|
+| <observable expression> | `expect(<actual>).toBe(<expected>)` | <literal, exact object, error, count, order, or absence> | <scenario outcome covered> |
+
+Forbidden substitutes: bare truthiness, unspecified snapshots, "no exception", or vague prose when an exact value, type, call, state, count, ordering, or absence is observable.
+
+## Red
+
+Test: <first focused test to add>
+Command: `<narrow test command>`
+Expected failure: <specific missing behavior, not setup failure>
+Expected assertion delta: <exact actual value versus exact expected value, or exact missing effect>
+
+## Green
+
+Minimal implementation: <smallest behavior change that can pass Red>
+
+## Verification
+
+- `<focused command>`
+- `<relevant regression command>`
+
+## Non-Goals
+
+- <behavior explicitly excluded from this task>
+
+## Completion Evidence
+
+Status: pending
+Red evidence:
+Assertion evidence:
+Green evidence:
+Regression evidence:
+Files changed:
+Deviations:
+```
+
 ## Execution Report
 
 ```markdown
 ## Result
 
 Implemented behaviors:
+Completed handoffs:
 Red evidence:
+Assertion evidence:
 Green evidence:
 Regression verification:
 Files changed:
