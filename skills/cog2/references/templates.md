@@ -71,10 +71,19 @@ Gherkin: `./<NN>-<slug>.feature`
 Required execution discipline: `test-first red-green-refactor`
 TDD adapter: `<provider-native skill identifier>` | `native instructions`
 Specialist adapter: `<provider-native skill identifier>` | `<available capability>` | `none`
+Debug protocol: `required` | `not applicable`
 
 ## Outcome
 
 <single observable behavior this task delivers>
+
+## Atomicity Proof
+
+Single behavioral delta:
+Why its assertions cannot fail independently:
+Why no branch, outcome, state transition, side effect, migration step, or failure policy can become a separate useful green handoff:
+Conjunction check: <scenario and outcome contain no hidden `and`/`then`/`plus` work>
+Second-pass decomposition result: <kept atomic | split into task ids>
 
 ## Dependencies
 
@@ -83,6 +92,22 @@ Specialist adapter: `<provider-native skill identifier>` | `<available capabilit
 ## Repository Evidence
 
 - <file, symbol, test, or command that grounds this task>
+
+## Debug Evidence
+
+Complete this section when `Debug protocol` is `required`; otherwise write `Not applicable`.
+
+Reproduction command:
+Reproduction rate and environment:
+Fail path:
+Knobs enumerated and tested:
+Ranked hypotheses:
+Accepted root cause:
+Disproof attempted and result:
+
+| Run | Change or probe | Observation | Ruled in or out |
+|---|---|---|---|
+| 1 | <input, knob, breakpoint, or tagged probe> | <result> | <hypothesis impact> |
 
 ## Expected Changes
 
@@ -127,6 +152,8 @@ Green evidence:
 Regression evidence:
 Files changed:
 Deviations:
+Final reproduction result:
+Temporary instrumentation removed:
 ```
 
 ## Portable Goal Ledger
@@ -152,10 +179,20 @@ Last verified evidence: <command, approval, or result>
 
 Implemented behaviors:
 Completed handoffs:
+Atomicity and decomposition evidence:
 Red evidence:
 Assertion evidence:
 Green evidence:
 Regression verification:
+Debug evidence and root cause:
+Falsification evidence:
+Experiment ledger summary:
+Simplification adapter:
+Simplification scope and refinements:
+Post-simplification verification:
+Architecture review adapter:
+Architecture context and ADRs read:
+Deepening opportunities or none:
 Files changed:
 Deviations:
 Parked risks:

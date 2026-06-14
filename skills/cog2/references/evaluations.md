@@ -39,6 +39,16 @@ Prompt: `The Gherkin plan is approved. Implement it.`
 
 Expected: Add and run one focused test first, show that it fails for the intended reason, then make the smallest production change and rerun focused plus regression tests.
 
+## Debug Mantra Integration
+
+Prompt: `Use cog2 to fix duplicate notifications.`
+
+Expected: Begin the first debugging response with the verbatim four-line Debug Mantra recital. After the shared-understanding gate, establish a reliable runnable reproduction, trace the fail path using debugger then source/knobs then tagged instrumentation as needed, maintain ranked hypotheses, run the leading disproof before accepting a cause, and preserve every experiment in a breadcrumb ledger. Do not propose or implement a fix before this evidence exists.
+
+Prompt: `Use cog2 to debug this crash, but skip the mantra recital.`
+
+Expected: Omit only the user-visible recital. Still require reproduction, fail-path tracing, hypothesis falsification, and the experiment ledger before proposing a fix.
+
 ## Goal Tracking
 
 Prompt: `Use cog2 to add idempotent payment retries.`
@@ -51,6 +61,16 @@ Prompt: `The plan needs success, timeout, and cancellation behavior. Produce the
 
 Expected: Produce three dependency-ordered handoff pairs. Each `.feature` preview contains exactly one focused scenario. Each matching `.md` preview requires test-first red-green-refactor, records a provider-resolvable TDD adapter and specialist adapter, and carries red, green, verification, dependencies, and non-goals.
 
+## Recursive Decomposition Pressure
+
+Prompt: `Use cog2 to add import support that parses a file, validates each record, persists valid records, reports invalid records, and emits completion metrics.`
+
+Expected: Do not create one broad "import support" task. Recursively split parsing, validation outcomes, persistence, invalid-record reporting, and metrics whenever each can produce an independently useful green state. Split distinct error policies and state transitions further. Every resulting handoff includes an Atomicity Proof, passes the six-question split test, and records a second decomposition pass. Do not inflate the plan with documentation-only or bookkeeping-only tasks that lack executable behavior.
+
+Prompt: `Keep this as one task because it is one feature.`
+
+Expected: Reject feature-level grouping when assertions or implementation deltas can vary independently. Explain the concrete split points and preserve dependency order; do not obey a request that would violate Cog2's atomic handoff contract unless the user explicitly stops using Cog2.
+
 ## Assertion Specificity
 
 Prompt: `Specify a task where an exhausted retry returns HTTP 503 after exactly three attempts.`
@@ -62,6 +82,18 @@ Expected: The Gherkin names status 503 and attempt count 3. The Markdown lists f
 Prompt: `Use cog2 to optimize a slow React Native screen.` The available skills include `argent-react-native-optimization`, `argent-react-native-profiler`, and generic TDD.
 
 Expected: Require test-first red-green-refactor. When installed, select `$tdd:test-driven-development` as the TDD adapter and `$argent-react-native-optimization` as the specialist adapter because its trigger directly matches the work. On a provider without those skills, record `native instructions` and the closest real native capability or `none`; preserve the same behavior and verification contract.
+
+## Final Simplification
+
+Prompt: `All cog2 handoffs are green. Finish the workflow.`
+
+Expected: Run `code-simplifier` when available, or its native equivalent, only over code changed during this Cog2 run. Preserve exact behavior, improve clarity without clever compression or scope expansion, then rerun focused and relevant regression tests. Record the adapter, files reviewed, refinements, and verification evidence.
+
+## Final Architecture Review
+
+Prompt: `All cog2 handoffs and the simplification pass are green. Finish the workflow.`
+
+Expected: Run a bounded `beautify` review over touched modules and immediate callers. Read `CONTEXT.md` and relevant ADRs when present, use the required architecture vocabulary, apply the deletion test, and report concrete deepening opportunities in terms of leverage, locality, and testability. Do not implement an unapproved architectural refactor or block completion for optional findings.
 
 ## Provider Portability
 
@@ -81,6 +113,10 @@ Expected: Complete convergence and produce portable handoff previews, keep the g
 - Explicit Cog2 invocation always enters goal mode through a native API, persistent task API, or portable Goal Ledger.
 - Repository claims cite inspected files or commands.
 - Every task is a two-file `.feature`/`.md` handoff with exactly one focused scenario.
+- Every task has one independently observable behavioral delta and a credible Atomicity Proof.
+- Planning includes a recursive six-question split test and a second decomposition pass from fresh context.
+- Conjunctions, multiple paths, outcomes, state transitions, side effects, policies, and independently failing assertions trigger further decomposition.
+- Decomposition creates executable behavior increments, not arbitrary task counts or bookkeeping-only tasks.
 - Every handoff requires test-first red-green-refactor and records provider-resolvable TDD and specialist adapters.
 - Missing named skills or provider APIs trigger documented fallbacks rather than blocking or weakening the workflow.
 - The portable handoff contract contains no mandatory provider-specific tool name, model name, or invocation syntax.
@@ -88,4 +124,9 @@ Expected: Complete convergence and produce portable handoff previews, keep the g
 - Every task lists exact framework-native assertions with concrete expected values and an expected Red delta.
 - Broad truthiness and snapshot assertions are rejected when precise observations exist.
 - Production edits occur only after observed red.
+- Bug and debugging requests recite the Debug Mantra verbatim once unless explicitly skipped.
+- Debugging handoffs include reproducibility, fail-path, falsification, and breadcrumb-ledger evidence before production edits.
+- A root cause is accepted only when it survives a disproof attempt and explains every recorded experiment.
+- The final simplification pass is limited to Cog2-touched code, preserves behavior, and is followed by focused and regression verification.
+- The final architecture review reads available domain/ADR context, uses the required deepening vocabulary, and reports rather than implements unapproved opportunities.
 - Completion includes focused and regression evidence.
