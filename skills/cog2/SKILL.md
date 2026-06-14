@@ -1,6 +1,6 @@
 ---
 name: cog2
-description: Runs a Socratic spec-to-code workflow that resolves a plan, explores the target codebase, decomposes work into atomic two-file handoffs (one focused Gherkin scenario plus one Markdown execution contract), routes each handoff to the best available specialist skill, and implements it with observed red-green-refactor TDD. Use when the user mentions cog2, asks to turn a plan into tested code, wants assumptions surfaced before implementation, or requests repository-grounded Gherkin, task handoffs, and TDD execution.
+description: Runs a provider-agnostic Socratic spec-to-code workflow that resolves a plan, explores the target codebase, decomposes work into atomic two-file handoffs (one focused Gherkin scenario plus one Markdown execution contract), tracks the goal through native tools or a portable ledger, and implements each behavior with observed red-green-refactor TDD. Use when the user mentions cog2, asks to turn a plan into tested code, wants assumptions surfaced before implementation, or requests repository-grounded Gherkin, task handoffs, and TDD execution across any agent provider.
 ---
 
 # Cog2
@@ -16,7 +16,15 @@ Turn an informal plan into verified code without guessing. Move through four str
 
 Execute the workflow; do not merely describe it.
 
-Invoking Cog2 is an explicit request to track the workflow as a goal. If goal tools are available, call `create_goal` before Phase 1 with the user's requested outcome. Do not set a token budget unless the user supplied one. Keep the goal active through both human gates and all task handoffs; call `update_goal(status: complete)` only after every completion condition is verified.
+Invoking Cog2 is an explicit request to enter goal mode. Before Phase 1, initialize goal tracking with the first available adapter:
+
+1. Native goal API: create a goal with the user's requested outcome. Do not set a token budget unless the user supplied one.
+2. Persistent task or plan API: create one top-level tracked item and keep it active.
+3. Portable fallback: emit a `Goal Ledger` containing the objective, status `active`, current phase, completed handoffs, pending handoffs, and blockers. Repeat the updated ledger at every phase gate and in the final report. After repository editing is approved, persist it at `docs/cog2/<plan-slug>/goal.md` with the handoffs.
+
+Never skip goal mode because a provider lacks a named goal tool. Keep the goal active through both human gates and all task handoffs. Mark it complete through the selected adapter only after every completion condition is verified.
+
+Treat provider features as adapters, not workflow semantics. Do not assume tool names, skill invocation syntax, model names, subagent support, planning APIs, usage metrics, or filesystem APIs. Discover available capabilities, map them to the required operation, and use the portable conversational or file-based fallback when absent. If a provider cannot read, write, or execute repository commands, complete the interview and handoff plan, keep the goal active, and report the missing execution capability as the blocker.
 
 ## Core Rules
 
@@ -29,7 +37,8 @@ Invoking Cog2 is an explicit request to track the workflow as a goal. If goal to
 - Do not write production code until the user approves the repository-grounded Gherkin plan.
 - Do not write production code without first running a test and observing the expected failure.
 - Represent every implementation task as exactly two handoff files: one `.feature` file containing one focused scenario and one `.md` file containing its execution contract.
-- Embed `Required execution skill: $tdd:test-driven-development` in every task handoff. Select and embed the narrowest available specialist skill when one materially helps the task; never invent a skill name.
+- Embed `Required execution discipline: test-first red-green-refactor` in every task handoff. If a matching TDD skill is installed, name it as an optional adapter; otherwise execute the discipline directly from this skill.
+- Select the narrowest available specialist skill or capability when one materially helps the task. Never invent a skill, tool, model, or provider name, and never make task completion depend on an optional provider integration.
 - Do not combine independent behaviors, boundary outcomes, or failure policies in one handoff. Split them into dependency-ordered tasks.
 - Require each handoff to state its exact executable assertions: assertion subject, framework-native matcher, concrete expected value, and failure message or diff expected during Red. Reject vague assertions such as "works", "is valid", "returns correctly", broad snapshots, or truthiness when a precise value can be asserted.
 - Preserve existing repository patterns and unrelated user changes.
@@ -110,20 +119,21 @@ Decompose implementation into the smallest dependency-ordered tasks that can com
 
 - `<NN>-<slug>.feature`: exactly one `Feature` and exactly one focused `Scenario` or `Scenario Outline`
 - `<NN>-<slug>.md`: the task identity, outcome, dependencies, repository evidence, expected files, exact assertions, red test and failure, minimal green target, verification commands, non-goals, and completion evidence
-- `Required execution skill: $tdd:test-driven-development`
-- `Specialist skill: $<name>` when an available domain or tool skill is more specific than general coding guidance
+- `Required execution discipline: test-first red-green-refactor`
+- `TDD adapter: <provider-native skill identifier> | native instructions`
+- `Specialist adapter: <provider-native skill identifier> | <available capability> | none`
 
-Choose the specialist by comparing the task against available skill descriptions. Prefer the narrowest skill whose stated trigger directly matches the work. TDD governs implementation order; the specialist governs domain technique. If none matches, write `Specialist skill: none`.
+Choose adapters by inspecting the current provider's available skills and tools. Prefer the narrowest installed skill whose stated trigger directly matches the work, then a matching native capability, then `none`. The TDD discipline governs implementation order regardless of adapter; a specialist adapter governs domain technique only. Record the selected adapter in the handoff so another provider can substitute an equivalent capability without changing the behavior contract.
 
 Present the evidence map, task DAG, and complete two-file handoff preview for every task as one implementation plan using `references/templates.md`. Ask for approval and stop. Do not self-approve. After approval, materialize the approved handoffs under `docs/cog2/<plan-slug>/tasks/` unless the repository has an established planning-artifact location.
 
 ## Phase 4: Red-Green-Refactor Execution
 
-After approval, execute handoffs in dependency order. Treat each approved `.feature` plus `.md` pair as the complete task boundary. Before editing code, read both files and load the required TDD skill plus the embedded specialist skill, if any. Do not pull unrelated scenarios from the global plan into the task.
+After approval, execute handoffs in dependency order. Treat each approved `.feature` plus `.md` pair as the complete task boundary. Before editing code, read both files and activate the recorded adapters when available. If an adapter is unavailable, preserve the handoff's discipline and contract using native reasoning and repository tools. Do not pull unrelated scenarios from the global plan into the task.
 
 For every handoff:
 
-1. Confirm the handoff has exactly one focused scenario, its dependencies are green, and its named skills exist. Stop and repair the plan if not.
+1. Confirm the handoff has exactly one focused scenario and its dependencies are green. Resolve unavailable adapters to an equivalent available capability or `native instructions`; do not block solely because a named skill is absent.
 2. Confirm every listed assertion uses the repository's real test framework and names a concrete expected value. Replace placeholders or broad assertions before proceeding.
 3. **Red:** Add one minimal behavior test containing the handoff's listed assertions.
 4. Run the narrow test and observe it fail for the expected missing behavior and expected assertion delta.
@@ -141,14 +151,14 @@ Never batch several unobserved red tests with a large implementation. Complete o
 Finish only when:
 
 - every approved Gherkin scenario maps to a passing executable test
-- every task has one approved `.feature`/`.md` handoff pair and names its required execution skill
+- every task has one approved `.feature`/`.md` handoff pair, names its required execution discipline, and records provider-resolvable adapters
 - every handoff's exact assertions pass and its Red evidence shows at least one of those assertions failed for the intended behavioral reason
 - all task verification commands pass
 - relevant regression checks pass
 - deviations and parked risks are reported
 - no required work remains
 
-Use the execution report in `references/templates.md`. If goal tools are available, call `update_goal(status: complete)` only after these conditions hold and report the returned final token usage. If completion is genuinely blocked, follow the goal tool's blocked-status threshold; do not mark incomplete work complete.
+Use the execution report in `references/templates.md`. Mark the goal complete through the selected adapter only after these conditions hold. Report provider usage metrics only when the provider returns them. If completion is genuinely blocked, preserve status `active` until the selected adapter's documented blocked threshold is met; do not mark incomplete work complete.
 
 ## Examples
 

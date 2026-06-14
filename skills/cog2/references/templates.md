@@ -68,8 +68,9 @@ Path: `docs/cog2/<plan-slug>/tasks/<NN>-<slug>.md`
 # <NN> <Task Name>
 
 Gherkin: `./<NN>-<slug>.feature`
-Required execution skill: `$tdd:test-driven-development`
-Specialist skill: `$<best-matching-skill>` | `none`
+Required execution discipline: `test-first red-green-refactor`
+TDD adapter: `<provider-native skill identifier>` | `native instructions`
+Specialist adapter: `<provider-native skill identifier>` | `<available capability>` | `none`
 
 ## Outcome
 
@@ -128,6 +129,22 @@ Files changed:
 Deviations:
 ```
 
+## Portable Goal Ledger
+
+Use this when no native goal or persistent task API exists. Present it before the first interview question, update it at each gate, and persist it with approved handoffs.
+
+```markdown
+## Goal Ledger
+
+Objective: <user-requested outcome>
+Status: active | complete | blocked
+Current phase: convergence | exploration | planning | execution | complete
+Completed handoffs: <ids or none>
+Pending handoffs: <ids or unknown before planning>
+Blockers: <items or none>
+Last verified evidence: <command, approval, or result>
+```
+
 ## Execution Report
 
 ```markdown
@@ -142,4 +159,5 @@ Regression verification:
 Files changed:
 Deviations:
 Parked risks:
+Goal adapter and final status:
 ```
