@@ -14,7 +14,7 @@
       "version": "1.0.0 - 2.0.0"
     },
     "canola.nvim": {
-      "rev": "d8566edbde9a20f77098cf7e142011923ebeb0f8",
+      "rev": "b6e41f866ae01a1f14e73fd1f57317a15020987a",
       "src": "https://github.com/barrettruth/canola.nvim"
     },
     "codediff.nvim": {
@@ -42,7 +42,7 @@
       "src": "https://github.com/akinsho/git-conflict.nvim"
     },
     "kulala.nvim": {
-      "rev": "e483050a54eb9d70ef733b06e129a8da8b3f1780",
+      "rev": "87c8f0136f0eaebe1dcea6f7448a34cea40b9513",
       "src": "https://github.com/mistweaverco/kulala.nvim"
     },
     "leap.nvim": {
@@ -50,11 +50,11 @@
       "src": "https://codeberg.org/andyg/leap.nvim"
     },
     "mini.cursorword": {
-      "rev": "a01471856e462144ea53972f22a67e790be68ee6",
+      "rev": "331bc17172e41343d39d91a4ab571d510766812e",
       "src": "https://github.com/nvim-mini/mini.cursorword"
     },
     "neogit": {
-      "rev": "99326a1310fb2d616b455d2fd16d01bf00682f06",
+      "rev": "43ea1a0854052e583f647e0b35879f0158a70a78",
       "src": "https://github.com/NeogitOrg/neogit"
     },
     "nvim-autopairs": {
@@ -66,15 +66,15 @@
       "src": "https://github.com/kevinhwang91/nvim-bqf"
     },
     "nvim-dap": {
-      "rev": "531771530d4f82ad2d21e436e3cc052d68d7aebb",
+      "rev": "9e848e09a697ee95302a3ef2dd43fd6eb709e570",
       "src": "https://github.com/mfussenegger/nvim-dap"
     },
     "nvim-dap-view": {
-      "rev": "91a2b0eab74cc889499587166cc6e3d53a7e1e45",
+      "rev": "440ec66c2b26470ec97cd4d6667cdd4b51cbc7cb",
       "src": "https://github.com/igorlfs/nvim-dap-view"
     },
     "nvim-lint": {
-      "rev": "99cbc3ca8a76845fca50e496be7212bebf907dd3",
+      "rev": "a219b2c9e5b4765e5c845aba119dad55806fcaf1",
       "src": "https://github.com/mfussenegger/nvim-lint"
     },
     "nvim-surround": {
@@ -98,7 +98,7 @@
       "src": "https://github.com/romus204/referencer.nvim"
     },
     "render-markdown.nvim": {
-      "rev": "5adf0895310c1904e5abfaad40a2baad7fe44a07",
+      "rev": "f422cb5c6855f150e2ddcfaf44e7157b98b34f6a",
       "src": "https://github.com/MeanderingProgrammer/render-markdown.nvim"
     },
     "resession.nvim": {
@@ -122,7 +122,7 @@
       "src": "https://github.com/folke/snacks.nvim"
     },
     "tree-sitter-manager.nvim": {
-      "rev": "c8a7b7b91aa23da24e7d02874f78d4c668a08530",
+      "rev": "ae305699da5e97b6cffdd5cc6f6045b1b0bd26ea",
       "src": "https://github.com/romus204/tree-sitter-manager.nvim"
     },
     "vim-repeat": {
@@ -134,11 +134,11 @@
       "src": "https://github.com/folke/which-key.nvim"
     },
     "yaml-companion.nvim": {
-      "rev": "5cde21cabf0f1fce380939e4cd55eb27baa9187a",
+      "rev": "c5feed97061f89ca7303a220230877b07c6b3b0f",
       "src": "https://github.com/mosheavni/yaml-companion.nvim"
     },
     "zpack.nvim": {
-      "rev": "1a5a7f2f4452d6057c5eb33e53cb8bab4f977430",
+      "rev": "c8b4e8d597ec5da5102e66ce7d73b77fa727b90c",
       "src": "https://github.com/zuqini/zpack.nvim"
     }
   }

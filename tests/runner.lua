@@ -1132,7 +1132,7 @@ local function test_statusline_reports_active_sessions_and_mode()
   assert_truthy(rendered:find("sess:1", 1, true) ~= nil, "statusline should include active session count")
 end
 
-local function test_env_setup_registers_envsync_command()
+local function test_env_setup_registers_refresh_commands()
   package.loaded["core.env"] = nil
   local old_executable = vim.fn.executable
   local old_system = vim.system
@@ -1153,6 +1153,7 @@ local function test_env_setup_registers_envsync_command()
   vim.system = old_system
 
   assert_truthy(command_exists("EnvSync"), "env.setup should register :EnvSync command")
+  assert_truthy(command_exists("MiseRefresh"), "env.setup should register :MiseRefresh command")
 end
 
 local function test_env_sync_applies_direnv_and_mise_values()
@@ -1761,7 +1762,7 @@ local tests = {
   { name = "test_tool_call_update_uses_level_three_heading", fn = test_tool_call_update_uses_level_three_heading },
   { name = "test_tool_call_status_updates_in_place", fn = test_tool_call_status_updates_in_place },
   { name = "test_statusline_reports_active_sessions_and_mode", fn = test_statusline_reports_active_sessions_and_mode },
-  { name = "test_env_setup_registers_envsync_command", fn = test_env_setup_registers_envsync_command },
+  { name = "test_env_setup_registers_refresh_commands", fn = test_env_setup_registers_refresh_commands },
   { name = "test_env_sync_applies_direnv_and_mise_values", fn = test_env_sync_applies_direnv_and_mise_values },
   { name = "test_leader_ot_opens_terminal", fn = test_leader_ot_opens_terminal },
   { name = "test_tab_cycle_keymaps_exist", fn = test_tab_cycle_keymaps_exist },

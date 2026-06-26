@@ -73,6 +73,11 @@ function M.setup()
     M.sync()
   end, { desc = "Re-sync mise + direnv env into vim.env" })
 
+  vim.api.nvim_create_user_command("MiseRefresh", function()
+    M.sync()
+    vim.notify("mise environment refreshed", vim.log.levels.INFO, { title = "mise" })
+  end, { desc = "Refresh mise + direnv env for the current project" })
+
   M.sync()
 end
 
