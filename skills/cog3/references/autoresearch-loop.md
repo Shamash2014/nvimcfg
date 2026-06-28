@@ -32,6 +32,14 @@ Write the handoff's property tests **and** its Gherkin scenario(s) as seed examp
    - examples failing → *pass-the-simplest-failure* or *generalize-from-counterexample*
    - examples pass, a property still fails on a region → *strengthen-then-satisfy*
    - generators keep hitting a boundary → *edge-hardening*
+
+   **Inner planning loop — materialize a reviewable TODO skeleton, then fill it.** Steps 1–6 plan one mutation *in code, not prose*: structures+connections, stubbed interfaces, a `TODO(...)` at every change site, marked break/revert points, invariant checks — a **TODO-annotated skeleton that is the code-review artifact.** Review it (self, a reviewer/code-review adapter, or the user) before writing logic; then implement **spec-first** — fill each reviewed TODO by driving its tagged property/example spec to green (the property loop, per TODO), looping back into planning whenever a TODO reveals a missing/wrong element, until green. The materialized TODOs are the work-list the property/spec loop consumes. Full for the first green, large extensions, and plateau-break rewrites; a small mutation re-plans only the relevant layer.
+   1. **Structures + connections** — define/extend the structs/types **and the connections among them** (ownership, references, dependencies, data-flow edges, wiring) before logic.
+   2. **Interfaces** — declare function/class signatures as stubs (`todo!()` / `raise NotImplementedError` / `throw`) so Red fails on *behavior*, not a compile/import error.
+   3. **TODO change-sites** — drop a tracked TODO at every site the change touches, **tagged with the property/example it satisfies** (`TODO(<NN>-<slug> → P2/E3): …`); these markers *are* the materialized plan, the unit a reviewer reads, and the spec each fill is driven by.
+   4. **Break + revert points** — mark where the change must break existing code (shared signature/schema/caller); make the break inside the git-atomic cycle so a DISCARD restores it cleanly; never leave the tree half-broken across a KEEP. This also forces a Cog2 atomicity recheck — if the break spans another behavioral delta, stop and split the handoff.
+   5. **Invariants + defensive checks** — internal preconditions/postconditions/structural asserts that complement the property tests (never replace one).
+   6. **Implement — spec-driven, per TODO** — fill each reviewed TODO by driving its tagged property/example to green (watch it fail, fill until it passes; a TODO closes only when its spec is green). Loop back to 1 if the skeleton proves wrong, until green.
 3. **Run** with the pinned `pbt_seed` and a per-test reporter (JSON/JUnit/TAP). Parse `V_cur = {properties, examples}` (which pass). Capture each failed property's **shrunk counterexample**.
 4. **Score on the current suite `S` vs `best_results`:**
    ```
