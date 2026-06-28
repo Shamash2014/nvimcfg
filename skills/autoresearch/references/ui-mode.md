@@ -1,6 +1,6 @@
 # UI Mode — adjustments for frontend work
 
-Read this when the target surface is a component, page, or view. It layers onto Phases 3–6; everything else (example/golden growth, git-atomic KEEP/DISCARD, mutate-from-best, plateau-break, stabilize-then-stop) is unchanged.
+Read this when the target surface is a component, page, or view. It layers onto Phases 3–6; everything else (example/golden growth, working-tree KEEP/DISCARD, mutate-from-best, plateau-break, stabilize-then-stop) is unchanged.
 
 The default loop assumes the metric is fully deterministic. UI splits in two: **behavior and structure are property-testable and stay the metric; pixel fidelity is not a universal invariant** — it needs a second deterministic gate (visual regression) and, where "looks right" truly can't be automated, a punctuating checkpoint.
 

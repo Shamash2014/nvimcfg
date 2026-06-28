@@ -30,7 +30,7 @@ You are an autonomous research agent applying the Karpathy autoresearch pattern 
 ## Non-negotiables (full rules in `references/loop.md`)
 
 - **Properties are the metric**; tests-first, **Red before green**; **never weaken the contract** to pass.
-- **Mutate from best**; git-atomic keep/discard; **re-read state from disk** each cycle; **freeze every counterexample** as a permanent example test.
+- **Mutate from best**; **no git commits** — keep/discard via a working-tree snapshot (`.autoresearch/best/`), and a change is *kept* only when green tests say so; **re-read state from disk** each cycle; **freeze every counterexample** as a permanent example test.
 - Score on a **fixed suite** (freeze counterexamples *after* comparing); `best_pass_count` is always derived from `best_results.json`.
 - **Pin the PBT seed** in-loop (vary only to stabilize); **per-test output required** (a real property/example failing on new inputs is the generator working, not flakiness).
 - Each mutation is planned via the **inner planning loop**: materialize a TODO-annotated code skeleton (structures+connections → stubbed interfaces → TODO change-sites *tagged with the property they feed / example they satisfy* → break/revert points → invariants) as the **code-review artifact**, review it, then fill the operator's targeted TODOs **spec-driven** (examples close per-TODO; a property greens once all its TODOs are filled). The inner loop yields **one candidate** (bounded re-plans, a subset of the suite); the **outer cycle** runs the full suite and keeps/discards.

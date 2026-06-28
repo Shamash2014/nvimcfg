@@ -14,7 +14,7 @@ Scope discipline is inherited from Cog2: the loop touches only the handoff's tar
     "pbt_seed": 1234, "property_count": 0, "example_count": 0,
     "best_pass_count": -1, "best_all_green": false, "green_streak": 0,
     "phase": "correctness", "run_number": 0, "plateau_counter": 0,
-    "max_cycles": 20, "best_commit": null
+    "max_cycles": 20
   }
   ```
 - `results.jsonl` — one line per cycle.
@@ -23,11 +23,11 @@ Scope discipline is inherited from Cog2: the loop touches only the handoff's tar
 
 ## Red baseline (run 0)
 
-Write the handoff's property tests **and** its Gherkin scenario(s) as seed example tests **before** any implementation; commit. Run the suite — it MUST fail. A property that passes against a stub is too weak: strengthen it (and surface to the Cog2 handoff record) before continuing. Record `best_results.json`, `best_commit = HEAD`. **Cycle invariant: at the start of every cycle the working tree equals `best_commit`.**
+Write the handoff's property tests **and** its Gherkin scenario(s) as seed example tests **before** any implementation. Run the suite — it MUST fail. A property that passes against a stub is too weak: strengthen it (and surface to the Cog2 handoff record) before continuing. Record `best_results.json` and mirror the touched files into `.loop/best/`. **No git commits** — the loop runs in the working tree; `.loop/best/` is the revert baseline. **Cycle invariant: at the start of every cycle the working tree equals best (matches `.loop/best/`).**
 
 ## One cycle (correctness phase)
 
-1. **Load** `state.json`, `best_results.json`, last 5 `results.jsonl`. Confirm tree == `best_commit`.
+1. **Load** `state.json`, `best_results.json`, last 5 `results.jsonl`. Confirm the working tree equals best (matches `.loop/best/`).
 2. **Select operator + mutate** (state-dependent, not round-robin), mutating from best:
    - examples failing → *pass-the-simplest-failure* or *generalize-from-counterexample*
    - examples pass, a property still fails on a region → *strengthen-then-satisfy*
@@ -37,34 +37,48 @@ Write the handoff's property tests **and** its Gherkin scenario(s) as seed examp
    1. **Structures + connections** — define/extend the structs/types **and the connections among them** (ownership, references, dependencies, data-flow edges, wiring) before logic.
    2. **Interfaces** — declare function/class signatures as stubs (`todo!()` / `raise NotImplementedError` / `throw`) so Red fails on *behavior*, not a compile/import error.
    3. **TODO change-sites** — drop a tracked TODO at every site the change touches, **tagged with the property it feeds or the example it satisfies** (`TODO(<NN>-<slug> → P2/E3): …`); these markers *are* the materialized plan, the unit a reviewer reads, and the spec each fill is driven by.
-   4. **Break + revert points** — mark where the change must break existing code (shared signature/schema/caller); make the break inside the git-atomic cycle so a DISCARD restores it cleanly; never leave the tree half-broken across a KEEP. This also forces a Cog2 atomicity recheck — if the break spans another behavioral delta, stop and split the handoff.
+   4. **Break + revert points** — mark where the change must break existing code (shared signature/schema/caller); **track the files you touch** so a DISCARD restores them from `.loop/best/` cleanly; never leave the tree half-broken once kept. This also forces a Cog2 atomicity recheck — if the break spans another behavioral delta, stop and split the handoff.
    5. **Invariants + defensive checks** — internal preconditions/postconditions/structural asserts that complement the property tests (never replace one).
-   6. **Implement — spec-driven, per TODO** — fill the operator's targeted TODOs, each driven by its tagged spec. An **example**-tagged TODO closes when its example greens; a **property** is an *aggregate gate* that greens only when all its contributing TODOs are filled (a property-tagged TODO is *done* when its code is filled and reviewed, even if the property stays red pending siblings). Re-plan at most a couple of times, then hand the candidate to the outer run/score.
+   6. **Implement — spec-driven, per TODO** — fill the operator's targeted TODOs, each driven by its tagged spec. An **example**-tagged TODO closes when its example greens; a **property** is an *aggregate gate* that greens only when all its contributing TODOs are filled (a property-tagged TODO is *planned-done* when its code is filled and reviewed, even if the property stays red pending siblings). **Implementation relies on green tests** — never treat a TODO as complete on filled-but-red code, and the candidate becomes best only when the outer per-test score is green/gain (no commit). Re-plan at most a couple of times, then hand the candidate to the outer run/score.
 3. **Run** with the pinned `pbt_seed` and a per-test reporter (JSON/JUnit/TAP). Parse `V_cur = {properties, examples}` (which pass). Capture each failed property's **shrunk counterexample**.
 4. **Score on the current suite `S` vs `best_results`:**
    ```
-   no_regress  = every property/example true in best_results is also true in V_cur
-   gain        = count(true in V_cur) > best_pass_count            # same suite S
-   first_green = (all properties true in V_cur) AND not best_all_green
-   KEEP if first_green OR (gain AND no_regress) else DISCARD
+   no_regress       = every property/example true in best_results is also true in V_cur
+   gain             = count(true in V_cur) > best_pass_count        # same suite S
+   all_green        = every property AND every example in V_cur is true   # the FULL suite
+   first_full_green = all_green AND not best_all_green              # best_all_green ≡ best is fully green
+   KEEP if first_full_green OR (gain AND no_regress) else DISCARD
+   # Transition to stabilize requires the FULL suite green, never properties-only — so no red example
+   # (regressed, or orthogonal-and-never-passed, e.g. the Gherkin scenario) can sneak into stabilize.
+   # all_green subsumes no-example-regress; an example the properties don't imply keeps the loop in
+   # correctness until it greens or the budget stops it — never a stuck stabilize.
    ```
 5. **Apply:**
-   - KEEP → `git commit`; `best_commit=HEAD`; `best_results=V_cur`; `best_all_green = all props green`; `plateau_counter=0`.
-   - DISCARD → `git restore` to `best_commit`; `plateau_counter += 1`.
+   - KEEP (green tests say so — no commit) → mirror the touched files into `.loop/best/`; `best_results=V_cur`; `best_all_green = all_green (full suite)`; `plateau_counter=0`.
+   - DISCARD → restore the touched files from `.loop/best/` (undo this candidate); `plateau_counter += 1`.
 6. **Freeze counterexamples (AFTER step 4):** for each failed property, add its shrunk counterexample as a named example test (tagged `counterexample@run<N>`), suite `S→S'`. Run **only the new tests** against the current tree (== best) and append to `best_results.examples`; bump `example_count`. Then **recompute `best_pass_count` = count of `true` in `best_results`** over `S'` (always derived, never stale), so next cycle's `gain` compares on the same denominator.
-7. **Log + update state** (`run_number`, `best_pass_count`, `best_all_green`, `plateau_counter`, `example_count`, `best_commit`).
+7. **Log + update state** (`run_number`, `best_pass_count`, `best_all_green`, `plateau_counter`, `example_count`).
 8. **Report** one line. If `best_all_green` just became true → `phase = "stabilize"`.
 9. **Plateau breaker:** `plateau_counter == 5` → don't mutate from best; rewrite the implementation from scratch using only the handoff outcome, properties, and accumulated counterexamples; score with the same step-4 rule; log `plateau_break`; reset counter.
 10. **Budget:** checkpoint every 10 cycles without pausing; if `run_number >= max_cycles`, stop the handoff with a "budget reached" status and report it to the Cog2 goal ledger (do not silently mark complete).
 
-## Stabilize → Refactor (once properties green)
+## Stabilize → Refactor (once the full suite is green)
 
-- **Stabilize** (`phase: stabilize`): no mutation; re-run best with a **new seed** each run. Green again → `green_streak += 1`; a surfaced counterexample → freeze it, `best_all_green=false`, `green_streak=0`, back to correctness. At `green_streak == 3` → `phase: refactor`.
+- **Stabilize** (`phase: stabilize`): no mutation; re-run best (**full suite**) with a **new seed** each run. **Green = the entire suite (properties + examples) passes.** Fully green → `green_streak += 1`. A new property **counterexample** *or* a previously-green **example** going red → it's a real residual regression: freeze the counterexample (if any), set `best_all_green=false`, `green_streak=0`, `phase=correctness`, return to Phase 5 to fix it. At `green_streak == 3` → `phase: refactor`.
 - **Refactor** (`phase: refactor`, ≤ 3 cycles): apply refactor-green (simplify, no behavior change). KEEP iff all properties green AND all examples pass (pinned seed) AND complexity not worse (LOC / cyclomatic); else DISCARD. Then the handoff is done.
 
 ## Handoff completion → back to Cog2
 
-A handoff is complete only when: all its properties are green and stable across 3 seeds, every seed/regression example passes, the red baseline showed a genuine failure first, and the refactor pass left the suite green. Record into the handoff `.md`: red evidence, property+example pass vectors, counterexamples frozen (count + inputs), seeds used, files changed, and any budget/atomicity deviation. Then advance the Cog2 goal ledger to the next handoff.
+A handoff is complete only when: all its properties are green and stable across 3 seeds, every seed/regression example passes, the red baseline showed a genuine failure first, and the refactor pass left the suite green. Record into the handoff `.md`: red evidence, property+example pass vectors, counterexamples frozen (count + inputs), seeds used, files changed, and any budget/atomicity deviation. Then advance the Cog2 goal ledger to the next handoff. **All handoff code lives uncommitted in the working tree (no git commits accumulate across handoffs).** If the user wants per-handoff checkpoints, surface that they can commit the completed handoff before the next one begins.
+
+## Loop invariants (don't skip)
+
+- **Re-read state from disk every cycle** — `state.json`, `best_results.json`, last 5 `results.jsonl`; never trust conversational memory for scores/counterexamples.
+- **Per-test output required** — a JSON/JUnit/TAP reporter (or run tests by name); exit code alone can't tell you which properties/examples passed.
+- **Score on the fixed suite, freeze after** — compare against `best_results` on the same `S`; freeze counterexamples only after the keep/discard decision. `best_pass_count` is always the derived count of `true` in `best_results`, recomputed after every suite growth.
+- **Mutate from best; no git commits** — the tree equals best (`.loop/best/`) at step 1; KEEP mirrors the green change into `.loop/best/`, DISCARD restores from it; a change is kept only when green tests say so.
+- **Budget every run** — correctness, stabilize, and refactor runs each increment `run_number` and count toward `max_cycles`; stop at the budget.
+- **Pin the PBT seed in-loop; vary only in stabilize.** A property failing on inputs an earlier run didn't generate is the generator working — freeze it; true flakiness (same pinned input, different result) is red until stabilized.
 
 ## Anti-gaming (inherited, absolute)
 

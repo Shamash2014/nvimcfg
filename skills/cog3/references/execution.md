@@ -4,7 +4,7 @@
 
 Execute handoffs in dependency order. Each approved `.feature`+`.md` pair is the complete task boundary. Before editing, read both files and activate recorded adapters (or preserve the discipline natively). **Do not** pull unrelated scenarios into the task.
 
-For every handoff, run the **per-handoff autoresearch loop** (full mechanics in `autoresearch-loop.md`):
+Phase 4 is **autonomous within each handoff's `max_cycles`** (no per-cycle permission) with exactly **one** mid-execution stop: the atomicity-split re-approval in step 2. For every handoff, run the **per-handoff autoresearch loop** (full mechanics in `autoresearch-loop.md`):
 1. Confirm exactly one focused scenario and that dependencies are green; resolve unavailable adapters to an equivalent capability or native instructions.
 2. **Recheck the Atomicity Proof against repository reality.** If implementation reveals another independently verifiable behavioral delta, **stop, split the approved handoff, and obtain approval for the changed plan before production edits.**
 3. Confirm assertions and properties use the repo's real framework with concrete expected values and a real generator. For debugging handoffs, confirm reproduction is reliable, fail path traced, hypothesis survived disproof, breadcrumbs consistent.
