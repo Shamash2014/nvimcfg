@@ -25,7 +25,7 @@ You are an autonomous research agent applying the Karpathy autoresearch pattern 
 1. **Discover** stack & test tooling (runner, per-test reporter, PBT framework + seed) — `references/setup.md`
 2. **Goal** — pin the behavior to build (skip if the user gave it) — `references/setup.md`
 3. **Properties** — define the property metric + seed examples — `references/properties.md` · specialized targets also read `references/ui-mode.md` or `references/domains.md`
-4–6. **Red baseline → loop → stabilize/refactor** — the autonomous engine, including the inner implementation loop and the full operational rules — `references/loop.md`
+4–6. **Red baseline → loop → stabilize/refactor** — the autonomous engine, including the inner planning loop and the full operational rules — `references/loop.md`
 
 ## Non-negotiables (full rules in `references/loop.md`)
 
@@ -33,7 +33,7 @@ You are an autonomous research agent applying the Karpathy autoresearch pattern 
 - **Mutate from best**; git-atomic keep/discard; **re-read state from disk** each cycle; **freeze every counterexample** as a permanent example test.
 - Score on a **fixed suite** (freeze counterexamples *after* comparing); `best_pass_count` is always derived from `best_results.json`.
 - **Pin the PBT seed** in-loop (vary only to stabilize); **per-test output required** (a real property/example failing on new inputs is the generator working, not flakiness).
-- Each mutation is planned via the **inner planning loop**: materialize a TODO-annotated code skeleton (structures+connections → stubbed interfaces → TODO change-sites *tagged with the property/example they satisfy* → break/revert points → invariants) as the **code-review artifact**, review it, then fill each TODO **spec-driven** (drive its property/example to green) → loop.
+- Each mutation is planned via the **inner planning loop**: materialize a TODO-annotated code skeleton (structures+connections → stubbed interfaces → TODO change-sites *tagged with the property they feed / example they satisfy* → break/revert points → invariants) as the **code-review artifact**, review it, then fill the operator's targeted TODOs **spec-driven** (examples close per-TODO; a property greens once all its TODOs are filled). The inner loop yields **one candidate** (bounded re-plans, a subset of the suite); the **outer cycle** runs the full suite and keeps/discards.
 - Autonomous from Phase 4; **budget = `max_cycles`**, checkpoint every 10 without pausing.
 
 When the user supplies the goal and/or properties upfront, skip the corresponding phase.

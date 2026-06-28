@@ -52,24 +52,24 @@ Run autonomously, without asking permission between cycles. **Disk is the source
 #### 1. Load state from disk
 Read `state.json`, `examples.md`, `best_results.json`, last 5 `results.jsonl`. Confirm the tree is at `best_commit`.
 
-#### 2. Select an operator and mutate (runs the inner implementation loop)
+#### 2. Select an operator and mutate (runs the inner planning loop)
 Operator selection is **state-dependent, not round-robin** — pick what the current failures call for, and log it:
 - examples failing → **pass-the-simplest-failure** or **generalize-from-counterexample**
 - examples pass but a property still fails on a region → **strengthen-then-satisfy**
 - generators keep hitting a boundary → **edge-hardening** (empty, null, zero, max, overflow, unicode, concurrency)
 - (plateau-break and refactor-green are reached via steps 8–9 and Phase 6, not here.)
 
-Always mutate **from best** (the tree already equals it). Produce the change via the **inner implementation loop** below.
+Always mutate **from best** (the tree already equals it). Produce the change via the **inner planning loop** below.
 
 ##### Inner planning loop — materialize a reviewable TODO skeleton, then fill it
-Nested inside the outer cycle (the outer loop is generate→test→score→mutate). **Steps 1–6 plan one mutation *in code*, not in prose:** you lay down structures+connections, stub the interfaces, drop a `TODO(...)` at every change site, mark the break/revert points, and add the invariant checks — producing a **TODO-annotated skeleton that is the code-review artifact.** Review the skeleton (self-review, a reviewer/code-review adapter, or the user) *before* writing logic — design fixes are cheap at skeleton stage. Then implement **spec-first**: fill each reviewed TODO by driving its tagged property/example spec to green (the outer property loop, run per TODO), **looping** back into planning whenever filling reveals a missing or wrong skeleton element, until the targeted tests go green. The materialized TODOs are exactly the work-list the property/spec loop consumes. Full skeleton for the first green, large extensions, and plateau-break rewrites; a small mutation re-plans only the relevant layer.
+Nested inside outer step 2: it produces **one candidate mutation** and does **not** run the outer scoring. Steps 1–6 plan the change *in code, not prose*: structures+connections, stubbed interfaces, a `TODO(...)` at every change site, marked break/revert points, invariant checks — a **TODO-annotated skeleton that is the code-review artifact** (review it — self, a reviewer/code-review adapter, or the user — *before* writing logic; design fixes are cheap here). Then fill **only the TODOs the chosen operator targets** (a subset — the rest of the suite may stay red; that's expected). The fill is **best-effort and bounded**: re-plan (loop to step 1) at most ~2–3 times if a TODO reveals a wrong skeleton element, then hand the candidate to outer step 3 **as-is** — the outer cycle runs the full suite once and decides KEEP/DISCARD (a candidate that didn't pan out is simply discarded; 5 discards in a row trigger the plateau-breaker). The materialized TODOs are the work-list the property/spec loop consumes. Full skeleton for the first green, large extensions, and plateau-break rewrites; a small mutation re-plans only the relevant layer. (Inner test runs aren't counted against `max_cycles`, which budgets outer cycles.)
 
 1. **Structures + connections.** Define/extend the structs/types the behavior needs **and the connections among them** — ownership, references, dependencies, data-flow edges, wiring — before any logic.
 2. **Interfaces.** Declare the function/class signatures (the contract surface) as stubs (`todo!()` / `raise NotImplementedError` / `throw`). Stubs make the Red test fail on *behavior*, not a compile/import error.
-3. **TODO change-sites.** Drop a tracked TODO at every site the change touches, **tagged with the property/example it will satisfy** (`TODO(goal → P2/E3): …`) — these markers *are* the materialized plan, the unit a reviewer reads, and the spec each implementation step is driven by; the full blast radius is visible before any logic.
+3. **TODO change-sites.** Drop a tracked TODO at every site the change touches, **tagged with the property it feeds or the example it satisfies** (`TODO(goal → P2/E3): …`) — these markers *are* the materialized plan, the unit a reviewer reads, and the spec each fill is driven by; the full blast radius is visible before any logic.
 4. **Break + revert points.** Mark where the change must break existing code (a shared signature, schema, or caller); make the break *inside* the git-atomic cycle so a DISCARD restores it cleanly — never leave the tree half-broken across a KEEP. Land the smallest break the failing test needs.
 5. **Invariants + defensive checks.** Add internal assertions — preconditions, postconditions, structural invariants — in the code itself. They complement the external property tests (catching what a generator may miss) and document intent; they never replace a property.
-6. **Implement — spec-driven, per TODO.** Fill each reviewed TODO by driving its tagged property/example spec to green: watch the spec fail, fill the body until it passes; a TODO is closed only when its spec is green. Loop back to step 1 whenever the skeleton proves wrong, until green.
+6. **Implement — spec-driven, per TODO.** Fill the TODOs the chosen operator targets, each driven by its tagged spec (watch it fail, fill until it passes). An **example**-tagged TODO closes when its example is green. A **property** is an *aggregate gate*: several TODOs usually feed it, so it greens only once all its contributing TODOs are filled — an individual property-tagged TODO is *done* when its code is filled and reviewed, even if the property stays red pending siblings. Re-plan (back to step 1) at most a couple of times if the skeleton proves wrong; then hand the candidate to outer step 3.
 
 #### 3. Run the tests (evaluate)
 Run the test command with the pinned `pbt_seed` and the per-test reporter. Parse a **per-test result map** `V_cur` = `{properties, examples}`. Exit code alone is insufficient. For each failed property, capture the **shrunk counterexample** (reproducible because the seed is pinned).
@@ -107,7 +107,7 @@ Update `state.json` (`run_number`, `best_pass_count`, `best_all_green`, `plateau
 `RUN [n] | Props: [g]/[P] | Examples: [k]/[E] | Status: [KEEP/DISCARD] | Best pass: [bp]` + mutation + new counterexamples + top failures. If `best_all_green` just became true → `phase = "stabilize"` and go to Phase 6.
 
 #### 9. Plateau breaker
-If `plateau_counter` reaches 5 (5 cycles, no KEEP): don't mutate from best. Re-read the last 10 `results.jsonl` entries and **rewrite the implementation from scratch** (running the inner implementation loop) using only the goal, properties, and accumulated counterexamples — ignore the stuck structure. Score with the same step-4 rule. Log `plateau_break`; reset `plateau_counter = 0`.
+If `plateau_counter` reaches 5 (5 cycles, no KEEP): don't mutate from best. Re-read the last 10 `results.jsonl` entries and **rewrite the implementation from scratch** (running the inner planning loop) using only the goal, properties, and accumulated counterexamples — ignore the stuck structure. Score with the same step-4 rule. Log `plateau_break`; reset `plateau_counter = 0`.
 
 #### 10. Budget + continue
 Every 10 cycles, print a checkpoint (best pass count, properties green, top failures) without pausing. If `run_number >= max_cycles`, stop with a "budget reached" report. Otherwise go to step 1.
@@ -122,7 +122,7 @@ Do **not** mutate. Re-run the suite against best with a **new, different PBT see
 When `green_streak` reaches **3** (three distinct seeds, all green) → set `phase = "refactor"`.
 
 ### Refactor (`phase: "refactor"`, bounded — default ≤ 3 cycles)
-Apply **refactor-green** (simplify, no behavior change) via the inner implementation loop. Because correctness is maxed (gain impossible), use a different KEEP rule:
+Apply **refactor-green** (simplify, no behavior change) via the inner planning loop. Because correctness is maxed (gain impossible), use a different KEEP rule:
 ```
 KEEP if  all properties green AND all examples pass (pinned seed) AND complexity not worse (LOC, or cyclomatic if a tool exists)
 else DISCARD (git restore)
@@ -157,5 +157,5 @@ Implementation: [files changed]  ·  Tests: [test files]  ·  Branch: autoresear
 13. **Respect the budget.** Stop at `max_cycles`; checkpoint every 10 cycles without pausing.
 14. **Stay scoped.** Modify only the target surface and its tests.
 15. **Log everything** — every cycle gets a JSONL entry with counterexamples and the operator used.
-16. **Inner planning loop** for every mutation: materialize a TODO-annotated code skeleton (structures+connections → stubbed interfaces → TODO change-sites *tagged with the property/example they satisfy* → break/revert points → invariants/defensive checks) as the **code-review artifact**, review it, then fill each TODO **spec-driven** by driving its property/example to green, looping back when the skeleton proves wrong. Internal invariants complement, never replace, the property tests.
+16. **Inner planning loop** yields one candidate mutation per outer cycle (it does not score): materialize a TODO-annotated code skeleton (structures+connections → stubbed interfaces → TODO change-sites *tagged with the property they feed or example they satisfy* → break/revert points → invariants/defensive checks) as the **code-review artifact**, review it, then fill the operator's targeted TODOs spec-driven — example-tagged TODOs close when their example greens; a property is an aggregate gate (greens only when all its contributing TODOs are filled). Re-plan at most a couple of times, then hand the candidate to the outer run/score (steps 3–6), which keeps or discards. Internal invariants complement, never replace, the property tests.
 17. **Specialized domains:** read `ui-mode.md` (frontend) or `domains.md` (data/ML, external I/O, concurrency, performance, generative, numerical) before writing properties. The golden-approval checkpoint in UI mode is the *only* sanctioned pause to autonomy; any llm-judge is advisory and never gates KEEP/DISCARD.
