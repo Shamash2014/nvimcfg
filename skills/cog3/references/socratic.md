@@ -12,7 +12,7 @@ When all material branches are resolved or parked, present the **shared-understa
 
 ## Phase 2: Explore the Codebase
 
-After confirmation, inspect before designing:
+After confirmation, inspect before designing. **Use a workflow / parallel sub-agents** where available: fan out mappers over distinct subsystems and synthesize into the evidence map (fall back to inline when absent).
 1. Read repo guidance; determine language, framework, build, **test command, per-test reporter (JSON/JUnit/TAP), lint, format**.
 2. Identify the **property-based test framework** and **how to pin its seed** (Hypothesis `--hypothesis-seed`/`.hypothesis/`, fast-check `{seed}`, proptest `proptest-regressions/`, rapid `-rapid.seed`, etc.); if none is installed, adding it is a setup step.
 3. Map entry points, modules, callers/callees, data flow, state transitions, side effects, public contracts. Read relevant files end-to-end incl. neighboring tests/fixtures. Search analogous implementations and local patterns. Inspect history when intent is unclear. Check worktree status and preserve unrelated changes. Run the narrowest useful baseline tests when practical.

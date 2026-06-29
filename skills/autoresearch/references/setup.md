@@ -2,7 +2,7 @@
 
 ## Phase 1 — Repo Discovery
 
-Scan the repository to understand the stack and, critically, **how tests run**.
+Scan the repository to understand the stack and, critically, **how tests run**. **Use a workflow / parallel sub-agents** for this (where the provider supports it): fan out readers over distinct subsystems/areas and synthesize their findings into the summary below — fall back to inline scanning only when no such capability exists.
 
 ### Steps
 
