@@ -42,7 +42,7 @@
       "src": "https://github.com/akinsho/git-conflict.nvim"
     },
     "kulala.nvim": {
-      "rev": "87c8f0136f0eaebe1dcea6f7448a34cea40b9513",
+      "rev": "b78b1aab31844bdba8a94041ff22a61d1563ba35",
       "src": "https://github.com/mistweaverco/kulala.nvim"
     },
     "leap.nvim": {
@@ -114,7 +114,7 @@
       "src": "https://github.com/tiagovla/scope.nvim"
     },
     "snacks-fff.nvim": {
-      "rev": "6c511f77fa1ee1e6ee682968b03d210ea5d162c8",
+      "rev": "f9448abc6732d407919bdcf55750d5fba565f1b1",
       "src": "https://github.com/so1ve/snacks-fff.nvim"
     },
     "snacks.nvim": {

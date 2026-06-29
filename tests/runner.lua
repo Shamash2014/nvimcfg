@@ -1480,6 +1480,47 @@ local function test_spacetree_restore_preserves_sibling_order()
   vim.cmd("silent! tabonly")
 end
 
+-- each space carries its own folder root (per-tab cwd); mksession only saves a
+-- single global cwd, so serialize/rebuild must round-trip per-space cwds.
+local function test_spacetree_restore_preserves_folder_roots()
+  package.loaded["core.spacetree"] = nil
+  local st = require("core.spacetree")
+  vim.cmd("silent! tabonly")
+  st.setup()
+
+  local root_dir = vim.uv.fs_realpath(vim.fn.tempname()) or vim.fn.tempname()
+  local child_dir = vim.fn.tempname()
+  vim.fn.mkdir(child_dir, "p")
+  child_dir = vim.uv.fs_realpath(child_dir) or child_dir
+  vim.fn.mkdir(root_dir, "p")
+  root_dir = vim.uv.fs_realpath(root_dir) or root_dir
+
+  vim.cmd.tcd(root_dir)
+  st.child()
+  vim.cmd.tcd(child_dir)
+  st.up()
+
+  local data = st.serialize()
+
+  -- clobber both spaces' cwds, then prove rebuild restores each one
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    vim.api.nvim_set_current_tabpage(tab)
+    vim.cmd.tcd("/")
+  end
+  st.rebuild(data)
+
+  local roots = {}
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    roots[vim.fn.getcwd(-1, vim.api.nvim_tabpage_get_number(tab))] = true
+  end
+  assert_equal(roots[root_dir], true, "root space folder should be restored")
+  assert_equal(roots[child_dir], true, "child space folder should be restored")
+
+  vim.fn.delete(root_dir, "rf")
+  vim.fn.delete(child_dir, "rf")
+  vim.cmd("silent! tabonly")
+end
+
 local function test_project_sync_sets_tab_cwd_from_repo_directory()
   package.loaded["core.project"] = nil
   local project = require("core.project")
@@ -1770,6 +1811,7 @@ local tests = {
   { name = "test_agent_term_supports_omlx_opencode_preset", fn = test_agent_term_supports_omlx_opencode_preset },
   { name = "test_sessions_load_picks_from_saved_files", fn = test_sessions_load_picks_from_saved_files },
   { name = "test_spacetree_restore_preserves_sibling_order", fn = test_spacetree_restore_preserves_sibling_order },
+  { name = "test_spacetree_restore_preserves_folder_roots", fn = test_spacetree_restore_preserves_folder_roots },
   { name = "test_project_sync_sets_tab_cwd_from_repo_directory", fn = test_project_sync_sets_tab_cwd_from_repo_directory },
   { name = "test_project_setup_updates_tab_cwd_on_bufenter", fn = test_project_setup_updates_tab_cwd_on_bufenter },
   { name = "test_project_setup_updates_tab_cwd_for_directory_buffers", fn = test_project_setup_updates_tab_cwd_for_directory_buffers },

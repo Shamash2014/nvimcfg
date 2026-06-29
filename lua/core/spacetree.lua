@@ -455,6 +455,8 @@ function M.serialize()
         -- (`:tabnew` inserts after the current tab), so it must be stored.
         order = parent and child_index(parent, id) or nil,
         name = n.name,
+        -- each space's folder root: mksession only saves one global cwd
+        cwd = vim.fn.getcwd(-1, vim.api.nvim_tabpage_get_number(n.tab)),
       }
       if id == state.root then
         root_pos = pos
@@ -509,6 +511,19 @@ function M.rebuild(data)
   end)
   for _, l in ipairs(links) do
     table.insert(state.nodes[l.pid].children, l.id)
+  end
+  -- reapply each space's folder root; tcd needs to run inside its own tab, so
+  -- hop through them and land back where we started
+  local origin = vim.api.nvim_get_current_tabpage()
+  for _, rec in ipairs(data.nodes) do
+    local tab = tabs[rec.pos]
+    if tab and rec.cwd and rec.cwd ~= "" and vim.fn.isdirectory(rec.cwd) == 1 then
+      vim.api.nvim_set_current_tabpage(tab)
+      pcall(vim.cmd.tcd, vim.fn.fnameescape(rec.cwd))
+    end
+  end
+  if vim.api.nvim_tabpage_is_valid(origin) then
+    vim.api.nvim_set_current_tabpage(origin)
   end
   if not state.root then
     for _, rec in ipairs(data.nodes) do
