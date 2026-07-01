@@ -71,7 +71,7 @@ Then **run the suite — it MUST fail on *behavior*** (the skeleton compiles; st
 
 ## Stabilize → Refactor (once the full suite is green)
 
-- **Stabilize** (`phase: stabilize`): no mutation; re-run best (**full suite**) with a **new seed** each run. **Green = the entire suite (properties + examples) passes.** Fully green → `green_streak += 1`. A new property **counterexample** *or* a previously-green **example** going red → it's a real residual regression: freeze the counterexample (if any), set `best_all_green=false`, `green_streak=0`, `phase=correctness`, return to Phase 5 to fix it. At `green_streak == 3` → `phase: refactor`.
+- **Stabilize** (`phase: stabilize`): no mutation; re-run best (**full suite**) with a **new seed** each run. **Green = the entire suite (properties + examples) passes.** Fully green → `green_streak += 1`. A new property **counterexample** *or* a previously-green **example** going red → it's a real residual regression: freeze the counterexample (if any), set `best_all_green=false`, `green_streak=0`, `phase=correctness`, return to the correctness loop to fix it (Cog3 Phase 4's loop — *not* the cross-handoff Phase 5 simplification). At `green_streak == 3` → `phase: refactor`.
 - **Refactor** (`phase: refactor`, ≤ 3 cycles): apply refactor-green (simplify, no behavior change) — runs the normal cycle with the step-4 score replaced by this rule (nothing to freeze). KEEP iff all properties green AND all examples pass (pinned seed) AND complexity not worse (LOC / cyclomatic); else DISCARD. Then the handoff is done.
 
 ## Handoff completion → back to Cog2

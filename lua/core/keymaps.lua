@@ -16,6 +16,11 @@ local function snacks()
   return ok and mod or nil
 end
 
+local function fff()
+  local ok, mod = pcall(require, "snacks-fff")
+  return ok and mod or nil
+end
+
 function M.setup()
   map("i", "jk", "<Esc>", { desc = "Exit insert mode" })
   map("t", "jk", "<C-\\><C-n>", { desc = "Exit terminal mode" })
@@ -85,6 +90,12 @@ function M.setup()
   map("n", "<leader>bp", "<cmd>bprevious<cr>", { desc = "Previous buffer" })
 
   map("n", "<leader>ff", function()
+    local fz = fff()
+    if fz and fz.find_files then
+      fz.find_files()
+      return
+    end
+
     local sn = snacks()
     if sn and sn.picker and sn.picker.files then
       sn.picker.files()
@@ -122,6 +133,12 @@ function M.setup()
   end, { desc = "Jump to file in explorer" })
 
   map("n", "<leader>sg", function()
+    local fz = fff()
+    if fz and fz.live_grep then
+      fz.live_grep()
+      return
+    end
+
     local sn = snacks()
     if sn and sn.picker and sn.picker.grep then
       sn.picker.grep()
@@ -131,6 +148,12 @@ function M.setup()
     vim.notify("Snacks grep unavailable", vim.log.levels.WARN, { title = "Search" })
   end, { desc = "Grep" })
   map("n", "<leader>sw", function()
+    local fz = fff()
+    if fz and fz.grep_word then
+      fz.grep_word()
+      return
+    end
+
     local sn = snacks()
     if sn and sn.picker and sn.picker.grep_word then
       sn.picker.grep_word()

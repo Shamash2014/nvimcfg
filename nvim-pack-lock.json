@@ -37,12 +37,16 @@
       "rev": "fb951dda8d9af7493c74b11b9ae92d7ee2bc0f0c",
       "src": "https://github.com/serhez/editr"
     },
+    "fff.nvim": {
+      "rev": "e0a9e08a3a6467ebb8d4b2889f1c21c3b36ba3e6",
+      "src": "https://github.com/dmtrKovalenko/fff.nvim"
+    },
     "git-conflict.nvim": {
       "rev": "a1badcd070d176172940eb55d9d59029dad1c5a6",
       "src": "https://github.com/akinsho/git-conflict.nvim"
     },
     "kulala.nvim": {
-      "rev": "b78b1aab31844bdba8a94041ff22a61d1563ba35",
+      "rev": "7fba542e4300c0d915f64da8a759f68ca1bd6b77",
       "src": "https://github.com/mistweaverco/kulala.nvim"
     },
     "leap.nvim": {
@@ -122,7 +126,7 @@
       "src": "https://github.com/folke/snacks.nvim"
     },
     "tree-sitter-manager.nvim": {
-      "rev": "ae305699da5e97b6cffdd5cc6f6045b1b0bd26ea",
+      "rev": "966c28dbc68fc99c82c51a64b6ec37f420aab880",
       "src": "https://github.com/romus204/tree-sitter-manager.nvim"
     },
     "vim-repeat": {
